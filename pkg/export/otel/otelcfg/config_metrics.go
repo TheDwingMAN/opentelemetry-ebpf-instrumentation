@@ -85,6 +85,11 @@ type MetricsConfig struct {
 	// removed from the metrics set.
 	TTL time.Duration `yaml:"ttl" env:"OTEL_EBPF_METRICS_TTL"`
 
+	// ProviderShutdownTimeout is the maximum time allowed for a MeterProvider to
+	// flush its pending metrics when evicted from the reporters cache.
+	// Defaults to Interval when unset.
+	ProviderShutdownTimeout time.Duration `yaml:"provider_shutdown_timeout" env:"OTEL_EBPF_METRICS_PROVIDER_SHUTDOWN_TIMEOUT"`
+
 	AllowServiceGraphSelfReferences bool `yaml:"allow_service_graph_self_references" env:"OTEL_EBPF_ALLOW_SERVICE_GRAPH_SELF_REFERENCES"`
 
 	// OTLPEndpointProvider allows overriding the OTLP Endpoint. It needs to return an endpoint and
@@ -126,6 +131,15 @@ func (m *MetricsConfig) GetInterval() time.Duration {
 		return time.Duration(m.OTELIntervalMS) * time.Millisecond
 	}
 	return m.Interval
+}
+
+// GetProviderShutdownTimeout returns the configured eviction flush timeout,
+// falling back to GetInterval() when ProviderShutdownTimeout is not set.
+func (m *MetricsConfig) GetProviderShutdownTimeout() time.Duration {
+	if m.ProviderShutdownTimeout == 0 {
+		return m.GetInterval()
+	}
+	return m.ProviderShutdownTimeout
 }
 
 func (m *MetricsConfig) GuessProtocol() Protocol {

@@ -14,32 +14,47 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
+// NoopShutdownExporter wraps a shared Exporter and turns Shutdown into a no-op.
+// This allows individual MeterProviders to call provider.Shutdown() (which stops
+// the PeriodicReader goroutine and flushes pending data) without permanently
+// marking the shared underlying exporter as shut-down.
+// The real exporter is shut down exactly once by MetricsExporterInstancer.Shutdown().
+type NoopShutdownExporter struct{ sdkmetric.Exporter }
+
+func (NoopShutdownExporter) Shutdown(context.Context) error { return nil }
+
 func meilog() *slog.Logger {
 	return slog.With("component", "otelcommon.MetricsExporterInstancer")
 }
 
 // MetricsExporterInstancer provides a common instance for the OTEL metrics exporter,
 // so all the OTEL metric families (RED, Network, Service Graph, Internal...) would go through
-// the same connection/instance
+// the same connection/instance.
+// Reporters receive a NoopShutdownExporter wrapper so no individual reporter can
+// permanently shut down the shared exporter. Call Shutdown() once after all
+// reporters have stopped their MeterProviders.
 type MetricsExporterInstancer struct {
-	mutex    sync.Mutex
-	instance sdkmetric.Exporter
-	Cfg      *MetricsConfig
+	mutex        sync.Mutex
+	instance     sdkmetric.Exporter
+	Cfg          *MetricsConfig
+	shutdownOnce sync.Once
 }
 
-// Instantiate the OTLP HTTP or GRPC metrics exporter, or a consumer-based exporter
+// Instantiate returns the shared OTLP/consumer exporter, wrapped in a
+// NoopShutdownExporter so that individual reporters cannot permanently shut
+// down the shared connection. The real Shutdown is done once by Shutdown().
 func (i *MetricsExporterInstancer) Instantiate(ctx context.Context) (sdkmetric.Exporter, error) {
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
 	if i.instance != nil {
-		return i.instance, nil
+		return NoopShutdownExporter{i.instance}, nil
 	}
 
 	// If a MetricsConsumer is configured, use the ConsumerExporter
 	if i.Cfg.MetricsConsumer != nil {
 		meilog().Debug("instantiating Consumer MetricsReporter")
 		i.instance = NewConsumerExporter(i.Cfg.MetricsConsumer)
-		return i.instance, nil
+		return NoopShutdownExporter{i.instance}, nil
 	}
 
 	var err error
@@ -58,7 +73,23 @@ func (i *MetricsExporterInstancer) Instantiate(ctx context.Context) (sdkmetric.E
 		return nil, fmt.Errorf("invalid protocol value: %q. Accepted values are: %s, %s, %s",
 			proto, ProtocolGRPC, ProtocolHTTPJSON, ProtocolHTTPProtobuf)
 	}
-	return i.instance, nil
+	return NoopShutdownExporter{i.instance}, nil
+}
+
+// Shutdown flushes and closes the underlying shared exporter exactly once.
+// Call this after all reporters have shut down their MeterProviders, so no
+// PeriodicReader goroutine is still exporting when the connection closes.
+func (i *MetricsExporterInstancer) Shutdown(ctx context.Context) error {
+	var err error
+	i.shutdownOnce.Do(func() {
+		i.mutex.Lock()
+		exp := i.instance
+		i.mutex.Unlock()
+		if exp != nil {
+			err = exp.Shutdown(ctx)
+		}
+	})
+	return err
 }
 
 func (i *MetricsExporterInstancer) httpMetricsExporter(ctx context.Context) (sdkmetric.Exporter, error) {

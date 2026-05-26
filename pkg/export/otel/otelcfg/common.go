@@ -310,6 +310,15 @@ func (rp *ReporterPool[K, T]) expireOldReporters() {
 	}
 }
 
+// Close evicts all remaining entries from the pool, triggering the eviction
+// callback synchronously for each one before returning.
+func (rp *ReporterPool[K, T]) Close() {
+	rp.lastServiceUID = emptyUID
+	rp.lastService = nil
+	rp.lastReporter = nil
+	rp.pool.Purge()
+}
+
 func (rp *ReporterPool[K, T]) get(uid svc.UID, service K) (*expirable[T], error) {
 	if e, ok := rp.pool.Get(uid); ok {
 		return e, nil

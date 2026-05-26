@@ -95,6 +95,15 @@ func RunWithContextInfo(
 	if err := g.Wait(); err != nil {
 		return err
 	}
+
+	// All pipeline goroutines have exited; every MeterProvider has been shut down
+	// via the NoopShutdownExporter wrapper. Now close the real shared exporter once.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), ctxInfo.OTELMetricsExporter.Cfg.GetProviderShutdownTimeout())
+	defer cancel()
+	if err := ctxInfo.OTELMetricsExporter.Shutdown(shutdownCtx); err != nil {
+		slog.Warn("closing OTEL metrics exporter", "error", err)
+	}
+
 	slog.Debug("OBI main node finished")
 	return nil
 }

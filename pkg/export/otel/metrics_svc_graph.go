@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
@@ -54,6 +55,10 @@ type SvcGraphMetricsReporter struct {
 	pidTracker       PidServiceTracker
 	is               instrumentations.InstrumentationSelection
 	metricAttributes []attributes.Field[*request.Span, attribute.KeyValue]
+
+	// providerShutdownWg tracks in-flight eviction goroutines so close() can
+	// wait for all of them before returning.
+	providerShutdownWg sync.WaitGroup
 
 	input         <-chan []request.Span
 	processEvents <-chan exec.ProcessEvent
@@ -136,9 +141,13 @@ func newSvcGraphMetricsReporter(
 			llog.Debug("evicting metrics reporter from cache")
 			v.cleanupAllMetricsInstances()
 
+			mr.providerShutdownWg.Add(1)
 			go func() {
-				if err := v.provider.ForceFlush(ctx); err != nil {
-					llog.Warn("error flushing evicted metrics provider", "error", err)
+				defer mr.providerShutdownWg.Done()
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.GetProviderShutdownTimeout())
+				defer cancel()
+				if err := v.provider.Shutdown(shutdownCtx); err != nil {
+					llog.Warn("error shutting down evicted metrics provider", "error", err)
 				}
 			}()
 		}, mr.newMetricSet)
@@ -285,13 +294,13 @@ func (mr *SvcGraphMetricsReporter) newMetricSet(service *svc.Attrs) (*SvcGraphMe
 }
 
 func (mr *SvcGraphMetricsReporter) close() {
-	go func() {
-		if err := mr.exporter.Shutdown(mr.ctx); err != nil {
-			mr.log.Warn("closing metrics provider", "error", err)
-			return
-		}
-		mr.log.Debug("Metrics reporter closed")
-	}()
+	// Evict all remaining cache entries; each fires a provider.Shutdown() goroutine.
+	mr.reporters.Close()
+	// Wait for all eviction goroutines to finish flushing before returning.
+	// The real shared exporter is shut down by MetricsExporterInstancer.Shutdown()
+	// in the instrumenter after all pipeline goroutines have exited.
+	mr.providerShutdownWg.Wait()
+	mr.log.Debug("SvcGraph metrics reporter closed")
 }
 
 func (mr *SvcGraphMetricsReporter) tracesResourceAttributes(service *svc.Attrs) attribute.Set {

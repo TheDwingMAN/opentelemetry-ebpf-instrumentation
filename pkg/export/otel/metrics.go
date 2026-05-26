@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
@@ -81,8 +82,10 @@ type MetricsReporter struct {
 	pidTracker       PidServiceTracker
 	is               instrumentations.InstrumentationSelection
 	targetMetrics    map[svc.UID]*TargetMetrics
-	attrGetters      attributes.NamedGetters[*request.Span, attribute.KeyValue]
-	spanExtraAttrs   []attr.Name
+	attrGetters        attributes.NamedGetters[*request.Span, attribute.KeyValue]
+	spanExtraAttrs     []attr.Name
+	providerShutdownWg sync.WaitGroup
+	systemProvider     *metric.MeterProvider
 
 	// user-selected fields for each of the reported metrics
 	attrHTTPDuration           []attributes.Field[*request.Span, attribute.KeyValue]
@@ -311,9 +314,13 @@ func newMetricsReporter(
 				mr.deleteTargetMetrics(&id)
 			}
 
+			mr.providerShutdownWg.Add(1)
 			go func() {
-				if err := v.provider.ForceFlush(ctx); err != nil {
-					llog.Warn("error flushing evicted metrics provider", "error", err)
+				defer mr.providerShutdownWg.Done()
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.GetProviderShutdownTimeout())
+				defer cancel()
+				if err := v.provider.Shutdown(shutdownCtx); err != nil {
+					llog.Warn("error shutting down evicted metrics provider", "error", err)
 				}
 			}()
 		}, mr.newMetricSet)
@@ -330,6 +337,7 @@ func newMetricsReporter(
 	mr.pidTracker = NewPidServiceTracker()
 
 	systemMetrics := mr.newMetricsInstance(nil)
+	mr.systemProvider = systemMetrics.provider
 	systemMeter := systemMetrics.provider.Meter(reporterName)
 
 	if err := mr.setupHostInfoMeter(systemMeter); err != nil {
@@ -697,6 +705,8 @@ func (mr *MetricsReporter) newMetricsInstance(service *svc.Attrs) Metrics {
 	mlog.Debug("creating new Metrics reporter")
 	resources := resource.NewWithAttributes(semconv.SchemaURL, resourceAttributes...)
 
+	// mr.exporter is already wrapped in NoopShutdownExporter by MetricsExporterInstancer.Instantiate(),
+	// so provider.Shutdown() on eviction stops the PeriodicReader goroutine without touching the real exporter.
 	opts := []metric.Option{
 		metric.WithResource(resources),
 		metric.WithReader(metric.NewPeriodicReader(mr.exporter,
@@ -765,13 +775,24 @@ func (mr *MetricsReporter) isExponentialAggregation() bool {
 }
 
 func (mr *MetricsReporter) close() {
-	go func() {
-		if err := mr.exporter.Shutdown(mr.ctx); err != nil {
-			mlog().Warn("closing metrics provider", "error", err)
-			return
-		}
-		mlog().Debug("Metrics reporter closed")
-	}()
+	// Evict all remaining cache entries, triggering the eviction callback for
+	// each one. Each callback calls WaitGroup.Add(1) before spawning its
+	// goroutine, so all adds happen before the Wait() below.
+	mr.reporters.Close()
+
+	// Block until every evicted provider has finished flushing through the
+	// shared exporter.
+	mr.providerShutdownWg.Wait()
+
+	// Shut down the system-metrics provider so its PeriodicReader goroutine stops.
+	// The real exporter is shut down by MetricsExporterInstancer.Shutdown() in the
+	// instrumenter after all pipeline goroutines have exited.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), mr.cfg.GetProviderShutdownTimeout())
+	defer cancel()
+	if err := mr.systemProvider.Shutdown(shutdownCtx); err != nil {
+		mlog().Warn("closing system metrics provider", "error", err)
+	}
+	mlog().Debug("Metrics reporter closed")
 }
 
 // instrumentMetricsExporter checks whether the context is configured to report internal metrics and,
