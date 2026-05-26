@@ -402,6 +402,7 @@ NativeHistogramConfig holds configuration for native histograms
 | `metrics.interval` | `duration` | `OTEL_EBPF_METRICS_INTERVAL` | `0s` | `30s`, `5m`, `1ms`, etc |  |  |
 | `metrics.otel_sdk_log_level` | `string` | `OTEL_EBPF_SDK_LOG_LEVEL` |  |  |  | Works independently from the global LogLevel because it prints GBs of logs in Debug mode and the Info messages leak internal details that are not usually valuable for the final user. Accepted values: debug, info, warn, error (case-insensitive). |
 | `metrics.protocol` | `string` | `OTEL_EXPORTER_OTLP_PROTOCOL` |  | ``, `debug`, `grpc`, `http/json`, `http/protobuf` |  |  |
+| `metrics.provider_shutdown_timeout` | `duration` | `OTEL_EBPF_METRICS_PROVIDER_SHUTDOWN_TIMEOUT` | `0s` | `30s`, `5m`, `1ms`, etc |  | Is the maximum time allowed for a MeterProvider to flush its pending metrics when evicted from the reporters cache. Defaults to Interval when unset. |
 | `metrics.reporters_cache_len` | `integer` | `OTEL_EBPF_METRICS_REPORT_CACHE_LEN` | `256` |  |  |  |
 | `metrics.ttl` | `duration` | `OTEL_EBPF_METRICS_TTL` | `5m` | `30s`, `5m`, `1ms`, etc |  | Specifies the time since a metric was updated for the last time until it is removed from the metrics set. |
 
@@ -501,6 +502,7 @@ ReverseDNS is currently experimental. It is kept disabled by default and will be
 | `otel_metrics_export.interval` | `duration` | `OTEL_EBPF_METRICS_INTERVAL` | `0s` | `30s`, `5m`, `1ms`, etc |  |  |
 | `otel_metrics_export.otel_sdk_log_level` | `string` | `OTEL_EBPF_SDK_LOG_LEVEL` |  |  |  | Works independently from the global LogLevel because it prints GBs of logs in Debug mode and the Info messages leak internal details that are not usually valuable for the final user. Accepted values: debug, info, warn, error (case-insensitive). |
 | `otel_metrics_export.protocol` | `string` | `OTEL_EXPORTER_OTLP_PROTOCOL` |  | ``, `debug`, `grpc`, `http/json`, `http/protobuf` |  |  |
+| `otel_metrics_export.provider_shutdown_timeout` | `duration` | `OTEL_EBPF_METRICS_PROVIDER_SHUTDOWN_TIMEOUT` | `0s` | `30s`, `5m`, `1ms`, etc |  | Is the maximum time allowed for a MeterProvider to flush its pending metrics when evicted from the reporters cache. Defaults to Interval when unset. |
 | `otel_metrics_export.reporters_cache_len` | `integer` | `OTEL_EBPF_METRICS_REPORT_CACHE_LEN` | `256` |  |  |  |
 | `otel_metrics_export.ttl` | `duration` | `OTEL_EBPF_METRICS_TTL` | `5m` | `30s`, `5m`, `1ms`, etc |  | Specifies the time since a metric was updated for the last time until it is removed from the metrics set. |
 
