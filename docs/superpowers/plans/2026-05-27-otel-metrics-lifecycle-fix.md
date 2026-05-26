@@ -14,6 +14,22 @@
 
 ---
 
+## Phase split — who executes what
+
+The cluster in this work is an **on-prem cluster only the user can reach**. An automated agent cannot run `kubectl`, push to the cluster's registry, or scrape pprof endpoints on it.
+
+| Phase | Tasks | Executor |
+|---|---|---|
+| Phase 1 — Code audit + tests | 0–9 | Agent (or user). All work is local to the repo + `go test`. |
+| **CHECKPOINT 1** | — | Agent **stops** and reports back to user. User runs Phase 2. |
+| Phase 2 — Cluster verification | 10–14 | **User only.** Requires `kubectl`, the cluster registry, and a running affected pod. |
+| **CHECKPOINT 2** | — | User reports verification result (pass / fail / inconclusive) to the next session. |
+| Phase 3 — Upstream PR prep | 15–17 | Agent (or user). Local branch surgery + `gh pr create`. Only proceed if Phase 2 passed. |
+
+Every task in Phase 2 carries a **`USER ONLY`** banner. An agent reaching one of those banners must stop and surface the checkpoint to the user.
+
+---
+
 ## File Map
 
 | # | File | Status on branch | Purpose |
@@ -571,11 +587,29 @@ git commit -m "test(metrics): tighten eviction regression tests"
 
 ---
 
+---
+
+## CHECKPOINT 1 — Stop here if you are an agent
+
+At this point Phase 1 (code audit + tests) is complete. The cluster verification in Phase 2 requires `kubectl` access to the user's on-prem cluster, push permission to its image registry, and a running affected pod — none of which an automated agent has.
+
+**Agent action:** stop and report to the user. Include:
+- The list of Tasks 1–9 boxes that you ticked.
+- Any deviations you found and reconciled (or could not reconcile).
+- The output of `go test -race ./pkg/export/otel/...`.
+- A single sentence: "Phase 1 complete. Phase 2 (Tasks 10–14) is yours; ping me back for Phase 3 when verification passes."
+
+The user will execute Phase 2 themselves and return for Phase 3.
+
+---
+
 ## Part 3 — Verification on the leaking production cluster (Tasks 10–14)
+
+> **USER ONLY.** Every task in this part requires access to the on-prem cluster. Agents must not attempt these tasks.
 
 Spec §6. This is the part not yet done; do not skip.
 
-### Task 10: Build the verification container image
+### Task 10: Build the verification container image  *(USER ONLY)*
 
 **Files:**
 - existing `Dockerfile` / build scripts in the repo
@@ -617,7 +651,7 @@ If the user's environment uses a different image build pipeline (Kaniko, BuildKi
 
 ---
 
-### Task 11: Baseline capture on the leaking pod
+### Task 11: Baseline capture on the leaking pod  *(USER ONLY)*
 
 **Files:** none (operational task)
 
@@ -665,7 +699,7 @@ Expected: shows tens of thousands of goroutines, with `metric.NewPeriodicReader.
 
 ---
 
-### Task 12: Deploy the fix to a single pod
+### Task 12: Deploy the fix to a single pod  *(USER ONLY)*
 
 **Files:** none (operational task)
 
@@ -706,7 +740,7 @@ Save to `verification/deployment.md`:
 
 ---
 
-### Task 13: Observation window (≥ 4 hours)
+### Task 13: Observation window (≥ 4 hours)  *(USER ONLY)*
 
 **Files:** none (operational task)
 
@@ -761,7 +795,7 @@ ls verification/samples/ | wc -l   # confirm ≥ 16 samples for a 4-hour run
 
 ---
 
-### Task 14: Evaluate success criteria
+### Task 14: Evaluate success criteria  *(USER ONLY)*
 
 **Files:** none (decision task)
 
@@ -805,6 +839,17 @@ kubectl set image ds/<daemonset> -n <obi-namespace> obi=<original-image>
 ```
 
 Then diff against the §11 baseline. If `NewPeriodicReader.func2` count is now flat (or only growing slowly) but RSS still climbs, the residual leak is on the prom side (spec §1 out-of-scope note) and needs a separate plan.
+
+---
+
+---
+
+## CHECKPOINT 2 — Wait for user verification result
+
+Before starting Part 4, the user must report back:
+- **PASS** — all four success criteria from Task 14 held. Proceed to Part 4.
+- **FAIL** — one or more criteria failed. Do NOT open an upstream PR. The rollback in Task 14 Step 2b applies and a new spec is needed (likely focused on the prom-side leak — spec §6.6).
+- **INCONCLUSIVE** — verification could not be completed (cluster access lost, pod recycled, etc.). Re-run Phase 2; do not proceed to Part 4.
 
 ---
 
