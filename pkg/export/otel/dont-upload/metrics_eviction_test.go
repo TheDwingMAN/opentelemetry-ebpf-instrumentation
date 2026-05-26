@@ -205,6 +205,7 @@ func TestEviction_NoGoroutineLeak(t *testing.T) {
 	// Give the eviction shutdown goroutines time to finish.
 	// Each has a timeout of cfg.GetProviderShutdownTimeout() (= Interval = 20ms).
 	time.Sleep(exportInterval * 10)
+	runtime.GC()     // settle time.AfterFunc callbacks, finalizers, and transient goroutines
 	runtime.Gosched()
 
 	goroutinesAfter := periodicReaderGoroutines()
@@ -232,6 +233,35 @@ func TestProviderShutdownTimeout_Configurable(t *testing.T) {
 	}
 	assert.Equal(t, 30*time.Second, explicit.GetProviderShutdownTimeout(),
 		"explicit ProviderShutdownTimeout should take precedence over Interval")
+}
+
+// TestExporterInstancer_ShutdownIdempotent verifies that calling
+// MetricsExporterInstancer.Shutdown() more than once is safe — the sync.Once
+// guard must prevent a double-close of the underlying shared exporter.
+func TestExporterInstancer_ShutdownIdempotent(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	instancer := &otelcfg.MetricsExporterInstancer{
+		Cfg: &otelcfg.MetricsConfig{
+			CommonEndpoint:  otlp.ServerEndpoint,
+			MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		},
+	}
+
+	// Populate i.instance so there is something real to shut down.
+	_, err = instancer.Instantiate(ctx)
+	require.NoError(t, err)
+
+	// First shutdown must succeed without error.
+	require.NoError(t, instancer.Shutdown(ctx), "first Shutdown should return nil")
+
+	// Second shutdown must also succeed (sync.Once prevents double-close).
+	require.NoError(t, instancer.Shutdown(ctx), "second Shutdown should return nil (idempotent)")
 }
 
 // periodicReaderGoroutines counts live goroutines running
