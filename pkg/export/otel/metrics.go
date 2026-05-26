@@ -789,8 +789,10 @@ func (mr *MetricsReporter) close() {
 	// instrumenter after all pipeline goroutines have exited.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), mr.cfg.GetProviderShutdownTimeout())
 	defer cancel()
-	if err := mr.systemProvider.Shutdown(shutdownCtx); err != nil {
-		mlog().Warn("closing system metrics provider", "error", err)
+	if mr.systemProvider != nil {
+		if err := mr.systemProvider.Shutdown(shutdownCtx); err != nil {
+			mlog().Warn("closing system metrics provider", "error", err)
+		}
 	}
 	mlog().Debug("Metrics reporter closed")
 }
