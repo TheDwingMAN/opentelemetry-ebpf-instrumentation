@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -47,13 +48,18 @@ func (i *MetricsExporterInstancer) Instantiate(ctx context.Context) (sdkmetric.E
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
 	if i.instance != nil {
-		return NoopShutdownExporter{i.instance}, nil
+		wrapped := NoopShutdownExporter{i.instance}
+		meilog().Info("DEBUG-LIFECYCLE: Instantiate returning wrapper",
+			"path", "cached", "inner_type", fmt.Sprintf("%T", i.instance))
+		return wrapped, nil
 	}
 
 	// If a MetricsConsumer is configured, use the ConsumerExporter
 	if i.Cfg.MetricsConsumer != nil {
 		meilog().Debug("instantiating Consumer MetricsReporter")
 		i.instance = NewConsumerExporter(i.Cfg.MetricsConsumer)
+		meilog().Info("DEBUG-LIFECYCLE: Instantiate returning wrapper",
+			"path", "consumer", "inner_type", fmt.Sprintf("%T", i.instance))
 		return NoopShutdownExporter{i.instance}, nil
 	}
 
@@ -73,6 +79,8 @@ func (i *MetricsExporterInstancer) Instantiate(ctx context.Context) (sdkmetric.E
 		return nil, fmt.Errorf("invalid protocol value: %q. Accepted values are: %s, %s, %s",
 			proto, ProtocolGRPC, ProtocolHTTPJSON, ProtocolHTTPProtobuf)
 	}
+	meilog().Info("DEBUG-LIFECYCLE: Instantiate returning wrapper",
+		"path", "otlp", "inner_type", fmt.Sprintf("%T", i.instance))
 	return NoopShutdownExporter{i.instance}, nil
 }
 
@@ -82,6 +90,8 @@ func (i *MetricsExporterInstancer) Instantiate(ctx context.Context) (sdkmetric.E
 func (i *MetricsExporterInstancer) Shutdown(ctx context.Context) error {
 	var err error
 	i.shutdownOnce.Do(func() {
+		meilog().Warn("DEBUG-LIFECYCLE: shutting down real exporter",
+			"stack", string(debug.Stack()))
 		i.mutex.Lock()
 		exp := i.instance
 		i.mutex.Unlock()
