@@ -11,6 +11,7 @@ enum {
     k_event_stat_tcp_failed_connection = 2, // StatTypeTCPFailedConnection
     k_event_stat_tcp_retransmit = 3,        // StatTypeTCPRetransmit
     k_event_stat_tcp_io = 4,                // StatTypeTCPIo
+    k_event_stat_block_io = 5,              // StatTypeBlockIo
 };
 
 // batch size used in tcp io metric
@@ -38,3 +39,15 @@ enum network_io_direction : u8 {
     direction_receive = 1,
     direction_transmit = 2,
 };
+
+typedef struct block_io {
+    u8 flags; // Must be first, we use it to tell what kind of event we have on the ring buffer
+    u8 op;    // 0=read, 1=write (from rwbs[0])
+    u8 _pad[2];
+    u32 dev;        // kernel dev_t (major<<20 | minor)
+    u64 latency_ns; // issue -> complete
+    u64 bytes;      // nr_sector * 512
+} block_io_t;
+
+// Force struct into the ELF for automatic creation of Golang struct
+const block_io_t *unused_block_io __attribute__((unused));
