@@ -29,6 +29,7 @@ const (
 	FeatureStatsTCPFailedConnections
 	FeatureStatsTCPRetransmits
 	FeatureStatsTCPIo
+	FeatureStorageBlock
 	FeatureNetworkInterZone
 	FeatureApplicationRED
 	// FeatureSpanLegacy emits span metrics under the Grafana-convention
@@ -66,6 +67,8 @@ var FeatureMapper = map[string]Features{
 	"stats_tcp_failed_connections": FeatureStatsTCPFailedConnections,
 	"stats_tcp_retransmits":        FeatureStatsTCPRetransmits,
 	"stats_tcp_io":                 FeatureStatsTCPIo,
+	"storage":                      FeatureStorageBlock,
+	"storage_block":                FeatureStorageBlock,
 	"network":                      FeatureNetwork,
 	"network_inter_zone":           FeatureNetworkInterZone,
 	"network_flow_packets":         FeatureNetworkFlowPackets,
@@ -314,7 +317,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats)
+	return f.any(FeatureStats | FeatureStorageBlock)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -331,6 +334,10 @@ func (f Features) StatsTCPRetransmits() bool {
 
 func (f Features) StatsTCPIo() bool {
 	return f.any(FeatureStatsTCPIo)
+}
+
+func (f Features) StorageBlock() bool {
+	return f.any(FeatureStorageBlock)
 }
 
 func (f Features) NetworkInterZone() bool {

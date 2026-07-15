@@ -212,6 +212,7 @@ func TestInvalidSpanMetricsConfig(t *testing.T) {
 	}
 }
 
+<<<<<<< HEAD
 func TestFeatureJSONSchemaFlagsDeprecatedNames(t *testing.T) {
 	items := Features(0).JSONSchema().Items
 	require.Len(t, items.OneOf, 2)
@@ -240,6 +241,13 @@ func TestDeprecatedEnabled(t *testing.T) {
 		mustLoadFeatures(t, "application_span_sizes").DeprecatedEnabled())
 
 	assert.Empty(t, mustLoadFeatures(t, "application", "application_span_otel").DeprecatedEnabled())
+}
+
+func TestStorageBlockFeatureParsing(t *testing.T) {
+	var f Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block"]`), &f))
+	assert.True(t, f.StorageBlock())
+	assert.True(t, f.StatMetrics()) // storage rides the stats pipeline
 }
 
 func TestFeatureUndefined(t *testing.T) {
