@@ -16,6 +16,7 @@ const (
 	StatTypeTCPFailedConnection
 	StatTypeTCPRetransmit
 	StatTypeTCPIo
+	StatTypeBlockIo
 )
 
 type TCPFailReasonType string
@@ -86,6 +87,7 @@ type Stat struct {
 	TCPFailedConnection *TCPFailedConnection `json:"-"`
 	TCPRetransmit       bool                 `json:"-"`
 	TCPIo               *TCPIo               `json:"-"`
+	BlockIo             *BlockIo             `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -104,6 +106,13 @@ type TCPFailedConnection struct {
 type TCPIo struct {
 	Direction uint8  `json:"direction"`
 	Bytes     uint32 `json:"bytes"`
+}
+
+type BlockIo struct {
+	Dev       uint32 `json:"dev"`
+	Op        uint8  `json:"op"`
+	LatencyNs uint64 `json:"latency_ns"`
+	Bytes     uint64 `json:"bytes"`
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.
@@ -149,6 +158,23 @@ type StatsTCPIo struct {
 	Bytes     [TCPIoBatchSize]uint32
 	Conn
 }
+
+// StatsBlockIo mirrors block_io_t in bpf/statsolly/types.h.
+type StatsBlockIo struct {
+	_         structs.HostLayout
+	Flags     uint8
+	Op        uint8
+	Pad       [2]uint8
+	Dev       uint32
+	LatencyNs uint64
+	Bytes     uint64
+}
+
+// BlockIo operation codes (mirror blk_op_from_rwbs in bpf/statsolly/blk_io.c).
+const (
+	BlockOpRead  uint8 = 0
+	BlockOpWrite uint8 = 1
+)
 
 // TCPIoBatchSize mirrors k_tcp_io_batch_size in bpf/statsolly/types.h.
 const TCPIoBatchSize = 10
