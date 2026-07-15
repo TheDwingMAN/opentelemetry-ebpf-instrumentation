@@ -42,6 +42,8 @@ const (
 	progObiStatsKprobeTCPSendmsg                      = "obi_stats_kprobe_tcp_sendmsg"
 	progObiStatsKretprobeTCPSendmsg                   = "obi_stats_kretprobe_tcp_sendmsg"
 	progObiStatsKprobeTCPCleanupRbuf                  = "obi_stats_kprobe_tcp_cleanup_rbuf"
+	progObiStatsTpBlockRqIssue                        = "obi_stats_tp_block_rq_issue"
+	progObiStatsTpBlockRqComplete                     = "obi_stats_tp_block_rq_complete"
 )
 
 // Hook point names, grouped by attach type.
@@ -53,6 +55,8 @@ const (
 
 	// Tracepoints: group/name, are validated by TestTracepointConstantFormat
 	TracepointInetSockSetState = "sock/inet_sock_set_state"
+	TracepointBlockRqIssue     = "block/block_rq_issue"
+	TracepointBlockRqComplete  = "block/block_rq_complete"
 
 	// Raw tracepoints: name only (no group prefix).
 	RawTracepointTCPRetransmitSkb = "tcp_retransmit_skb"
@@ -112,6 +116,9 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	}
 	if !features.StatsTCPIo() {
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
+	}
+	if !features.StorageBlock() {
+		toDisable = append(toDisable, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
 	}
 
 	if err := fixupSpec(spec, toDisable); err != nil {
@@ -202,6 +209,32 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 			name:    TracepointInetSockSetState,
 			program: objects.ObiStatsTpInetSockSetStateConnRole,
 			enabled: connRoleUsed,
+		},
+	} {
+		if !t.enabled {
+			continue
+		}
+
+		group, tp, _ := strings.Cut(t.name, "/")
+		l, err := link.Tracepoint(group, tp, t.program, nil)
+		if err != nil {
+			closeAll(closables)
+			return nil, fmt.Errorf("failed tracepoint attachment %s: %w", t.name, err)
+		}
+		closables = append(closables, l)
+	}
+
+	// block tracepoints
+	for _, t := range []probe{
+		{
+			name:    TracepointBlockRqIssue,
+			program: objects.ObiStatsTpBlockRqIssue,
+			enabled: features.StorageBlock(),
+		},
+		{
+			name:    TracepointBlockRqComplete,
+			program: objects.ObiStatsTpBlockRqComplete,
+			enabled: features.StorageBlock(),
 		},
 	} {
 		if !t.enabled {
