@@ -40,6 +40,7 @@ type statMetricsReporter struct {
 	tcpFailedConnections *Expirer[prometheus.Counter]
 	tcpRetransmits       *Expirer[prometheus.Counter]
 	tcpIo                *Expirer[prometheus.Counter]
+	diskIOLatency        *Expirer[prometheus.Histogram]
 
 	promConnect *connector.PrometheusManager
 
@@ -47,6 +48,7 @@ type statMetricsReporter struct {
 	tcpFailedConnectionsAttrs []attributes.Field[*ebpf.Stat, string]
 	tcpRetransmitsAttrs       []attributes.Field[*ebpf.Stat, string]
 	tcpIoAttrs                []attributes.Field[*ebpf.Stat, string]
+	diskIOLatencyAttrs        []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -159,6 +161,24 @@ func newStatsReporter(
 		register = append(register, mr.tcpFailedConnections)
 	}
 
+	if cfg.CommonCfg.Features.StorageBlock() {
+		log.Debug("registering stat disk io latency metric")
+
+		mr.diskIOLatencyAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskIOLatency))
+
+		mr.diskIOLatency = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:                            attributes.StatDiskIOLatency.Prom,
+			Help:                            "measures the block I/O latency as calculated by the kernel in seconds",
+			Buckets:                         cfg.Config.Buckets.StatTCPRttHistogram,
+			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
+			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
+			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
+		}, labelNames(mr.diskIOLatencyAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskIOLatency)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -181,6 +201,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPFailedConnections(stat)
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
+			r.observeDiskIOLatency(stat)
 		}
 	}
 }
@@ -215,4 +236,12 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 	}
 	r.tcpIo.WithLabelValues(labelValues(stat, r.tcpIoAttrs)...).
 		Metric.Add(float64(stat.TCPIo.Bytes))
+}
+
+func (r *statMetricsReporter) observeDiskIOLatency(stat *ebpf.Stat) {
+	if r.diskIOLatency == nil || stat.BlockIo == nil {
+		return
+	}
+	r.diskIOLatency.WithLabelValues(labelValues(stat, r.diskIOLatencyAttrs)...).
+		Metric.Observe(float64(stat.BlockIo.LatencyNs) / 1_000_000_000.0)
 }
