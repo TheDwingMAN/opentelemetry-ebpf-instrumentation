@@ -127,6 +127,14 @@ func getDefinitions(
 		extraGroupAttributes[GroupStats],
 	)
 
+	// disk I/O stat metrics attributes
+	statsDiskAttributes := AttrReportGroup{
+		Attributes: map[attr.Name]Default{
+			attr.DiskDevice:      true,
+			attr.DiskIOOperation: true,
+		},
+	}
+
 	// attributes to be reported exclusively for network metrics when
 	// kubernetes metadata is enabled
 	networkKubeAttributes := NewAttrReportGroup(
@@ -558,6 +566,10 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{
 				attr.NetworkIoDirection: true,
 			},
+		},
+		StatDiskIOLatency.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{},
 		},
 
 		// span and service graph metrics don't yet implement attribute selection,

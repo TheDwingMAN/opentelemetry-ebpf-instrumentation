@@ -4,6 +4,8 @@
 package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
+	"fmt"
+
 	"go.opentelemetry.io/otel/attribute"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
@@ -69,6 +71,22 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.NetworkIoDirection), networkIoDirectionStr(NetworkIoDirectionCode(direction)))
 		}
+	case attr.DiskDevice:
+		getter = func(s *Stat) attribute.KeyValue {
+			var dev uint32
+			if s.BlockIo != nil {
+				dev = s.BlockIo.Dev
+			}
+			return attribute.String(string(attr.DiskDevice), fmtDev(dev))
+		}
+	case attr.DiskIOOperation:
+		getter = func(s *Stat) attribute.KeyValue {
+			op := "read"
+			if s.BlockIo != nil && s.BlockIo.Op == BlockOpWrite {
+				op = "write"
+			}
+			return attribute.String(string(attr.DiskIOOperation), op)
+		}
 
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
@@ -121,4 +139,10 @@ func networkIoDirectionStr(d NetworkIoDirectionCode) string {
 		return string(DirectionReceive)
 	}
 	return ""
+}
+
+// fmtDev formats a Linux dev_t value as "<major>:<minor>", mirroring the
+// kernel's MAJOR()/MINOR() macros.
+func fmtDev(dev uint32) string {
+	return fmt.Sprintf("%d:%d", dev>>20, dev&0xFFFFF)
 }

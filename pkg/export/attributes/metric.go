@@ -403,6 +403,12 @@ var (
 		Unit:    "By",
 		Type:    InstrumentCounter,
 	})
+	StatDiskIOLatency = metric(Name{
+		Section: "system.disk.io.latency",
+		OTEL:    "system.disk.io.latency",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
 )
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.
