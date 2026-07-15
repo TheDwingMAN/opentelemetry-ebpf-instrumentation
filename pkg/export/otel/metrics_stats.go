@@ -76,6 +76,7 @@ func newStatMeterProvider(res *resource.Resource, exporter *sdkmetric.Exporter, 
 		metric.WithResource(res),
 		metric.WithReader(metric.NewPeriodicReader(*exporter, metric.WithInterval(interval))),
 		metric.WithView(statHistogramView(attributes.StatTCPRtt.OTEL, cfg.Buckets.StatTCPRttHistogram, isExponential, cfg.ExponentialHistogram)),
+		metric.WithView(statHistogramView(attributes.StatDiskIOLatency.OTEL, cfg.Buckets.StatTCPRttHistogram, isExponential, cfg.ExponentialHistogram)),
 	)
 }
 
@@ -88,6 +89,7 @@ type statMetricsExporter struct {
 	tcpFailedConnections *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	tcpRetransmits       *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	tcpIo                *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	diskIOLatency        *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
 	expireTTL            time.Duration
 	in                   <-chan []*ebpf.Stat
 }
@@ -210,6 +212,22 @@ func newStatMetricsExporter(
 		nme.tcpFailedConnections = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, tcpFailedConnections, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StorageBlock() {
+		log := log.With("metricFamily", "StorageBlock")
+
+		h, err := ebpfEvents.Float64Histogram(attributes.StatDiskIOLatency.OTEL, metric2.WithUnit("s"))
+		if err != nil {
+			log.Error("creating disk io latency histogram", "error", err)
+			return nil, err
+		}
+
+		attrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatDiskIOLatency))
+
+		nme.diskIOLatency = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -232,6 +250,10 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if me.tcpIo != nil && v.TCPIo != nil {
 				tcpIo, attrs := me.tcpIo.ForRecord(v)
 				tcpIo.Add(ctx, int64(v.TCPIo.Bytes), metric2.WithAttributeSet(attrs))
+			}
+			if me.diskIOLatency != nil && v.BlockIo != nil {
+				h, attrs := me.diskIOLatency.ForRecord(v)
+				h.Record(ctx, float64(v.BlockIo.LatencyNs)/1_000_000_000.0, metric2.WithAttributeSet(attrs))
 			}
 		}
 	}
