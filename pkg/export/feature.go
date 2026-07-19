@@ -29,7 +29,6 @@ const (
 	FeatureStatsTCPFailedConnections
 	FeatureStatsTCPRetransmits
 	FeatureStatsTCPIo
-	FeatureStorageBlock
 	FeatureNetworkInterZone
 	FeatureApplicationRED
 	// FeatureSpanLegacy emits span metrics under the Grafana-convention
@@ -50,6 +49,7 @@ const (
 	FeatureApplicationHost
 	FeatureApplicationRuntime
 	FeatureEBPF
+	FeatureStorageBlock
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
