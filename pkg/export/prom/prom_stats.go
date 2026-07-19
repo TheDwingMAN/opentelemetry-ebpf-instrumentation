@@ -171,7 +171,7 @@ func newStatsReporter(
 		mr.diskIOLatency = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:                            attributes.StatDiskIOLatency.Prom,
 			Help:                            "measures the block I/O latency as calculated by the kernel in seconds",
-			Buckets:                         cfg.Config.Buckets.StatTCPRttHistogram,
+			Buckets:                         cfg.Config.Buckets.StatDiskIOLatencyHistogram,
 			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
 			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
 			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,

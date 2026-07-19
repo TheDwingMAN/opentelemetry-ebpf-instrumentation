@@ -12,6 +12,7 @@ type Buckets struct {
 	GenAITokenUsageHistogram     []float64 `yaml:"gen_ai_client_token_usage_histogram"`
 	GenAIClientDurationHistogram []float64 `yaml:"gen_ai_client_operation_duration_histogram"`
 	StatTCPRttHistogram          []float64 `yaml:"stat_tcp_rtt_histogram"`
+	StatDiskIOLatencyHistogram   []float64 `yaml:"stat_disk_io_latency_histogram"`
 }
 
 // DefaultBuckets define the default explicit bucket boundaries. They are ignored by the OTEL exporter when
@@ -31,4 +32,7 @@ var DefaultBuckets = Buckets{
 
 	// Covers sub-millisecond to low-second RTT range.
 	StatTCPRttHistogram: []float64{0.0005, 0.001, 0.002, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0},
+
+	// Covers NVMe sub-millisecond service times up to saturated-device multi-second tails.
+	StatDiskIOLatencyHistogram: []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 2.5, 5.0},
 }

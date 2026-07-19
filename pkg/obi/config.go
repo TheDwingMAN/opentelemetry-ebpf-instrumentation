@@ -776,10 +776,10 @@ func (c *Config) validate(context validationContext) error {
 	applicationEnabled := c.enabledForValidation(FeatureAppO11y, context)
 	statsEnabled := c.enabledForValidation(FeatureStatsO11y, context)
 	if !networkEnabled && !applicationEnabled && !statsEnabled {
-		return ConfigError("at least one of 'network', 'application' or 'stats' features must be enabled. " +
-			"Enable an OpenTelemetry or Prometheus metrics export, then enable any of the network*, application* or stats*" +
-			"features using the 'OTEL_EBPF_METRICS_FEATURES=network,application,stats' environment variable " +
-			"or 'meter_provider: { features: [network,application,stats] }' in the YAML configuration file. ")
+		return ConfigError("at least one of 'network', 'application', 'stats' or 'storage' features must be enabled. " +
+			"Enable an OpenTelemetry or Prometheus metrics export, then enable any of the network*, application*, stats* " +
+			"or storage* features using the 'OTEL_EBPF_METRICS_FEATURES=network,application,stats,storage' environment variable " +
+			"or 'meter_provider: { features: [network,application,stats,storage] }' in the YAML configuration file. ")
 	}
 
 	if networkEnabled && c.NetworkFlows.Source == EbpfSourceTC && context.checkCiliumCompatibility != nil {

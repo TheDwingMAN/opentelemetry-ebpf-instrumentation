@@ -76,7 +76,7 @@ func newStatMeterProvider(res *resource.Resource, exporter *sdkmetric.Exporter, 
 		metric.WithResource(res),
 		metric.WithReader(metric.NewPeriodicReader(*exporter, metric.WithInterval(interval))),
 		metric.WithView(statHistogramView(attributes.StatTCPRtt.OTEL, cfg.Buckets.StatTCPRttHistogram, isExponential, cfg.ExponentialHistogram)),
-		metric.WithView(statHistogramView(attributes.StatDiskIOLatency.OTEL, cfg.Buckets.StatTCPRttHistogram, isExponential, cfg.ExponentialHistogram)),
+		metric.WithView(statHistogramView(attributes.StatDiskIOLatency.OTEL, cfg.Buckets.StatDiskIOLatencyHistogram, isExponential, cfg.ExponentialHistogram)),
 	)
 }
 
