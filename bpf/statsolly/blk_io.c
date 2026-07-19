@@ -15,6 +15,7 @@
 enum { k_blk_bytes_per_sector = 512 };
 
 // rwbs[0] == 'W' (write) or 'F' (flush) means write; anything else is a read.
+// Other op codes (e.g. discard 'D') intentionally fold into read for this skeleton (read|write only).
 static __always_inline u8 blk_op_from_rwbs(const unsigned char rwbs[8]) {
     return (rwbs[0] == 'W' || rwbs[0] == 'F') ? 1 : 0;
 }

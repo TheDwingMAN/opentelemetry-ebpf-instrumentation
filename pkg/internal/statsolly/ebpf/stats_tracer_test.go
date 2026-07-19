@@ -168,6 +168,8 @@ func TestFixupSpecUnknownProgram(t *testing.T) {
 func TestTracepointConstantFormat(t *testing.T) {
 	hooks := []string{
 		TracepointInetSockSetState,
+		TracepointBlockRqIssue,
+		TracepointBlockRqComplete,
 	}
 	for _, hook := range hooks {
 		if _, _, ok := strings.Cut(hook, "/"); !ok {
