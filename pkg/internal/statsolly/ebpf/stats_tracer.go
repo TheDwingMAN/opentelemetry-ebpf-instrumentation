@@ -83,10 +83,6 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	}
 
 	objects := StatsObjects{}
-	spec, err := LoadStats()
-	if err != nil {
-		return nil, fmt.Errorf("loading BPF data: %w", err)
-	}
 
 	// UndefinedGroup is intentional: we only need to check NetworkTCPHandshakeRole,
 	// which is a direct metric attribute.
@@ -117,23 +113,18 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	if !features.StatsTCPIo() {
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
-	if !features.StorageBlock() {
+	storageBlock := features.StorageBlock()
+	if !storageBlock {
 		toDisable = append(toDisable, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
 	}
 
-	if err := fixupSpec(spec, toDisable); err != nil {
-		return nil, fmt.Errorf("fixing up BPF spec: %w", err)
+	load := func(toDisable []string) error {
+		objects = StatsObjects{}
+		return loadStatsObjects(cfg, toDisable, &objects)
 	}
-
-	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
-
-	sharedMaps := map[string]*ebpf.Map{}
-	var mu sync.Mutex
-	if err := ebpfconvenience.LoadSpec(spec, &objects, map[string]any{
-		"g_bpf_debug":             cfg.BpfDebug,
-		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
-	}, sharedMaps, &mu, "", nil); err != nil {
-		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
+	storageBlock, err = loadWithStorageFallback(load, toDisable, storageBlock, tlog)
+	if err != nil {
+		return nil, err
 	}
 
 	var closables []io.Closer
@@ -224,17 +215,19 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		closables = append(closables, l)
 	}
 
-	// block tracepoints
+	// block tracepoints: best-effort. A kernel where the block tracepoints
+	// cannot be attached must not take down the rest of the stats agent.
+	var storageLinks []io.Closer
 	for _, t := range []probe{
 		{
 			name:    TracepointBlockRqIssue,
 			program: objects.ObiStatsTpBlockRqIssue,
-			enabled: features.StorageBlock(),
+			enabled: storageBlock,
 		},
 		{
 			name:    TracepointBlockRqComplete,
 			program: objects.ObiStatsTpBlockRqComplete,
-			enabled: features.StorageBlock(),
+			enabled: storageBlock,
 		},
 	} {
 		if !t.enabled {
@@ -244,11 +237,15 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		group, tp, _ := strings.Cut(t.name, "/")
 		l, err := link.Tracepoint(group, tp, t.program, nil)
 		if err != nil {
-			closeAll(closables)
-			return nil, fmt.Errorf("failed tracepoint attachment %s: %w", t.name, err)
+			tlog.Warn("failed block tracepoint attachment; disabling storage block metrics",
+				"tracepoint", t.name, "error", err)
+			closeAll(storageLinks)
+			storageLinks = nil
+			break
 		}
-		closables = append(closables, l)
+		storageLinks = append(storageLinks, l)
 	}
+	closables = append(closables, storageLinks...)
 
 	// raw tracepoints
 	for _, t := range []probe{
@@ -308,6 +305,53 @@ func (m *StatsFetcher) StatsEventsMap() *ebpf.Map {
 
 func (m *StatsFetcher) DebugEventsMap() *ebpf.Map {
 	return m.objects.DebugEvents
+}
+
+// loadStatsObjects loads a fresh copy of the statsolly BPF spec with the given
+// programs stubbed out, and assigns the resulting objects.
+func loadStatsObjects(cfg *config.EBPFTracer, toDisable []string, objects *StatsObjects) error {
+	spec, err := LoadStats()
+	if err != nil {
+		return fmt.Errorf("loading BPF data: %w", err)
+	}
+
+	if err := fixupSpec(spec, toDisable); err != nil {
+		return fmt.Errorf("fixing up BPF spec: %w", err)
+	}
+
+	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
+
+	sharedMaps := map[string]*ebpf.Map{}
+	var mu sync.Mutex
+	if err := ebpfconvenience.LoadSpec(spec, objects, map[string]any{
+		"g_bpf_debug":             cfg.BpfDebug,
+		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
+	}, sharedMaps, &mu, "", nil); err != nil {
+		return fmt.Errorf("loading stats eBPF spec: %w", err)
+	}
+	return nil
+}
+
+// loadWithStorageFallback loads the spec and, if loading fails while the
+// storage block programs are enabled, stubs them out and retries once, so a
+// kernel incompatibility in the storage probes never takes down the rest of
+// the stats agent. It returns whether storage block metrics remain enabled.
+func loadWithStorageFallback(load func(toDisable []string) error, toDisable []string, storageBlock bool, log *slog.Logger) (bool, error) {
+	err := load(toDisable)
+	if err == nil {
+		return storageBlock, nil
+	}
+	if !storageBlock {
+		return false, err
+	}
+
+	log.Warn("loading stats eBPF spec failed with storage block metrics enabled;"+
+		" disabling storage block metrics and retrying (likely kernel incompatibility)", "error", err)
+	toDisable = append(toDisable, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
+	if err := load(toDisable); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // fixupSpec replaces disabled programs with no-op stubs before loading,
