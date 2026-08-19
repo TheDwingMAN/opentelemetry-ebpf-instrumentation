@@ -56,7 +56,7 @@ func TestStatHistogramView_ExplicitUsesBuckets(t *testing.T) {
 	assert.Equal(t, buckets, aggregation.Boundaries)
 }
 
-func TestStatMetricsExporter_DiskIOLatency(t *testing.T) {
+func TestStatMetricsExporter_DiskMetrics(t *testing.T) {
 	defer otelcfg.RestoreEnvAfterExecution()()
 	ctx := t.Context()
 
@@ -77,6 +77,9 @@ func TestStatMetricsExporter_DiskIOLatency(t *testing.T) {
 			SelectorCfg: &attributes.SelectorConfig{
 				SelectionCfg: attributes.Selection{
 					attributes.StatDiskIOLatency.Section: attributes.InclusionLists{
+						Include: []string{"*"},
+					},
+					attributes.StatDiskIOBytes.Section: attributes.InclusionLists{
 						Include: []string{"*"},
 					},
 				},
@@ -100,15 +103,43 @@ func TestStatMetricsExporter_DiskIOLatency(t *testing.T) {
 		},
 	})
 
-	// THEN a single disk.io.latency histogram data point is exported
+	// THEN that one event produces both disk metrics: the latency histogram
+	// and the bytes counter.
+	//
+	// Both are exported independently, so the order they reach the collector is
+	// not deterministic and we cannot assert on "the next record". Drain
+	// whatever has arrived on each tick and keep the first record seen per
+	// metric name -- first-seen is also the value we want under either
+	// temporality, since a delta counter reports 0 on subsequent intervals.
+	seen := map[string]collector.MetricRecord{}
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		metric := readChan(ct, otlp.Records())
-		assert.Equal(ct, "system.disk.io.latency", metric.Name)
-		assert.Equal(ct, map[string]string{
-			"system.device":     "8:16",
-			"disk.io.operation": "write",
-		}, metric.Attributes)
-		assert.InEpsilon(ct, 0.002, metric.FloatVal, 0.0001)
-		assert.Equal(ct, 1, metric.Count)
+		for drained := false; !drained; {
+			select {
+			case rec := <-otlp.Records():
+				if _, ok := seen[rec.Name]; !ok {
+					seen[rec.Name] = rec
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.Contains(ct, seen, "obi.stat.disk.io.latency")
+		assert.Contains(ct, seen, "obi.stat.disk.io.bytes")
 	}, timeout, 100*time.Millisecond)
+
+	// Both metrics carry the same device/direction attributes, decoded from
+	// dev 0x800010 (major 8, minor 16) and BlockOpWrite.
+	diskAttrs := map[string]string{
+		"system.device":     "8:16",
+		"disk.io.direction": "write",
+	}
+
+	latency := seen["obi.stat.disk.io.latency"]
+	assert.Equal(t, diskAttrs, latency.Attributes)
+	assert.InEpsilon(t, 0.002, latency.FloatVal, 0.0001)
+	assert.Equal(t, 1, latency.Count)
+
+	ioBytes := seen["obi.stat.disk.io.bytes"]
+	assert.Equal(t, diskAttrs, ioBytes.Attributes)
+	assert.Equal(t, int64(4096), ioBytes.IntVal)
 }

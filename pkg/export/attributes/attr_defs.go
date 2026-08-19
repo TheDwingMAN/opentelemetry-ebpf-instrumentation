@@ -131,7 +131,7 @@ func getDefinitions(
 	statsDiskAttributes := AttrReportGroup{
 		Attributes: map[attr.Name]Default{
 			attr.DiskDevice:      true,
-			attr.DiskIOOperation: true,
+			attr.DiskIODirection: true,
 		},
 	}
 
@@ -568,6 +568,10 @@ func getDefinitions(
 			},
 		},
 		StatDiskIOLatency.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskIOBytes.Section: {
 			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
 			Attributes: map[attr.Name]Default{},
 		},

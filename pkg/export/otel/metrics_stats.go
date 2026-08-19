@@ -90,6 +90,7 @@ type statMetricsExporter struct {
 	tcpRetransmits       *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	tcpIo                *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskIOLatency        *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
+	diskIOBytes          *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	expireTTL            time.Duration
 	in                   <-chan []*ebpf.Stat
 }
@@ -212,8 +213,8 @@ func newStatMetricsExporter(
 		nme.tcpFailedConnections = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, tcpFailedConnections, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
-	if cfg.CommonCfg.Features.StorageBlock() {
-		log := log.With("metricFamily", "StorageBlock")
+	if cfg.CommonCfg.Features.StorageBlockLatency() {
+		log := log.With("metricFamily", "StorageBlockLatency")
 
 		h, err := ebpfEvents.Float64Histogram(attributes.StatDiskIOLatency.OTEL, metric2.WithUnit("s"))
 		if err != nil {
@@ -226,6 +227,22 @@ func newStatMetricsExporter(
 			attrProv.For(attributes.StatDiskIOLatency))
 
 		nme.diskIOLatency = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if cfg.CommonCfg.Features.StorageBlockIo() {
+		log := log.With("metricFamily", "StorageBlockIo")
+
+		diskIOBytes, err := ebpfEvents.Int64Counter(attributes.StatDiskIOBytes.OTEL, metric2.WithUnit("By"))
+		if err != nil {
+			log.Error("creating disk io bytes counter", "error", err)
+			return nil, err
+		}
+
+		bytesAttrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatDiskIOBytes))
+
+		nme.diskIOBytes = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, diskIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
@@ -254,6 +271,10 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if me.diskIOLatency != nil && v.BlockIo != nil {
 				h, attrs := me.diskIOLatency.ForRecord(v)
 				h.Record(ctx, float64(v.BlockIo.LatencyNs)/1_000_000_000.0, metric2.WithAttributeSet(attrs))
+			}
+			if me.diskIOBytes != nil && v.BlockIo != nil {
+				diskIOBytes, attrs := me.diskIOBytes.ForRecord(v)
+				diskIOBytes.Add(ctx, int64(v.BlockIo.Bytes), metric2.WithAttributeSet(attrs))
 			}
 		}
 	}

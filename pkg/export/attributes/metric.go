@@ -404,10 +404,32 @@ var (
 		Type:    InstrumentCounter,
 	})
 	StatDiskIOLatency = metric(Name{
-		Section: "system.disk.io.latency",
-		OTEL:    "system.disk.io.latency",
+		Section: "obi.stat.disk.io.latency",
+		OTEL:    "obi.stat.disk.io.latency",
 		Unit:    "s",
 		Type:    InstrumentHistogram,
+	})
+	// StatDiskIOBytes carries the same semantics as upstream semconv's
+	// `system.disk.io` (disk bytes transferred, keyed by `system.device` and
+	// `disk.io.direction`) but is deliberately published under the OBI
+	// namespace rather than as the standard metric.
+	//
+	// Emitting `system.disk.io` would collide with the OTel Collector's
+	// `hostmetrics` receiver, which publishes that exact metric with the same
+	// attributes. On any host running both, aggregate queries such as
+	// `sum(rate(system_disk_io_bytes_total[5m]))` would silently return roughly
+	// double the real throughput, since both agents report the same physical
+	// devices. A distinct name keeps the two sources independently attributable
+	// and lets operators run OBI alongside hostmetrics.
+	//
+	// `{bytes}` is a UCUM annotation rather than the `By` unit, following the
+	// same pattern as NetworkFlow above: the OTEL name already ends in `bytes`,
+	// and a real unit would make the derived Prometheus name double-suffix.
+	StatDiskIOBytes = metric(Name{
+		Section: "obi.stat.disk.io.bytes",
+		OTEL:    "obi.stat.disk.io.bytes",
+		Unit:    "{bytes}",
+		Type:    InstrumentCounter,
 	})
 )
 

@@ -49,9 +49,18 @@ const (
 	FeatureApplicationHost
 	FeatureApplicationRuntime
 	FeatureEBPF
-	FeatureStorageBlock
+	FeatureStorageBlockLatency
+	FeatureStorageBlockIo
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
+
+// FeatureStorageBlock enables all block-layer storage metrics.
+// Note: both metrics are derived from the same block_rq_issue/block_rq_complete
+// tracepoint pair, so disabling one does not reduce kernel-side overhead — the
+// probe still fires and the event is still delivered. Splitting them is about
+// series cardinality, letting a user take the latency distribution without the
+// byte counter or vice versa.
+const FeatureStorageBlock = FeatureStorageBlockLatency | FeatureStorageBlockIo
 
 // FeatureStats enables all stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -69,6 +78,8 @@ var FeatureMapper = map[string]Features{
 	"stats_tcp_io":                 FeatureStatsTCPIo,
 	"storage":                      FeatureStorageBlock,
 	"storage_block":                FeatureStorageBlock,
+	"storage_block_latency":        FeatureStorageBlockLatency,
+	"storage_block_io":             FeatureStorageBlockIo,
 	"network":                      FeatureNetwork,
 	"network_inter_zone":           FeatureNetworkInterZone,
 	"network_flow_packets":         FeatureNetworkFlowPackets,
@@ -336,8 +347,18 @@ func (f Features) StatsTCPIo() bool {
 	return f.any(FeatureStatsTCPIo)
 }
 
+// StorageBlock reports whether any block-layer storage metric is enabled. It
+// gates the shared setup (eBPF probes, ring buffer) that both metrics need.
 func (f Features) StorageBlock() bool {
 	return f.any(FeatureStorageBlock)
+}
+
+func (f Features) StorageBlockLatency() bool {
+	return f.any(FeatureStorageBlockLatency)
+}
+
+func (f Features) StorageBlockIo() bool {
+	return f.any(FeatureStorageBlockIo)
 }
 
 func (f Features) NetworkInterZone() bool {

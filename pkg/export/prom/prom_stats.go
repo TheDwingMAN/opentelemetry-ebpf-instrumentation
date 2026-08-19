@@ -41,6 +41,7 @@ type statMetricsReporter struct {
 	tcpRetransmits       *Expirer[prometheus.Counter]
 	tcpIo                *Expirer[prometheus.Counter]
 	diskIOLatency        *Expirer[prometheus.Histogram]
+	diskIOBytes          *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -49,6 +50,7 @@ type statMetricsReporter struct {
 	tcpRetransmitsAttrs       []attributes.Field[*ebpf.Stat, string]
 	tcpIoAttrs                []attributes.Field[*ebpf.Stat, string]
 	diskIOLatencyAttrs        []attributes.Field[*ebpf.Stat, string]
+	diskIOBytesAttrs          []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -161,7 +163,7 @@ func newStatsReporter(
 		register = append(register, mr.tcpFailedConnections)
 	}
 
-	if cfg.CommonCfg.Features.StorageBlock() {
+	if cfg.CommonCfg.Features.StorageBlockLatency() {
 		log.Debug("registering stat disk io latency metric")
 
 		mr.diskIOLatencyAttrs = attributes.PrometheusGetters(
@@ -177,6 +179,20 @@ func newStatsReporter(
 			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
 		}, labelNames(mr.diskIOLatencyAttrs)).MetricVec, timeNow, cfg.Config.TTL)
 		register = append(register, mr.diskIOLatency)
+	}
+
+	if cfg.CommonCfg.Features.StorageBlockIo() {
+		log.Debug("registering stat disk io bytes metric")
+
+		mr.diskIOBytesAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskIOBytes))
+
+		mr.diskIOBytes = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskIOBytes.Prom,
+			Help: "count of bytes transferred at the block layer",
+		}, labelNames(mr.diskIOBytesAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskIOBytes)
 	}
 
 	if cfg.Config.Registry != nil {
@@ -202,6 +218,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
 			r.observeDiskIOLatency(stat)
+			r.observeDiskIOBytes(stat)
 		}
 	}
 }
@@ -244,4 +261,12 @@ func (r *statMetricsReporter) observeDiskIOLatency(stat *ebpf.Stat) {
 	}
 	r.diskIOLatency.WithLabelValues(labelValues(stat, r.diskIOLatencyAttrs)...).
 		Metric.Observe(float64(stat.BlockIo.LatencyNs) / 1_000_000_000.0)
+}
+
+func (r *statMetricsReporter) observeDiskIOBytes(stat *ebpf.Stat) {
+	if r.diskIOBytes == nil || stat.BlockIo == nil {
+		return
+	}
+	r.diskIOBytes.WithLabelValues(labelValues(stat, r.diskIOBytesAttrs)...).
+		Metric.Add(float64(stat.BlockIo.Bytes))
 }
