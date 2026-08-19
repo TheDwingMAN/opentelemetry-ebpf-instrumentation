@@ -40,10 +40,15 @@ enum network_io_direction : u8 {
     direction_transmit = 2,
 };
 
+enum blk_io_op : u8 {
+    k_blk_op_read = 0,
+    k_blk_op_write = 1,
+};
+
 typedef struct block_io {
     u8 flags; // Must be first, we use it to tell what kind of event we have on the ring buffer
-    u8 op;    // 0=read, 1=write (from rwbs[0])
-    u8 _pad[2];
+    enum blk_io_op op; // 0=read, 1=write (from rwbs[0])
+    unsigned char _pad[2];
     u32 dev;        // kernel dev_t (major<<20 | minor)
     u64 latency_ns; // issue -> complete
     u64 bytes;      // nr_sector * 512

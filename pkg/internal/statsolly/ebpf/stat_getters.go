@@ -77,15 +77,15 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			if s.BlockIo != nil {
 				dev = s.BlockIo.Dev
 			}
-			return attribute.String(string(attr.DiskDevice), fmtDev(dev))
+			return attribute.String(string(attr.DiskDevice), deviceName(dev))
 		}
-	case attr.DiskIOOperation:
+	case attr.DiskIODirection:
 		getter = func(s *Stat) attribute.KeyValue {
 			op := "read"
 			if s.BlockIo != nil && s.BlockIo.Op == BlockOpWrite {
 				op = "write"
 			}
-			return attribute.String(string(attr.DiskIOOperation), op)
+			return attribute.String(string(attr.DiskIODirection), op)
 		}
 
 	default:

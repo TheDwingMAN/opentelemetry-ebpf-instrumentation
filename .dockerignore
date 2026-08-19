@@ -5,3 +5,10 @@ rootfs.raw
 docker-disk.img
 internal/test/vm/lvh/out/
 .git/objects/
+
+# AI assistant tooling and working notes. Kept out of the build context; the
+# working copies live in ../obi-ai-workspace/.
+.claude/
+.superpowers/
+CLAUDE.md
+docs/superpowers/

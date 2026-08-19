@@ -32,8 +32,8 @@ struct trace_event_raw_block_rq_completion___x {
 
 // rwbs[0] == 'W' (write) or 'F' (flush) means write; anything else is a read.
 // Other op codes (e.g. discard 'D') intentionally fold into read for this skeleton (read|write only).
-static __always_inline u8 blk_op_from_rwbs0(char rwbs0) {
-    return (rwbs0 == 'W' || rwbs0 == 'F') ? 1 : 0;
+static __always_inline enum blk_io_op blk_op_from_rwbs0(char rwbs0) {
+    return (rwbs0 == 'W' || rwbs0 == 'F') ? k_blk_op_write : k_blk_op_read;
 }
 
 SEC("tracepoint/block/block_rq_issue")

@@ -135,3 +135,11 @@ internal/test/vm/lvh/out/
 !pkg/internal/transform/route/harvest/nodejs/test_files_dist_versioned/dist/**
 internal/test/integration/components/ai/openai/mock-server/mock-server
 internal/test/integration/components/ai/openai/go/testserver
+
+# AI assistant tooling and working notes; the working copies live in
+# ../obi-ai-workspace/. Listed here so they never re-enter a contribution.
+# Note: CLAUDE.md is intentionally NOT listed -- upstream tracks it as a
+# project file that imports AGENTS.md and AI-POLICY.md.
+.claude/
+.superpowers/
+docs/superpowers/
