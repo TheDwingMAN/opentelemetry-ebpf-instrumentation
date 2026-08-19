@@ -84,7 +84,7 @@ func TestStatMetricsExporter_DiskMetrics(t *testing.T) {
 					},
 				},
 			},
-			CommonCfg: &perapp.MetricsConfig{Features: export.FeatureStorageBlock},
+			CommonCfg: &perapp.GlobalMetricsConfig{Features: export.FeatureStorageBlock},
 		}, stats)(ctx)
 	require.NoError(t, err)
 

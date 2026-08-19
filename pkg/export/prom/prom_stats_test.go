@@ -37,7 +37,7 @@ func newStatsReporterWithFeatures(
 		&StatsPrometheusConfig{
 			Config:      &PrometheusConfig{Registry: registry, TTL: time.Minute},
 			SelectorCfg: &attributes.SelectorConfig{},
-			CommonCfg:   &perapp.MetricsConfig{Features: features},
+			CommonCfg:   &perapp.GlobalMetricsConfig{Features: features},
 		},
 		msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(1)),
 	)
@@ -149,7 +149,7 @@ func TestStatsReporterSkipsDiskMetricsWithoutFeature(t *testing.T) {
 		&StatsPrometheusConfig{
 			Config:      &PrometheusConfig{Registry: registry, TTL: time.Minute},
 			SelectorCfg: &attributes.SelectorConfig{},
-			CommonCfg:   &perapp.MetricsConfig{Features: export.FeatureStatsTCPRtt},
+			CommonCfg:   &perapp.GlobalMetricsConfig{Features: export.FeatureStatsTCPRtt},
 		},
 		msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(1)),
 	)
