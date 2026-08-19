@@ -66,7 +66,7 @@ func TestStatsReporterRecordsDiskMetrics(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	reporter := newDiskStatsReporter(t, registry)
 
-	reporter.observeDiskIOLatency(blockIoStat())
+	reporter.observeDiskOpDuration(blockIoStat())
 	reporter.observeDiskIOBytes(blockIoStat())
 
 	diskLabels := map[string]string{
@@ -74,7 +74,7 @@ func TestStatsReporterRecordsDiskMetrics(t *testing.T) {
 		"disk_io_direction": "write",
 	}
 
-	latency := gatheredMetric(t, registry, "obi_stat_disk_io_latency_seconds", diskLabels)
+	latency := gatheredMetric(t, registry, "obi_stat_disk_operation_duration_seconds", diskLabels)
 	require.NotNil(t, latency, "latency histogram not registered or not observed")
 	assert.Equal(t, uint64(1), latency.GetHistogram().GetSampleCount())
 	assert.InEpsilon(t, 0.002, latency.GetHistogram().GetSampleSum(), 0.0001)
@@ -115,14 +115,14 @@ func TestStatsReporterDiskFeatureGating(t *testing.T) {
 		wantBytes   bool
 	}{
 		{"umbrella enables both", export.FeatureStorageBlock, true, true},
-		{"latency only", export.FeatureStorageBlockLatency, true, false},
+		{"latency only", export.FeatureStorageBlockDuration, true, false},
 		{"bytes only", export.FeatureStorageBlockIo, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registry := prometheus.NewRegistry()
 			reporter := newStatsReporterWithFeatures(t, registry, tc.features)
 
-			reporter.observeDiskIOLatency(blockIoStat())
+			reporter.observeDiskOpDuration(blockIoStat())
 			reporter.observeDiskIOBytes(blockIoStat())
 
 			diskLabels := map[string]string{
@@ -130,7 +130,7 @@ func TestStatsReporterDiskFeatureGating(t *testing.T) {
 				"disk_io_direction": "write",
 			}
 
-			latency := gatheredMetric(t, registry, "obi_stat_disk_io_latency_seconds", diskLabels)
+			latency := gatheredMetric(t, registry, "obi_stat_disk_operation_duration_seconds", diskLabels)
 			ioBytes := gatheredMetric(t, registry, "obi_stat_disk_io_bytes_total", diskLabels)
 
 			assert.Equal(t, tc.wantLatency, latency != nil, "latency histogram presence")
@@ -155,11 +155,11 @@ func TestStatsReporterSkipsDiskMetricsWithoutFeature(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.Nil(t, reporter.diskIOLatency)
+	assert.Nil(t, reporter.diskOpDuration)
 	assert.Nil(t, reporter.diskIOBytes)
 
 	// Observing is a no-op rather than a nil-pointer panic.
-	reporter.observeDiskIOLatency(blockIoStat())
+	reporter.observeDiskOpDuration(blockIoStat())
 	reporter.observeDiskIOBytes(blockIoStat())
 
 	families, err := registry.Gather()

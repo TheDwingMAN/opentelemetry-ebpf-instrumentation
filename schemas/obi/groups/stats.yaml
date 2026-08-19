@@ -147,11 +147,16 @@ groups:
   # feature is enabled. Both attributes are reused from upstream semconv
   # (`system.device` + `disk.io.direction`), so no OBI-specific attribute is
   # introduced here. The metric name follows the OBI `obi.stat.*` convention
-  # used by the TCP stats above (all dot-separated segments), rather than the
-  # upstream `system.disk.*` namespace.
-  - id: metric.obi_stat_disk_io_latency
+  # used by the TCP stats above, rather than the upstream `system.disk.*`
+  # namespace.
+  #
+  # `operation.duration` rather than `io.latency`: semconv reserves `duration`
+  # for a histogram of a discrete operation's elapsed time, and a name must not
+  # be both a leaf and a namespace -- `obi.stat.disk.io` is a metric in its own
+  # right below.
+  - id: metric.obi_stat_disk_operation_duration
     type: metric
-    metric_name: obi.stat.disk.io.latency
+    metric_name: obi.stat.disk.operation.duration
     instrument: histogram
     unit: "s"
     stability: development
@@ -173,9 +178,11 @@ groups:
   # publishes that metric with these same attributes, so a host running both
   # agents would get two writers on one series. See
   # obi-ai-workspace/DISK-METRICS-CONTROVERSIES.md for the full rationale.
-  - id: metric.obi_stat_disk_io_bytes
+  # The unit is not repeated in the metric name: semconv states that metrics
+  # carrying their unit in OTEL metadata SHOULD NOT include it in the name.
+  - id: metric.obi_stat_disk_io
     type: metric
-    metric_name: obi.stat.disk.io.bytes
+    metric_name: obi.stat.disk.io
     instrument: counter
     unit: "By"
     stability: development

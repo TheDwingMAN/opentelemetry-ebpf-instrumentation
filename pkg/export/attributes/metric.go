@@ -406,13 +406,20 @@ var (
 		Unit:    "By",
 		Type:    InstrumentCounter,
 	})
-	StatDiskIOLatency = metric(Name{
-		Section: "obi.stat.disk.io.latency",
-		OTEL:    "obi.stat.disk.io.latency",
+	// `operation.duration` follows the semantic conventions naming guidance:
+	// `duration` is reserved for a histogram of the elapsed time of a discrete
+	// operation (as in `db.client.operation.duration`), which is exactly what
+	// this measures. `latency` is not a convention term.
+	//
+	// It also keeps `obi.stat.disk.io` free to be a metric in its own right:
+	// a name must not serve as both a leaf and a namespace.
+	StatDiskOperationDuration = metric(Name{
+		Section: "obi.stat.disk.operation.duration",
+		OTEL:    "obi.stat.disk.operation.duration",
 		Unit:    "s",
 		Type:    InstrumentHistogram,
 	})
-	// StatDiskIOBytes carries the same semantics as upstream semconv's
+	// StatDiskIO carries the same semantics as upstream semconv's
 	// `system.disk.io` (disk bytes transferred, keyed by `system.device` and
 	// `disk.io.direction`) but is deliberately published under the OBI
 	// namespace rather than as the standard metric.
@@ -425,13 +432,15 @@ var (
 	// devices. A distinct name keeps the two sources independently attributable
 	// and lets operators run OBI alongside hostmetrics.
 	//
-	// `{bytes}` is a UCUM annotation rather than the `By` unit, following the
-	// same pattern as NetworkFlow above: the OTEL name already ends in `bytes`,
-	// and a real unit would make the derived Prometheus name double-suffix.
-	StatDiskIOBytes = metric(Name{
-		Section: "obi.stat.disk.io.bytes",
-		OTEL:    "obi.stat.disk.io.bytes",
-		Unit:    "{bytes}",
+	// The unit is deliberately absent from the name: semantic conventions state
+	// that metrics carrying their unit in OTEL metadata SHOULD NOT repeat it in
+	// the metric name. `By` therefore replaces the earlier `{bytes}`
+	// annotation, which only existed to stop the derived Prometheus name from
+	// double-suffixing a name that itself ended in "bytes".
+	StatDiskIO = metric(Name{
+		Section: "obi.stat.disk.io",
+		OTEL:    "obi.stat.disk.io",
+		Unit:    "By",
 		Type:    InstrumentCounter,
 	})
 )

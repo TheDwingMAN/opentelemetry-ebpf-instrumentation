@@ -76,10 +76,10 @@ func TestStatMetricsExporter_DiskMetrics(t *testing.T) {
 			Metrics: cfg,
 			SelectorCfg: &attributes.SelectorConfig{
 				SelectionCfg: attributes.Selection{
-					attributes.StatDiskIOLatency.Section: attributes.InclusionLists{
+					attributes.StatDiskOperationDuration.Section: attributes.InclusionLists{
 						Include: []string{"*"},
 					},
-					attributes.StatDiskIOBytes.Section: attributes.InclusionLists{
+					attributes.StatDiskIO.Section: attributes.InclusionLists{
 						Include: []string{"*"},
 					},
 				},
@@ -123,8 +123,8 @@ func TestStatMetricsExporter_DiskMetrics(t *testing.T) {
 				drained = true
 			}
 		}
-		assert.Contains(ct, seen, "obi.stat.disk.io.latency")
-		assert.Contains(ct, seen, "obi.stat.disk.io.bytes")
+		assert.Contains(ct, seen, "obi.stat.disk.operation.duration")
+		assert.Contains(ct, seen, "obi.stat.disk.io")
 	}, timeout, 100*time.Millisecond)
 
 	// Both metrics carry the same device/direction attributes, decoded from
@@ -134,12 +134,12 @@ func TestStatMetricsExporter_DiskMetrics(t *testing.T) {
 		"disk.io.direction": "write",
 	}
 
-	latency := seen["obi.stat.disk.io.latency"]
+	latency := seen["obi.stat.disk.operation.duration"]
 	assert.Equal(t, diskAttrs, latency.Attributes)
 	assert.InEpsilon(t, 0.002, latency.FloatVal, 0.0001)
 	assert.Equal(t, 1, latency.Count)
 
-	ioBytes := seen["obi.stat.disk.io.bytes"]
+	ioBytes := seen["obi.stat.disk.io"]
 	assert.Equal(t, diskAttrs, ioBytes.Attributes)
 	assert.Equal(t, int64(4096), ioBytes.IntVal)
 }

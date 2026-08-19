@@ -567,11 +567,11 @@ func getDefinitions(
 				attr.NetworkIoDirection: true,
 			},
 		},
-		StatDiskIOLatency.Section: {
+		StatDiskOperationDuration.Section: {
 			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
-		StatDiskIOBytes.Section: {
+		StatDiskIO.Section: {
 			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
 			Attributes: map[attr.Name]Default{},
 		},

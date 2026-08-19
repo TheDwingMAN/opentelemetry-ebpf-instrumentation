@@ -247,7 +247,7 @@
             8192
           ]
         },
-        "stat_disk_io_latency_histogram": {
+        "stat_disk_operation_duration_histogram": {
           "items": {
             "type": "number"
           },
@@ -966,8 +966,8 @@
           "stats_tcp_rtt",
           "storage",
           "storage_block",
-          "storage_block_io",
-          "storage_block_latency"
+          "storage_block_duration",
+          "storage_block_io"
         ]
       },
       "type": "array",

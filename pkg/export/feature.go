@@ -49,7 +49,7 @@ const (
 	FeatureApplicationHost
 	FeatureApplicationRuntime
 	FeatureEBPF
-	FeatureStorageBlockLatency
+	FeatureStorageBlockDuration
 	FeatureStorageBlockIo
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
@@ -60,7 +60,7 @@ const (
 // probe still fires and the event is still delivered. Splitting them is about
 // series cardinality, letting a user take the latency distribution without the
 // byte counter or vice versa.
-const FeatureStorageBlock = FeatureStorageBlockLatency | FeatureStorageBlockIo
+const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo
 
 // FeatureStats enables all stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -78,7 +78,7 @@ var FeatureMapper = map[string]Features{
 	"stats_tcp_io":                 FeatureStatsTCPIo,
 	"storage":                      FeatureStorageBlock,
 	"storage_block":                FeatureStorageBlock,
-	"storage_block_latency":        FeatureStorageBlockLatency,
+	"storage_block_duration":       FeatureStorageBlockDuration,
 	"storage_block_io":             FeatureStorageBlockIo,
 	"network":                      FeatureNetwork,
 	"network_inter_zone":           FeatureNetworkInterZone,
@@ -353,8 +353,8 @@ func (f Features) StorageBlock() bool {
 	return f.any(FeatureStorageBlock)
 }
 
-func (f Features) StorageBlockLatency() bool {
-	return f.any(FeatureStorageBlockLatency)
+func (f Features) StorageBlockDuration() bool {
+	return f.any(FeatureStorageBlockDuration)
 }
 
 func (f Features) StorageBlockIo() bool {
