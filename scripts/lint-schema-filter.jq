@@ -28,10 +28,10 @@ map(select(
   (
     (
       (.error.FailToResolveDefinition? // null) as $fail
+      | (($fail | objects).UnstableFileFormat? // null) as $unstable
       | $fail != null
-        and ($fail.UnstableFileFormat? // null) as $unstable
-        | $unstable != null
-          and $unstable.file_format == "definition/2"
+        and $unstable != null
+        and ($unstable | objects).file_format == "definition/2"
     )
     or
     (
