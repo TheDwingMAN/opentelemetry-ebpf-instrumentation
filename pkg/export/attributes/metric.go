@@ -315,7 +315,10 @@ var (
 		Type:    InstrumentUpDownCounter,
 	})
 	JVMMemoryUsedAfterLastGC = metric(Name{
-		Section: "jvm.memory.used_after_last_gc",
+		// Section must be fully dot-separated: normalizeMetric turns every `_`
+		// in user input into `.` before lookup, so a Section containing `_`
+		// can never be matched by anything a user writes in attributes.select.
+		Section: "jvm.memory.used.after.last.gc",
 		OTEL:    "jvm.memory.used_after_last_gc",
 		Unit:    "By",
 		Type:    InstrumentUpDownCounter,
