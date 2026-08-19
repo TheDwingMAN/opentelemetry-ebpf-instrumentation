@@ -273,10 +273,21 @@ func enoughPromResults(t require.TestingT, results []promtest.Result) {
 }
 
 func totalPromCount(t require.TestingT, results []promtest.Result) int {
-	total := 0
+	return int(totalPromValue(t, results))
+}
+
+// totalPromValue sums the sample values of a query result.
+//
+// Parses as float rather than int on purpose: Prometheus renders large sample
+// values in scientific notation (e.g. "1.048576e+08"), which strconv.Atoi
+// rejects outright. Any byte counter reaches that magnitude within seconds, so
+// an Atoi-based sum fails the test with a confusing parse error rather than a
+// value mismatch.
+func totalPromValue(t require.TestingT, results []promtest.Result) float64 {
+	total := 0.0
 	for _, res := range results {
 		require.Len(t, res.Value, 2)
-		val, err := strconv.Atoi(res.Value[1].(string))
+		val, err := strconv.ParseFloat(res.Value[1].(string), 64)
 		require.NoError(t, err)
 		total += val
 	}
