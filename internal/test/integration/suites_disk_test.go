@@ -14,8 +14,8 @@ import (
 
 func TestStat_DiskMetrics(t *testing.T) {
 	compose, err := docker.ComposeSuite("docker-compose-disk-metrics.yml", path.Join(pathOutput, "test-suite-disk-metrics.log"))
-	compose.Env = append(compose.Env, `OTEL_EBPF_CONFIG_SUFFIX=-disk-metrics`, `PROM_CONFIG_SUFFIX=-disk-metrics`)
 	require.NoError(t, err)
+	compose.Env = append(compose.Env, `OTEL_EBPF_CONFIG_SUFFIX=-disk-metrics`, `PROM_CONFIG_SUFFIX=-disk-metrics`)
 	require.NoError(t, compose.Up())
 	waitForDiskMetricsPipeline(t)
 	t.Run("Disk Metrics operation duration", testDiskMetricsOpDuration)
