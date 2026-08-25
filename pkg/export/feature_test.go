@@ -212,7 +212,6 @@ func TestInvalidSpanMetricsConfig(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
 func TestFeatureJSONSchemaFlagsDeprecatedNames(t *testing.T) {
 	items := Features(0).JSONSchema().Items
 	require.Len(t, items.OneOf, 2)
