@@ -176,8 +176,8 @@ groups:
   # is published under the OBI namespace on purpose: emitting `system.disk.io`
   # would collide with the OTel Collector's `hostmetrics` receiver, which
   # publishes that metric with these same attributes, so a host running both
-  # agents would get two writers on one series. See
-  # obi-ai-workspace/DISK-METRICS-CONTROVERSIES.md for the full rationale.
+  # agents would get two writers on one series.
+  #
   # The unit is not repeated in the metric name: semconv states that metrics
   # carrying their unit in OTEL metadata SHOULD NOT include it in the name.
   - id: metric.obi_stat_disk_io
