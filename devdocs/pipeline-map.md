@@ -113,7 +113,7 @@ flowchart TD
     DEC(Stats<br/>decorator) --> DPD
     DPD(Dynamic PID<br/>decorator):::optional --> DPF
     DPF(Dynamic PID<br/>filter):::optional --> MRG
-    DMT(eBPF<br/>Disk Map Tracer):::optional --> DK8S
+    DMT(eBPF Disk and<br/>File Sync Map Tracer):::optional --> DK8S
     KSTORE --> DK8S
     DK8S(Kubernetes decorator<br/>by container ID):::optional --> DDEC
     DDEC(Disk stats<br/>decorator) --> MRG

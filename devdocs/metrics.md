@@ -168,12 +168,22 @@ The disk metrics are charged to the workload that owns the I/O: the cgroup that 
 - Before Linux 5.18 (and on RHEL 8), the block layer can merge the I/O of different cgroups into the same request. OBI charges a merged request to the cgroup of its first bio.
 - `obi.stat.disk.io` counts the bytes of the requests that completed successfully, as issued to the device. The histogram and `obi.stat.disk.operations` count failed requests too, with an `error.type`.
 
+#### File sync stats
+
+`obi.stat.fs.sync.duration` measures the calls to the kernel's `vfs_fsync_range` function and, on kernels that have it as a function of its own (Linux 6.12 and later), `do_fsync`. They serve `fsync(2)`, `fdatasync(2)`, `O_SYNC` and `O_DSYNC` writes, `msync(2)` with `MS_SYNC`, and their io_uring equivalents, on any filesystem, including network filesystems. It is the time an application waits for its data to be durable, which includes queueing and journaling, unlike the block I/O metrics. Limitations:
+
+- It needs kprobes. On kernels without them, enabling it makes StatsO11y fail to start, like the TCP IO stats.
+- A sync is charged to the workload of the thread that called it, through the cgroup of its `io` controller (`blkio` on cgroup v1), so the same cgroup name rules as the disk metrics apply.
+- Stacked filesystems, like overlayfs, sync the file of the filesystem below them: in that case the sync of the lower file is measured, once per call.
+- `sync(2)`, `syncfs(2)`, `sync_file_range(2)` and the writeback of dirty pages by the kernel are not measured.
+
 ### Performance considerations
 
 Some stat metrics attach to kernel functions that are called very frequently (e.g. `tcp_sendmsg`, `tcp_cleanup_rbuf` for TCP IO). These probes add a small overhead on every call, so the aggregate cost is proportional to the rate of TCP sends/receives on the node. Consider:
 
 - If you need RTT, failed connections, or retransmits **without** TCP IO overhead, enable those individually (`stats_tcp_rtt`, `stats_tcp_failed_connections`, `stats_tcp_successful_connections`, `stats_tcp_retransmits`) instead of using the `stats` aggregate feature — `stats` includes `stats_tcp_io`, which fires on every `tcp_sendmsg` and `tcp_cleanup_rbuf` call.
 - The `stats_events` ring buffer and the per-metric eBPF maps (e.g. `tcp_io_accum`) have default size limits; on nodes with a very large number of concurrent connections these can be resized via the `ebpf.*` configuration knobs if events start being dropped.
+- The file sync probes (`stats_fs_sync_duration`) fire on every file sync, which is usually much less frequent than block requests.
 - The disk probes (`stats_disk_*` features) fire on every block request issue and completion, so their cost grows with the node's IOPS. They don't send one ring buffer event per request: the kernel accumulates the latencies in a histogram per device, direction, outcome and cgroup (`disk_io_accum`), which userspace reads every `ebpf.batch_timeout`. The exporters still record every request into their histogram (`stats_disk_operation_duration`), so the userspace cost also grows with the IOPS: roughly hundreds of nanoseconds per request with the OTLP exporter, and tens with the Prometheus exporter. For these reasons they are not part of the `stats` aggregate and must be enabled explicitly.
 
 ### Final notes
