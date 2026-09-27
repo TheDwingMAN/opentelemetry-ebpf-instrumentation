@@ -69,6 +69,7 @@ func TestPrometheusNames(t *testing.T) {
 		{StatDiskOperationErrors, "obi_stat_disk_operation_errors_total"},
 		{StatFsOperationDuration, "obi_stat_fs_operation_duration_seconds"},
 		{StatFsIO, "obi_stat_fs_io_bytes_total"},
+		{StatFsOperationErrors, "obi_stat_fs_operation_errors_total"},
 	}
 
 	for _, test := range tests {

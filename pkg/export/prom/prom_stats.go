@@ -48,6 +48,7 @@ type statMetricsReporter struct {
 	diskOpErrors         *Expirer[prometheus.Counter]
 	fsOpDuration         *Expirer[prometheus.Histogram]
 	fsIOBytes            *Expirer[prometheus.Counter]
+	fsOpErrors           *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -62,6 +63,7 @@ type statMetricsReporter struct {
 	diskOpErrorsAttrs         []attributes.Field[*ebpf.Stat, string]
 	fsOpDurationAttrs         []attributes.Field[*ebpf.Stat, string]
 	fsIOBytesAttrs            []attributes.Field[*ebpf.Stat, string]
+	fsOpErrorsAttrs           []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -284,6 +286,20 @@ func newStatsReporter(
 		register = append(register, mr.fsIOBytes)
 	}
 
+	if cfg.CommonCfg.Features.StorageFSErrors() {
+		log.Debug("registering stat fs operation errors metric")
+
+		mr.fsOpErrorsAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatFsOperationErrors))
+
+		mr.fsOpErrors = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatFsOperationErrors.Prom,
+			Help: "counts filesystem I/O operations that failed, broken down by errno",
+		}, labelNames(mr.fsOpErrorsAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.fsOpErrors)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -313,6 +329,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeDiskOpErrors(stat)
 			r.observeFsOpDuration(stat)
 			r.observeFsIOBytes(stat)
+			r.observeFsOpErrors(stat)
 		}
 	}
 }
@@ -403,4 +420,12 @@ func (r *statMetricsReporter) observeFsIOBytes(stat *ebpf.Stat) {
 	}
 	r.fsIOBytes.WithLabelValues(labelValues(stat, r.fsIOBytesAttrs)...).
 		Metric.Add(float64(stat.FsIo.Bytes))
+}
+
+func (r *statMetricsReporter) observeFsOpErrors(stat *ebpf.Stat) {
+	if r.fsOpErrors == nil || stat.FsIo == nil || stat.FsIo.Error == 0 {
+		return
+	}
+	r.fsOpErrors.WithLabelValues(labelValues(stat, r.fsOpErrorsAttrs)...).
+		Metric.Add(1)
 }

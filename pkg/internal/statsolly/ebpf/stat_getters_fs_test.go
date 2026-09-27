@@ -30,3 +30,18 @@ func TestFsIoGetters_NilFsIo(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "unknown", fsGetter(s).Value.Emit())
 }
+
+// TestFsIoErrorTypeGetter covers the platform-independent paths: no error,
+// and a stat that carries no filesystem I/O event. The errno-name-on-error
+// path is platform-specific (errnoName only resolves names on unix); see
+// stat_getters_fs_unix_test.go.
+func TestFsIoErrorTypeGetter(t *testing.T) {
+	errGetter, ok := StatGetters(attr.ErrorType)
+	assert.True(t, ok)
+
+	noError := &Stat{Type: StatTypeFsIo, FsIo: &FsIo{Error: 0}}
+	assert.Empty(t, errGetter(noError).Value.Emit())
+
+	notFsIo := &Stat{Type: StatTypeTCPRtt, TCPRtt: &TCPRtt{}}
+	assert.Empty(t, errGetter(notFsIo).Value.Emit())
+}

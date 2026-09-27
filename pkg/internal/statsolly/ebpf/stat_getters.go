@@ -192,12 +192,25 @@ func fsOpStr(o FsOpCode) string {
 	}
 }
 
-// errorTypeStr returns the errno name for a failed BlockIo completion
+// errorTypeStr returns the errno name for a failed BlockIo or FsIo event
 // (Error holds 0 or -errno), or "" when there was no error or the stat
-// carries no block I/O event.
+// carries neither event type.
 func errorTypeStr(s *Stat) string {
-	if s.BlockIo == nil || s.BlockIo.Error == 0 {
+	switch {
+	case s.BlockIo != nil:
+		return errnoNameForError(s.BlockIo.Error)
+	case s.FsIo != nil:
+		return errnoNameForError(s.FsIo.Error)
+	default:
 		return ""
 	}
-	return errnoName(-s.BlockIo.Error)
+}
+
+// errnoNameForError returns the errno name for a non-zero error (0 or
+// -errno), or "" when there was no error.
+func errnoNameForError(err int32) string {
+	if err == 0 {
+		return ""
+	}
+	return errnoName(-err)
 }

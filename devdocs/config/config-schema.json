@@ -1018,6 +1018,7 @@
               "storage_block_queue",
               "storage_fs",
               "storage_fs_duration",
+              "storage_fs_errors",
               "storage_fs_io"
             ]
           },

@@ -41,6 +41,19 @@ func fsIoStat() *ebpf.Stat {
 	}
 }
 
+// fsIoErrorStat is a failed filesystem completion on the same fs
+// type/operation as fsIoStat, with a non-zero error (-ESTALE).
+func fsIoErrorStat() *ebpf.Stat {
+	return &ebpf.Stat{
+		Type: ebpf.StatTypeFsIo,
+		FsIo: &ebpf.FsIo{
+			Fs:    uint8(ebpf.CodeFsNFS),
+			Op:    uint8(ebpf.CodeFsOpWrite),
+			Error: -116, // -ESTALE
+		},
+	}
+}
+
 // TestStatsReporterRecordsFsMetrics asserts that a single filesystem I/O event
 // feeds both fs metric families -- the latency histogram and the bytes
 // counter -- with the fs type and operation labels decoded from the raw stat.
@@ -84,15 +97,75 @@ func TestStatsReporterFsMetricsNotRegisteredWithoutFeature(t *testing.T) {
 
 	assert.Nil(t, reporter.fsOpDuration)
 	assert.Nil(t, reporter.fsIOBytes)
+	assert.Nil(t, reporter.fsOpErrors)
 
 	// Observing is a no-op rather than a nil-pointer panic.
 	reporter.observeFsOpDuration(fsIoStat())
 	reporter.observeFsIOBytes(fsIoStat())
+	reporter.observeFsOpErrors(fsIoErrorStat())
 
 	families, err := registry.Gather()
 	require.NoError(t, err)
 	for _, f := range families {
 		assert.NotContains(t, f.GetName(), "fs_io")
 		assert.NotContains(t, f.GetName(), "fs_operation")
+	}
+}
+
+// TestStatsReporterRecordsFsOperationErrors asserts the error counter only
+// increments for a failed filesystem completion, keyed by the errno name, and
+// a successful completion (Error == 0) leaves it untouched.
+func TestStatsReporterRecordsFsOperationErrors(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter := newStatsReporterWithFeatures(t, registry, export.FeatureStorageFSErrors)
+
+	reporter.observeFsOpErrors(fsIoStat()) // Error == 0: must not count
+	reporter.observeFsOpErrors(fsIoErrorStat())
+
+	opErrors := gatheredMetric(t, registry, "obi_stat_fs_operation_errors_total", map[string]string{
+		"system_filesystem_type": "nfs",
+		"fs_operation":           "write",
+		"error_type":             "ESTALE",
+	})
+	require.NotNil(t, opErrors, "errors counter not registered or not observed")
+	assert.InEpsilon(t, 1.0, opErrors.GetCounter().GetValue(), 0)
+}
+
+// TestStatsReporterFsFeatureGating asserts each fs metric is independently
+// selectable, mirroring TestStatsReporterDiskQueueAndErrorsFeatureGating for
+// the disk errors counter.
+func TestStatsReporterFsFeatureGating(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		features    export.Features
+		wantLatency bool
+		wantErrors  bool
+	}{
+		{"umbrella enables both", export.FeatureStorageFS, true, true},
+		{"duration only", export.FeatureStorageFSDuration, true, false},
+		{"errors only", export.FeatureStorageFSErrors, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := prometheus.NewRegistry()
+			reporter := newStatsReporterWithFeatures(t, registry, tc.features)
+
+			reporter.observeFsOpDuration(fsIoStat())
+			reporter.observeFsOpErrors(fsIoErrorStat())
+
+			fsLabels := map[string]string{
+				"system_filesystem_type": "nfs",
+				"fs_operation":           "write",
+			}
+			latency := gatheredMetric(t, registry, "obi_stat_fs_operation_duration_seconds", fsLabels)
+
+			opErrors := gatheredMetric(t, registry, "obi_stat_fs_operation_errors_total", map[string]string{
+				"system_filesystem_type": "nfs",
+				"fs_operation":           "write",
+				"error_type":             "ESTALE",
+			})
+
+			assert.Equal(t, tc.wantLatency, latency != nil, "latency histogram presence")
+			assert.Equal(t, tc.wantErrors, opErrors != nil, "errors counter presence")
+		})
 	}
 }

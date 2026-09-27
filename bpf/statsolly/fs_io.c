@@ -14,6 +14,11 @@
 #include <statsolly/maps/stats_events.h>
 #include <statsolly/maps/fs_start.h>
 
+// Kernel-internal completion marker (include/linux/errno.h), not a real
+// failure: an async iocb was queued and will complete later on its own,
+// without OBI observing that completion.
+enum { k_eiocbqueued = 529 };
+
 static __always_inline void
 fs_probe_entry(const struct kiocb *const iocb, const enum fs_type fs, const enum fs_op op) {
     struct fs_start_val val = {};
@@ -47,7 +52,7 @@ static __always_inline void fs_probe_exit(const long ret) {
     const u8 op = start->op;
     bpf_map_delete_elem(&fs_start, &id);
 
-    if (ret <= 0) {
+    if (ret == 0 || ret == -k_eiocbqueued) {
         return;
     }
 
@@ -65,7 +70,12 @@ static __always_inline void fs_probe_exit(const long ret) {
     se->host_pid = host_pid;
     se->pid_ns = pid_ns;
     se->latency_ns = latency;
-    se->bytes = (u64)ret;
+    se->bytes = ret > 0 ? (u64)ret : 0;
+    se->error = ret < 0 ? (s32)ret : 0;
+    se->_pad2[0] = 0;
+    se->_pad2[1] = 0;
+    se->_pad2[2] = 0;
+    se->_pad2[3] = 0;
 
     bpf_ringbuf_submit(se, stats_events_flags());
 }

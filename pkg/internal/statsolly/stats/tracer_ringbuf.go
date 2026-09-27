@@ -186,6 +186,7 @@ func readFsIoIntoStat(record *ringbuf.Record) (ebpf.Stat, error) {
 			PidNs:     event.PidNs,
 			LatencyNs: event.LatencyNs,
 			Bytes:     event.Bytes,
+			Error:     event.Error,
 		},
 	}, nil
 }
