@@ -71,10 +71,6 @@ spec:
             path: /sys/kernel/tracing
             type: Directory
         # THE PREREQUISITE: without this the PV/PVC join resolves nothing.
-        - name: kubelet-root
-          hostPath:
-            path: /var/lib/kubelet
-            type: Directory
       containers:
         - name: obi
           image: obi:dev
@@ -93,10 +89,6 @@ spec:
               name: testoutput
             - mountPath: /sys/kernel/tracing
               name: tracing
-            - mountPath: /var/lib/kubelet
-              name: kubelet-root
-              readOnly: true
-              mountPropagation: HostToContainer
           env:
             - name: GOCOVERDIR
               value: "/testoutput"
