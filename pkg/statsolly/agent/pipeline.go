@@ -99,8 +99,13 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
 	swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
 
+	kubeDecoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "kubeDecoratedDiskStats")
+	swi.Add(k8s.ContainerMetadataDecoratorProvider(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
+		diskContainerID, statAttrs, diskStats, kubeDecoratedDiskStats),
+		swarm.WithID("DiskKubeDecorator"))
+
 	decoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "decoratedDiskStats")
-	swi.Add(decorate.Decorate(s.agentIP, statAttrs, diskStats, decoratedDiskStats),
+	swi.Add(decorate.Decorate(s.agentIP, statAttrs, kubeDecoratedDiskStats, decoratedDiskStats),
 		swarm.WithID("DiskStatsDecorator"))
 
 	allStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "allStats")
@@ -132,6 +137,13 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		swarm.WithID("StatPrinter"))
 
 	return swi.Instance(ctx)
+}
+
+func diskContainerID(s *ebpf.Stat) string {
+	if s.DiskIO == nil {
+		return ""
+	}
+	return s.DiskIO.ContainerID
 }
 
 // mergeStats forwards the stats of both inputs to the output, and closes the output once both
