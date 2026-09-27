@@ -21,7 +21,7 @@ const nfsFixtureLine = `2827 1806 0:574 / /var/lib/kubelet/pods/55293f39-c745-45
 func TestResolveMountNFS(t *testing.T) {
 	withMountInfo(t, nfsFixtureLine)
 
-	info, ok := resolveMount(574)
+	info, ok := resolveMount(MountKey{Dev: 574})
 	require.True(t, ok)
 	assert.Equal(t, MountInfo{
 		PodUID:     "55293f39-c745-4578-accb-f3e5cfc7b303",
@@ -34,7 +34,7 @@ func TestResolveMountNFS(t *testing.T) {
 func TestResolveMountUnknownDevice(t *testing.T) {
 	withMountInfo(t, nfsFixtureLine)
 
-	_, ok := resolveMount(99<<20 | 1)
+	_, ok := resolveMount(MountKey{Dev: 99<<20 | 1})
 	assert.False(t, ok)
 }
 
@@ -42,7 +42,7 @@ func TestResolveMountCSITrailingMountSegment(t *testing.T) {
 	const csiLine = `123 1 0:900 / /var/lib/kubelet/pods/11111111-2222-3333-4444-555555555555/volumes/kubernetes.io~csi/pvc-abc/mount rw,relatime shared:99 - ext4 10.0.0.5:/export/pvc-abc rw`
 	withMountInfo(t, csiLine)
 
-	info, ok := resolveMount(900)
+	info, ok := resolveMount(MountKey{Dev: 900})
 	require.True(t, ok)
 	assert.Equal(t, "pvc-abc", info.PVName)
 	assert.Equal(t, "csi", info.VolumeType)
@@ -52,7 +52,7 @@ func TestResolveMountSourceWithoutColon(t *testing.T) {
 	const line = `77 1 0:41 / /var/lib/kubelet/pods/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/volumes/kubernetes.io~csi/pvc-noserver/mount rw,relatime shared:5 - ext4 /dev/sdb1 rw`
 	withMountInfo(t, line)
 
-	info, ok := resolveMount(41)
+	info, ok := resolveMount(MountKey{Dev: 41})
 	require.True(t, ok)
 	assert.Equal(t, "/dev/sdb1", info.Server)
 }
@@ -60,7 +60,7 @@ func TestResolveMountSourceWithoutColon(t *testing.T) {
 func TestResolveMountCacheInvalidation(t *testing.T) {
 	withMountInfo(t, nfsFixtureLine)
 
-	_, ok := resolveMount(574)
+	_, ok := resolveMount(MountKey{Dev: 574})
 	require.True(t, ok, "expected the fixture mount to resolve")
 
 	// Pod/volume torn down: rewrite the fixture without that mount, but leave
@@ -69,12 +69,12 @@ func TestResolveMountCacheInvalidation(t *testing.T) {
 	const unrelatedLine = `50 1 0:20 / /run/user/1000 rw,nosuid,nodev,relatime shared:30 - tmpfs tmpfs rw,size=100k`
 	require.NoError(t, os.WriteFile(mountInfoPath, []byte(unrelatedLine+"\n"), 0o644))
 
-	_, ok = resolveMount(574)
+	_, ok = resolveMount(MountKey{Dev: 574})
 	assert.True(t, ok, "expected a stale cache hit before invalidation")
 
 	resetMountCache()
 
-	_, ok = resolveMount(574)
+	_, ok = resolveMount(MountKey{Dev: 574})
 	assert.False(t, ok, "expected no match after invalidation once the mount is gone")
 }
 
@@ -82,7 +82,7 @@ func TestResolveMountNegativeCache(t *testing.T) {
 	const unrelatedLine = `50 1 0:20 / /run/user/1000 rw,nosuid,nodev,relatime shared:30 - tmpfs tmpfs rw,size=100k`
 	withMountInfo(t, unrelatedLine)
 
-	_, ok := resolveMount(574)
+	_, ok := resolveMount(MountKey{Dev: 574})
 	require.False(t, ok, "expected no match for a device with no kubelet volume mount")
 
 	// The device now has a matching kubelet volume mount, but the negative
@@ -90,7 +90,7 @@ func TestResolveMountNegativeCache(t *testing.T) {
 	// proving the miss isn't rescanned on every call.
 	require.NoError(t, os.WriteFile(mountInfoPath, []byte(nfsFixtureLine+"\n"), 0o644))
 
-	_, ok = resolveMount(574)
+	_, ok = resolveMount(MountKey{Dev: 574})
 	assert.False(t, ok, "expected the negative cache entry to be served before its TTL elapses")
 }
 
@@ -224,7 +224,7 @@ func kubensNode(t *testing.T) string {
 func TestScanMountsReadsKubeletNamespace(t *testing.T) {
 	kubensNode(t)
 
-	info, ok := scanForMount(32)
+	info, ok := scanForMount(MountKey{Dev: 32})
 
 	require.True(t, ok)
 	assert.Equal(t, "pvc-kubens", info.PVName)
@@ -234,12 +234,12 @@ func TestScanMountsReadsKubeletNamespace(t *testing.T) {
 // CRI-O is still there to read them from: attribution must not lapse.
 func TestScanMountsFollowsNamespaceAcrossKubeletRestart(t *testing.T) {
 	root := kubensNode(t)
-	_, ok := scanForMount(32)
+	_, ok := scanForMount(MountKey{Dev: 32})
 	require.True(t, ok)
 
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "901")))
 
-	info, ok := scanForMount(32)
+	info, ok := scanForMount(MountKey{Dev: 32})
 	require.True(t, ok, "the namespace is still readable through CRI-O")
 	assert.Equal(t, "pvc-kubens", info.PVName)
 }
@@ -276,9 +276,10 @@ func TestFindKubeletSkipsContainerizedKubelet(t *testing.T) {
 // to isolate cache state between cases.
 func resetMountCache() {
 	mountMu.Lock()
-	mountCache = map[uint32]mountCacheEntry{}
+	mountCache = map[MountKey]mountCacheEntry{}
 	mountOrder = nil
 	mountMu.Unlock()
+	forgetRootInodes()
 }
 
 // The kubelet's mounts live in the host mount namespace, which hostPID makes
@@ -330,7 +331,7 @@ func TestScanForMountMarksSharedSuperblock(t *testing.T) {
 		"36 35 0:32 / /var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw",
 	)
 
-	info, ok := scanForMount(32)
+	info, ok := scanForMount(MountKey{Dev: 32})
 
 	require.True(t, ok)
 	assert.Equal(t, "pvc-shared", info.PVName, "the volume is the same for every mount")
@@ -345,7 +346,7 @@ func TestScanForMountSinglePodIsNotShared(t *testing.T) {
 		"37 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw",
 	)
 
-	info, ok := scanForMount(32)
+	info, ok := scanForMount(MountKey{Dev: 32})
 
 	require.True(t, ok)
 	assert.False(t, info.Shared)
@@ -361,7 +362,7 @@ func TestScanForMountDistinctVolumesOnOneSuperblock(t *testing.T) {
 		"37 35 0:77 /pvc-bbbb /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~csi/pvc-bbbb/mount rw,relatime shared:1 - nfs4 10.0.0.1:/export/pvc-bbbb rw",
 	)
 
-	info, ok := scanForMount(77)
+	info, ok := scanForMount(MountKey{Dev: 77})
 
 	require.True(t, ok, "the device is still a kubelet volume")
 	assert.Empty(t, info.PVName)
@@ -376,18 +377,121 @@ func TestInvalidateMountCacheSeesNewSharer(t *testing.T) {
 	const second = "37 35 0:32 / /var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw"
 	withMountInfo(t, first)
 
-	info, ok := resolveMount(32)
+	info, ok := resolveMount(MountKey{Dev: 32})
 	require.True(t, ok)
 	require.False(t, info.Shared)
 
 	require.NoError(t, os.WriteFile(mountInfoPath, []byte(first+"\n"+second+"\n"), 0o644))
 
-	info, _ = resolveMount(32)
+	info, _ = resolveMount(MountKey{Dev: 32})
 	assert.False(t, info.Shared, "still served from cache until the table is known to have changed")
 
 	invalidateMountCache()
 
-	info, ok = resolveMount(32)
+	info, ok = resolveMount(MountKey{Dev: 32})
 	require.True(t, ok)
 	assert.True(t, info.Shared)
+}
+
+// withRootDir creates the directory a mount point is reached through, under
+// the fixture table's "<proc>/<pid>/root", and returns its inode.
+func withRootDir(t *testing.T, mountPoint string) uint64 {
+	t.Helper()
+
+	dir := filepath.Join(rootOf(mountInfoPath), mountPoint)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	ino, ok := mountRootInode(dir)
+	require.True(t, ok)
+	return ino
+}
+
+// Static PVs, or a subdirectory provisioner, carve several volumes out of one
+// NFS export, and NFS gives them one superblock. The root of the mount the
+// I/O went through tells which volume it was.
+func TestScanForMountTellsVolumesApartByMountRoot(t *testing.T) {
+	const (
+		mpA = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-aaaa"
+		mpB = "/var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~csi/pvc-bbbb/mount"
+	)
+	withMountInfo(t,
+		"36 35 0:77 /export/pvc-aaaa "+mpA+" rw,relatime shared:1 - nfs4 10.0.0.1:/export/pvc-aaaa rw",
+		"37 35 0:77 /export/pvc-bbbb "+mpB+" rw,relatime shared:1 - nfs4 10.0.0.1:/export/pvc-bbbb rw",
+	)
+	inoA := withRootDir(t, mpA)
+	inoB := withRootDir(t, mpB)
+
+	info, ok := scanForMount(MountKey{Dev: 77, RootIno: inoB})
+	require.True(t, ok)
+	assert.Equal(t, "pvc-bbbb", info.PVName)
+	assert.Equal(t, "e6db4197-793a-4924-8d17-2b71dbad18bb", info.PodUID)
+	assert.False(t, info.Shared, "only one pod mounts pvc-bbbb")
+
+	info, ok = scanForMount(MountKey{Dev: 77, RootIno: inoA})
+	require.True(t, ok)
+	assert.Equal(t, "pvc-aaaa", info.PVName)
+}
+
+// Two pods on one of those volumes: the volume is certain, the pod is not.
+func TestScanForMountSharedVolumeOnSharedSuperblock(t *testing.T) {
+	const (
+		mpA1 = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-aaaa"
+		mpA2 = "/var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-aaaa"
+		mpB  = "/var/lib/kubelet/pods/0ae4568c-d532-43ff-88c2-d16d7512e97b/volumes/kubernetes.io~nfs/pvc-bbbb"
+	)
+	withMountInfo(t,
+		"36 35 0:77 /export/a "+mpA1+" rw - nfs4 10.0.0.1:/export/a rw",
+		"37 35 0:77 /export/a "+mpA2+" rw - nfs4 10.0.0.1:/export/a rw",
+		"38 35 0:77 /export/b "+mpB+" rw - nfs4 10.0.0.1:/export/b rw",
+	)
+	// Both pods' mounts of pvc-aaaa have the same root; the fixture uses one
+	// directory for them by linking the second to the first.
+	inoA := withRootDir(t, mpA1)
+	require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(rootOf(mountInfoPath), mpA2)), 0o755))
+	require.NoError(t, os.Symlink(filepath.Join(rootOf(mountInfoPath), mpA1), filepath.Join(rootOf(mountInfoPath), mpA2)))
+	withRootDir(t, mpB)
+
+	info, ok := scanForMount(MountKey{Dev: 77, RootIno: inoA})
+	require.True(t, ok)
+	assert.Equal(t, "pvc-aaaa", info.PVName)
+	assert.True(t, info.Shared)
+}
+
+// A root inode that matches no mount (a subPath mount, or a lookup that
+// failed) leaves the volume unnamed rather than guessed.
+func TestScanForMountUnknownMountRootLeavesVolumeUnnamed(t *testing.T) {
+	const (
+		mpA = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-aaaa"
+		mpB = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-bbbb"
+	)
+	withMountInfo(t,
+		"36 35 0:77 /a "+mpA+" rw - nfs4 10.0.0.1:/export/a rw",
+		"37 35 0:77 /b "+mpB+" rw - nfs4 10.0.0.1:/export/b rw",
+	)
+	withRootDir(t, mpA)
+	// pvc-bbbb's mount point does not exist in the fixture: its lookup fails.
+
+	info, ok := scanForMount(MountKey{Dev: 77, RootIno: 1})
+	require.True(t, ok, "the device is still a kubelet volume")
+	assert.Empty(t, info.PVName)
+	assert.False(t, info.Shared)
+}
+
+// Resolutions are cached per mount, not per device: two volumes on one
+// superblock must not share a cache entry.
+func TestResolveMountCachesPerMountRoot(t *testing.T) {
+	const (
+		mpA = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-aaaa"
+		mpB = "/var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-bbbb"
+	)
+	withMountInfo(t,
+		"36 35 0:77 /a "+mpA+" rw - nfs4 10.0.0.1:/export/a rw",
+		"37 35 0:77 /b "+mpB+" rw - nfs4 10.0.0.1:/export/b rw",
+	)
+	inoA := withRootDir(t, mpA)
+	inoB := withRootDir(t, mpB)
+
+	a, _ := resolveMount(MountKey{Dev: 77, RootIno: inoA})
+	b, _ := resolveMount(MountKey{Dev: 77, RootIno: inoB})
+	assert.Equal(t, "pvc-aaaa", a.PVName)
+	assert.Equal(t, "pvc-bbbb", b.PVName)
 }

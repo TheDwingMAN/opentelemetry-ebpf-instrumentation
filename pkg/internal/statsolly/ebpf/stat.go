@@ -201,6 +201,9 @@ type FsIo struct {
 	LatencyNs uint64 `json:"latency_ns"`
 	Bytes     uint64 `json:"bytes"`
 	Error     int32  `json:"error"`
+	// RootIno is the inode of the root of the mount the file was reached
+	// through, which tells apart volumes that share SDev.
+	RootIno uint64 `json:"root_ino"`
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.
@@ -283,6 +286,7 @@ type StatsFsIo struct {
 	Bytes     uint64
 	Error     int32
 	Pad2      [4]uint8
+	RootIno   uint64
 }
 
 // TCPIoBatchSize mirrors k_tcp_io_batch_size in bpf/statsolly/types.h.
