@@ -86,6 +86,9 @@ const (
 	K8SClientCluster   = Name("client_k8s_cluster_name")
 	K8SServerCluster   = Name("server_k8s_cluster_name")
 
+	K8sPersistentVolumeName      = Name("k8s.persistentvolume.name")
+	K8sPersistentVolumeClaimName = Name("k8s.persistentvolumeclaim.name")
+
 	ContainerName = Name(semconv.ContainerNameKey)
 	ContainerID   = Name(semconv.ContainerIDKey)
 

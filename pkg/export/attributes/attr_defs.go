@@ -135,14 +135,6 @@ func getDefinitions(
 		},
 	}
 
-	// network filesystem I/O stat metrics attributes
-	statsFsAttributes := AttrReportGroup{
-		Attributes: map[attr.Name]Default{
-			attr.FsType:      true,
-			attr.FsOperation: true,
-		},
-	}
-
 	// attributes to be reported exclusively for network metrics when
 	// kubernetes metadata is enabled
 	networkKubeAttributes := NewAttrReportGroup(
@@ -258,6 +250,27 @@ func getDefinitions(
 		},
 		extraGroupAttributes[GroupAppKube],
 	)
+
+	// persistent volume/claim attributes for filesystem I/O stat metrics,
+	// only relevant when kubernetes metadata is enabled
+	statsFsKubeAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sPersistentVolumeName:      true,
+			attr.K8sPersistentVolumeClaimName: true,
+		},
+	}
+
+	// network filesystem I/O stat metrics attributes. Pod/namespace/container
+	// attribution is shared with appKubeAttributes since both are keyed by the
+	// same k8s.pod.name/k8s.namespace.name/k8s.container.name attributes.
+	statsFsAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&appKubeAttributes, &statsFsKubeAttributes},
+		Attributes: map[attr.Name]Default{
+			attr.FsType:      true,
+			attr.FsOperation: true,
+		},
+	}
 
 	// ServiceName and ServiceNamespace are reported both as resource and metric attributes, as
 	// the OTEL definition requires that it is reported as resource attribute,
