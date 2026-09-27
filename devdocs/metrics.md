@@ -149,12 +149,24 @@ The RST **sender** is not affected because it goes through the normal applicatio
 
 StatsO11y probes fire at different points relative to `inet_put_port()`, so the behaviour is not uniform across metrics. For example, `obi_kprobe_tcp_close_srtt` (kprobe on `tcp_close`) may still observe a valid port in some RST-receiver scenarios, while `obi_tracepoint_inet_sock_set_state` (tracepoint on `inet_sock_set_state`) consistently sees `0`. Metrics with `src_port="0"` still carry useful signal — `dst_port`, `src_address`, `dst_address`, `reason`, and `network_tcp_handshake_role` remain valid.
 
+#### Block I/O (disk) stats
+
+`obi.stat.disk.operation.duration` is measured from the `block_rq_issue` to the final `block_rq_complete` tracepoint of each request, so it is the time the device took to serve it: it excludes the time requests wait in the I/O scheduler or in blk-throttle before being issued. Other limitations:
+
+- Only reads and writes are measured. Flush, discard and passthrough requests are not.
+- Filesystems without a block device (NFS, CIFS, FUSE, virtiofs) never reach the block layer, so they are not observed.
+- Bio-based device-mapper targets (LVM, dm-crypt) don't issue requests themselves: their I/O is reported on the underlying physical device. Request-based dm-multipath and loop devices report the same I/O on both the stacked and the underlying device, so adding up devices counts it twice.
+- Requests issued before OBI started are not measured.
+- The tracepoint arguments changed across kernel versions (and some of those changes were backported to older kernels), so OBI reads them from the kernel BTF instead of guessing from the kernel version. If the kernel BTF lacks the tracepoint prototypes, the disk probes are not loaded and a warning is logged; the other stat metrics keep working.
+- Disk stat metrics are not supported together with dynamic application selection: they are disabled when a dynamic PID selector is set.
+
 ### Performance considerations
 
 Some stat metrics attach to kernel functions that are called very frequently (e.g. `tcp_sendmsg`, `tcp_cleanup_rbuf` for TCP IO). These probes add a small overhead on every call, so the aggregate cost is proportional to the rate of TCP sends/receives on the node. Consider:
 
 - If you need RTT, failed connections, or retransmits **without** TCP IO overhead, enable those individually (`stats_tcp_rtt`, `stats_tcp_failed_connections`, `stats_tcp_successful_connections`, `stats_tcp_retransmits`) instead of using the `stats` aggregate feature — `stats` includes `stats_tcp_io`, which fires on every `tcp_sendmsg` and `tcp_cleanup_rbuf` call.
 - The `stats_events` ring buffer and the per-metric eBPF maps (e.g. `tcp_io_accum`) have default size limits; on nodes with a very large number of concurrent connections these can be resized via the `ebpf.*` configuration knobs if events start being dropped.
+- The disk probes (`stats_disk_operation_duration`) fire on every block request issue and completion, so their cost grows with the node's IOPS. They don't send one ring buffer event per request: the kernel accumulates the latencies in a histogram per device, direction and outcome (`disk_io_accum`), which userspace reads every `ebpf.batch_timeout`. The exporters still record every request into their histogram, so the userspace cost also grows with the IOPS: roughly hundreds of nanoseconds per request with the OTLP exporter, and tens with the Prometheus exporter. For these reasons they are not part of the `stats` aggregate and must be enabled explicitly.
 
 ### Final notes
 
