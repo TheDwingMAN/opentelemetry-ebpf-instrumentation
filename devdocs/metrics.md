@@ -160,13 +160,21 @@ StatsO11y probes fire at different points relative to `inet_put_port()`, so the 
 - The tracepoint arguments changed across kernel versions (and some of those changes were backported to older kernels), so OBI reads them from the kernel BTF instead of guessing from the kernel version. If the kernel BTF lacks the tracepoint prototypes, the disk probes are not loaded and a warning is logged; the other stat metrics keep working.
 - Disk stat metrics are not supported together with dynamic application selection: they are disabled when a dynamic PID selector is set.
 
+The disk metrics are charged to the workload that owns the I/O: the cgroup that the request's first bio is charged to, which is the cgroup the kernel also uses for `io.stat` and `io.max`. OBI reads the cgroup name in the kernel, takes the container ID from it, and decorates the metrics with the pod and container of that ID. Limitations:
+
+- Only cgroups named after a container ID are attributed: `<id>` (cgroupfs drivers) or `<runtime>-<id>.scope` (systemd drivers, e.g. `cri-containerd-<id>.scope`). When the `io` (cgroup v2) controller is not enabled down to the container cgroups, the I/O is charged to an ancestor cgroup, such as the pod slice, and is reported without workload attributes.
+- Some I/O is never charged to a workload, and is reported without workload attributes: filesystem journal and metadata I/O issued by kernel threads (e.g. `jbd2`), RAID resync and device-mapper internal I/O, and flush requests.
+- Buffered writes are written back later by kernel threads. They are charged to the workload that dirtied the pages only on cgroup v2, and only on filesystems with cgroup writeback support (ext2, ext4, btrfs, f2fs, xfs). Otherwise they are reported without workload attributes.
+- Before Linux 5.18 (and on RHEL 8), the block layer can merge the I/O of different cgroups into the same request. OBI charges a merged request to the cgroup of its first bio.
+- `obi.stat.disk.io` counts the bytes of the requests that completed successfully, as issued to the device. The histogram and `obi.stat.disk.operations` count failed requests too, with an `error.type`.
+
 ### Performance considerations
 
 Some stat metrics attach to kernel functions that are called very frequently (e.g. `tcp_sendmsg`, `tcp_cleanup_rbuf` for TCP IO). These probes add a small overhead on every call, so the aggregate cost is proportional to the rate of TCP sends/receives on the node. Consider:
 
 - If you need RTT, failed connections, or retransmits **without** TCP IO overhead, enable those individually (`stats_tcp_rtt`, `stats_tcp_failed_connections`, `stats_tcp_successful_connections`, `stats_tcp_retransmits`) instead of using the `stats` aggregate feature — `stats` includes `stats_tcp_io`, which fires on every `tcp_sendmsg` and `tcp_cleanup_rbuf` call.
 - The `stats_events` ring buffer and the per-metric eBPF maps (e.g. `tcp_io_accum`) have default size limits; on nodes with a very large number of concurrent connections these can be resized via the `ebpf.*` configuration knobs if events start being dropped.
-- The disk probes (`stats_disk_operation_duration`) fire on every block request issue and completion, so their cost grows with the node's IOPS. They don't send one ring buffer event per request: the kernel accumulates the latencies in a histogram per device, direction and outcome (`disk_io_accum`), which userspace reads every `ebpf.batch_timeout`. The exporters still record every request into their histogram, so the userspace cost also grows with the IOPS: roughly hundreds of nanoseconds per request with the OTLP exporter, and tens with the Prometheus exporter. For these reasons they are not part of the `stats` aggregate and must be enabled explicitly.
+- The disk probes (`stats_disk_*` features) fire on every block request issue and completion, so their cost grows with the node's IOPS. They don't send one ring buffer event per request: the kernel accumulates the latencies in a histogram per device, direction, outcome and cgroup (`disk_io_accum`), which userspace reads every `ebpf.batch_timeout`. The exporters still record every request into their histogram (`stats_disk_operation_duration`), so the userspace cost also grows with the IOPS: roughly hundreds of nanoseconds per request with the OTLP exporter, and tens with the Prometheus exporter. For these reasons they are not part of the `stats` aggregate and must be enabled explicitly.
 
 ### Final notes
 
