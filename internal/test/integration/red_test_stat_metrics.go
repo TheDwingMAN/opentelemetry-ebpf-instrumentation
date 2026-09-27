@@ -115,10 +115,31 @@ func testStatMetricsDiskOperationDuration(t *testing.T) {
 	}
 }
 
+// testStatMetricsDiskCounters checks that the I/O of the disk-io container is charged to it
+func testStatMetricsDiskCounters(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, metric := range []string{
+		"obi_stat_disk_io_bytes_total",
+		"obi_stat_disk_operations_total",
+		"obi_stat_disk_operation_time_seconds_total",
+	} {
+		for _, direction := range []string{"read", "write"} {
+			require.EventuallyWithT(t, func(ct *assert.CollectT) {
+				results, err := pq.Query(metric + `{disk_io_direction="` + direction + `",container_id=~"[0-9a-f]{64}"} > 0`)
+				require.NoError(ct, err)
+				enoughPromResults(ct, results)
+				for _, res := range results {
+					assert.NotEmpty(ct, res.Metric["system_device"])
+				}
+			}, testTimeout, 100*time.Millisecond)
+		}
+	}
+}
+
 // testStatMetricsNoDiskStats checks that the stats aggregate feature doesn't enable the disk stats
 func testStatMetricsNoDiskStats(t *testing.T) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
-	results, err := pq.Query(`obi_stat_disk_operation_duration_seconds_count`)
+	results, err := pq.Query(`{__name__=~"obi_stat_disk_.*"}`)
 	require.NoError(t, err)
 	assert.Empty(t, results)
 }
