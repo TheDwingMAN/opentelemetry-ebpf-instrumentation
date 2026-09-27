@@ -33,6 +33,11 @@ const (
 	// environment of the child processes of TestDiskIOIsChargedPerCgroup
 	envWriterDevice = "OBI_TEST_DISK_WRITER_DEVICE"
 	envWriterBlocks = "OBI_TEST_DISK_WRITER_BLOCKS"
+	// environment of the child process of TestFsSyncIsChargedPerCgroup
+	envSyncerFile = "OBI_TEST_FS_SYNCER_FILE"
+
+	fileSyncs   = 20
+	failedSyncs = 3
 )
 
 // TestDiskLatencyIsAccumulatedPerDevice drives a known I/O pattern on a loop device and checks
@@ -41,7 +46,8 @@ const (
 func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	bounds := []float64{0.001, 0.01, 0.1}
 	features := export.FeatureStatsDiskOperationDuration
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{}, bounds)
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+		ebpf.LatencyHistograms{DiskOperationDuration: bounds})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 	require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
@@ -99,7 +105,8 @@ func TestDiskIOIsChargedPerCgroup(t *testing.T) {
 	// a counter alone must load the disk probes, without the histogram
 	features := export.FeatureStatsDiskOperations
 	bounds := []float64{0.001}
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{}, bounds)
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+		ebpf.LatencyHistograms{DiskOperationDuration: bounds})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 
@@ -115,7 +122,8 @@ func TestDiskIOIsChargedPerCgroup(t *testing.T) {
 	}
 	for containerID, blocks := range writers {
 		cgroup := filepath.Join(cgroupRoot, "docker-"+containerID+".scope")
-		runWriterInCgroup(t, cgroup, loopDev, blocks)
+		runInCgroup(t, cgroup, "TestDiskIOWriterProcess",
+			envWriterDevice+"="+loopDev, envWriterBlocks+"="+strconv.FormatUint(blocks, 10))
 	}
 
 	deviceName := filepath.Base(loopDev)
@@ -150,6 +158,68 @@ func TestDiskIOWriterProcess(t *testing.T) {
 	}
 }
 
+// TestFsSyncIsChargedPerCgroup syncs a file, and a pipe, which can't be synced, from a process in
+// a container-like cgroup, and checks that the container is charged exactly those syncs.
+func TestFsSyncIsChargedPerCgroup(t *testing.T) {
+	if _, err := os.Stat("/sys/bus/event_source/devices/kprobe/type"); err != nil {
+		t.Skip("the kernel doesn't support kprobes")
+	}
+	cgroupRoot := ioCgroupRoot(t)
+	features := export.FeatureStatsFsSyncDuration
+	bounds := []float64{0.001}
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+		ebpf.LatencyHistograms{FsSyncDuration: bounds})
+	require.NoError(t, err)
+	t.Cleanup(func() { fetcher.Close() })
+
+	reader := newFsSyncReader(ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: fetcher.FsSyncAccumMap()},
+		bounds, newCgroupContainers(ebpfCgroupNames{names: fetcher.DiskCgroupNamesMap()}))
+	reader.readStats() // forget the syncs that happened before this test
+
+	containerID := strings.Repeat("c3", 32)
+	runInCgroup(t, filepath.Join(cgroupRoot, "docker-"+containerID+".scope"), "TestFsSyncProcess",
+		envSyncerFile+"="+filepath.Join(t.TempDir(), "synced"))
+
+	syncs := map[string]uint64{}
+	for _, stat := range reader.readStats() {
+		if stat.FsSync.ContainerID != containerID {
+			continue
+		}
+		for _, latency := range stat.FsSync.Latency {
+			syncs[stat.FsSync.ErrorType] += latency.Count
+		}
+	}
+	assert.Equal(t, map[string]uint64{"": fileSyncs, "EINVAL": failedSyncs}, syncs)
+}
+
+// TestFsSyncProcess is not a test: TestFsSyncIsChargedPerCgroup runs it as a child process that
+// syncs a file and a pipe once its parent has moved it to a cgroup and tells it to start.
+func TestFsSyncProcess(t *testing.T) {
+	path := os.Getenv(envSyncerFile)
+	if path == "" {
+		t.Skip("only runs as a child process of TestFsSyncIsChargedPerCgroup")
+	}
+	_, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	require.NoError(t, err)
+
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	defer f.Close()
+	for range fileSyncs {
+		_, err := f.WriteString("synced\n")
+		require.NoError(t, err)
+		require.NoError(t, f.Sync())
+	}
+
+	pipeRead, pipeWrite, err := os.Pipe()
+	require.NoError(t, err)
+	defer pipeRead.Close()
+	defer pipeWrite.Close()
+	for range failedSyncs {
+		require.ErrorIs(t, unix.Fsync(int(pipeWrite.Fd())), unix.EINVAL)
+	}
+}
+
 // ioCgroupRoot returns the root of the cgroup hierarchy of the io (v2) or blkio (v1)
 // controller, where the test can create cgroups
 func ioCgroupRoot(t *testing.T) string {
@@ -168,14 +238,15 @@ func ioCgroupRoot(t *testing.T) string {
 	return ""
 }
 
-// runWriterInCgroup runs TestDiskIOWriterProcess in a new cgroup, writing blocks to the device
-func runWriterInCgroup(t *testing.T, cgroup, device string, blocks uint64) {
+// runInCgroup runs the given test of this binary as a child process in a new cgroup, with the
+// given environment
+func runInCgroup(t *testing.T, cgroup, testName string, env ...string) {
 	t.Helper()
 	require.NoError(t, os.Mkdir(cgroup, 0o755))
 	t.Cleanup(func() { _ = os.Remove(cgroup) })
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestDiskIOWriterProcess$")
-	cmd.Env = append(os.Environ(), envWriterDevice+"="+device, envWriterBlocks+"="+strconv.FormatUint(blocks, 10))
+	cmd := exec.Command(os.Args[0], "-test.run=^"+testName+"$")
+	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	start, err := cmd.StdinPipe()
 	require.NoError(t, err)

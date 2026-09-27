@@ -43,6 +43,28 @@ func TestStatGetters_DiskIO(t *testing.T) {
 	assert.Empty(t, errorTypeString(okRead))
 }
 
+func TestStatGetters_FsSync(t *testing.T) {
+	failed := &Stat{Type: StatTypeFsSync, FsSync: &FsSync{ErrorType: "EIO", ContainerID: "0123abcd"}}
+	succeeded := &Stat{Type: StatTypeFsSync, FsSync: &FsSync{}}
+
+	errorType, ok := StatGetters(attr.ErrorType)
+	require.True(t, ok)
+	assert.Equal(t, "EIO", errorType(failed).Value.AsString())
+	assert.False(t, errorType(succeeded).Valid())
+
+	containerID, ok := StatGetters(attr.ContainerID)
+	require.True(t, ok)
+	assert.Equal(t, "0123abcd", containerID(failed).Value.AsString())
+	assert.False(t, containerID(succeeded).Valid())
+}
+
+func TestStatContainerID(t *testing.T) {
+	assert.Equal(t, "aaaa", (&Stat{DiskIO: &DiskIO{ContainerID: "aaaa"}}).ContainerID())
+	assert.Equal(t, "bbbb", (&Stat{FsSync: &FsSync{ContainerID: "bbbb"}}).ContainerID(),
+		"file syncs are charged to containers too")
+	assert.Empty(t, (&Stat{TCPRetransmit: true}).ContainerID())
+}
+
 func TestStatGetters_DiskIOContainer(t *testing.T) {
 	inContainer := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{ContainerID: "0123abcd"}}
 	onHost := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{}}

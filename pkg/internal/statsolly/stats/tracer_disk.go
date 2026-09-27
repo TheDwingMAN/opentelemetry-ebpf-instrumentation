@@ -85,20 +85,20 @@ func (e ebpfCgroupNames) name(cgroupID uint64) (string, bool) {
 
 // DiskMapTracerConfig tells a DiskMapTracer which kernel maps to read, and how to interpret them
 type DiskMapTracerConfig struct {
-	// DiskIOAccum is the accumulation map to read. A nil map is not read.
-	DiskIOAccum *ciliumebpf.Map
-	CgroupNames *ciliumebpf.Map
-	// DiskLatencyBounds are the histogram boundaries, in seconds, that the kernel buckets the
-	// latencies with
-	DiskLatencyBounds []float64
+	// DiskIOAccum and FsSyncAccum are the accumulation maps to read. A nil map is not read.
+	DiskIOAccum, FsSyncAccum *ciliumebpf.Map
+	CgroupNames              *ciliumebpf.Map
+	// DiskLatencyBounds and FsSyncLatencyBounds are the histogram boundaries, in seconds, that
+	// the kernel buckets the latencies with
+	DiskLatencyBounds, FsSyncLatencyBounds []float64
 	// DiskStatusIsBlkStatus tells how the kernel reports block request completion statuses
 	// (see disk_status_code)
 	DiskStatusIsBlkStatus bool
 	Interval              time.Duration
 }
 
-// DiskMapTracer periodically reads the block I/O accumulation map that the kernel fills, and
-// forwards what changed since the previous read as ebpf.Stat records.
+// DiskMapTracer periodically reads the block I/O and file sync accumulation maps that the kernel
+// fills, and forwards what changed since the previous read as ebpf.Stat records.
 type DiskMapTracer struct {
 	readers  []statReader
 	interval time.Duration
@@ -114,6 +114,10 @@ func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 	if cfg.DiskIOAccum != nil {
 		readers = append(readers, newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskIOAccum},
 			cfg.DiskLatencyBounds, cfg.DiskStatusIsBlkStatus, &deviceNames{sysRoot: "/sys"}, containers))
+	}
+	if cfg.FsSyncAccum != nil {
+		readers = append(readers, newFsSyncReader(ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: cfg.FsSyncAccum},
+			cfg.FsSyncLatencyBounds, containers))
 	}
 	return &DiskMapTracer{readers: readers, interval: cfg.Interval}
 }
@@ -258,6 +262,41 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 			Operations:  delta.operations,
 			Time:        delta.seconds(),
 			Bytes:       current.Bytes - previous.Bytes,
+			Latency:     delta.latency,
+		},
+	}
+}
+
+func newFsSyncReader(
+	accum accumSource[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT],
+	latencyBounds []float64,
+	containers *cgroupContainers,
+) *accumReader[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT] {
+	f := fsSyncStats{latencyBounds: latencyBounds, containers: containers}
+	return newAccumReader("fs_sync_accum", accum, f.stat)
+}
+
+type fsSyncStats struct {
+	latencyBounds []float64
+	containers    *cgroupContainers
+}
+
+// stat returns the file syncs that completed since the previous read of the key, or nil
+func (f *fsSyncStats) stat(key ebpf.StatsFsSyncKeyT, current, previous ebpf.StatsFsSyncAccumT) *ebpf.Stat {
+	if anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) {
+		previous = ebpf.StatsFsSyncAccumT{}
+	}
+	delta := latencyDelta(f.latencyBounds, current.LatencyCount[:], current.LatencySumNs[:],
+		previous.LatencyCount[:], previous.LatencySumNs[:])
+	if delta.operations == 0 {
+		return nil
+	}
+	return &ebpf.Stat{
+		Type: ebpf.StatTypeFsSync,
+		FsSync: &ebpf.FsSync{
+			// vfs_fsync_range reports errnos on every kernel version
+			ErrorType:   diskErrorType(key.Status, false),
+			ContainerID: f.containers.containerID(key.CgroupId),
 			Latency:     delta.latency,
 		},
 	}

@@ -291,6 +291,33 @@ func TestDiskCounters(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+func TestFsSyncStats(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsFsSyncDuration)
+
+	diskEvents <- []*ebpf.Stat{
+		{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{
+			Latency: []ebpf.LatencySample{{Seconds: 0.004, Count: 3}},
+		}},
+		{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{
+			ErrorType: "EIO",
+			Latency:   []ebpf.LatencySample{{Seconds: 0.02, Count: 1}},
+		}},
+	}
+
+	ok := map[string]string{"error_type": ""}
+	failed := map[string]string{"error_type": "EIO"}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_duration_seconds_count", Value: 3, Labels: ok},
+			{Name: "obi_stat_fs_sync_duration_seconds_count", Value: 1, Labels: failed},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_duration_seconds_count"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_duration_seconds_sum", Value: 0.012, Labels: ok},
+			{Name: "obi_stat_fs_sync_duration_seconds_sum", Value: 0.02, Labels: failed},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_duration_seconds_sum"))
+	}, timeout, 100*time.Millisecond)
+}
+
 // startDiskPipeline runs the stats pipeline with the given disk features, exporting to
 // Prometheus. It returns the channel to send disk stats through and the Prometheus URL.
 func startDiskPipeline(t *testing.T, features export.Features) (chan<- []*ebpf.Stat, string) {
@@ -308,7 +335,10 @@ func startDiskPipeline(t *testing.T, features export.Features) (chan<- []*ebpf.S
 				Registry: registry,
 				Path:     "/metrics",
 				TTL:      time.Hour,
-				Buckets:  export.Buckets{StatDiskOperationDurationHistogram: []float64{0.001, 0.01}},
+				Buckets: export.Buckets{
+					StatDiskOperationDurationHistogram: []float64{0.001, 0.01},
+					StatFsSyncDurationHistogram:        []float64{0.001, 0.01},
+				},
 			},
 			Metrics: perapp.GlobalMetricsConfig{Features: features},
 		},

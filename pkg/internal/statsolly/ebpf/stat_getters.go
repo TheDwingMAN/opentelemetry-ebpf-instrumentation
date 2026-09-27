@@ -87,19 +87,19 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		}
 	case attr.ErrorType:
 		getter = func(s *Stat) attribute.KeyValue {
-			// error.type only applies to failed requests: return an invalid
+			// error.type only applies to failed operations: return an invalid
 			// KeyValue so the attribute is omitted instead of emitted empty.
-			if s.DiskIO == nil || s.DiskIO.ErrorType == "" {
-				return attribute.KeyValue{}
+			if errorType := storageErrorType(s); errorType != "" {
+				return attribute.String(string(attr.ErrorType), errorType)
 			}
-			return attribute.String(string(attr.ErrorType), s.DiskIO.ErrorType)
+			return attribute.KeyValue{}
 		}
 	case attr.ContainerID:
 		getter = func(s *Stat) attribute.KeyValue {
-			if s.DiskIO == nil || s.DiskIO.ContainerID == "" {
-				return attribute.KeyValue{}
+			if containerID := s.ContainerID(); containerID != "" {
+				return attribute.String(string(attr.ContainerID), containerID)
 			}
-			return attribute.String(string(attr.ContainerID), s.DiskIO.ContainerID)
+			return attribute.KeyValue{}
 		}
 
 	default:
@@ -161,6 +161,17 @@ func diskIODirectionStr(d DiskIODirectionCode) string {
 		return string(DiskDirectionRead)
 	case CodeDiskDirectionWrite:
 		return string(DiskDirectionWrite)
+	}
+	return ""
+}
+
+// storageErrorType is the error of a block I/O or file sync stat, empty on success
+func storageErrorType(s *Stat) string {
+	switch {
+	case s.DiskIO != nil:
+		return s.DiskIO.ErrorType
+	case s.FsSync != nil:
+		return s.FsSync.ErrorType
 	}
 	return ""
 }

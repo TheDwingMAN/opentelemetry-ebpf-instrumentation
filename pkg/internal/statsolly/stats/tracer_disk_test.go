@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 )
@@ -197,4 +198,51 @@ func TestDiskReaderResolvesContainers(t *testing.T) {
 	}
 	assert.Equal(t, map[string]int{containerID: 1, "": 2}, containers,
 		"I/O charged to a non-container cgroup, or to an unknown one, has no container")
+}
+
+type fakeFsSyncAccum struct {
+	entries map[ebpf.StatsFsSyncKeyT]ebpf.StatsFsSyncAccumT
+}
+
+func (f *fakeFsSyncAccum) read() (map[ebpf.StatsFsSyncKeyT]ebpf.StatsFsSyncAccumT, error) {
+	return maps.Clone(f.entries), nil
+}
+
+func (f *fakeFsSyncAccum) delete(key ebpf.StatsFsSyncKeyT) error {
+	delete(f.entries, key)
+	return nil
+}
+
+func TestFsSyncReader(t *testing.T) {
+	const containerID = "40c03570b6f4c30bc8d69923d37ee698f5cfcced92c7b7df1c47f6f7887378a9"
+	ok := ebpf.StatsFsSyncKeyT{CgroupId: 100}
+	failed := ebpf.StatsFsSyncKeyT{CgroupId: 100, Status: uint8(unix.EIO)}
+	syncs := func(count, latencyNs uint64) ebpf.StatsFsSyncAccumT {
+		var a ebpf.StatsFsSyncAccumT
+		a.LatencyCount[1], a.LatencySumNs[1] = count, count*latencyNs
+		return a
+	}
+	src := &fakeFsSyncAccum{entries: map[ebpf.StatsFsSyncKeyT]ebpf.StatsFsSyncAccumT{
+		ok:     syncs(4, 2_000_000),
+		failed: syncs(1, 2_000_000),
+	}}
+	r := newFsSyncReader(src, testBounds, newCgroupContainers(fakeCgroupNames{
+		100: "cri-containerd-" + containerID + ".scope",
+	}))
+
+	stats := r.readStats()
+	require.Len(t, stats, 2)
+	byError := map[string]*ebpf.FsSync{}
+	for _, stat := range stats {
+		assert.Equal(t, ebpf.StatTypeFsSync, stat.Type)
+		assert.Equal(t, containerID, stat.FsSync.ContainerID)
+		byError[stat.FsSync.ErrorType] = stat.FsSync
+	}
+	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 4}}, byError[""].Latency)
+	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 1}}, byError["EIO"].Latency)
+
+	src.entries[ok] = syncs(6, 2_000_000)
+	stats = r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 2}}, stats[0].FsSync.Latency)
 }

@@ -20,6 +20,7 @@ const (
 	StatTypeTCPIo                   = StatType(StatsStatTypeK_statTypeTcpIo)
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
 	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
+	StatTypeFsSync                  = StatType(StatsStatTypeK_statTypeFsSync)
 )
 
 type TCPFailReasonType string
@@ -111,6 +112,7 @@ type Stat struct {
 	TCPRetransmit           bool                     `json:"-"`
 	TCPIo                   *TCPIo                   `json:"-"`
 	DiskIO                  *DiskIO                  `json:"-"`
+	FsSync                  *FsSync                  `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -151,6 +153,29 @@ type DiskIO struct {
 	// Bytes transferred by the operations that succeeded
 	Bytes uint64
 	// Latency of the completed requests, as one representative value per kernel histogram bucket
+	Latency []LatencySample
+}
+
+// ContainerID returns the container that a block I/O or file sync stat is charged to, or an empty
+// string for any other stat
+func (s *Stat) ContainerID() string {
+	switch {
+	case s.DiskIO != nil:
+		return s.DiskIO.ContainerID
+	case s.FsSync != nil:
+		return s.FsSync.ContainerID
+	}
+	return ""
+}
+
+// FsSync is the file syncs that completed with an outcome and charged to a cgroup, since the
+// previous read of the kernel accumulation map.
+type FsSync struct {
+	// ErrorType is empty for successful syncs
+	ErrorType string
+	// ContainerID of the cgroup of the thread that synced. Empty outside containers.
+	ContainerID string
+	// Latency of the syncs, as one representative value per kernel histogram bucket
 	Latency []LatencySample
 }
 

@@ -1139,6 +1139,26 @@ Completed block I/O requests, per block device, direction, outcome and workload 
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
+## `obi.stat.fs.sync.duration`
+
+Duration of file syncs (fsync, fdatasync and their equivalents), per outcome and workload that synced.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the file sync failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+
 ## `obi.stat.tcp.failed.connections`
 
 Count of TCP connections that failed to establish, broken down by `reason`.

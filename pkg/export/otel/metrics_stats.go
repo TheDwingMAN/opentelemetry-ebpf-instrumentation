@@ -79,6 +79,7 @@ func newStatMeterProvider(res *resource.Resource, exporter *sdkmetric.Exporter, 
 		metric.WithReader(metric.NewPeriodicReader(*exporter, metric.WithInterval(interval))),
 		metric.WithView(statHistogramView(attributes.StatTCPRtt.OTEL, cfg.Buckets.StatTCPRttHistogram, isExponential, cfg.ExponentialHistogram)),
 		metric.WithView(statHistogramView(attributes.StatDiskOperationDuration.OTEL, cfg.Buckets.StatDiskOperationDurationHistogram, isExponential, cfg.ExponentialHistogram)),
+		metric.WithView(statHistogramView(attributes.StatFsSyncDuration.OTEL, cfg.Buckets.StatFsSyncDurationHistogram, isExponential, cfg.ExponentialHistogram)),
 	)
 }
 
@@ -96,6 +97,7 @@ type statMetricsExporter struct {
 	diskIO                   *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskOperations           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskOperationTime        *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
+	fsSyncDuration           *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
 }
@@ -283,6 +285,16 @@ func newStatMetricsExporter(
 		nme.diskOperationTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, diskOperationTime, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StatsFsSyncDuration() {
+		fsSyncDuration, err := ebpfEvents.Float64Histogram(attributes.StatFsSyncDuration.OTEL, metric2.WithUnit(attributes.StatFsSyncDuration.Unit))
+		if err != nil {
+			log.Error("creating stats file sync duration histogram", "error", err)
+			return nil, err
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatFsSyncDuration))
+		nme.fsSyncDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, fsSyncDuration, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -313,14 +325,13 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if v.DiskIO != nil {
 				me.recordDiskCounters(ctx, v)
 			}
+			if me.fsSyncDuration != nil && v.FsSync != nil {
+				fsSyncDuration, attrs := me.fsSyncDuration.ForRecord(v)
+				recordLatency(ctx, fsSyncDuration, v.FsSync.Latency, metric2.WithAttributeSet(attrs))
+			}
 			if me.diskOperationDuration != nil && v.DiskIO != nil {
 				diskOperationDuration, attrs := me.diskOperationDuration.ForRecord(v)
-				withAttrs := metric2.WithAttributeSet(attrs)
-				for _, latency := range v.DiskIO.Latency {
-					for range latency.Count {
-						diskOperationDuration.Record(ctx, latency.Seconds, withAttrs)
-					}
-				}
+				recordLatency(ctx, diskOperationDuration, v.DiskIO.Latency, metric2.WithAttributeSet(attrs))
 			}
 		}
 	}
@@ -338,5 +349,14 @@ func (me *statMetricsExporter) recordDiskCounters(ctx context.Context, v *ebpf.S
 	if me.diskOperationTime != nil {
 		diskOperationTime, attrs := me.diskOperationTime.ForRecord(v)
 		diskOperationTime.Add(ctx, v.DiskIO.Time, metric2.WithAttributeSet(attrs))
+	}
+}
+
+// recordLatency records each kernel histogram bucket sample as many times as requests it stands for
+func recordLatency(ctx context.Context, histogram metric2.Float64Histogram, latency []ebpf.LatencySample, attrs metric2.RecordOption) {
+	for _, sample := range latency {
+		for range sample.Count {
+			histogram.Record(ctx, sample.Seconds, attrs)
+		}
 	}
 }

@@ -262,6 +262,33 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 	assert.Equal(t, []attr.Name{attr.DiskIODirection, attr.SystemDevice}, p.For(StatDiskIO))
 }
 
+func TestDefault_StatFsSyncDuration(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+	}, p.For(StatFsSyncDuration))
+
+	p, err = NewAttrSelector(GroupKubernetes, &SelectorConfig{
+		SelectionCfg: Selection{"obi.stat.fs.sync.duration": InclusionLists{Include: []string{"*"}}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ContainerID,
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.K8sContainerName,
+		attr.K8sKind,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.K8sPodName,
+		attr.OBIIP,
+	}, p.For(StatFsSyncDuration), "file syncs have no device or direction")
+}
+
 func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{
 		SelectionCfg: Selection{

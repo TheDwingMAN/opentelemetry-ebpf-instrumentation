@@ -42,3 +42,18 @@ static __always_inline u8 disk_status_code(const u64 raw_error, const bool is_bl
     }
     return (u8)(-(s32)raw_error);
 }
+
+enum { k_errno_ebadf = 9 };
+
+// do_fsync fails with EBADF, before syncing anything, when the file descriptor is invalid
+static __always_inline bool fs_sync_attempted(const s32 ret) {
+    return ret != -k_errno_ebadf;
+}
+
+// vfs_fsync_range returns 0 or a negative errno. Normalized to the errno, 0 on success.
+static __always_inline u8 fs_sync_status(const s32 ret) {
+    if (ret >= 0) {
+        return 0;
+    }
+    return (u8)(-ret);
+}

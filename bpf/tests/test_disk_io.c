@@ -73,12 +73,22 @@ static void test_status_code(void) {
     assert_true(disk_status_code(0, false) == 0, "errno 0 is success");
 }
 
+static void test_fs_sync_status(void) {
+    assert_true(fs_sync_status(0) == 0, "a successful sync has no status");
+    assert_true(fs_sync_status(-5) == 5, "-EIO becomes errno 5");
+    assert_true(fs_sync_status(-22) == 22, "-EINVAL becomes errno 22");
+    assert_true(!fs_sync_attempted(-9), "an invalid file descriptor is not a file sync");
+    assert_true(fs_sync_attempted(-22), "a file that can't be synced is a failed file sync");
+    assert_true(fs_sync_attempted(0), "a successful sync is a file sync");
+}
+
 int main(void) {
     test_latency_bucket_is_upper_inclusive();
     test_latency_bucket_without_bounds();
     test_latency_bucket_never_exceeds_the_bucket_array();
     test_final_completion();
     test_status_code();
+    test_fs_sync_status();
 
     if (failed_assertions) {
         printf("%u assertion(s) failed\n", failed_assertions);

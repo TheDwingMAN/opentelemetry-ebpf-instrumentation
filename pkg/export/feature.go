@@ -60,6 +60,7 @@ const (
 	FeatureStatsDiskIO
 	FeatureStatsDiskOperations
 	FeatureStatsDiskOperationTime
+	FeatureStatsFsSyncDuration
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
@@ -87,6 +88,7 @@ var FeatureMapper = map[string]Features{
 	"stats_disk_operations":            FeatureStatsDiskOperations,
 	"stats_disk_operation_time":        FeatureStatsDiskOperationTime,
 	"stats_disk_operation_duration":    FeatureStatsDiskOperationDuration,
+	"stats_fs_sync_duration":           FeatureStatsFsSyncDuration,
 	"network":                          FeatureNetwork,
 	"network_inter_zone":               FeatureNetworkInterZone,
 	"network_flow_packets":             FeatureNetworkFlowPackets,
@@ -388,7 +390,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStatsDisk)
+	return f.any(FeatureStats | FeatureStatsDisk | FeatureStatsFsSyncDuration)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -430,6 +432,10 @@ func (f Features) StatsDiskOperationTime() bool {
 
 func (f Features) StatsDiskOperationDuration() bool {
 	return f.any(FeatureStatsDiskOperationDuration)
+}
+
+func (f Features) StatsFsSyncDuration() bool {
+	return f.any(FeatureStatsFsSyncDuration)
 }
 
 func (f Features) NetworkInterZone() bool {

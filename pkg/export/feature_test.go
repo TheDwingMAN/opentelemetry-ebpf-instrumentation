@@ -69,6 +69,20 @@ func TestFeatureStatsDiskIsOptIn(t *testing.T) {
 	assert.True(t, FeatureAll.StatsDiskOperationDuration())
 }
 
+func TestFeatureStatsFsSyncIsOptIn(t *testing.T) {
+	fsSync, err := LoadFeatures([]string{"stats_fs_sync_duration"})
+	require.NoError(t, err)
+	assert.True(t, fsSync.StatsFsSyncDuration())
+	assert.True(t, fsSync.StatMetrics(), "a file sync only selection must still enable the stats pipeline")
+	assert.False(t, fsSync.StatsDisk())
+
+	for _, aggregate := range []string{"stats", "stats_disk"} {
+		features, err := LoadFeatures([]string{aggregate})
+		require.NoError(t, err)
+		assert.False(t, features.StatsFsSyncDuration(), "%s must not enable file sync stats", aggregate)
+	}
+}
+
 func TestFeatureStatsDiskAggregate(t *testing.T) {
 	disk, err := LoadFeatures([]string{"stats_disk"})
 	require.NoError(t, err)

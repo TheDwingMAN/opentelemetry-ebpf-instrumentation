@@ -15,6 +15,7 @@ enum stat_type : u8 {
     k_stat_type_tcp_io = 4,
     k_stat_type_tcp_successful_connection = 5,
     k_stat_type_disk_io = 6,
+    k_stat_type_fs_sync = 7,
 };
 
 // batch size used in tcp io metric

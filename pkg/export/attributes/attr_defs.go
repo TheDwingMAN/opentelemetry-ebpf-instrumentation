@@ -141,6 +141,18 @@ func getDefinitions(
 		nil,
 	)
 
+	// file sync metrics attributes: syncs are file operations, so they have neither device
+	// nor direction
+	statsFsSyncAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:       false,
+			attr.ContainerID: false,
+		},
+		nil,
+	)
+
 	// workload that block I/O is charged to, when kubernetes metadata is enabled
 	statsDiskKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
@@ -823,6 +835,12 @@ func getDefinitions(
 		StatDiskOperationTime.Section: {
 			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
 			Attributes: map[attr.Name]Default{},
+		},
+		StatFsSyncDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
 		},
 
 		// span and service graph metrics don't yet implement attribute selection,

@@ -45,6 +45,7 @@ type statMetricsReporter struct {
 	diskIO                   *Expirer[prometheus.Counter]
 	diskOperations           *Expirer[prometheus.Counter]
 	diskOperationTime        *Expirer[prometheus.Counter]
+	fsSyncDuration           *Expirer[prometheus.Histogram]
 
 	promConnect *connector.PrometheusManager
 
@@ -57,6 +58,7 @@ type statMetricsReporter struct {
 	diskIOAttrs                   []attributes.Field[*ebpf.Stat, string]
 	diskOperationsAttrs           []attributes.Field[*ebpf.Stat, string]
 	diskOperationTimeAttrs        []attributes.Field[*ebpf.Stat, string]
+	fsSyncDurationAttrs           []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -229,6 +231,19 @@ func newStatsReporter(
 		register = append(register, mr.diskOperationTime)
 	}
 
+	if cfg.CommonCfg.Features.StatsFsSyncDuration() {
+		mr.fsSyncDurationAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncDuration))
+		mr.fsSyncDuration = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:                            attributes.StatFsSyncDuration.Prom,
+			Help:                            "measures the duration of file syncs (fsync, fdatasync and their equivalents), in seconds",
+			Buckets:                         cfg.Config.Buckets.StatFsSyncDurationHistogram,
+			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
+			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
+			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
+		}, labelNames(mr.fsSyncDurationAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.fsSyncDuration)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -254,6 +269,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPIo(stat)
 			r.observeDiskOperationDuration(stat)
 			r.observeDiskCounters(stat)
+			r.observeFsSyncDuration(stat)
 		}
 	}
 }
@@ -302,10 +318,23 @@ func (r *statMetricsReporter) observeDiskOperationDuration(stat *ebpf.Stat) {
 	if r.diskOperationDuration == nil || stat.DiskIO == nil {
 		return
 	}
-	histogram := r.diskOperationDuration.WithLabelValues(labelValues(stat, r.diskOperationDurationAttrs)...).Metric
-	for _, latency := range stat.DiskIO.Latency {
-		for range latency.Count {
-			histogram.Observe(latency.Seconds)
+	observeLatency(r.diskOperationDuration.WithLabelValues(labelValues(stat, r.diskOperationDurationAttrs)...).Metric,
+		stat.DiskIO.Latency)
+}
+
+func (r *statMetricsReporter) observeFsSyncDuration(stat *ebpf.Stat) {
+	if r.fsSyncDuration == nil || stat.FsSync == nil {
+		return
+	}
+	observeLatency(r.fsSyncDuration.WithLabelValues(labelValues(stat, r.fsSyncDurationAttrs)...).Metric,
+		stat.FsSync.Latency)
+}
+
+// observeLatency observes each kernel histogram bucket sample as many times as requests it stands for
+func observeLatency(histogram prometheus.Histogram, latency []ebpf.LatencySample) {
+	for _, sample := range latency {
+		for range sample.Count {
+			histogram.Observe(sample.Seconds)
 		}
 	}
 }
