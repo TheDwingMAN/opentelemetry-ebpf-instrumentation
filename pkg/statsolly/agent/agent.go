@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"slices"
 	"time"
 
 	ciliumebpf "github.com/cilium/ebpf"
@@ -61,6 +62,10 @@ func (s Status) String() string {
 
 var errShutdownTimeout = errors.New("graceful shutdown has timed out while waiting for eBPF statsolly to finish")
 
+// defaultDiskReadInterval is how often the disk accumulation map is read when ebpf.batch_timeout
+// doesn't set a period
+const defaultDiskReadInterval = time.Second
+
 // Stats reporting agent
 type Stats struct {
 	cfg     *obi.Config
@@ -72,6 +77,8 @@ type Stats struct {
 
 	// stat metrics
 	rbTracer *stats.RingBufTracer
+	// nil unless block I/O stat metrics are enabled and their probes attached
+	diskTracer *stats.DiskMapTracer
 
 	// focuses on TCP/UDP stack internals (kprobes/tracepoints)
 	fetcher ebpFetcher
@@ -83,6 +90,8 @@ type ebpFetcher interface {
 	io.Closer
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
+	DiskIOAccumMap() *ciliumebpf.Map
+	DiskStatusIsBlkStatus() bool
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -106,7 +115,9 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		SelectionCfg:            cfg.Attributes.Select,
 		ExtraGroupAttributesCfg: cfg.Attributes.ExtraGroupAttributes,
 	}
-	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg)
+	features := probedFeatures(alog, cfg.Metrics.Features, ctxInfo.DynamicPIDSelector != nil)
+
+	statsFetcher, err = newFetcher(&cfg.EBPF, &features, selectorCfg, diskLatencyBounds(cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -114,8 +125,27 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
 }
 
-func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg)
+// probedFeatures returns the stat features whose eBPF probes must be loaded. Block I/O stats can't
+// be matched to dynamically selected applications yet, so they are left out under dynamic selection.
+func probedFeatures(log *slog.Logger, features export.Features, dynamicSelection bool) export.Features {
+	if !dynamicSelection || !features.StatsDisk() {
+		return features
+	}
+	log.Warn("disk stat metrics are disabled: they are not supported with dynamic application selection")
+	return features &^ export.FeatureStatsDisk
+}
+
+func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, diskLatencyBounds []float64) (ebpFetcher, error) {
+	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, diskLatencyBounds)
+}
+
+// diskLatencyBounds returns the boundaries the kernel buckets disk latencies with: the union of
+// the Prometheus and OTEL exporter boundaries, so that the kernel buckets refine both.
+func diskLatencyBounds(cfg *obi.Config) []float64 {
+	bounds := slices.Concat(cfg.Prometheus.Buckets.StatDiskOperationDurationHistogram,
+		cfg.OTELMetrics.Buckets.StatDiskOperationDurationHistogram)
+	slices.Sort(bounds)
+	return slices.Compact(bounds)
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests
@@ -127,12 +157,22 @@ func statsAgent(
 ) (*Stats, error) {
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
+	var diskTracer *stats.DiskMapTracer
+	if diskAccum := statsFetcher.DiskIOAccumMap(); diskAccum != nil {
+		interval := cfg.EBPF.BatchTimeout
+		if interval <= 0 {
+			interval = defaultDiskReadInterval
+		}
+		diskTracer = stats.NewDiskMapTracer(diskAccum, diskLatencyBounds(cfg), statsFetcher.DiskStatusIsBlkStatus(), interval)
+	}
+
 	return &Stats{
-		ctxInfo:  ctxInfo,
-		cfg:      cfg,
-		rbTracer: rbTracer,
-		agentIP:  agentIP,
-		fetcher:  statsFetcher,
+		ctxInfo:    ctxInfo,
+		cfg:        cfg,
+		rbTracer:   rbTracer,
+		diskTracer: diskTracer,
+		agentIP:    agentIP,
+		fetcher:    statsFetcher,
 	}, nil
 }
 

@@ -10,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFixupSpec(t *testing.T) {
@@ -188,4 +191,88 @@ func TestTracepointConstantFormat(t *testing.T) {
 			t.Errorf("tracepoint constant %q is not in group/name format", hook)
 		}
 	}
+}
+
+func TestDiskProgramsToDisable(t *testing.T) {
+	allDisk := []string{
+		progObiStatsRawTpBlockRqIssue,
+		progObiStatsRawTpBlockRqIssueLegacy,
+		progObiStatsRawTpBlockRqComplete,
+	}
+	assert.ElementsMatch(t, allDisk, diskProgramsToDisable(false, blockTracepointLayout{}),
+		"no disk program is loaded when disk stats are disabled")
+	assert.ElementsMatch(t, allDisk, diskProgramsToDisable(true, blockTracepointLayout{unknown: true}),
+		"no disk program is loaded when the tracepoint layout can't be told")
+	assert.Equal(t, []string{progObiStatsRawTpBlockRqIssueLegacy},
+		diskProgramsToDisable(true, blockTracepointLayout{}),
+		"current kernels load the single-argument block_rq_issue program")
+	assert.Equal(t, []string{progObiStatsRawTpBlockRqIssue},
+		diskProgramsToDisable(true, blockTracepointLayout{issueHasQueueArg: true}),
+		"older kernels load the (q, rq) block_rq_issue program")
+}
+
+func TestDiskLatencyBoundsToNs(t *testing.T) {
+	boundsNs, err := diskLatencyBoundsToNs([]float64{0.00005, 0.001, 2.5})
+	require.NoError(t, err)
+	assert.Equal(t, []uint64{50_000, 1_000_000, 2_500_000_000}, boundsNs[:3])
+	assert.Zero(t, boundsNs[3], "unused boundaries are left unset")
+
+	_, err = diskLatencyBoundsToNs(nil)
+	require.NoError(t, err, "no boundaries means a single bucket")
+
+	_, err = diskLatencyBoundsToNs(make([]float64, maxDiskLatencyBounds+1))
+	require.Error(t, err, "more boundaries than the kernel has room for")
+
+	_, err = diskLatencyBoundsToNs([]float64{0, 0.001})
+	require.Error(t, err, "boundaries must be positive")
+
+	_, err = diskLatencyBoundsToNs([]float64{0.001, 0.0005})
+	require.Error(t, err, "boundaries must increase")
+
+	_, err = diskLatencyBoundsToNs([]float64{1e-10, 2e-10})
+	require.Error(t, err, "boundaries closer than a nanosecond collapse in the kernel")
+}
+
+func TestBlockTracepointLayoutFromBTF(t *testing.T) {
+	voidPtr := btf.FuncParam{Name: "__data", Type: &btf.Pointer{Target: &btf.Void{}}}
+	rq := btf.FuncParam{Name: "rq", Type: &btf.Pointer{Target: &btf.Struct{Name: "request"}}}
+	queue := btf.FuncParam{Name: "q", Type: &btf.Pointer{Target: &btf.Struct{Name: "request_queue"}}}
+	nrBytes := btf.FuncParam{Name: "nr_bytes", Type: &btf.Int{Name: "unsigned int", Size: 4}}
+	errnoArg := btf.FuncParam{Name: "error", Type: &btf.Int{Name: "int", Size: 4, Encoding: btf.Signed}}
+	blkStatusArg := btf.FuncParam{Name: "error", Type: &btf.Typedef{
+		Name: "blk_status_t", Type: &btf.Typedef{Name: "u8", Type: &btf.Int{Name: "unsigned char", Size: 1}},
+	}}
+
+	protos := func(issue, complete []btf.FuncParam) func(string) (*btf.FuncProto, error) {
+		return func(name string) (*btf.FuncProto, error) {
+			switch name {
+			case "btf_trace_block_rq_issue":
+				return &btf.FuncProto{Params: issue}, nil
+			case "btf_trace_block_rq_complete":
+				return &btf.FuncProto{Params: complete}, nil
+			}
+			return nil, btf.ErrNotFound
+		}
+	}
+
+	current, err := blockTracepointLayoutFrom(protos(
+		[]btf.FuncParam{voidPtr, rq}, []btf.FuncParam{voidPtr, rq, blkStatusArg, nrBytes}))
+	require.NoError(t, err)
+	assert.Equal(t, blockTracepointLayout{completeReportsBlkStatus: true}, current)
+
+	// e.g. 5.8 and RHEL 8 up to 8.5
+	legacy, err := blockTracepointLayoutFrom(protos(
+		[]btf.FuncParam{voidPtr, queue, rq}, []btf.FuncParam{voidPtr, rq, errnoArg, nrBytes}))
+	require.NoError(t, err)
+	assert.Equal(t, blockTracepointLayout{issueHasQueueArg: true}, legacy)
+
+	// e.g. 5.11 to 5.15, and 5.10.137+ or RHEL 8.6+ with the backported block_rq_issue change
+	mixed, err := blockTracepointLayoutFrom(protos(
+		[]btf.FuncParam{voidPtr, rq}, []btf.FuncParam{voidPtr, rq, errnoArg, nrBytes}))
+	require.NoError(t, err)
+	assert.Equal(t, blockTracepointLayout{}, mixed)
+
+	_, err = blockTracepointLayoutFrom(protos(
+		[]btf.FuncParam{voidPtr}, []btf.FuncParam{voidPtr, rq, errnoArg, nrBytes}))
+	require.Error(t, err, "an unexpected prototype is an error, not a guess")
 }
