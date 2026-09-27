@@ -52,7 +52,11 @@ services:
       OTEL_EBPF_HOSTNAME: "obi"
       OTEL_EBPF_BPF_HTTP_REQUEST_TIMEOUT: "5s"
       OTEL_EBPF_PROCESSES_INTERVAL: "100ms"
-      OTEL_EBPF_METRICS_FEATURES: "storage_block"
+      # storage_fs is on so the filesystem programs are loaded and attached
+      # too, not just compiled. The suite asserts on block metrics only, but
+      # a program the kernel rejects fails the whole collection, which is how
+      # a disabled-program regression once took the entire pipeline down.
+      OTEL_EBPF_METRICS_FEATURES: "storage_block,storage_fs"
       OTEL_EBPF_PROTOCOL_DEBUG_PRINT: "true"
       OTEL_EBPF_PROMETHEUS_PORT: "8999"
     depends_on:

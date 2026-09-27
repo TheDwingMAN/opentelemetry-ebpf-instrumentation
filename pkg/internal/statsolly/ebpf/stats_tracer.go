@@ -90,30 +90,46 @@ const (
 	progObiStatsFentryBtrfsFsync = "obi_stats_fentry_btrfs_fsync"
 	progObiStatsFexitBtrfsFsync  = "obi_stats_fexit_btrfs_fsync"
 
-	progObiStatsKprobeNFSRead      = "obi_stats_kprobe_nfs_read"
-	progObiStatsKretprobeNFSRead   = "obi_stats_kretprobe_nfs_read"
-	progObiStatsKprobeNFSWrite     = "obi_stats_kprobe_nfs_write"
-	progObiStatsKretprobeNFSWrite  = "obi_stats_kretprobe_nfs_write"
-	progObiStatsKprobeNFSFsync     = "obi_stats_kprobe_nfs_fsync"
-	progObiStatsKretprobeNFSFsync  = "obi_stats_kretprobe_nfs_fsync"
-	progObiStatsKprobeCephRead     = "obi_stats_kprobe_ceph_read"
-	progObiStatsKretprobeCephRead  = "obi_stats_kretprobe_ceph_read"
-	progObiStatsKprobeCephWrite    = "obi_stats_kprobe_ceph_write"
-	progObiStatsKretprobeCephWrite = "obi_stats_kretprobe_ceph_write"
-	progObiStatsKprobeCephFsync    = "obi_stats_kprobe_ceph_fsync"
-	progObiStatsKretprobeCephFsync = "obi_stats_kretprobe_ceph_fsync"
-	progObiStatsKprobeCIFSRead     = "obi_stats_kprobe_cifs_read"
-	progObiStatsKretprobeCIFSRead  = "obi_stats_kretprobe_cifs_read"
-	progObiStatsKprobeCIFSWrite    = "obi_stats_kprobe_cifs_write"
-	progObiStatsKretprobeCIFSWrite = "obi_stats_kretprobe_cifs_write"
-	progObiStatsKprobeCIFSFsync    = "obi_stats_kprobe_cifs_fsync"
-	progObiStatsKretprobeCIFSFsync = "obi_stats_kretprobe_cifs_fsync"
-	progObiStatsKprobeFUSERead     = "obi_stats_kprobe_fuse_read"
-	progObiStatsKretprobeFUSERead  = "obi_stats_kretprobe_fuse_read"
-	progObiStatsKprobeFUSEWrite    = "obi_stats_kprobe_fuse_write"
-	progObiStatsKretprobeFUSEWrite = "obi_stats_kretprobe_fuse_write"
-	progObiStatsKprobeFUSEFsync    = "obi_stats_kprobe_fuse_fsync"
-	progObiStatsKretprobeFUSEFsync = "obi_stats_kretprobe_fuse_fsync"
+	progObiStatsKprobeNFSRead        = "obi_stats_kprobe_nfs_read"
+	progObiStatsKretprobeNFSRead     = "obi_stats_kretprobe_nfs_read"
+	progObiStatsKprobeNFSWrite       = "obi_stats_kprobe_nfs_write"
+	progObiStatsKretprobeNFSWrite    = "obi_stats_kretprobe_nfs_write"
+	progObiStatsFentrySpliceNFS      = "obi_stats_fentry_nfs_splice_read"
+	progObiStatsFexitSpliceNFS       = "obi_stats_fexit_nfs_splice_read"
+	progObiStatsKprobeSpliceNFS      = "obi_stats_kprobe_nfs_splice_read"
+	progObiStatsKretprobeSpliceNFS   = "obi_stats_kretprobe_nfs_splice_read"
+	progObiStatsFentrySpliceFuse     = "obi_stats_fentry_fuse_splice_read"
+	progObiStatsFexitSpliceFuse      = "obi_stats_fexit_fuse_splice_read"
+	progObiStatsKprobeSpliceFuse     = "obi_stats_kprobe_fuse_splice_read"
+	progObiStatsKretprobeSpliceFuse  = "obi_stats_kretprobe_fuse_splice_read"
+	progObiStatsFentrySpliceExt4     = "obi_stats_fentry_ext4_splice_read"
+	progObiStatsFexitSpliceExt4      = "obi_stats_fexit_ext4_splice_read"
+	progObiStatsKprobeSpliceExt4     = "obi_stats_kprobe_ext4_splice_read"
+	progObiStatsKretprobeSpliceExt4  = "obi_stats_kretprobe_ext4_splice_read"
+	progObiStatsFentrySpliceBtrfs    = "obi_stats_fentry_btrfs_splice_read"
+	progObiStatsFexitSpliceBtrfs     = "obi_stats_fexit_btrfs_splice_read"
+	progObiStatsKprobeSpliceBtrfs    = "obi_stats_kprobe_btrfs_splice_read"
+	progObiStatsKretprobeSpliceBtrfs = "obi_stats_kretprobe_btrfs_splice_read"
+	progObiStatsKprobeNFSFsync       = "obi_stats_kprobe_nfs_fsync"
+	progObiStatsKretprobeNFSFsync    = "obi_stats_kretprobe_nfs_fsync"
+	progObiStatsKprobeCephRead       = "obi_stats_kprobe_ceph_read"
+	progObiStatsKretprobeCephRead    = "obi_stats_kretprobe_ceph_read"
+	progObiStatsKprobeCephWrite      = "obi_stats_kprobe_ceph_write"
+	progObiStatsKretprobeCephWrite   = "obi_stats_kretprobe_ceph_write"
+	progObiStatsKprobeCephFsync      = "obi_stats_kprobe_ceph_fsync"
+	progObiStatsKretprobeCephFsync   = "obi_stats_kretprobe_ceph_fsync"
+	progObiStatsKprobeCIFSRead       = "obi_stats_kprobe_cifs_read"
+	progObiStatsKretprobeCIFSRead    = "obi_stats_kretprobe_cifs_read"
+	progObiStatsKprobeCIFSWrite      = "obi_stats_kprobe_cifs_write"
+	progObiStatsKretprobeCIFSWrite   = "obi_stats_kretprobe_cifs_write"
+	progObiStatsKprobeCIFSFsync      = "obi_stats_kprobe_cifs_fsync"
+	progObiStatsKretprobeCIFSFsync   = "obi_stats_kretprobe_cifs_fsync"
+	progObiStatsKprobeFUSERead       = "obi_stats_kprobe_fuse_read"
+	progObiStatsKretprobeFUSERead    = "obi_stats_kretprobe_fuse_read"
+	progObiStatsKprobeFUSEWrite      = "obi_stats_kprobe_fuse_write"
+	progObiStatsKretprobeFUSEWrite   = "obi_stats_kretprobe_fuse_write"
+	progObiStatsKprobeFUSEFsync      = "obi_stats_kprobe_fuse_fsync"
+	progObiStatsKretprobeFUSEFsync   = "obi_stats_kretprobe_fuse_fsync"
 
 	progObiStatsKprobeExt4Read      = "obi_stats_kprobe_ext4_read"
 	progObiStatsKretprobeExt4Read   = "obi_stats_kretprobe_ext4_read"
@@ -526,6 +542,8 @@ func allFsProgramNames() []string {
 		names = append(names, n.kprobePrograms()...)
 		names = append(names, n.fentryFsyncPrograms()...)
 		names = append(names, n.kprobeFsyncPrograms()...)
+		names = append(names, n.fentrySplicePrograms()...)
+		names = append(names, n.kprobeSplicePrograms()...)
 	}
 	return names
 }
@@ -578,6 +596,9 @@ type fsProgramNames struct {
 	KprobeRead, KretprobeRead   string
 	KprobeWrite, KretprobeWrite string
 	KprobeFsync, KretprobeFsync string
+	// Empty for filesystems without a dedicated splice_read symbol.
+	FentrySpliceRead, FexitSpliceRead     string
+	KprobeSpliceRead, KretprobeSpliceRead string
 }
 
 func fsProgNamesFor(fs FsTypeCode) fsProgramNames {
@@ -590,6 +611,8 @@ func fsProgNamesFor(fs FsTypeCode) fsProgramNames {
 			KprobeRead: progObiStatsKprobeNFSRead, KretprobeRead: progObiStatsKretprobeNFSRead,
 			KprobeWrite: progObiStatsKprobeNFSWrite, KretprobeWrite: progObiStatsKretprobeNFSWrite,
 			KprobeFsync: progObiStatsKprobeNFSFsync, KretprobeFsync: progObiStatsKretprobeNFSFsync,
+			FentrySpliceRead: progObiStatsFentrySpliceNFS, FexitSpliceRead: progObiStatsFexitSpliceNFS,
+			KprobeSpliceRead: progObiStatsKprobeSpliceNFS, KretprobeSpliceRead: progObiStatsKretprobeSpliceNFS,
 		}
 	case CodeFsCeph:
 		return fsProgramNames{
@@ -617,6 +640,8 @@ func fsProgNamesFor(fs FsTypeCode) fsProgramNames {
 			KprobeRead: progObiStatsKprobeFUSERead, KretprobeRead: progObiStatsKretprobeFUSERead,
 			KprobeWrite: progObiStatsKprobeFUSEWrite, KretprobeWrite: progObiStatsKretprobeFUSEWrite,
 			KprobeFsync: progObiStatsKprobeFUSEFsync, KretprobeFsync: progObiStatsKretprobeFUSEFsync,
+			FentrySpliceRead: progObiStatsFentrySpliceFuse, FexitSpliceRead: progObiStatsFexitSpliceFuse,
+			KprobeSpliceRead: progObiStatsKprobeSpliceFuse, KretprobeSpliceRead: progObiStatsKretprobeSpliceFuse,
 		}
 	case CodeFsExt4:
 		return fsProgramNames{
@@ -626,6 +651,8 @@ func fsProgNamesFor(fs FsTypeCode) fsProgramNames {
 			KprobeRead: progObiStatsKprobeExt4Read, KretprobeRead: progObiStatsKretprobeExt4Read,
 			KprobeWrite: progObiStatsKprobeExt4Write, KretprobeWrite: progObiStatsKretprobeExt4Write,
 			KprobeFsync: progObiStatsKprobeExt4Fsync, KretprobeFsync: progObiStatsKretprobeExt4Fsync,
+			FentrySpliceRead: progObiStatsFentrySpliceExt4, FexitSpliceRead: progObiStatsFexitSpliceExt4,
+			KprobeSpliceRead: progObiStatsKprobeSpliceExt4, KretprobeSpliceRead: progObiStatsKretprobeSpliceExt4,
 		}
 	case CodeFsXFS:
 		return fsProgramNames{
@@ -644,6 +671,8 @@ func fsProgNamesFor(fs FsTypeCode) fsProgramNames {
 			KprobeRead: progObiStatsKprobeBtrfsRead, KretprobeRead: progObiStatsKretprobeBtrfsRead,
 			KprobeWrite: progObiStatsKprobeBtrfsWrite, KretprobeWrite: progObiStatsKretprobeBtrfsWrite,
 			KprobeFsync: progObiStatsKprobeBtrfsFsync, KretprobeFsync: progObiStatsKretprobeBtrfsFsync,
+			FentrySpliceRead: progObiStatsFentrySpliceBtrfs, FexitSpliceRead: progObiStatsFexitSpliceBtrfs,
+			KprobeSpliceRead: progObiStatsKprobeSpliceBtrfs, KretprobeSpliceRead: progObiStatsKretprobeSpliceBtrfs,
 		}
 	default:
 		return fsProgramNames{}
@@ -664,6 +693,22 @@ func (n fsProgramNames) fentryFsyncPrograms() []string {
 
 func (n fsProgramNames) kprobeFsyncPrograms() []string {
 	return []string{n.KprobeFsync, n.KretprobeFsync}
+}
+
+// The splice families are empty for filesystems that have no dedicated
+// splice_read symbol, and an empty name is not a program fixupSpec knows.
+func (n fsProgramNames) fentrySplicePrograms() []string {
+	if n.FentrySpliceRead == "" {
+		return nil
+	}
+	return []string{n.FentrySpliceRead, n.FexitSpliceRead}
+}
+
+func (n fsProgramNames) kprobeSplicePrograms() []string {
+	if n.KprobeSpliceRead == "" {
+		return nil
+	}
+	return []string{n.KprobeSpliceRead, n.KretprobeSpliceRead}
 }
 
 // planFsToDisable turns the per-filesystem attach plans into the programs to
@@ -689,6 +734,8 @@ func planFsToDisable(plans []fsAttachPlan) (toDisable []string, attachTo map[str
 			toDisable = append(toDisable, names.kprobePrograms()...)
 			toDisable = append(toDisable, names.fentryFsyncPrograms()...)
 			toDisable = append(toDisable, names.kprobeFsyncPrograms()...)
+			toDisable = append(toDisable, names.fentrySplicePrograms()...)
+			toDisable = append(toDisable, names.kprobeSplicePrograms()...)
 			continue
 		}
 
@@ -700,6 +747,18 @@ func planFsToDisable(plans []fsAttachPlan) (toDisable []string, attachTo map[str
 			attachTo[names.FexitRead] = plan.ReadSym
 			attachTo[names.FentryWrite] = plan.WriteSym
 			attachTo[names.FexitWrite] = plan.WriteSym
+		}
+
+		switch {
+		case plan.SpliceReadSym == "":
+			toDisable = append(toDisable, names.fentrySplicePrograms()...)
+			toDisable = append(toDisable, names.kprobeSplicePrograms()...)
+		case !plan.UseFentry:
+			toDisable = append(toDisable, names.fentrySplicePrograms()...)
+		default:
+			toDisable = append(toDisable, names.kprobeSplicePrograms()...)
+			attachTo[names.FentrySpliceRead] = plan.SpliceReadSym
+			attachTo[names.FexitSpliceRead] = plan.SpliceReadSym
 		}
 
 		if plan.FsyncSym == "" {
@@ -765,6 +824,27 @@ func fsProgramsFor(fs FsTypeCode, objects *StatsObjects) (fentryRead, fexitRead,
 
 // fsFsyncProgramsFor returns the loaded fsync programs backing an
 // fsAttachPlan.
+// fsSpliceReadProgramsFor returns the splice_read programs for a filesystem,
+// or all nil for the filesystems that have no dedicated symbol.
+func fsSpliceReadProgramsFor(fs FsTypeCode, objects *StatsObjects) (fentry, fexit, kprobe, kretprobe *ebpf.Program) {
+	switch fs {
+	case CodeFsNFS:
+		return objects.ObiStatsFentryNfsSpliceRead, objects.ObiStatsFexitNfsSpliceRead,
+			objects.ObiStatsKprobeNfsSpliceRead, objects.ObiStatsKretprobeNfsSpliceRead
+	case CodeFsFUSE:
+		return objects.ObiStatsFentryFuseSpliceRead, objects.ObiStatsFexitFuseSpliceRead,
+			objects.ObiStatsKprobeFuseSpliceRead, objects.ObiStatsKretprobeFuseSpliceRead
+	case CodeFsExt4:
+		return objects.ObiStatsFentryExt4SpliceRead, objects.ObiStatsFexitExt4SpliceRead,
+			objects.ObiStatsKprobeExt4SpliceRead, objects.ObiStatsKretprobeExt4SpliceRead
+	case CodeFsBtrfs:
+		return objects.ObiStatsFentryBtrfsSpliceRead, objects.ObiStatsFexitBtrfsSpliceRead,
+			objects.ObiStatsKprobeBtrfsSpliceRead, objects.ObiStatsKretprobeBtrfsSpliceRead
+	default:
+		return nil, nil, nil, nil
+	}
+}
+
 func fsFsyncProgramsFor(fs FsTypeCode, objects *StatsObjects) (fentryFsync, fexitFsync, kprobeFsync, kretprobeFsync *ebpf.Program) {
 	switch fs {
 	case CodeFsNFS:
@@ -802,6 +882,7 @@ func attachFsPlan(objects *StatsObjects, plan fsAttachPlan) ([]io.Closer, error)
 	fentryRead, fexitRead, fentryWrite, fexitWrite,
 		kprobeRead, kretprobeRead, kprobeWrite, kretprobeWrite := fsProgramsFor(plan.Fs, objects)
 	fentryFsync, fexitFsync, kprobeFsync, kretprobeFsync := fsFsyncProgramsFor(plan.Fs, objects)
+	fentrySplice, fexitSplice, kprobeSplice, kretprobeSplice := fsSpliceReadProgramsFor(plan.Fs, objects)
 
 	var steps []func() (io.Closer, error)
 	if plan.UseFentry {
@@ -829,6 +910,16 @@ func attachFsPlan(objects *StatsObjects, plan fsAttachPlan) ([]io.Closer, error)
 				},
 			)
 		}
+		if plan.SpliceReadSym != "" {
+			steps = append(steps,
+				func() (io.Closer, error) {
+					return link.AttachTracing(link.TracingOptions{Program: fentrySplice, AttachType: ebpf.AttachTraceFEntry})
+				},
+				func() (io.Closer, error) {
+					return link.AttachTracing(link.TracingOptions{Program: fexitSplice, AttachType: ebpf.AttachTraceFExit})
+				},
+			)
+		}
 	} else {
 		steps = []func() (io.Closer, error){
 			func() (io.Closer, error) { return link.Kprobe(plan.ReadSym, kprobeRead, nil) },
@@ -840,6 +931,12 @@ func attachFsPlan(objects *StatsObjects, plan fsAttachPlan) ([]io.Closer, error)
 			steps = append(steps,
 				func() (io.Closer, error) { return link.Kprobe(plan.FsyncSym, kprobeFsync, nil) },
 				func() (io.Closer, error) { return link.Kretprobe(plan.FsyncSym, kretprobeFsync, nil) },
+			)
+		}
+		if plan.SpliceReadSym != "" {
+			steps = append(steps,
+				func() (io.Closer, error) { return link.Kprobe(plan.SpliceReadSym, kprobeSplice, nil) },
+				func() (io.Closer, error) { return link.Kretprobe(plan.SpliceReadSym, kretprobeSplice, nil) },
 			)
 		}
 	}
