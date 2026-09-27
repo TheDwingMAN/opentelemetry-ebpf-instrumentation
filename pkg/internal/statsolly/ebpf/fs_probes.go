@@ -20,6 +20,7 @@ var (
 	sysKernelBTFDir       = "/sys/kernel/btf"
 	tracefsAvailableFuncs = "/sys/kernel/tracing/available_filter_functions"
 	procKallsyms          = "/proc/kallsyms"
+	sysModuleDir          = "/sys/module"
 )
 
 // fsTarget names the file_operations read/write implementations for one
@@ -177,57 +178,71 @@ func fentryCapable(module, sym string) bool {
 	return spec.TypeByName(sym, &fn) == nil
 }
 
-// kprobeExists reports whether a symbol can be probed. tracefs is authoritative
-// but root-only, so fall back to kallsyms when it cannot be read.
-func kprobeExists(sym string) bool {
-	if found, err := symbolInTracefs(sym); err == nil {
+// probeableAmong returns which of wanted can be probed, reading the symbol
+// table once: kallsyms alone runs to hundreds of thousands of lines. tracefs
+// is authoritative but root-only, so fall back to kallsyms when it cannot be
+// read.
+func probeableAmong(wanted map[string]bool) map[string]bool {
+	if found, err := scanSymbols(tracefsAvailableFuncs, 0, wanted); err == nil {
 		return found
 	}
-	return symbolInKallsyms(sym)
+	found, _ := scanSymbols(procKallsyms, 2, wanted)
+	return found
 }
 
-func symbolInTracefs(sym string) (bool, error) {
-	f, err := os.Open(tracefsAvailableFuncs)
+// scanSymbols returns the members of wanted named in the whitespace-separated
+// column col of path's lines.
+func scanSymbols(path string, col int, wanted map[string]bool) (map[string]bool, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer f.Close()
 
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		name, _, _ := strings.Cut(sc.Text(), " ")
-		if name == sym {
-			return true, nil
-		}
-	}
-	return false, sc.Err()
-}
-
-func symbolInKallsyms(sym string) bool {
-	f, err := os.Open(procKallsyms)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-
+	found := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
-		if len(fields) >= 3 && fields[2] == sym {
-			return true
+		if len(fields) > col && wanted[fields[col]] {
+			found[fields[col]] = true
 		}
 	}
-	return false
+	return found, sc.Err()
+}
+
+// symbolResolver returns a resolver that picks the first probeable candidate
+// among the symbols of targets, from a single read of the symbol table.
+func symbolResolver(targets []fsTarget) func([]string) (string, bool) {
+	wanted := map[string]bool{}
+	for _, tgt := range targets {
+		for _, syms := range [][]string{tgt.ReadSyms, tgt.WriteSyms, tgt.FsyncSyms, tgt.SpliceReadSyms} {
+			for _, sym := range syms {
+				wanted[sym] = true
+			}
+		}
+	}
+	found := probeableAmong(wanted)
+	return func(candidates []string) (string, bool) {
+		for _, sym := range candidates {
+			if found[sym] {
+				return sym, true
+			}
+		}
+		return "", false
+	}
 }
 
 // resolveFsSymbol returns the first candidate that is actually probeable.
 func resolveFsSymbol(candidates []string) (string, bool) {
-	for _, sym := range candidates {
-		if kprobeExists(sym) {
-			return sym, true
-		}
-	}
-	return "", false
+	return symbolResolver([]fsTarget{{ReadSyms: candidates}})(candidates)
+}
+
+// moduleLoaded reports whether a kernel module is loaded. A filesystem built
+// into the kernel is there from boot, so it can only be missing at startup
+// if it is a module that loads later.
+func moduleLoaded(module string) bool {
+	_, err := os.Stat(filepath.Join(sysModuleDir, module))
+	return err == nil
 }
 
 type fsAttachPlan struct {
@@ -274,5 +289,20 @@ func planFsAttachWith(
 }
 
 func planFsAttach() []fsAttachPlan {
-	return planFsAttachWith(fsTargets, fentryCapable, resolveFsSymbol)
+	return planFsAttachWith(fsTargets, fentryCapable, symbolResolver(fsTargets))
+}
+
+// planPendingFsAttach plans only the filesystems not in done whose module is
+// loaded. With none of them loaded, as on most ticks, it reads nothing.
+func planPendingFsAttach(done map[FsTypeCode]bool) []fsAttachPlan {
+	var pending []fsTarget
+	for _, tgt := range fsTargets {
+		if !done[tgt.Fs] && moduleLoaded(tgt.Module) {
+			pending = append(pending, tgt)
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	return planFsAttachWith(pending, fentryCapable, symbolResolver(pending))
 }
