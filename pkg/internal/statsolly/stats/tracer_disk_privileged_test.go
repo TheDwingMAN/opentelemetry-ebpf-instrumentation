@@ -275,6 +275,9 @@ func attachLoopDevice(t *testing.T) string {
 	path := fmt.Sprintf("/dev/loop%d", index)
 	loop, err := os.OpenFile(path, os.O_RDWR, 0)
 	require.NoError(t, err)
+	// udev reads a block device to probe it whenever it changes, unless the device is locked
+	// (https://systemd.io/BLOCK_DEVICE_LOCKING/): keep it locked so that only the test does I/O
+	require.NoError(t, unix.Flock(int(loop.Fd()), unix.LOCK_EX))
 	require.NoError(t, unix.IoctlSetInt(int(loop.Fd()), unix.LOOP_SET_FD, int(backing.Fd())))
 	t.Cleanup(func() {
 		_ = unix.IoctlSetInt(int(loop.Fd()), unix.LOOP_CLR_FD, 0)
