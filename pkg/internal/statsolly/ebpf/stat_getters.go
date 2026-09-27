@@ -195,6 +195,8 @@ func fsOpStr(o FsOpCode) string {
 		return string(FsOpWrite)
 	case CodeFsOpFsync:
 		return string(FsOpFsync)
+	case CodeFsOpFdatasync:
+		return string(FsOpFdatasync)
 	default:
 		return string(FsOpRead)
 	}
