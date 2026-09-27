@@ -1052,7 +1052,7 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 		t.Parallel()
 
 		cfg := defaultRuntimeConfig()
-		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsDisk
+		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsDisk | export.FeatureStatsFsSyncDuration
 
 		_, ext := RuntimeToV2(&cfg)
 
@@ -1062,6 +1062,7 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 			"disk_operations",
 			"disk_operation_time",
 			"disk_operation_duration",
+			"fs_sync_duration",
 		}, value(t, ext.Capture.Network, "stats", "features"))
 	})
 
