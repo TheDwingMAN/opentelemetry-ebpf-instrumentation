@@ -32,8 +32,18 @@ func TestStat_GoDiskStatMetrics(t *testing.T) {
 	compose.Env = append(compose.Env, `OTEL_EBPF_CONFIG_SUFFIX=-go-stat-metrics`, `PROM_CONFIG_SUFFIX=-promscrape-otel`)
 	require.NoError(t, err)
 	require.NoError(t, compose.Up())
-	t.Run("Go Stat Metrics disk operation duration tests", testStatMetricsDiskOperationDuration)
-	t.Run("Go Stat Metrics disk counters tests", testStatMetricsDiskCounters)
+	containerID, err := compose.ContainerID("disk-io")
+	require.NoError(t, err)
+	require.Len(t, containerID, 64)
+	t.Run("Go Stat Metrics disk operation duration tests", func(t *testing.T) {
+		testStatMetricsDiskOperationDuration(t, containerID)
+	})
+	t.Run("Go Stat Metrics disk counters tests", func(t *testing.T) {
+		testStatMetricsDiskCounters(t, containerID)
+	})
+	t.Run("Go Stat Metrics file sync duration tests", func(t *testing.T) {
+		testStatMetricsFsSyncDuration(t, containerID)
+	})
 	runWeaverValidation(t)
 	require.NoError(t, compose.Close())
 }
