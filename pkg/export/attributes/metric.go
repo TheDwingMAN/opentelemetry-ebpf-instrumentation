@@ -594,6 +594,36 @@ var (
 		Unit:    "s",
 		Type:    InstrumentHistogram,
 	})
+	StatDiskQueueDuration = metric(Name{
+		Section: "obi.stat.disk.queue.duration",
+		OTEL:    "obi.stat.disk.queue.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatDiskFlushDuration = metric(Name{
+		Section: "obi.stat.disk.flush.duration",
+		OTEL:    "obi.stat.disk.flush.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatDiskDiscardDuration = metric(Name{
+		Section: "obi.stat.disk.discard.duration",
+		OTEL:    "obi.stat.disk.discard.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatDiskDiscardIO = metric(Name{
+		Section: "obi.stat.disk.discard.io",
+		OTEL:    "obi.stat.disk.discard.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
+	StatDiskPendingOperations = metric(Name{
+		Section: "obi.stat.disk.pending_operations",
+		OTEL:    "obi.stat.disk.pending_operations",
+		Unit:    "{operation}",
+		Type:    InstrumentUpDownCounter,
+	})
 )
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.

@@ -73,6 +73,27 @@ static void test_status_code(void) {
     assert_true(disk_status_code(0, false) == 0, "errno 0 is success");
 }
 
+static void test_op_from_req_op(void) {
+    assert_true(disk_op_from_req_op(0) == disk_op_read, "REQ_OP_READ is a read");
+    assert_true(disk_op_from_req_op(1) == disk_op_write, "REQ_OP_WRITE is a write");
+    assert_true(disk_op_from_req_op(2) == disk_op_flush, "REQ_OP_FLUSH is a flush");
+    assert_true(disk_op_from_req_op(3) == disk_op_discard, "REQ_OP_DISCARD is a discard");
+    assert_true(disk_op_from_req_op(5) == disk_op_discard, "REQ_OP_SECURE_ERASE is a discard");
+    assert_true(disk_op_from_req_op(9) == disk_op_unknown, "REQ_OP_WRITE_ZEROES is not measured");
+    assert_true(disk_op_from_req_op(34) == disk_op_unknown,
+                "driver private operations are not measured");
+}
+
+static void test_queue_ns(void) {
+    assert_true(disk_queue_ns(1000, 1500) == 500, "the wait is the time from allocation to issue");
+    assert_true(disk_queue_ns(1500, 1500) == 0,
+                "a request issued as soon as allocated did not wait");
+    assert_true(disk_queue_ns(0, 1500) == k_disk_queue_unknown,
+                "the wait is unknown when the kernel didn't record the allocation time");
+    assert_true(disk_queue_ns(2000, 1500) == k_disk_queue_unknown,
+                "an allocation time after the issue is not trusted");
+}
+
 static void test_fs_sync_status(void) {
     assert_true(fs_sync_status(0) == 0, "a successful sync has no status");
     assert_true(fs_sync_status(-5) == 5, "-EIO becomes errno 5");
@@ -88,6 +109,8 @@ int main(void) {
     test_latency_bucket_never_exceeds_the_bucket_array();
     test_final_completion();
     test_status_code();
+    test_op_from_req_op();
+    test_queue_ns();
     test_fs_sync_status();
 
     if (failed_assertions) {

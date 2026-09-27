@@ -73,17 +73,24 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		}
 	case attr.SystemDevice:
 		getter = func(s *Stat) attribute.KeyValue {
-			if s.DiskIO == nil {
+			if device := diskDevice(s); device != "" {
+				return attribute.String(string(attr.SystemDevice), device)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.DiskPartition:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.DiskIO == nil || s.DiskIO.Partition == "" {
 				return attribute.KeyValue{}
 			}
-			return attribute.String(string(attr.SystemDevice), s.DiskIO.Device)
+			return attribute.String(string(attr.DiskPartition), s.DiskIO.Partition)
 		}
 	case attr.DiskIODirection:
 		getter = func(s *Stat) attribute.KeyValue {
-			if s.DiskIO == nil {
-				return attribute.KeyValue{}
+			if direction := diskIODirectionStr(diskOp(s)); direction != "" {
+				return attribute.String(string(attr.DiskIODirection), direction)
 			}
-			return attribute.String(string(attr.DiskIODirection), diskIODirectionStr(s.DiskIO.Direction))
+			return attribute.KeyValue{}
 		}
 	case attr.ErrorType:
 		getter = func(s *Stat) attribute.KeyValue {
@@ -155,14 +162,36 @@ func networkIoDirectionStr(d NetworkIoDirectionCode) string {
 	return ""
 }
 
-func diskIODirectionStr(d DiskIODirectionCode) string {
-	switch d {
-	case CodeDiskDirectionRead:
+// diskIODirectionStr is the disk.io.direction of reads and writes, empty for other operations
+func diskIODirectionStr(op DiskOpCode) string {
+	switch op {
+	case CodeDiskOpRead:
 		return string(DiskDirectionRead)
-	case CodeDiskDirectionWrite:
+	case CodeDiskOpWrite:
 		return string(DiskDirectionWrite)
 	}
 	return ""
+}
+
+// diskDevice is the device of a block I/O stat, empty for any other stat
+func diskDevice(s *Stat) string {
+	switch {
+	case s.DiskIO != nil:
+		return s.DiskIO.Device
+	case s.DiskPending != nil:
+		return s.DiskPending.Device
+	}
+	return ""
+}
+
+func diskOp(s *Stat) DiskOpCode {
+	switch {
+	case s.DiskIO != nil:
+		return s.DiskIO.Op
+	case s.DiskPending != nil:
+		return s.DiskPending.Op
+	}
+	return 0
 }
 
 // storageErrorType is the error of a block I/O or file sync stat, empty on success

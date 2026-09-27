@@ -91,6 +91,7 @@ type ebpFetcher interface {
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
 	DiskIOAccumMap() *ciliumebpf.Map
+	DiskRequestsMap() *ciliumebpf.Map
 	FsSyncAccumMap() *ciliumebpf.Map
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
@@ -143,20 +144,24 @@ func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *
 }
 
 // latencyHistograms returns the boundaries the kernel buckets latencies with: the union of the
-// Prometheus and OTEL exporter boundaries, so that the kernel buckets refine both.
+// Prometheus and OTEL exporter boundaries, so that the kernel buckets refine both. The kernel
+// buckets all the block request latencies with the same boundaries.
 func latencyHistograms(cfg *obi.Config) ebpf.LatencyHistograms {
+	prom, otel := cfg.Prometheus.Buckets, cfg.OTELMetrics.Buckets
 	return ebpf.LatencyHistograms{
-		DiskOperationDuration: boundsUnion(cfg.Prometheus.Buckets.StatDiskOperationDurationHistogram,
-			cfg.OTELMetrics.Buckets.StatDiskOperationDurationHistogram),
-		FsSyncDuration: boundsUnion(cfg.Prometheus.Buckets.StatFsSyncDurationHistogram,
-			cfg.OTELMetrics.Buckets.StatFsSyncDurationHistogram),
+		Disk: boundsUnion(
+			prom.StatDiskOperationDurationHistogram, otel.StatDiskOperationDurationHistogram,
+			prom.StatDiskQueueDurationHistogram, otel.StatDiskQueueDurationHistogram,
+			prom.StatDiskFlushDurationHistogram, otel.StatDiskFlushDurationHistogram,
+			prom.StatDiskDiscardDurationHistogram, otel.StatDiskDiscardDurationHistogram),
+		FsSyncDuration: boundsUnion(prom.StatFsSyncDurationHistogram, otel.StatFsSyncDurationHistogram),
 	}
 }
 
-func boundsUnion(a, b []float64) []float64 {
-	bounds := slices.Concat(a, b)
-	slices.Sort(bounds)
-	return slices.Compact(bounds)
+func boundsUnion(bounds ...[]float64) []float64 {
+	union := slices.Concat(bounds...)
+	slices.Sort(union)
+	return slices.Compact(union)
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests
@@ -175,11 +180,16 @@ func statsAgent(
 			interval = defaultDiskReadInterval
 		}
 		histograms := latencyHistograms(cfg)
+		var diskRequests *ciliumebpf.Map
+		if cfg.Metrics.Features.StatsDiskPendingOperations() {
+			diskRequests = statsFetcher.DiskRequestsMap()
+		}
 		diskTracer = stats.NewDiskMapTracer(&stats.DiskMapTracerConfig{
 			DiskIOAccum:           statsFetcher.DiskIOAccumMap(),
+			DiskRequests:          diskRequests,
 			FsSyncAccum:           statsFetcher.FsSyncAccumMap(),
 			CgroupNames:           statsFetcher.DiskCgroupNamesMap(),
-			DiskLatencyBounds:     histograms.DiskOperationDuration,
+			DiskLatencyBounds:     histograms.Disk,
 			FsSyncLatencyBounds:   histograms.FsSyncDuration,
 			DiskStatusIsBlkStatus: statsFetcher.DiskStatusIsBlkStatus(),
 			Interval:              interval,

@@ -15,12 +15,12 @@ import (
 func TestStatGetters_DiskIO(t *testing.T) {
 	failedWrite := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{
 		Device:    "nvme0n1",
-		Direction: CodeDiskDirectionWrite,
+		Op:        CodeDiskOpWrite,
 		ErrorType: "EIO",
 	}}
 	okRead := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{
-		Device:    "vda",
-		Direction: CodeDiskDirectionRead,
+		Device: "vda",
+		Op:     CodeDiskOpRead,
 	}}
 
 	device, ok := StatGetters(attr.SystemDevice)
@@ -41,6 +41,38 @@ func TestStatGetters_DiskIO(t *testing.T) {
 	errorTypeString, ok := StatStringGetters(attr.ErrorType)
 	require.True(t, ok)
 	assert.Empty(t, errorTypeString(okRead))
+}
+
+func TestStatGetters_DiskPartition(t *testing.T) {
+	onPartition := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "nvme0n1", Partition: "nvme0n1p2"}}
+	onDisk := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "nvme0n1"}}
+
+	partition, ok := StatGetters(attr.DiskPartition)
+	require.True(t, ok)
+	assert.Equal(t, "nvme0n1p2", partition(onPartition).Value.AsString())
+	assert.False(t, partition(onDisk).Valid(), "omitted for I/O on the whole disk")
+}
+
+func TestStatGetters_DiskOperationsWithoutDirection(t *testing.T) {
+	flush := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "sda", Op: CodeDiskOpFlush}}
+	discard := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "sda", Op: CodeDiskOpDiscard}}
+
+	direction, ok := StatGetters(attr.DiskIODirection)
+	require.True(t, ok)
+	assert.False(t, direction(flush).Valid(), "flushes neither read nor write")
+	assert.False(t, direction(discard).Valid(), "discards neither read nor write")
+}
+
+func TestStatGetters_DiskPending(t *testing.T) {
+	pending := &Stat{Type: StatTypeDiskPending, DiskPending: &DiskPending{Device: "sdb", Op: CodeDiskOpRead, Requests: 3}}
+
+	device, ok := StatGetters(attr.SystemDevice)
+	require.True(t, ok)
+	assert.Equal(t, "sdb", device(pending).Value.AsString())
+
+	direction, ok := StatGetters(attr.DiskIODirection)
+	require.True(t, ok)
+	assert.Equal(t, "read", direction(pending).Value.AsString())
 }
 
 func TestStatGetters_FsSync(t *testing.T) {

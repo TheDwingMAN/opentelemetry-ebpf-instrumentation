@@ -21,6 +21,7 @@ const (
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
 	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
 	StatTypeFsSync                  = StatType(StatsStatTypeK_statTypeFsSync)
+	StatTypeDiskPending             = StatType(StatsStatTypeK_statTypeDiskPending)
 )
 
 type TCPFailReasonType string
@@ -90,14 +91,22 @@ const (
 	DiskDirectionWrite DiskIODirectionType = "write"
 )
 
-// DiskIODirectionCode aliases the bpf2go-generated constants derived from enum
-// disk_io_direction in bpf/statsolly/types.h.
-type DiskIODirectionCode uint8
+// DiskOpCode aliases the bpf2go-generated constants derived from enum disk_op in
+// bpf/statsolly/types.h.
+type DiskOpCode uint8
 
 const (
-	CodeDiskDirectionRead  = DiskIODirectionCode(StatsDiskIoDirectionDiskDirectionRead)
-	CodeDiskDirectionWrite = DiskIODirectionCode(StatsDiskIoDirectionDiskDirectionWrite)
+	CodeDiskOpRead    = DiskOpCode(StatsDiskOpDiskOpRead)
+	CodeDiskOpWrite   = DiskOpCode(StatsDiskOpDiskOpWrite)
+	CodeDiskOpFlush   = DiskOpCode(StatsDiskOpDiskOpFlush)
+	CodeDiskOpDiscard = DiskOpCode(StatsDiskOpDiskOpDiscard)
 )
+
+// IsTransfer tells whether the operation reads or writes data, the operations that the disk I/O
+// metrics report per direction
+func (o DiskOpCode) IsTransfer() bool {
+	return o == CodeDiskOpRead || o == CodeDiskOpWrite
+}
 
 // Stat contains accumulated metrics from a stat, with extra metadata
 // that is added from the user space
@@ -112,6 +121,7 @@ type Stat struct {
 	TCPRetransmit           bool                     `json:"-"`
 	TCPIo                   *TCPIo                   `json:"-"`
 	DiskIO                  *DiskIO                  `json:"-"`
+	DiskPending             *DiskPending             `json:"-"`
 	FsSync                  *FsSync                  `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
@@ -137,11 +147,13 @@ type TCPIo struct {
 	Bytes     uint32 `json:"bytes"`
 }
 
-// DiskIO is the block I/O completed on a device, in a direction, with an outcome and charged to
-// a cgroup, since the previous read of the kernel accumulation map.
+// DiskIO is the block I/O completed on a device, with an operation and an outcome, and charged
+// to a cgroup, since the previous read of the kernel accumulation map.
 type DiskIO struct {
-	Device    string
-	Direction DiskIODirectionCode
+	Device string
+	// Partition of Device that the I/O targets. Empty for I/O on the whole device.
+	Partition string
+	Op        DiskOpCode
 	// ErrorType is empty for successful requests
 	ErrorType string
 	// ContainerID of the cgroup the I/O is charged to. Empty for I/O charged to no container.
@@ -154,6 +166,16 @@ type DiskIO struct {
 	Bytes uint64
 	// Latency of the completed requests, as one representative value per kernel histogram bucket
 	Latency []LatencySample
+	// Queue is the time that the requests waited before their issue to the device, for the
+	// requests whose wait the kernel knows
+	Queue []LatencySample
+}
+
+// DiskPending is the number of block requests of an operation that a device is serving
+type DiskPending struct {
+	Device   string
+	Op       DiskOpCode
+	Requests int64
 }
 
 // ContainerID returns the container that a block I/O or file sync stat is charged to, or an empty

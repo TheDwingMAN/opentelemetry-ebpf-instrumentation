@@ -7,6 +7,8 @@ package stats
 
 import (
 	"bufio"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,7 +51,7 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	bounds := []float64{0.001, 0.01, 0.1}
 	features := export.FeatureStatsDiskOperationDuration
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
-		ebpf.LatencyHistograms{DiskOperationDuration: bounds})
+		ebpf.LatencyHistograms{Disk: bounds})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 	require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
@@ -72,30 +76,169 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	}
 
 	deviceName := filepath.Base(loopDev)
-	completed := map[ebpf.DiskIODirectionCode]uint64{}
-	operations := map[ebpf.DiskIODirectionCode]uint64{}
-	transferred := map[ebpf.DiskIODirectionCode]uint64{}
+	completed := map[ebpf.DiskOpCode]uint64{}
+	queued := map[ebpf.DiskOpCode]uint64{}
+	operations := map[ebpf.DiskOpCode]uint64{}
+	transferred := map[ebpf.DiskOpCode]uint64{}
 	for _, stat := range reader.readStats() {
-		if stat.DiskIO.Device != deviceName {
+		if stat.DiskIO.Device != deviceName || !stat.DiskIO.Op.IsTransfer() {
 			continue
 		}
 		assert.Empty(t, stat.DiskIO.ErrorType)
+		assert.Empty(t, stat.DiskIO.Partition, "the I/O targets the whole device")
 		for _, latency := range stat.DiskIO.Latency {
 			assert.Positive(t, latency.Seconds)
-			completed[stat.DiskIO.Direction] += latency.Count
+			completed[stat.DiskIO.Op] += latency.Count
 		}
-		operations[stat.DiskIO.Direction] += stat.DiskIO.Operations
-		transferred[stat.DiskIO.Direction] += stat.DiskIO.Bytes
+		for _, wait := range stat.DiskIO.Queue {
+			queued[stat.DiskIO.Op] += wait.Count
+		}
+		operations[stat.DiskIO.Op] += stat.DiskIO.Operations
+		transferred[stat.DiskIO.Op] += stat.DiskIO.Bytes
 	}
-	perDirection := func(value uint64) map[ebpf.DiskIODirectionCode]uint64 {
-		return map[ebpf.DiskIODirectionCode]uint64{
-			ebpf.CodeDiskDirectionWrite: value,
-			ebpf.CodeDiskDirectionRead:  value,
+	perDirection := func(value uint64) map[ebpf.DiskOpCode]uint64 {
+		return map[ebpf.DiskOpCode]uint64{
+			ebpf.CodeDiskOpWrite: value,
+			ebpf.CodeDiskOpRead:  value,
 		}
 	}
 	assert.Equal(t, perDirection(directIOBlocks), completed)
 	assert.Equal(t, perDirection(directIOBlocks), operations)
 	assert.Equal(t, perDirection(directIOBlocks*directIOBlockSize), transferred)
+	// loop devices keep I/O statistics, so the kernel timestamps the allocation of every request
+	assert.Equal(t, perDirection(directIOBlocks), queued, "the wait before issue of every request is known")
+}
+
+// TestDiskPartitions checks that I/O on a partition is reported with its partition
+func TestDiskPartitions(t *testing.T) {
+	loopDev, partitionDev := attachPartitionedLoopDevice(t)
+	reader := attachDiskReader(t, export.FeatureStatsDiskOperations)
+
+	const partitionWrites = 16
+	partition, err := os.OpenFile(partitionDev, os.O_RDWR|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer partition.Close()
+	block := alignedBuffer(t, directIOBlockSize)
+	for i := range partitionWrites {
+		_, err := partition.WriteAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+	}
+
+	written := map[string]uint64{}
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device == filepath.Base(loopDev) && stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
+			written[stat.DiskIO.Partition] += stat.DiskIO.Operations
+		}
+	}
+	assert.Equal(t, map[string]uint64{filepath.Base(partitionDev): partitionWrites}, written)
+}
+
+// TestDiskFlushesAndDiscards checks that flushes and discards are reported apart from reads and
+// writes
+func TestDiskFlushesAndDiscards(t *testing.T) {
+	loopDev := attachLoopDevice(t)
+	reader := attachDiskReader(t, export.FeatureStatsDisk)
+
+	disk, err := os.OpenFile(loopDev, os.O_RDWR, 0)
+	require.NoError(t, err)
+	defer disk.Close()
+	const discarded = 1 << 20
+	// loop devices support discards only on the kernels and backing filesystems that can punch holes
+	discardErr := discard(disk, 0, discarded)
+	discardSupported := !errors.Is(discardErr, unix.EOPNOTSUPP)
+	if discardSupported {
+		require.NoError(t, discardErr)
+	}
+	// the page cache of the device is written back, then its write back cache flushed
+	_, err = disk.WriteAt(alignedBuffer(t, directIOBlockSize), discarded)
+	require.NoError(t, err)
+	require.NoError(t, disk.Sync())
+
+	var flushes, discards, discardedBytes uint64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != filepath.Base(loopDev) {
+			continue
+		}
+		switch stat.DiskIO.Op {
+		case ebpf.CodeDiskOpFlush:
+			flushes += stat.DiskIO.Operations
+			assert.Zero(t, stat.DiskIO.Bytes, "flushes transfer no data")
+		case ebpf.CodeDiskOpDiscard:
+			discards += stat.DiskIO.Operations
+			discardedBytes += stat.DiskIO.Bytes
+		}
+	}
+	assert.Positive(t, flushes, "fsync on a device with a write back cache flushes it")
+	if !discardSupported {
+		t.Log("the loop device doesn't support discards on this kernel")
+		return
+	}
+	assert.Positive(t, discards)
+	assert.Equal(t, uint64(discarded), discardedBytes, "the discarded bytes add up to the discarded range")
+}
+
+// attachDiskReader loads the disk probes of the given features and returns a reader of their
+// accumulation map that already forgot the I/O that happened before
+func attachDiskReader(t *testing.T, features export.Features) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
+	t.Helper()
+	bounds := []float64{0.001, 0.01, 0.1}
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+		ebpf.LatencyHistograms{Disk: bounds})
+	require.NoError(t, err)
+	t.Cleanup(func() { fetcher.Close() })
+	require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
+
+	reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: fetcher.DiskIOAccumMap()}, bounds,
+		fetcher.DiskStatusIsBlkStatus(), &deviceNames{sysRoot: "/sys"},
+		newCgroupContainers(ebpfCgroupNames{names: fetcher.DiskCgroupNamesMap()}))
+	reader.readStats()
+	return reader
+}
+
+// TestDiskPendingRequests keeps requests in flight on a null_blk device that completes them
+// slowly, and checks that they are counted.
+func TestDiskPendingRequests(t *testing.T) {
+	bounds := []float64{0.001}
+	features := export.FeatureStatsDiskPendingOperations
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+		ebpf.LatencyHistograms{Disk: bounds})
+	require.NoError(t, err)
+	t.Cleanup(func() { fetcher.Close() })
+
+	const inFlight = 4
+	device := slowNullBlockDevice(t, 500*time.Millisecond)
+	pending := newPendingReader(ebpfRequests{starts: fetcher.DiskRequestsMap()}, &deviceNames{sysRoot: "/sys"})
+
+	done := make(chan error, inFlight)
+	for i := range inFlight {
+		go func() {
+			f, err := os.OpenFile(device, os.O_RDONLY|unix.O_DIRECT, 0)
+			if err != nil {
+				done <- err
+				return
+			}
+			defer f.Close()
+			_, err = f.ReadAt(alignedBuffer(t, directIOBlockSize), int64(i*directIOBlockSize))
+			done <- err
+		}()
+	}
+	requestsOf := func() map[ebpf.DiskOpCode]int64 {
+		requests := map[ebpf.DiskOpCode]int64{}
+		for _, stat := range pending.readStats() {
+			if stat.DiskPending.Device == filepath.Base(device) {
+				requests[stat.DiskPending.Op] = stat.DiskPending.Requests
+			}
+		}
+		return requests
+	}
+	require.Eventually(t, func() bool {
+		return requestsOf()[ebpf.CodeDiskOpRead] == inFlight
+	}, 400*time.Millisecond, 10*time.Millisecond, "the reads are in flight while the device serves them")
+	for range inFlight {
+		require.NoError(t, <-done)
+	}
+	assert.Equal(t, map[ebpf.DiskOpCode]int64{ebpf.CodeDiskOpRead: 0}, requestsOf(),
+		"the device is still reported once its requests complete")
 }
 
 // TestDiskIOIsChargedPerCgroup writes to the same loop device from two processes in two
@@ -106,7 +249,7 @@ func TestDiskIOIsChargedPerCgroup(t *testing.T) {
 	features := export.FeatureStatsDiskOperations
 	bounds := []float64{0.001}
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
-		ebpf.LatencyHistograms{DiskOperationDuration: bounds})
+		ebpf.LatencyHistograms{Disk: bounds})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 
@@ -129,7 +272,7 @@ func TestDiskIOIsChargedPerCgroup(t *testing.T) {
 	deviceName := filepath.Base(loopDev)
 	charged := map[string]uint64{}
 	for _, stat := range reader.readStats() {
-		if stat.DiskIO.Device == deviceName && stat.DiskIO.Direction == ebpf.CodeDiskDirectionWrite {
+		if stat.DiskIO.Device == deviceName && stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
 			charged[stat.DiskIO.ContainerID] += stat.DiskIO.Operations
 		}
 	}
@@ -265,7 +408,14 @@ func attachLoopDevice(t *testing.T) string {
 	require.NoError(t, err)
 	t.Cleanup(func() { backing.Close() })
 	require.NoError(t, backing.Truncate(loopBackingFileSize))
+	path, _ := attachLoopDeviceTo(t, backing)
+	return path
+}
 
+// attachLoopDeviceTo attaches a new loop device to a file and returns its /dev path and the
+// open device
+func attachLoopDeviceTo(t *testing.T, backing *os.File) (string, *os.File) {
+	t.Helper()
 	control, err := os.OpenFile("/dev/loop-control", os.O_RDWR, 0)
 	require.NoError(t, err)
 	defer control.Close()
@@ -283,7 +433,109 @@ func attachLoopDevice(t *testing.T) string {
 		_ = unix.IoctlSetInt(int(loop.Fd()), unix.LOOP_CLR_FD, 0)
 		loop.Close()
 	})
-	return path
+	return path, loop
+}
+
+// attachPartitionedLoopDevice attaches a new loop device to a sparse file with a DOS partition
+// table, and returns the /dev paths of the device and of its first partition
+func attachPartitionedLoopDevice(t *testing.T) (string, string) {
+	t.Helper()
+	const (
+		sectorSize     = 512
+		firstSector    = 2048
+		partitionBytes = 32 << 20
+	)
+	mbr := make([]byte, sectorSize)
+	entry := mbr[446:462]
+	entry[4] = 0x83 // Linux
+	binary.LittleEndian.PutUint32(entry[8:], firstSector)
+	binary.LittleEndian.PutUint32(entry[12:], partitionBytes/sectorSize)
+	mbr[510], mbr[511] = 0x55, 0xaa
+
+	backing, err := os.Create(filepath.Join(t.TempDir(), "disk.img"))
+	require.NoError(t, err)
+	t.Cleanup(func() { backing.Close() })
+	require.NoError(t, backing.Truncate(loopBackingFileSize))
+	_, err = backing.WriteAt(mbr, 0)
+	require.NoError(t, err)
+
+	path, loop := attachLoopDeviceTo(t, backing)
+	require.NoError(t, unix.IoctlLoopSetStatus64(int(loop.Fd()), &unix.LoopInfo64{Flags: unix.LO_FLAGS_PARTSCAN}))
+	name := filepath.Base(path) + "p1"
+	for start := time.Now(); ; time.Sleep(50 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join("/sys/class/block", name, "dev")); err == nil {
+			break
+		}
+		if time.Since(start) > 5*time.Second {
+			t.Skip("the kernel doesn't read the partition table (CONFIG_MSDOS_PARTITION may not be set)")
+		}
+	}
+
+	return path, deviceNode(t, name)
+}
+
+// discard discards a range of a block device with the BLKDISCARD ioctl
+func discard(f *os.File, offset, length uint64) error {
+	span := [2]uint64{offset, length}
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), unix.BLKDISCARD, uintptr(unsafe.Pointer(&span)))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+// slowNullBlockDevice creates a null_blk device that completes each request after the given
+// delay, and returns its /dev path. It skips the test if null_blk can't be configured.
+func slowNullBlockDevice(t *testing.T, delay time.Duration) string {
+	t.Helper()
+	_ = exec.Command("modprobe", "null_blk", "nr_devices=0").Run()
+	dir := filepath.Join("/sys/kernel/config/nullb", fmt.Sprintf("obi-test-%d", os.Getpid()))
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Skipf("null_blk can't be configured through configfs: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.WriteFile(filepath.Join(dir, "power"), []byte("0"), 0o644)
+		_ = os.Remove(dir)
+	})
+	for name, value := range map[string]string{
+		"irqmode":         "2", // complete requests from a timer
+		"completion_nsec": strconv.FormatInt(delay.Nanoseconds(), 10),
+		"hw_queue_depth":  "64",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(value), 0o644), name)
+	}
+	// null_blk names the device nullb<index> on older kernels, and after the configfs directory on
+	// newer ones: take the block device that appears when it's powered on
+	before, err := os.ReadDir("/sys/class/block")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "power"), []byte("1"), 0o644))
+	after, err := os.ReadDir("/sys/class/block")
+	require.NoError(t, err)
+	existed := map[string]bool{}
+	for _, entry := range before {
+		existed[entry.Name()] = true
+	}
+	for _, entry := range after {
+		if !existed[entry.Name()] {
+			return deviceNode(t, entry.Name())
+		}
+	}
+	require.FailNow(t, "no block device appeared when powering on the null_blk device")
+	return ""
+}
+
+// deviceNode creates a node of a block device in a temporary directory, from its numbers in sysfs,
+// as /dev isn't populated automatically in every environment
+func deviceNode(t *testing.T, name string) string {
+	t.Helper()
+	numbers, err := os.ReadFile(filepath.Join("/sys/class/block", name, "dev"))
+	require.NoError(t, err)
+	var major, minor uint32
+	_, err = fmt.Sscanf(string(numbers), "%d:%d", &major, &minor)
+	require.NoError(t, err)
+	node := filepath.Join(t.TempDir(), name)
+	require.NoError(t, unix.Mknod(node, unix.S_IFBLK|0o600, int(unix.Mkdev(major, minor))))
+	return node
 }
 
 // alignedBuffer returns a page-aligned buffer, as O_DIRECT requires

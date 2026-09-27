@@ -31,16 +31,18 @@ const disk_io_key_t *unused_disk_io_key __attribute__((unused));
 const disk_io_accum_t *unused_disk_io_accum __attribute__((unused));
 const disk_cgroup_name_t *unused_disk_cgroup_name __attribute__((unused));
 
-static __always_inline enum disk_io_direction request_direction(struct request *rq) {
-    const u32 op = BPF_CORE_READ(rq, cmd_flags) & k_req_op_mask;
-    switch (op) {
-    case REQ_OP_READ:
-        return disk_direction_read;
-    case REQ_OP_WRITE:
-        return disk_direction_write;
-    default:
-        return disk_direction_unknown;
-    }
+// The partitions of kernels before Linux 5.11 (including RHEL 8), which requests pointed to
+// instead of a struct block_device
+struct hd_struct___old {
+    int partno;
+} __attribute__((preserve_access_index));
+
+struct request___old {
+    struct hd_struct___old *part;
+} __attribute__((preserve_access_index));
+
+static __always_inline enum disk_op request_op(struct request *rq) {
+    return disk_op_from_req_op(BPF_CORE_READ(rq, cmd_flags) & k_req_op_mask);
 }
 
 static __always_inline struct gendisk *request_disk(struct request *rq) {
@@ -63,14 +65,44 @@ static __always_inline struct cgroup *request_cgroup(struct request *rq) {
     return BPF_CORE_READ(bio, bi_blkg, blkcg, css.cgroup);
 }
 
-static __always_inline void record_issue(struct request *rq) {
-    if (request_direction(rq) == disk_direction_unknown) {
+// The partition that the request targets: its dev_t, or its partition number on kernels before
+// Linux 5.11.
+static __always_inline void request_partition(struct request *rq, u32 *part_dev, u8 *partno) {
+    struct bio *bio = BPF_CORE_READ(rq, bio);
+    // Linux 5.12+: the block device of the first bio. Requests that the block layer generates,
+    // such as flushes, have no bio.
+    if (bpf_core_field_exists(bio->bi_bdev)) {
+        if (bio) {
+            *part_dev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
+        }
         return;
     }
+    // Older kernels clear the partition of bios when they remap them to the whole disk, but
+    // record the partition of requests in rq->part when the disk keeps I/O statistics
+    if (bpf_core_field_exists(((struct hd_struct___old *)0)->partno)) {
+        const struct request___old *old = (const void *)rq;
+        *partno = BPF_CORE_READ(old, part, partno);
+        return;
+    }
+    // Linux 5.11, where rq->part is already a struct block_device
+    *part_dev = BPF_CORE_READ(rq, part, bd_dev);
+}
+
+static __always_inline void record_issue(struct request *rq) {
+    const enum disk_op op = request_op(rq);
+    if (op == disk_op_unknown) {
+        return;
+    }
+    const u64 issued_ns = bpf_ktime_get_ns();
+    struct gendisk *disk = request_disk(rq);
     const u64 key = (u64)(uintptr_t)rq;
     const disk_rq_start_t start = {
-        .issued_ns = bpf_ktime_get_ns(),
+        .issued_ns = issued_ns,
+        .queued_ns = disk_queue_ns(BPF_CORE_READ(rq, start_time_ns), issued_ns),
         .bytes = BPF_CORE_READ(rq, __data_len),
+        .major = BPF_CORE_READ(disk, major),
+        .minor = BPF_CORE_READ(disk, first_minor),
+        .op = op,
     };
     bpf_map_update_elem(&disk_rq_start, &key, &start, BPF_ANY);
 }
@@ -84,7 +116,10 @@ static __always_inline disk_io_accum_t *lookup_or_init_accum(const disk_io_key_t
     if (!init) {
         return 0;
     }
-    bpf_memset(init, 0, sizeof(*init));
+    // in two halves: bpf_memset only unrolls up to a limited size
+    enum { k_queue_offset = __builtin_offsetof(disk_io_accum_t, queue_count) };
+    bpf_memset(init, 0, k_queue_offset);
+    bpf_memset((unsigned char *)init + k_queue_offset, 0, sizeof(*init) - k_queue_offset);
     // BPF_NOEXIST: another CPU may have created the entry since the lookup above
     bpf_map_update_elem(&disk_io_accum, key, init, BPF_NOEXIST);
     return bpf_map_lookup_elem(&disk_io_accum, key);
@@ -121,21 +156,18 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         return 0;
     }
     const u64 latency_ns = bpf_ktime_get_ns() - start->issued_ns;
+    const u64 queued_ns = start->queued_ns;
     const u32 bytes = start->bytes;
-    bpf_map_delete_elem(&disk_rq_start, &rq_key);
-
-    struct gendisk *disk = request_disk(rq);
     struct cgroup *cgrp = request_cgroup(rq);
-    const disk_io_key_t key = {
+    disk_io_key_t key = {
         .cgroup_id = BPF_CORE_READ(cgrp, kn, id),
-        .major = BPF_CORE_READ(disk, major),
-        .minor = BPF_CORE_READ(disk, first_minor),
-        .direction = request_direction(rq),
+        .major = start->major,
+        .minor = start->minor,
+        .op = start->op,
         .status = status,
     };
-    if (key.direction == disk_direction_unknown) {
-        return 0;
-    }
+    bpf_map_delete_elem(&disk_rq_start, &rq_key);
+    request_partition(rq, &key.part_dev, &key.partno);
 
     disk_io_accum_t *accum = lookup_or_init_accum(&key);
     if (!accum) {
@@ -149,10 +181,18 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     }
     const u32 bucket =
         disk_latency_bucket(disk_latency_bounds_ns, disk_latency_bounds_len, latency_ns);
-    if (bucket >= k_disk_latency_max_buckets) {
+    if (bucket < k_disk_latency_max_buckets) {
+        __sync_fetch_and_add(&accum->latency_count[bucket], 1);
+        __sync_fetch_and_add(&accum->latency_sum_ns[bucket], latency_ns);
+    }
+    if (queued_ns == k_disk_queue_unknown) {
         return 0;
     }
-    __sync_fetch_and_add(&accum->latency_count[bucket], 1);
-    __sync_fetch_and_add(&accum->latency_sum_ns[bucket], latency_ns);
+    const u32 queue_bucket =
+        disk_latency_bucket(disk_latency_bounds_ns, disk_latency_bounds_len, queued_ns);
+    if (queue_bucket < k_disk_latency_max_buckets) {
+        __sync_fetch_and_add(&accum->queue_count[queue_bucket], 1);
+        __sync_fetch_and_add(&accum->queue_sum_ns[queue_bucket], queued_ns);
+    }
     return 0;
 }

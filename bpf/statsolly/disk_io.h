@@ -26,6 +26,48 @@ static __always_inline u32 disk_latency_bucket(const volatile u64 *bounds,
     return bucket;
 }
 
+// REQ_OP_* values of the operations that are measured. They are stable across kernel versions,
+// unlike the zoned operations that were renumbered in Linux 6.8, and enum req_opf was renamed, so
+// they are not relocated.
+enum {
+    k_req_op_read = 0,
+    k_req_op_write = 1,
+    k_req_op_flush = 2,
+    k_req_op_discard = 3,
+    k_req_op_secure_erase = 5,
+};
+
+// disk_op_from_req_op classifies the REQ_OP_* operation of a request. A secure erase discards
+// the blocks too, so it counts as a discard.
+static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op) {
+    switch (req_op) {
+    case k_req_op_read:
+        return disk_op_read;
+    case k_req_op_write:
+        return disk_op_write;
+    case k_req_op_flush:
+        return disk_op_flush;
+    case k_req_op_discard:
+    case k_req_op_secure_erase:
+        return disk_op_discard;
+    default:
+        return disk_op_unknown;
+    }
+}
+
+enum { k_disk_queue_unknown = ~0ULL };
+
+// disk_queue_ns is the time a request waited in the block layer, from its allocation until its
+// issue to the device: in the I/O scheduler or in the dispatch queues. The kernel only records
+// the allocation time (start_ns) when I/O statistics or an I/O scheduler need it, so the wait is
+// k_disk_queue_unknown when start_ns is 0.
+static __always_inline u64 disk_queue_ns(const u64 start_ns, const u64 issue_ns) {
+    if (start_ns == 0 || start_ns > issue_ns) {
+        return k_disk_queue_unknown;
+    }
+    return issue_ns - start_ns;
+}
+
 // A request can complete in several block_rq_complete calls (partial completions). Each call
 // reports the bytes completed by that call while remaining_bytes (rq->__data_len) still
 // holds the bytes left before the call, so the call that completes the rest is the last one.

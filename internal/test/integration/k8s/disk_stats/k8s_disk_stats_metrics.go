@@ -32,7 +32,7 @@ const (
 // diskStatLabels are the Prometheus labels of all the attributes that the disk and file sync stat
 // metrics can have
 var diskStatLabels = []string{
-	"system_device", "disk_io_direction", "error_type", "container_id", "obi_ip",
+	"system_device", "obi_disk_partition", "disk_io_direction", "error_type", "container_id", "obi_ip",
 	"k8s_cluster_name", "k8s_namespace_name", "k8s_owner_name", "k8s_kind", "k8s_pod_name", "k8s_container_name",
 }
 
@@ -41,6 +41,8 @@ func FeatureDiskStats() features.Feature {
 		Assess("charges block I/O to the workload that did it", testDiskIOChargedToWorkload).
 		Assess("reports the disk latency of the workload", testDiskLatencyPerWorkload).
 		Assess("reports the file syncs of the workload", testFsSyncPerWorkload).
+		Assess("reports how long the I/O of the workload waits before its issue", testDiskQueuePerWorkload).
+		Assess("reports the requests in flight of the disks of the workload", testDiskPendingOfWorkloadDevices).
 		Feature()
 }
 
@@ -63,10 +65,14 @@ func fsSyncLabels() map[string]*regexp.Regexp {
 // which also has the device and direction of the I/O
 func diskIOLabels(direction string) map[string]*regexp.Regexp {
 	labels := fsSyncLabels()
-	labels["system_device"] = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	labels["system_device"] = blockDevicePattern
+	// only there when the I/O targets a partition, which depends on the disk layout of the node
+	labels["obi_disk_partition"] = regexp.MustCompile(`^([a-z][a-z0-9-]*)?$`)
 	labels["disk_io_direction"] = regexp.MustCompile("^" + direction + "$")
 	return labels
 }
+
+var blockDevicePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 func assertDiskStatLabels(t assert.TestingT, series map[string]string, expected map[string]*regexp.Regexp) {
 	assert.Empty(t, promtest.LabelMismatches(series, diskStatLabels, expected), series)
@@ -145,5 +151,49 @@ func testFsSyncPerWorkload(ctx context.Context, t *testing.T, _ *envconf.Config)
 		require.NoError(ct, err)
 		assertHistogramBounds(ct, buckets, export.DefaultBuckets.StatFsSyncDurationHistogram)
 	}, testTimeout, pollInterval)
+	return ctx
+}
+
+func testDiskQueuePerWorkload(ctx context.Context, t *testing.T, _ *envconf.Config) context.Context {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		selector := `{` + workload + `,disk_io_direction="` + direction + `"}`
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			counts, err := pq.Query(`obi_stat_disk_queue_duration_seconds_count` + selector + ` > 0`)
+			require.NoError(ct, err)
+			require.NotEmpty(ct, counts)
+			for _, res := range counts {
+				assertDiskStatLabels(ct, res.Metric, diskIOLabels(direction))
+			}
+
+			buckets, err := pq.Query(`obi_stat_disk_queue_duration_seconds_bucket` + selector)
+			require.NoError(ct, err)
+			assertHistogramBounds(ct, buckets, export.DefaultBuckets.StatDiskQueueDurationHistogram)
+		}, testTimeout, pollInterval)
+	}
+	return ctx
+}
+
+func testDiskPendingOfWorkloadDevices(ctx context.Context, t *testing.T, _ *envconf.Config) context.Context {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			devices, err := pq.Query(`group by (system_device) (obi_stat_disk_operations_total{` + workload +
+				`,disk_io_direction="` + direction + `"})`)
+			require.NoError(ct, err)
+			require.NotEmpty(ct, devices)
+			for _, device := range devices {
+				pending, err := pq.Query(`obi_stat_disk_pending_operations{system_device="` + device.Metric["system_device"] +
+					`",disk_io_direction="` + direction + `"} >= 0`)
+				require.NoError(ct, err)
+				require.Len(ct, pending, 1, "one series per device and direction")
+				assertDiskStatLabels(ct, pending[0].Metric, map[string]*regexp.Regexp{
+					"system_device":     blockDevicePattern,
+					"disk_io_direction": regexp.MustCompile("^" + direction + "$"),
+					"obi_ip":            regexp.MustCompile(`^[0-9a-fA-F.:]+$`),
+				})
+			}
+		}, testTimeout, pollInterval)
+	}
 	return ctx
 }

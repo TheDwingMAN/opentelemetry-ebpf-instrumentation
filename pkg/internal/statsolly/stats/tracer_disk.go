@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -87,7 +88,9 @@ func (e ebpfCgroupNames) name(cgroupID uint64) (string, bool) {
 type DiskMapTracerConfig struct {
 	// DiskIOAccum and FsSyncAccum are the accumulation maps to read. A nil map is not read.
 	DiskIOAccum, FsSyncAccum *ciliumebpf.Map
-	CgroupNames              *ciliumebpf.Map
+	// DiskRequests holds the block requests in flight. Nil unless their number is reported.
+	DiskRequests *ciliumebpf.Map
+	CgroupNames  *ciliumebpf.Map
 	// DiskLatencyBounds and FsSyncLatencyBounds are the histogram boundaries, in seconds, that
 	// the kernel buckets the latencies with
 	DiskLatencyBounds, FsSyncLatencyBounds []float64
@@ -100,7 +103,9 @@ type DiskMapTracerConfig struct {
 // DiskMapTracer periodically reads the block I/O and file sync accumulation maps that the kernel
 // fills, and forwards what changed since the previous read as ebpf.Stat records.
 type DiskMapTracer struct {
-	readers  []statReader
+	readers []statReader
+	// nil unless the requests in flight are reported
+	pending  *pendingReader
 	interval time.Duration
 }
 
@@ -110,16 +115,21 @@ type statReader interface {
 
 func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 	containers := newCgroupContainers(ebpfCgroupNames{names: cfg.CgroupNames})
+	devices := &deviceNames{sysRoot: "/sys"}
 	var readers []statReader
 	if cfg.DiskIOAccum != nil {
 		readers = append(readers, newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskIOAccum},
-			cfg.DiskLatencyBounds, cfg.DiskStatusIsBlkStatus, &deviceNames{sysRoot: "/sys"}, containers))
+			cfg.DiskLatencyBounds, cfg.DiskStatusIsBlkStatus, devices, containers))
+	}
+	var pending *pendingReader
+	if cfg.DiskRequests != nil {
+		pending = newPendingReader(ebpfRequests{starts: cfg.DiskRequests}, devices)
 	}
 	if cfg.FsSyncAccum != nil {
 		readers = append(readers, newFsSyncReader(ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: cfg.FsSyncAccum},
 			cfg.FsSyncLatencyBounds, containers))
 	}
-	return &DiskMapTracer{readers: readers, interval: cfg.Interval}
+	return &DiskMapTracer{readers: readers, pending: pending, interval: cfg.Interval}
 }
 
 func (m *DiskMapTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
@@ -132,16 +142,29 @@ func (m *DiskMapTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				var stats []*ebpf.Stat
-				for _, reader := range m.readers {
-					stats = append(stats, reader.readStats()...)
-				}
+				stats := m.readStats()
 				if len(stats) > 0 {
 					out.SendCtx(ctx, stats)
 				}
 			}
 		}
 	}
+}
+
+func (m *DiskMapTracer) readStats() []*ebpf.Stat {
+	var stats []*ebpf.Stat
+	for _, reader := range m.readers {
+		stats = append(stats, reader.readStats()...)
+	}
+	if m.pending == nil {
+		return stats
+	}
+	for _, stat := range stats {
+		if stat.DiskIO != nil {
+			m.pending.observe(stat.DiskIO)
+		}
+	}
+	return append(stats, m.pending.readStats()...)
 }
 
 // accumReader reads a kernel map of cumulative values and forwards, as stats, what grew since
@@ -244,7 +267,8 @@ type diskStats struct {
 // stat returns the block requests that completed since the previous read of the key, or nil
 func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsDiskIoAccumT) *ebpf.Stat {
 	// kernel counters only grow; a decrease means the LRU map evicted and re-created the entry
-	if current.Bytes < previous.Bytes || anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) {
+	if current.Bytes < previous.Bytes || anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) ||
+		anyDecreased(current.QueueCount[:], previous.QueueCount[:]) {
 		previous = ebpf.StatsDiskIoAccumT{}
 	}
 	delta := latencyDelta(d.latencyBounds, current.LatencyCount[:], current.LatencySumNs[:],
@@ -252,17 +276,21 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 	if delta.operations == 0 {
 		return nil
 	}
+	queue := latencyDelta(d.latencyBounds, current.QueueCount[:], current.QueueSumNs[:],
+		previous.QueueCount[:], previous.QueueSumNs[:])
 	return &ebpf.Stat{
 		Type: ebpf.StatTypeDiskIO,
 		DiskIO: &ebpf.DiskIO{
 			Device:      d.devices.name(key.Major, key.Minor),
-			Direction:   ebpf.DiskIODirectionCode(key.Direction),
+			Partition:   d.devices.partition(key.Major, key.Minor, key.PartDev, key.Partno),
+			Op:          ebpf.DiskOpCode(key.Op),
 			ErrorType:   diskErrorType(key.Status, d.statusIsBlkStatus),
 			ContainerID: d.containers.containerID(key.CgroupId),
 			Operations:  delta.operations,
 			Time:        delta.seconds(),
 			Bytes:       current.Bytes - previous.Bytes,
 			Latency:     delta.latency,
+			Queue:       queue.latency,
 		},
 	}
 }
@@ -405,8 +433,55 @@ func (c *cgroupContainers) containerID(cgroupID uint64) string {
 
 // deviceNames resolves block device numbers to their kernel names, e.g. 259:0 to nvme0n1
 type deviceNames struct {
-	sysRoot string
-	cache   map[[2]uint32]string
+	sysRoot    string
+	cache      map[[2]uint32]string
+	partitions map[partitionKey]string
+}
+
+type partitionKey struct {
+	major, minor, partDev uint32
+	partno                uint8
+}
+
+// kernelDevMinorBits is the width of the minor number in a kernel-internal dev_t
+const kernelDevMinorBits = 20
+
+// partition returns the name of the partition of a disk that block I/O targets, from its kernel
+// dev_t (partDev, Linux 5.12+) or, on older kernels, its partition number. Empty for I/O on the
+// whole disk, or when the partition can't be found.
+func (d *deviceNames) partition(major, minor, partDev uint32, partno uint8) string {
+	partMajor, partMinor := partDev>>kernelDevMinorBits, partDev&(1<<kernelDevMinorBits-1)
+	if (partDev == 0 && partno == 0) || (partMajor == major && partMinor == minor) {
+		return ""
+	}
+	if d.partitions == nil {
+		d.partitions = map[partitionKey]string{}
+	}
+	key := partitionKey{major: major, minor: minor, partDev: partDev, partno: partno}
+	if name, ok := d.partitions[key]; ok {
+		return name
+	}
+	var name string
+	if partDev != 0 {
+		name = d.name(partMajor, partMinor)
+	} else {
+		name = d.partitionByNumber(d.name(major, minor), partno)
+	}
+	d.partitions[key] = name
+	return name
+}
+
+// partitionByNumber finds the partition of a disk with the given number in sysfs, where each
+// partition is a directory of the disk with a "partition" file holding its number
+func (d *deviceNames) partitionByNumber(disk string, partno uint8) string {
+	numbers, _ := filepath.Glob(filepath.Join(d.sysRoot, "block", disk, "*", "partition"))
+	for _, number := range numbers {
+		content, err := os.ReadFile(number)
+		if err == nil && strings.TrimSpace(string(content)) == strconv.Itoa(int(partno)) {
+			return filepath.Base(filepath.Dir(number))
+		}
+	}
+	return ""
 }
 
 func (d *deviceNames) name(major, minor uint32) string {

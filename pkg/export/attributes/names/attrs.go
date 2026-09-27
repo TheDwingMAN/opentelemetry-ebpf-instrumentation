@@ -388,4 +388,6 @@ const (
 	NetworkIoDirection        = Name(semconv.NetworkIODirectionKey)
 	SystemDevice              = Name(semconv.SystemDeviceKey)
 	DiskIODirection           = Name(semconv.DiskIODirectionKey)
+	// DiskPartition is the partition of system.device that block I/O targets, e.g. nvme0n1p1
+	DiskPartition = Name("obi.disk.partition")
 )

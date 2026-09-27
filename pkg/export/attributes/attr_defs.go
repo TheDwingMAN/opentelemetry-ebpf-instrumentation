@@ -135,8 +135,36 @@ func getDefinitions(
 		map[attr.Name]Default{
 			attr.OBIIP:           false,
 			attr.SystemDevice:    true,
+			attr.DiskPartition:   false,
 			attr.DiskIODirection: true,
 			attr.ContainerID:     false,
+		},
+		nil,
+	)
+
+	// attributes of the block operations that neither read nor write, such as flushes and
+	// discards, which therefore have no direction
+	statsDiskOpAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:         false,
+			attr.SystemDevice:  true,
+			attr.DiskPartition: false,
+			attr.ContainerID:   false,
+		},
+		nil,
+	)
+
+	// attributes of the number of requests a device is serving, which is not charged to
+	// workloads
+	statsDiskPendingAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:           false,
+			attr.SystemDevice:    true,
+			attr.DiskIODirection: true,
 		},
 		nil,
 	)
@@ -841,6 +869,30 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
+		},
+		StatDiskQueueDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeOptInAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskFlushDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskOpAttributes, &statsDiskKubeOptInAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskDiscardDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskOpAttributes, &statsDiskKubeOptInAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskDiscardIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskOpAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskPendingOperations.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskPendingAttributes},
+			Attributes: map[attr.Name]Default{},
 		},
 
 		// span and service graph metrics don't yet implement attribute selection,

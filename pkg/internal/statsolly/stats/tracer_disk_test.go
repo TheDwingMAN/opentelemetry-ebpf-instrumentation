@@ -4,10 +4,12 @@
 package stats
 
 import (
+	"fmt"
 	"maps"
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,7 +37,7 @@ func (f *fakeDiskAccum) delete(key ebpf.StatsDiskIoKeyT) error {
 var testBounds = []float64{0.001, 0.01}
 
 func writeKey(major, minor uint32) ebpf.StatsDiskIoKeyT {
-	return ebpf.StatsDiskIoKeyT{Major: major, Minor: minor, Direction: ebpf.StatsDiskIoDirectionDiskDirectionWrite}
+	return ebpf.StatsDiskIoKeyT{Major: major, Minor: minor, Op: ebpf.StatsDiskOpDiskOpWrite}
 }
 
 // accum builds a kernel accumulation value: counts[i] requests in bucket i, each taking latencyNs[i]
@@ -70,7 +72,7 @@ func TestDiskReaderForwardsDeltas(t *testing.T) {
 	require.Len(t, stats, 1)
 	assert.Equal(t, ebpf.StatTypeDiskIO, stats[0].Type)
 	assert.Equal(t, "259:0", stats[0].DiskIO.Device)
-	assert.Equal(t, ebpf.CodeDiskDirectionWrite, stats[0].DiskIO.Direction)
+	assert.Equal(t, ebpf.CodeDiskOpWrite, stats[0].DiskIO.Op)
 	assert.Empty(t, stats[0].DiskIO.ErrorType)
 	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 3}}, stats[0].DiskIO.Latency)
 
@@ -140,6 +142,83 @@ func TestDeviceNames(t *testing.T) {
 	names := &deviceNames{sysRoot: root}
 	assert.Equal(t, "nvme0n1", names.name(259, 0))
 	assert.Equal(t, "8:0", names.name(8, 0), "falls back to major:minor when sysfs has no name")
+}
+
+// fakeSysBlock creates the sysfs entries of a disk and its partitions: /dev/block/<maj:min>/uevent
+// for each device, and /block/<disk>/<partition>/partition with the partition numbers
+func fakeSysBlock(t *testing.T, root string, disk string, major, minor uint32, partitions map[string][2]uint32) {
+	t.Helper()
+	writeUevent := func(name string, major, minor uint32) {
+		dir := filepath.Join(root, "dev", "block", fmt.Sprintf("%d:%d", major, minor))
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "uevent"), []byte("DEVNAME="+name+"\n"), 0o644))
+	}
+	writeUevent(disk, major, minor)
+	number := 0
+	for name, numbers := range partitions {
+		number++
+		writeUevent(name, numbers[0], numbers[1])
+		dir := filepath.Join(root, "block", disk, name)
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "partition"), []byte(strconv.Itoa(number)+"\n"), 0o644))
+	}
+}
+
+func kernelDev(major, minor uint32) uint32 {
+	return major<<kernelDevMinorBits | minor
+}
+
+func TestDevicePartitions(t *testing.T) {
+	root := t.TempDir()
+	// NVMe partitions have extended device numbers, unrelated to the disk's
+	fakeSysBlock(t, root, "nvme0n1", 259, 0, map[string][2]uint32{"nvme0n1p1": {259, 1}})
+	names := &deviceNames{sysRoot: root}
+
+	assert.Equal(t, "nvme0n1p1", names.partition(259, 0, kernelDev(259, 1), 0), "from the partition dev_t (Linux 5.12+)")
+	assert.Equal(t, "nvme0n1p1", names.partition(259, 0, 0, 1), "from the partition number (older kernels)")
+	assert.Empty(t, names.partition(259, 0, kernelDev(259, 0), 0), "I/O on the whole disk has no partition")
+	assert.Empty(t, names.partition(259, 0, 0, 0), "requests without a bio have no partition")
+	assert.Empty(t, names.partition(259, 0, 0, 7), "a partition that sysfs doesn't know")
+}
+
+func TestDiskReaderForwardsPartitionAndQueue(t *testing.T) {
+	root := t.TempDir()
+	fakeSysBlock(t, root, "sda", 8, 0, map[string][2]uint32{"sda1": {8, 1}})
+	key := writeKey(8, 0)
+	key.PartDev = kernelDev(8, 1)
+	current := accum([]uint64{2, 0, 0}, []uint64{500_000, 0, 0})
+	// one of the two requests waited 2 ms before its issue, the wait of the other one is unknown
+	current.QueueCount[1] = 1
+	current.QueueSumNs[1] = 2_000_000
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{key: current}}
+	r := newDiskReader(src, testBounds, false, &deviceNames{sysRoot: root}, newCgroupContainers(fakeCgroupNames{}))
+
+	stats := r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, "sda", stats[0].DiskIO.Device)
+	assert.Equal(t, "sda1", stats[0].DiskIO.Partition)
+	assert.Equal(t, uint64(2), stats[0].DiskIO.Operations)
+	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 1}}, stats[0].DiskIO.Queue)
+}
+
+func TestDiskReaderForwardsFlushesAndDiscards(t *testing.T) {
+	flush, discard := writeKey(8, 0), writeKey(8, 0)
+	flush.Op, discard.Op = ebpf.StatsDiskOpDiskOpFlush, ebpf.StatsDiskOpDiskOpDiscard
+	discarded := accum([]uint64{1, 0, 0}, []uint64{300_000, 0, 0})
+	discarded.Bytes = 1 << 20
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
+		flush:   accum([]uint64{0, 4, 0}, []uint64{0, 3_000_000, 0}),
+		discard: discarded,
+	}}
+	r := newTestDiskReader(src)
+
+	byOp := map[ebpf.DiskOpCode]*ebpf.DiskIO{}
+	for _, stat := range r.readStats() {
+		byOp[stat.DiskIO.Op] = stat.DiskIO
+	}
+	require.Len(t, byOp, 2)
+	assert.Equal(t, uint64(4), byOp[ebpf.CodeDiskOpFlush].Operations)
+	assert.Equal(t, uint64(1<<20), byOp[ebpf.CodeDiskOpDiscard].Bytes)
 }
 
 func TestDiskErrorType(t *testing.T) {

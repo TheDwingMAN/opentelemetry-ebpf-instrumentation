@@ -306,6 +306,7 @@ func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.K8sPodName,
+		attr.DiskPartition,
 		attr.OBIIP,
 		attr.SystemDevice,
 	}, p.For(StatDiskOperationDuration))

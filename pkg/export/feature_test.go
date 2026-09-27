@@ -90,7 +90,19 @@ func TestFeatureStatsDiskAggregate(t *testing.T) {
 	assert.True(t, disk.StatsDiskOperations())
 	assert.True(t, disk.StatsDiskOperationTime())
 	assert.True(t, disk.StatsDiskOperationDuration())
+	assert.True(t, disk.StatsDiskQueueDuration())
+	assert.True(t, disk.StatsDiskFlush())
+	assert.True(t, disk.StatsDiskDiscard())
+	assert.True(t, disk.StatsDiskPendingOperations())
 	assert.False(t, disk.StatsTCPIo(), "the disk aggregate doesn't enable TCP stats")
+
+	for _, feature := range []string{"stats_disk_queue_duration", "stats_disk_flush", "stats_disk_discard", "stats_disk_pending_operations"} {
+		features, err := LoadFeatures([]string{feature})
+		require.NoError(t, err)
+		assert.True(t, features.StatsDisk(), "%s loads the block I/O probes", feature)
+		assert.True(t, features.StatMetrics(), "%s enables the stats pipeline", feature)
+		assert.False(t, features.StatsDiskOperationDuration(), "%s alone doesn't report the request durations", feature)
+	}
 
 	counters, err := LoadFeatures([]string{"stats_disk_io", "stats_disk_operations", "stats_disk_operation_time"})
 	require.NoError(t, err)

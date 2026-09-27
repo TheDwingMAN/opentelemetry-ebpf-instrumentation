@@ -101,13 +101,15 @@ func testStatMetricsTCPIoGo(t *testing.T) {
 // diskStatLabels are the Prometheus labels of all the attributes that the disk and file sync stat
 // metrics can have
 var diskStatLabels = []string{
-	"system_device", "disk_io_direction", "error_type", "container_id", "obi_ip",
+	"system_device", "obi_disk_partition", "disk_io_direction", "error_type", "container_id", "obi_ip",
 	"k8s_cluster_name", "k8s_namespace_name", "k8s_owner_name", "k8s_kind", "k8s_pod_name", "k8s_container_name",
 }
 
 var (
 	blockDevicePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
-	ipPattern          = regexp.MustCompile(`^[0-9a-fA-F.:]+$`)
+	// the partition is only there when the I/O targets one, which depends on the disk layout of the host
+	optionalPartitionPattern = regexp.MustCompile(`^([a-z][a-z0-9-]*)?$`)
+	ipPattern                = regexp.MustCompile(`^[0-9a-fA-F.:]+$`)
 )
 
 // assertDiskStatLabels checks that a series of a disk or file sync stat metric has exactly the
@@ -130,8 +132,19 @@ func fsSyncLabels(containerID string) map[string]*regexp.Regexp {
 func diskIOLabels(containerID, direction string) map[string]*regexp.Regexp {
 	labels := fsSyncLabels(containerID)
 	labels["system_device"] = blockDevicePattern
+	labels["obi_disk_partition"] = optionalPartitionPattern
 	labels["disk_io_direction"] = regexp.MustCompile("^" + direction + "$")
 	return labels
+}
+
+// pendingLabels are the expected attributes of the requests in flight of a device, which are not
+// charged to workloads
+func pendingLabels(direction string) map[string]*regexp.Regexp {
+	return map[string]*regexp.Regexp{
+		"system_device":     blockDevicePattern,
+		"disk_io_direction": regexp.MustCompile("^" + direction + "$"),
+		"obi_ip":            ipPattern,
+	}
 }
 
 // assertHistogramBounds checks that the histograms of the given _bucket series have the given
@@ -218,6 +231,55 @@ func testStatMetricsFsSyncDuration(t *testing.T, containerID string) {
 		require.NoError(ct, err)
 		assertHistogramBounds(ct, buckets, export.DefaultBuckets.StatFsSyncDurationHistogram)
 	}, testTimeout, 100*time.Millisecond)
+}
+
+// testStatMetricsDiskQueueDuration checks the histogram of the time the requests of the disk-io
+// container wait before their issue: the kernel knows it for every request of the host disks,
+// which keep I/O statistics
+func testStatMetricsDiskQueueDuration(t *testing.T, containerID string) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		selector := `{container_id="` + containerID + `",disk_io_direction="` + direction + `"}`
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			counts, err := pq.Query(`obi_stat_disk_queue_duration_seconds_count` + selector + ` > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, counts)
+			for _, res := range counts {
+				assertDiskStatLabels(ct, res.Metric, diskIOLabels(containerID, direction))
+			}
+
+			buckets, err := pq.Query(`obi_stat_disk_queue_duration_seconds_bucket` + selector)
+			require.NoError(ct, err)
+			assertHistogramBounds(ct, buckets, export.DefaultBuckets.StatDiskQueueDurationHistogram)
+
+			// the wait is measured for some or all of the requests, never more
+			excess, err := pq.Query(`obi_stat_disk_queue_duration_seconds_count` + selector +
+				` > obi_stat_disk_operation_duration_seconds_count` + selector)
+			require.NoError(ct, err)
+			assert.Empty(ct, excess, "the wait can't be measured for more requests than completed")
+		}, testTimeout, 100*time.Millisecond)
+	}
+}
+
+// testStatMetricsDiskPendingOperations checks that the devices that the disk-io container reads
+// and writes report their requests in flight
+func testStatMetricsDiskPendingOperations(t *testing.T, containerID string) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			devices, err := pq.Query(`group by (system_device) (obi_stat_disk_operations_total{container_id="` + containerID +
+				`",disk_io_direction="` + direction + `"})`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, devices)
+			for _, device := range devices {
+				pending, err := pq.Query(`obi_stat_disk_pending_operations{system_device="` + device.Metric["system_device"] +
+					`",disk_io_direction="` + direction + `"} >= 0`)
+				require.NoError(ct, err)
+				require.Len(ct, pending, 1, "one series per device and direction")
+				assertDiskStatLabels(ct, pending[0].Metric, pendingLabels(direction))
+			}
+		}, testTimeout, 100*time.Millisecond)
+	}
 }
 
 // testStatMetricsNoDiskStats checks that the stats aggregate feature doesn't enable the disk stats

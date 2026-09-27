@@ -16,6 +16,8 @@ enum stat_type : u8 {
     k_stat_type_tcp_successful_connection = 5,
     k_stat_type_disk_io = 6,
     k_stat_type_fs_sync = 7,
+    // produced in userspace, from the requests in flight in disk_rq_start
+    k_stat_type_disk_pending = 8,
 };
 
 // batch size used in tcp io metric
@@ -44,10 +46,13 @@ enum network_io_direction : u8 {
     direction_transmit = 2,
 };
 
-enum disk_io_direction : u8 {
-    disk_direction_unknown = 0,
-    disk_direction_read = 1,
-    disk_direction_write = 2,
+// Operation of a block request. Only these operations are measured.
+enum disk_op : u8 {
+    disk_op_unknown = 0,
+    disk_op_read = 1,
+    disk_op_write = 2,
+    disk_op_flush = 3,
+    disk_op_discard = 4,
 };
 
 // The latency histogram boundaries are configurable from userspace, up to this many.

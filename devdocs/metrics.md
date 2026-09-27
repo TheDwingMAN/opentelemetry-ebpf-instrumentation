@@ -153,7 +153,7 @@ StatsO11y probes fire at different points relative to `inet_put_port()`, so the 
 
 `obi.stat.disk.operation.duration` is measured from the `block_rq_issue` to the final `block_rq_complete` tracepoint of each request, so it is the time the device took to serve it: it excludes the time requests wait in the I/O scheduler or in blk-throttle before being issued. Other limitations:
 
-- Only reads and writes are measured. Flush, discard and passthrough requests are not.
+- Reads and writes are reported per direction by the disk I/O metrics. Cache flushes are reported by `obi.stat.disk.flush.duration`, and discards (including secure erases) by `obi.stat.disk.discard.duration` and `obi.stat.disk.discard.io`. Write-zeroes and passthrough requests are not measured.
 - Filesystems without a block device (NFS, CIFS, FUSE, virtiofs) never reach the block layer, so they are not observed.
 - Bio-based device-mapper targets (LVM, dm-crypt) don't issue requests themselves: their I/O is reported on the underlying physical device. Request-based dm-multipath and loop devices report the same I/O on both the stacked and the underlying device, so adding up devices counts it twice.
 - Requests issued before OBI started are not measured.
@@ -167,6 +167,15 @@ The disk metrics are charged to the workload that owns the I/O: the cgroup that 
 - Buffered writes are written back later by kernel threads. They are charged to the workload that dirtied the pages only on cgroup v2, and only on filesystems with cgroup writeback support (ext2, ext4, btrfs, f2fs, xfs). Otherwise they are reported without workload attributes.
 - Before Linux 5.18 (and on RHEL 8), the block layer can merge the I/O of different cgroups into the same request. OBI charges a merged request to the cgroup of its first bio.
 - `obi.stat.disk.io` counts the bytes of the requests that completed successfully, as issued to the device. The histogram and `obi.stat.disk.operations` count failed requests too, with an `error.type`.
+
+`obi.stat.disk.queue.duration` is the time requests wait between their allocation and their issue to the device, in the I/O scheduler or in the dispatch queues. Together with `obi.stat.disk.operation.duration`, it splits the time an I/O takes in the block layer like iostat's `await` does: the average number of requests waiting or in service (iostat's `aqu-sz`) is the rate of the sum of both histograms. Limitations:
+
+- The kernel only timestamps the allocation of requests on devices that keep I/O statistics (`/sys/block/<device>/queue/iostats`) or use an I/O scheduler. The wait of other requests is not measured.
+- Waits before the allocation, such as those of blk-throttle (`io.max`) and of writeback throttling, are not included.
+
+`obi.stat.disk.pending_operations` is the number of reads and writes that each device is serving: issued and not yet completed, sampled every `ebpf.batch_timeout`. It is reported for every device that completed reads or writes recently.
+
+The opt-in `obi.disk.partition` attribute is the partition that the I/O targets, such as `nvme0n1p1`, while `system.device` stays the whole disk. It is omitted for I/O on the whole disk and for requests that target no partition, like flushes. Before Linux 5.11 (including RHEL 8), the kernel only records the partition of requests on devices that keep I/O statistics, and it records the partition that holds the sectors of the request, as it does for its own statistics: I/O on the whole disk that falls within a partition is reported with that partition.
 
 #### File sync stats
 
@@ -184,7 +193,7 @@ Some stat metrics attach to kernel functions that are called very frequently (e.
 - If you need RTT, failed connections, or retransmits **without** TCP IO overhead, enable those individually (`stats_tcp_rtt`, `stats_tcp_failed_connections`, `stats_tcp_successful_connections`, `stats_tcp_retransmits`) instead of using the `stats` aggregate feature — `stats` includes `stats_tcp_io`, which fires on every `tcp_sendmsg` and `tcp_cleanup_rbuf` call.
 - The `stats_events` ring buffer and the per-metric eBPF maps (e.g. `tcp_io_accum`) have default size limits; on nodes with a very large number of concurrent connections these can be resized via the `ebpf.*` configuration knobs if events start being dropped.
 - The file sync probes (`stats_fs_sync_duration`) fire on every file sync, which is usually much less frequent than block requests.
-- The disk probes (`stats_disk_*` features) fire on every block request issue and completion, so their cost grows with the node's IOPS. They don't send one ring buffer event per request: the kernel accumulates the latencies in a histogram per device, direction, outcome and cgroup (`disk_io_accum`), which userspace reads every `ebpf.batch_timeout`. The exporters still record every request into their histogram (`stats_disk_operation_duration`), so the userspace cost also grows with the IOPS: roughly hundreds of nanoseconds per request with the OTLP exporter, and tens with the Prometheus exporter. For these reasons they are not part of the `stats` aggregate and must be enabled explicitly.
+- The disk probes (`stats_disk_*` features) fire on every block request issue and completion, so their cost grows with the node's IOPS. `stats_disk_pending_operations` also reads the table of requests in flight (up to 16384 entries) every `ebpf.batch_timeout`. They don't send one ring buffer event per request: the kernel accumulates the latencies in a histogram per device, direction, outcome and cgroup (`disk_io_accum`), which userspace reads every `ebpf.batch_timeout`. The exporters still record every request into their histogram (`stats_disk_operation_duration`), so the userspace cost also grows with the IOPS: roughly hundreds of nanoseconds per request with the OTLP exporter, and tens with the Prometheus exporter. For these reasons they are not part of the `stats` aggregate and must be enabled explicitly.
 
 ### Final notes
 

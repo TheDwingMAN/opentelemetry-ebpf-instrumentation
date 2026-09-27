@@ -61,6 +61,10 @@ const (
 	FeatureStatsDiskOperations
 	FeatureStatsDiskOperationTime
 	FeatureStatsFsSyncDuration
+	FeatureStatsDiskQueueDuration
+	FeatureStatsDiskFlush
+	FeatureStatsDiskDiscard
+	FeatureStatsDiskPendingOperations
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
@@ -72,7 +76,8 @@ const FeatureStats = FeatureStatsTCPRtt | FeatureStatsTCPFailedConnections | Fea
 
 // FeatureStatsDisk groups the block I/O stat metrics. They are not part of the `stats` aggregate:
 // their probes fire on every block request, so they have to be enabled explicitly.
-const FeatureStatsDisk = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskOperationTime
+const FeatureStatsDisk = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskOperationTime |
+	FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard | FeatureStatsDiskPendingOperations
 
 // FeatureMapper stays public so any extension package can add and remove feature
 // definitions before loading them.
@@ -89,6 +94,10 @@ var FeatureMapper = map[string]Features{
 	"stats_disk_operation_time":        FeatureStatsDiskOperationTime,
 	"stats_disk_operation_duration":    FeatureStatsDiskOperationDuration,
 	"stats_fs_sync_duration":           FeatureStatsFsSyncDuration,
+	"stats_disk_queue_duration":        FeatureStatsDiskQueueDuration,
+	"stats_disk_flush":                 FeatureStatsDiskFlush,
+	"stats_disk_discard":               FeatureStatsDiskDiscard,
+	"stats_disk_pending_operations":    FeatureStatsDiskPendingOperations,
 	"network":                          FeatureNetwork,
 	"network_inter_zone":               FeatureNetworkInterZone,
 	"network_flow_packets":             FeatureNetworkFlowPackets,
@@ -436,6 +445,22 @@ func (f Features) StatsDiskOperationDuration() bool {
 
 func (f Features) StatsFsSyncDuration() bool {
 	return f.any(FeatureStatsFsSyncDuration)
+}
+
+func (f Features) StatsDiskQueueDuration() bool {
+	return f.any(FeatureStatsDiskQueueDuration)
+}
+
+func (f Features) StatsDiskFlush() bool {
+	return f.any(FeatureStatsDiskFlush)
+}
+
+func (f Features) StatsDiskDiscard() bool {
+	return f.any(FeatureStatsDiskDiscard)
+}
+
+func (f Features) StatsDiskPendingOperations() bool {
+	return f.any(FeatureStatsDiskPendingOperations)
 }
 
 func (f Features) NetworkInterZone() bool {

@@ -13,12 +13,17 @@
 typedef struct disk_io_key {
     // id of the cgroup the I/O is charged to (in the io controller hierarchy), 0 if unknown
     u64 cgroup_id;
+    // whole disk
     u32 major;
     u32 minor;
-    enum disk_io_direction direction;
+    // partition the I/O targets, as a kernel dev_t, or 0 when it is only known by its number in
+    // partno (before Linux 5.11). The whole disk when both are 0 or when part_dev is the disk.
+    u32 part_dev;
+    enum disk_op op;
     // 0 on success; otherwise a blk_status_t or an errno, see disk_status_code
     u8 status;
-    u8 _pad[6];
+    u8 partno;
+    u8 _pad[1];
 } disk_io_key_t;
 
 // Cumulative values: the kernel never resets them, userspace reads them periodically and
@@ -26,6 +31,9 @@ typedef struct disk_io_key {
 typedef struct disk_io_accum {
     u64 latency_count[k_disk_latency_max_buckets];
     u64 latency_sum_ns[k_disk_latency_max_buckets];
+    // time the requests waited before their issue, for those whose wait is known
+    u64 queue_count[k_disk_latency_max_buckets];
+    u64 queue_sum_ns[k_disk_latency_max_buckets];
     // bytes of the requests that completed successfully
     u64 bytes;
 } disk_io_accum_t;

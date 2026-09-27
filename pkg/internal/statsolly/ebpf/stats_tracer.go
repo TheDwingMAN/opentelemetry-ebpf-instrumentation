@@ -81,7 +81,7 @@ const (
 const maxDiskLatencyBounds = len(StatsDiskIoAccumT{}.LatencyCount) - 1
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_io_direction -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type fs_sync_key_t -type fs_sync_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_rq_start_t -type disk_cgroup_name_t -type fs_sync_key_t -type fs_sync_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -96,8 +96,9 @@ type StatsFetcher struct {
 // LatencyHistograms are the boundaries, in seconds, of the latency histograms that the kernel
 // accumulates
 type LatencyHistograms struct {
-	DiskOperationDuration []float64
-	FsSyncDuration        []float64
+	// Disk buckets the durations of the block requests and their wait before issue
+	Disk           []float64
+	FsSyncDuration []float64
 }
 
 func tlog() *slog.Logger {
@@ -107,7 +108,7 @@ func tlog() *slog.Logger {
 // NewStatsFetcher loads and attaches the stat probes of the enabled features
 func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, histograms LatencyHistograms) (*StatsFetcher, error) {
 	tlog := tlog()
-	diskLatencyBoundsNs, err := diskLatencyBoundsToNs(histograms.DiskOperationDuration)
+	diskLatencyBoundsNs, err := diskLatencyBoundsToNs(histograms.Disk)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +185,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		"g_bpf_debug":                cfg.BpfDebug,
 		"stats_wakeup_data_bytes":    uint32(cfg.StatsWakeupDataBytes),
 		"disk_latency_bounds_ns":     diskLatencyBoundsNs,
-		"disk_latency_bounds_len":    uint32(len(histograms.DiskOperationDuration)),
+		"disk_latency_bounds_len":    uint32(len(histograms.Disk)),
 		"disk_status_is_blk_status":  blockLayout.completeReportsBlkStatus,
 		"fs_sync_latency_bounds_ns":  fsSyncLatencyBoundsNs,
 		"fs_sync_latency_bounds_len": uint32(len(histograms.FsSyncDuration)),
@@ -400,6 +401,15 @@ func (m *StatsFetcher) DiskIOAccumMap() *ebpf.Map {
 		return nil
 	}
 	return m.objects.DiskIoAccum
+}
+
+// DiskRequestsMap returns the map where the kernel tracks the block requests in flight, or nil if
+// the disk probes are not attached.
+func (m *StatsFetcher) DiskRequestsMap() *ebpf.Map {
+	if !m.diskAttached {
+		return nil
+	}
+	return m.objects.DiskRqStart
 }
 
 // FsSyncAccumMap returns the map where the kernel accumulates file sync latencies, or nil if the

@@ -393,6 +393,8 @@ groups:
         requirement_level: opt_in
       - ref: system.device
         requirement_level: recommended
+      - ref: obi.disk.partition
+        requirement_level: opt_in
       - ref: disk.io.direction
         requirement_level: recommended
       - ref: error.type
@@ -427,6 +429,8 @@ groups:
         requirement_level: opt_in
       - ref: system.device
         requirement_level: recommended
+      - ref: obi.disk.partition
+        requirement_level: opt_in
       - ref: disk.io.direction
         requirement_level: recommended
       - ref: container.id
@@ -461,6 +465,8 @@ groups:
         requirement_level: opt_in
       - ref: system.device
         requirement_level: recommended
+      - ref: obi.disk.partition
+        requirement_level: opt_in
       - ref: disk.io.direction
         requirement_level: recommended
       - ref: container.id
@@ -499,6 +505,8 @@ groups:
         requirement_level: opt_in
       - ref: system.device
         requirement_level: recommended
+      - ref: obi.disk.partition
+        requirement_level: opt_in
       - ref: disk.io.direction
         requirement_level: recommended
       - ref: container.id
@@ -551,3 +559,162 @@ groups:
         requirement_level: opt_in
       - ref: k8s.container.name
         requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.disk.queue.duration
+    type: metric
+    metric_name: obi.stat.disk.queue.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Time block I/O requests wait between their allocation and their issue to
+      the device, in the I/O scheduler or in the dispatch queues, per block
+      device and direction.
+    note: >
+      Only requests whose allocation the kernel timestamps are measured: those
+      of devices that keep I/O statistics or use an I/O scheduler. Waits
+      before the allocation, such as those of blk-throttle (io.max) and of
+      writeback throttling, are not included.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.partition
+        requirement_level: opt_in
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level: opt_in
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.disk.flush.duration
+    type: metric
+    metric_name: obi.stat.disk.flush.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Duration of the cache flush requests of block devices, from their issue
+      to the device until their completion, per block device and outcome.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.partition
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the request failed
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level: opt_in
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.disk.discard.duration
+    type: metric
+    metric_name: obi.stat.disk.discard.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Duration of the block discard (TRIM) and secure erase requests, from their
+      issue to the device until their completion, per block device and outcome.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.partition
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the request failed
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level: opt_in
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.disk.discard.io
+    type: metric
+    metric_name: obi.stat.disk.discard.io
+    instrument: counter
+    unit: "By"
+    stability: development
+    brief: >
+      Bytes discarded by the block discard (TRIM) and secure erase requests
+      that completed successfully, per block device and workload the requests
+      are charged to.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.partition
+        requirement_level: opt_in
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.disk.pending_operations
+    type: metric
+    metric_name: obi.stat.disk.pending_operations
+    instrument: updowncounter
+    unit: "{operation}"
+    stability: development
+    brief: >
+      Number of block read and write requests that a device is serving: issued
+      to the device and not yet completed, per block device and direction.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended

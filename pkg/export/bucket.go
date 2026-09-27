@@ -14,6 +14,9 @@ type Buckets struct {
 	StatTCPRttHistogram                []float64 `yaml:"stat_tcp_rtt_histogram"`
 	StatDiskOperationDurationHistogram []float64 `yaml:"stat_disk_operation_duration_histogram"`
 	StatFsSyncDurationHistogram        []float64 `yaml:"stat_fs_sync_duration_histogram"`
+	StatDiskQueueDurationHistogram     []float64 `yaml:"stat_disk_queue_duration_histogram"`
+	StatDiskFlushDurationHistogram     []float64 `yaml:"stat_disk_flush_duration_histogram"`
+	StatDiskDiscardDurationHistogram   []float64 `yaml:"stat_disk_discard_duration_histogram"`
 	V8JSGCDurationHistogram            []float64 `yaml:"v8js_gc_duration_histogram"`
 	JVMGCDurationHistogram             []float64 `yaml:"jvm_gc_duration_histogram"`
 }
@@ -39,6 +42,9 @@ var DefaultBuckets = Buckets{
 	// From NVMe reads (tens of microseconds) to network storage stalls (seconds).
 	StatDiskOperationDurationHistogram: []float64{0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
 	StatFsSyncDurationHistogram:        []float64{0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+	StatDiskQueueDurationHistogram:     []float64{0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+	StatDiskFlushDurationHistogram:     []float64{0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+	StatDiskDiscardDurationHistogram:   []float64{0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
 
 	// https://opentelemetry.io/docs/specs/semconv/runtime/nodejs-metrics/#metric-v8jsgcduration
 	V8JSGCDurationHistogram: []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10},
