@@ -7,7 +7,9 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,8 +60,8 @@ func PIDMetadataDecoratorProvider[T any](
 		dec := &pidDecorator{
 			store:      store,
 			pvc:        pvc,
-			containers: expirable.NewLRU[app.PID, string](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
-			namespaces: expirable.NewLRU[uint32, string](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+			containers: expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+			namespaces: expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
 		}
 		in := input.Subscribe(msg.SubscriberName("k8s.PIDMetadataDecorator"))
 
@@ -82,12 +84,19 @@ func PIDMetadataDecoratorProvider[T any](
 type pidDecorator struct {
 	store *kube.Store
 	pvc   ebpf.PVCLookup
-	// containers caches the container ID, or "" for none, of host PIDs the
-	// Store does not track.
-	containers *expirable.LRU[app.PID, string]
-	// namespaces caches the container ID, or "" for none, owning a PID
-	// namespace, for processes that exited before they were decorated.
-	namespaces *expirable.LRU[uint32, string]
+	// containers caches the cgroup identity, empty for none, of host PIDs
+	// the Store does not track.
+	containers *expirable.LRU[app.PID, cgroupIdentity]
+	// namespaces caches the cgroup identity owning a PID namespace, for
+	// processes that exited before they were decorated.
+	namespaces *expirable.LRU[uint32, cgroupIdentity]
+}
+
+// cgroupIdentity is what a process's cgroup path says about it: its container
+// ID and the UID of the pod the container belongs to.
+type cgroupIdentity struct {
+	containerID string
+	podUID      string
 }
 
 // decorate populates a's Metadata with pod/namespace/container attribution
@@ -152,56 +161,88 @@ func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs,
 }
 
 // podContainerByCgroup resolves the process that issued the I/O to its pod and
-// container through its cgroup, caching the container ID per host PID. A
-// process that has already exited, the norm for short-lived writers such as a
-// dd or a backup script, is resolved through its PID namespace instead.
+// container through its cgroup, caching the result per host PID. A process
+// that has already exited, the norm for short-lived writers such as a dd or a
+// backup script, is resolved through its PID namespace instead.
+//
+// The Store learns a container's ID only once the pod's status reports it,
+// which trails the container's first I/O; a pod doing its work in its first
+// seconds would lose attribution. The pod UID in the cgroup path is known from
+// the moment the pod is scheduled, so the pod is resolved by UID until the
+// container ID is known, and the container label follows once it is.
 func (d *pidDecorator) podContainerByCgroup(pidNs uint32, hostPID app.PID) (*ikube.CachedObjMeta, string) {
 	if hostPID == 0 {
 		return nil, ""
 	}
-	cid, ok := d.containers.Get(hostPID)
+	id, ok := d.containers.Get(hostPID)
 	if !ok {
-		cid = containerOf(hostPID)
-		if cid == "" {
-			cid = d.containerOfNamespace(pidNs)
+		id = identityOf(hostPID)
+		if id.containerID == "" {
+			id = d.identityOfNamespace(pidNs)
 		}
-		d.containers.Add(hostPID, cid)
+		d.containers.Add(hostPID, id)
 	}
-	if cid == "" {
+	if id.containerID == "" {
 		return nil, ""
 	}
-	return d.store.PodContainerByContainerID(cid)
+	if meta, name := d.store.PodContainerByContainerID(id.containerID); meta != nil {
+		return meta, name
+	}
+	if id.podUID == "" {
+		return nil, ""
+	}
+	return d.store.PodByUID(id.podUID), ""
 }
 
-// containerOfNamespace finds the container owning PID namespace pidNs through
+// identityOfNamespace finds the container owning PID namespace pidNs through
 // any process still living in it. Kubernetes gives each container its own PID
 // namespace, so the namespace names the container for as long as the
 // container runs, whichever of its processes did the I/O. The host's own
 // namespace names no container and is never looked up.
-func (d *pidDecorator) containerOfNamespace(pidNs uint32) string {
+func (d *pidDecorator) identityOfNamespace(pidNs uint32) cgroupIdentity {
 	if pidNs == 0 || pidNs == hostPIDNamespace() {
-		return ""
+		return cgroupIdentity{}
 	}
-	if cid, ok := d.namespaces.Get(pidNs); ok {
-		return cid
+	if id, ok := d.namespaces.Get(pidNs); ok {
+		return id
 	}
-	cid := ""
+	var id cgroupIdentity
 	for _, pid := range pidsInNamespace(pidNs) {
-		if cid = containerOf(pid); cid != "" {
+		if id = identityOf(pid); id.containerID != "" {
 			break
 		}
 	}
-	d.namespaces.Add(pidNs, cid)
-	return cid
+	d.namespaces.Add(pidNs, id)
+	return id
 }
 
-func containerOf(pid app.PID) string {
+func identityOf(pid app.PID) cgroupIdentity {
 	info, err := kube.InfoForPID(pid)
 	if err != nil {
 		pidLog().Debug("no container for process", "pid", pid, "error", err)
+		return cgroupIdentity{}
+	}
+	return cgroupIdentity{containerID: info.ContainerID, podUID: podUIDForPID(pid)}
+}
+
+// podUIDPattern matches the pod UID in a kubelet cgroup path, in both the
+// systemd driver's form (kubepods-burstable-pod<uid with _>.slice) and the
+// cgroupfs driver's (/kubepods/burstable/pod<uid>/).
+var podUIDPattern = regexp.MustCompile(`pod([0-9a-f]{8}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{12})`)
+
+// podUIDForPID reads the pod UID from a process's cgroup path, or "" if the
+// process is not in a kubelet-managed cgroup. It is an injectable indirection
+// for tests.
+var podUIDForPID = func(pid app.PID) string {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(int(pid)) + "/cgroup")
+	if err != nil {
 		return ""
 	}
-	return info.ContainerID
+	m := podUIDPattern.FindSubmatch(b)
+	if m == nil {
+		return ""
+	}
+	return strings.ReplaceAll(string(m[1]), "_", "-")
 }
 
 var hostPIDNamespace = sync.OnceValue(func() uint32 {
