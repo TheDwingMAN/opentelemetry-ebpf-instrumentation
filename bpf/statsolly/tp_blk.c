@@ -1,0 +1,133 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build obi_bpf_ignore
+#include <bpfcore/vmlinux.h>
+#include <bpfcore/bpf_builtins.h>
+#include <bpfcore/bpf_helpers.h>
+#include <bpfcore/bpf_core_read.h>
+
+#include <common/scratch_mem.h>
+
+#include <statsolly/disk_io.h>
+#include <statsolly/types.h>
+#include <statsolly/maps/disk_io_accum.h>
+#include <statsolly/maps/disk_rq_start.h>
+
+// The request flags start right after the REQ_OP_BITS-wide operation field.
+enum { k_req_op_mask = (1U << __REQ_FAILFAST_DEV) - 1 };
+
+// To be injected from userspace during eBPF program load & initialization.
+volatile const u64 disk_latency_bounds_ns[k_disk_latency_max_bounds];
+volatile const u32 disk_latency_bounds_len;
+// Set when block_rq_complete reports a blk_status_t (Linux 5.16+) instead of a negative errno.
+volatile const bool disk_status_is_blk_status;
+
+SCRATCH_MEM_TYPED(disk_io_accum_init, disk_io_accum_t)
+
+// Force structs into the ELF for automatic creation of Golang struct
+const disk_io_key_t *unused_disk_io_key __attribute__((unused));
+const disk_io_accum_t *unused_disk_io_accum __attribute__((unused));
+
+static __always_inline enum disk_io_direction request_direction(struct request *rq) {
+    const u32 op = BPF_CORE_READ(rq, cmd_flags) & k_req_op_mask;
+    switch (op) {
+    case REQ_OP_READ:
+        return disk_direction_read;
+    case REQ_OP_WRITE:
+        return disk_direction_write;
+    default:
+        return disk_direction_unknown;
+    }
+}
+
+static __always_inline struct gendisk *request_disk(struct request *rq) {
+    // rq->rq_disk was removed in Linux 5.17 in favor of rq->q->disk, which older kernels
+    // (including RHEL 8) don't have.
+    if (bpf_core_field_exists(rq->rq_disk)) {
+        return BPF_CORE_READ(rq, rq_disk);
+    }
+    return BPF_CORE_READ(rq, q, disk);
+}
+
+static __always_inline void record_issue(struct request *rq) {
+    if (request_direction(rq) == disk_direction_unknown) {
+        return;
+    }
+    const u64 key = (u64)(uintptr_t)rq;
+    const u64 now = bpf_ktime_get_ns();
+    bpf_map_update_elem(&disk_rq_start, &key, &now, BPF_ANY);
+}
+
+static __always_inline disk_io_accum_t *lookup_or_init_accum(const disk_io_key_t *key) {
+    disk_io_accum_t *accum = bpf_map_lookup_elem(&disk_io_accum, key);
+    if (accum) {
+        return accum;
+    }
+    disk_io_accum_t *init = disk_io_accum_init_mem();
+    if (!init) {
+        return 0;
+    }
+    bpf_memset(init, 0, sizeof(*init));
+    // BPF_NOEXIST: another CPU may have created the entry since the lookup above
+    bpf_map_update_elem(&disk_io_accum, key, init, BPF_NOEXIST);
+    return bpf_map_lookup_elem(&disk_io_accum, key);
+}
+
+// Block layer tracepoint arguments changed in Linux 5.11 (also backported to 5.10.137+ and
+// RHEL 8.6+): block_rq_issue went from (q, rq) to (rq). Userspace loads one of the two
+// programs below after checking the tracepoint prototype in the kernel BTF.
+SEC("raw_tracepoint/block_rq_issue")
+int obi_stats_raw_tp_block_rq_issue(struct bpf_raw_tracepoint_args *ctx) {
+    record_issue((struct request *)ctx->args[0]);
+    return 0;
+}
+
+SEC("raw_tracepoint/block_rq_issue")
+int obi_stats_raw_tp_block_rq_issue_legacy(struct bpf_raw_tracepoint_args *ctx) {
+    record_issue((struct request *)ctx->args[1]);
+    return 0;
+}
+
+SEC("raw_tracepoint/block_rq_complete")
+int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
+    struct request *rq = (struct request *)ctx->args[0];
+    const u8 status = disk_status_code(ctx->args[1], disk_status_is_blk_status);
+    const u32 nr_bytes = (u32)ctx->args[2];
+
+    if (!disk_rq_final_completion(nr_bytes, BPF_CORE_READ(rq, __data_len), status)) {
+        return 0;
+    }
+
+    const u64 rq_key = (u64)(uintptr_t)rq;
+    const u64 *issued_ns = bpf_map_lookup_elem(&disk_rq_start, &rq_key);
+    if (!issued_ns) {
+        return 0;
+    }
+    const u64 latency_ns = bpf_ktime_get_ns() - *issued_ns;
+    bpf_map_delete_elem(&disk_rq_start, &rq_key);
+
+    struct gendisk *disk = request_disk(rq);
+    const disk_io_key_t key = {
+        .major = BPF_CORE_READ(disk, major),
+        .minor = BPF_CORE_READ(disk, first_minor),
+        .direction = request_direction(rq),
+        .status = status,
+    };
+    if (key.direction == disk_direction_unknown) {
+        return 0;
+    }
+
+    disk_io_accum_t *accum = lookup_or_init_accum(&key);
+    if (!accum) {
+        return 0;
+    }
+    const u32 bucket =
+        disk_latency_bucket(disk_latency_bounds_ns, disk_latency_bounds_len, latency_ns);
+    if (bucket >= k_disk_latency_max_buckets) {
+        return 0;
+    }
+    __sync_fetch_and_add(&accum->latency_count[bucket], 1);
+    __sync_fetch_and_add(&accum->latency_sum_ns[bucket], latency_ns);
+    return 0;
+}
