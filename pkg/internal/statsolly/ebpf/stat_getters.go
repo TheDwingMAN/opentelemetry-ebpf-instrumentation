@@ -94,6 +94,13 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.ErrorType), s.DiskIO.ErrorType)
 		}
+	case attr.ContainerID:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.DiskIO == nil || s.DiskIO.ContainerID == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.ContainerID), s.DiskIO.ContainerID)
+		}
 
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }

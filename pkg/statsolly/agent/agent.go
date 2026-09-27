@@ -91,6 +91,7 @@ type ebpFetcher interface {
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
 	DiskIOAccumMap() *ciliumebpf.Map
+	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
 }
 
@@ -163,7 +164,8 @@ func statsAgent(
 		if interval <= 0 {
 			interval = defaultDiskReadInterval
 		}
-		diskTracer = stats.NewDiskMapTracer(diskAccum, diskLatencyBounds(cfg), statsFetcher.DiskStatusIsBlkStatus(), interval)
+		diskTracer = stats.NewDiskMapTracer(diskAccum, statsFetcher.DiskCgroupNamesMap(), diskLatencyBounds(cfg),
+			statsFetcher.DiskStatusIsBlkStatus(), interval)
 	}
 
 	return &Stats{

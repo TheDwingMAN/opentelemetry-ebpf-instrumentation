@@ -42,3 +42,13 @@ func TestStatGetters_DiskIO(t *testing.T) {
 	require.True(t, ok)
 	assert.Empty(t, errorTypeString(okRead))
 }
+
+func TestStatGetters_DiskIOContainer(t *testing.T) {
+	inContainer := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{ContainerID: "0123abcd"}}
+	onHost := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{}}
+
+	containerID, ok := StatGetters(attr.ContainerID)
+	require.True(t, ok)
+	assert.Equal(t, "0123abcd", containerID(inContainer).Value.AsString())
+	assert.False(t, containerID(onHost).Valid(), "omitted for I/O charged to no container")
+}

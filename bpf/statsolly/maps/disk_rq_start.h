@@ -8,12 +8,19 @@
 
 #include <common/pin_internal.h>
 
-// Issue timestamp of each in-flight block request, keyed by the struct request address.
+typedef struct disk_rq_start {
+    u64 issued_ns;
+    // size of the request when it was issued
+    u32 bytes;
+    u8 _pad[4];
+} disk_rq_start_t;
+
+// Issue time and size of each in-flight block request, keyed by the struct request address.
 // LRU so that requests whose completion is never seen can't leak entries.
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1 << 14);
     __type(key, u64);
-    __type(value, u64);
+    __type(value, disk_rq_start_t);
     __uint(pinning, OBI_PIN_INTERNAL);
 } disk_rq_start SEC(".maps");

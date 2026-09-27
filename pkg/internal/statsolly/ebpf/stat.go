@@ -135,13 +135,21 @@ type TCPIo struct {
 	Bytes     uint32 `json:"bytes"`
 }
 
-// DiskIO is the block I/O completed on a device, in a direction and with an outcome, since
-// the previous read of the kernel accumulation map.
+// DiskIO is the block I/O completed on a device, in a direction, with an outcome and charged to
+// a cgroup, since the previous read of the kernel accumulation map.
 type DiskIO struct {
 	Device    string
 	Direction DiskIODirectionCode
 	// ErrorType is empty for successful requests
 	ErrorType string
+	// ContainerID of the cgroup the I/O is charged to. Empty for I/O charged to no container.
+	ContainerID string
+
+	Operations uint64
+	// Time is the sum of the latencies of the operations, in seconds
+	Time float64
+	// Bytes transferred by the operations that succeeded
+	Bytes uint64
 	// Latency of the completed requests, as one representative value per kernel histogram bucket
 	Latency []LatencySample
 }

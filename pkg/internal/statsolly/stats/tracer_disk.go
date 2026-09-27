@@ -17,8 +17,10 @@ import (
 	"time"
 
 	ciliumebpf "github.com/cilium/ebpf"
+	"github.com/hashicorp/golang-lru/v2/simplelru"
 	"golang.org/x/sys/unix"
 
+	"go.opentelemetry.io/obi/pkg/internal/helpers/container"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
@@ -31,6 +33,9 @@ const diskIdleReadsBeforeDelete = 60
 
 // errorTypeOther is the semantic conventions fallback for error.type values OBI can't name
 const errorTypeOther = "_OTHER"
+
+// cgroupContainersCacheLen matches the size of the disk_cgroup_names eBPF map
+const cgroupContainersCacheLen = 1 << 10
 
 func dtlog() *slog.Logger {
 	return slog.With("component", "stat.DiskMapTracer")
@@ -61,6 +66,23 @@ func (e ebpfDiskAccum) delete(key ebpf.StatsDiskIoKeyT) error {
 	return e.accum.Delete(key)
 }
 
+// cgroupNameSource abstracts the disk_cgroup_names eBPF map, for testing
+type cgroupNameSource interface {
+	name(cgroupID uint64) (string, bool)
+}
+
+type ebpfCgroupNames struct {
+	names *ciliumebpf.Map
+}
+
+func (e ebpfCgroupNames) name(cgroupID uint64) (string, bool) {
+	var name ebpf.StatsDiskCgroupNameT
+	if err := e.names.Lookup(cgroupID, &name); err != nil {
+		return "", false
+	}
+	return unix.ByteSliceToString(name.Name[:]), true
+}
+
 // DiskMapTracer periodically reads the block I/O accumulation map that the kernel fills, and
 // forwards what changed since the previous read as ebpf.Stat records.
 type DiskMapTracer struct {
@@ -68,12 +90,19 @@ type DiskMapTracer struct {
 	interval time.Duration
 }
 
-// NewDiskMapTracer returns a tracer for the given disk_io_accum map. latencyBounds are the
-// histogram boundaries, in seconds, that the kernel buckets the latencies with.
-// statusIsBlkStatus tells how the kernel reports the completion status (see disk_status_code).
-func NewDiskMapTracer(accum *ciliumebpf.Map, latencyBounds []float64, statusIsBlkStatus bool, interval time.Duration) *DiskMapTracer {
+// NewDiskMapTracer returns a tracer for the given disk_io_accum and disk_cgroup_names maps.
+// latencyBounds are the histogram boundaries, in seconds, that the kernel buckets the latencies
+// with. statusIsBlkStatus tells how the kernel reports the completion status (see
+// disk_status_code).
+func NewDiskMapTracer(
+	accum, cgroupNames *ciliumebpf.Map,
+	latencyBounds []float64,
+	statusIsBlkStatus bool,
+	interval time.Duration,
+) *DiskMapTracer {
 	return &DiskMapTracer{
-		reader:   newDiskReader(ebpfDiskAccum{accum: accum}, latencyBounds, statusIsBlkStatus, &deviceNames{sysRoot: "/sys"}),
+		reader: newDiskReader(ebpfDiskAccum{accum: accum}, latencyBounds, statusIsBlkStatus,
+			&deviceNames{sysRoot: "/sys"}, newCgroupContainers(ebpfCgroupNames{names: cgroupNames})),
 		interval: interval,
 	}
 }
@@ -102,18 +131,26 @@ type diskReader struct {
 	latencyBounds     []float64
 	statusIsBlkStatus bool
 	devices           *deviceNames
+	containers        *cgroupContainers
 
 	previous  map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT
 	idleReads map[ebpf.StatsDiskIoKeyT]int
 }
 
-func newDiskReader(accum diskAccumSource, latencyBounds []float64, statusIsBlkStatus bool, devices *deviceNames) *diskReader {
+func newDiskReader(
+	accum diskAccumSource,
+	latencyBounds []float64,
+	statusIsBlkStatus bool,
+	devices *deviceNames,
+	containers *cgroupContainers,
+) *diskReader {
 	return &diskReader{
 		log:               dtlog(),
 		accum:             accum,
 		latencyBounds:     latencyBounds,
 		statusIsBlkStatus: statusIsBlkStatus,
 		devices:           devices,
+		containers:        containers,
 		previous:          map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{},
 		idleReads:         map[ebpf.StatsDiskIoKeyT]int{},
 	}
@@ -147,11 +184,12 @@ func (r *diskReader) readStats() []*ebpf.Stat {
 func (r *diskReader) statFromDelta(key ebpf.StatsDiskIoKeyT, current ebpf.StatsDiskIoAccumT) *ebpf.Stat {
 	previous := r.previous[key]
 	// kernel counters only grow; a decrease means the LRU map evicted and re-created the entry
-	if anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) {
+	if current.Bytes < previous.Bytes || anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) {
 		previous = ebpf.StatsDiskIoAccumT{}
 	}
 
 	var latency []ebpf.LatencySample
+	var operations, timeNs uint64
 	// one bucket per boundary, plus the overflow bucket
 	for bucket := range len(r.latencyBounds) + 1 {
 		count := current.LatencyCount[bucket] - previous.LatencyCount[bucket]
@@ -160,17 +198,23 @@ func (r *diskReader) statFromDelta(key ebpf.StatsDiskIoKeyT, current ebpf.StatsD
 		}
 		sumNs := current.LatencySumNs[bucket] - previous.LatencySumNs[bucket]
 		latency = append(latency, latencySample(r.latencyBounds, bucket, count, sumNs))
+		operations += count
+		timeNs += sumNs
 	}
-	if len(latency) == 0 {
+	if operations == 0 {
 		return nil
 	}
 	return &ebpf.Stat{
 		Type: ebpf.StatTypeDiskIO,
 		DiskIO: &ebpf.DiskIO{
-			Device:    r.devices.name(key.Major, key.Minor),
-			Direction: ebpf.DiskIODirectionCode(key.Direction),
-			ErrorType: diskErrorType(key.Status, r.statusIsBlkStatus),
-			Latency:   latency,
+			Device:      r.devices.name(key.Major, key.Minor),
+			Direction:   ebpf.DiskIODirectionCode(key.Direction),
+			ErrorType:   diskErrorType(key.Status, r.statusIsBlkStatus),
+			ContainerID: r.containers.containerID(key.CgroupId),
+			Operations:  operations,
+			Time:        float64(timeNs) / float64(time.Second),
+			Bytes:       current.Bytes - previous.Bytes,
+			Latency:     latency,
 		},
 	}
 }
@@ -257,6 +301,38 @@ func diskErrorType(status uint8, isBlkStatus bool) string {
 		return name
 	}
 	return errorTypeOther
+}
+
+// cgroupContainers resolves the cgroups that block I/O is charged to into the ID of their
+// container, from the cgroup names that the kernel recorded.
+type cgroupContainers struct {
+	names cgroupNameSource
+	cache *simplelru.LRU[uint64, string]
+}
+
+func newCgroupContainers(names cgroupNameSource) *cgroupContainers {
+	// the size is a constant known to be valid
+	cache, _ := simplelru.NewLRU[uint64, string](cgroupContainersCacheLen, nil)
+	return &cgroupContainers{names: names, cache: cache}
+}
+
+// containerID returns the ID of the container of the cgroup, or an empty string if the cgroup
+// is not a container, or is unknown
+func (c *cgroupContainers) containerID(cgroupID uint64) string {
+	if cgroupID == 0 {
+		return ""
+	}
+	if id, ok := c.cache.Get(cgroupID); ok {
+		return id
+	}
+	name, ok := c.names.name(cgroupID)
+	if !ok {
+		// not cached: the kernel may record the name later
+		return ""
+	}
+	id, _ := container.IDFromCgroupName(name)
+	c.cache.Add(cgroupID, id)
+	return id
 }
 
 // deviceNames resolves block device numbers to their kernel names, e.g. 259:0 to nvme0n1

@@ -11,6 +11,8 @@
 #include <statsolly/types.h>
 
 typedef struct disk_io_key {
+    // id of the cgroup the I/O is charged to (in the io controller hierarchy), 0 if unknown
+    u64 cgroup_id;
     u32 major;
     u32 minor;
     enum disk_io_direction direction;
@@ -24,6 +26,8 @@ typedef struct disk_io_key {
 typedef struct disk_io_accum {
     u64 latency_count[k_disk_latency_max_buckets];
     u64 latency_sum_ns[k_disk_latency_max_buckets];
+    // bytes of the requests that completed successfully
+    u64 bytes;
 } disk_io_accum_t;
 
 struct {

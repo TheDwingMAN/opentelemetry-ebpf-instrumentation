@@ -72,7 +72,7 @@ const (
 const maxDiskLatencyBounds = len(StatsDiskIoAccumT{}.LatencyCount) - 1
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_io_direction -type disk_io_key_t -type disk_io_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_io_direction -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -140,7 +140,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 
-	diskEnabled := features.StatsDiskOperationDuration()
+	diskEnabled := features.StatsDisk()
 	var blockLayout blockTracepointLayout
 	if diskEnabled {
 		blockLayout = kernelBlockTracepointLayout(tlog)
@@ -343,6 +343,15 @@ func (m *StatsFetcher) DiskIOAccumMap() *ebpf.Map {
 		return nil
 	}
 	return m.objects.DiskIoAccum
+}
+
+// DiskCgroupNamesMap returns the map where the kernel records the names of the cgroups that
+// block I/O is charged to, or nil if the disk probes are not attached.
+func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
+	if !m.diskAttached {
+		return nil
+	}
+	return m.objects.DiskCgroupNames
 }
 
 // DiskStatusIsBlkStatus tells whether the kernel reports block request completion statuses as

@@ -47,8 +47,16 @@ func accum(counts []uint64, latencyNs []uint64) ebpf.StatsDiskIoAccumT {
 	return a
 }
 
+type fakeCgroupNames map[uint64]string
+
+func (f fakeCgroupNames) name(cgroupID uint64) (string, bool) {
+	name, ok := f[cgroupID]
+	return name, ok
+}
+
 func newTestDiskReader(src diskAccumSource) *diskReader {
-	return newDiskReader(src, testBounds, false, &deviceNames{sysRoot: "/nonexistent"})
+	return newDiskReader(src, testBounds, false, &deviceNames{sysRoot: "/nonexistent"},
+		newCgroupContainers(fakeCgroupNames{}))
 }
 
 func TestDiskReaderForwardsDeltas(t *testing.T) {
@@ -143,4 +151,50 @@ func TestDiskErrorType(t *testing.T) {
 	// errno before Linux 5.16
 	assert.Equal(t, "EIO", diskErrorType(5, false))
 	assert.Equal(t, "ETIMEDOUT", diskErrorType(110, false))
+}
+
+func TestDiskReaderForwardsCounters(t *testing.T) {
+	key := writeKey(259, 0)
+	current := accum([]uint64{0, 3, 1}, []uint64{0, 2_000_000, 50_000_000})
+	current.Bytes = 3 * 4096
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{key: current}}
+	r := newTestDiskReader(src)
+
+	stats := r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, uint64(4), stats[0].DiskIO.Operations)
+	assert.InDelta(t, 0.056, stats[0].DiskIO.Time, 1e-12)
+	assert.Equal(t, uint64(3*4096), stats[0].DiskIO.Bytes)
+
+	next := accum([]uint64{0, 5, 1}, []uint64{0, 2_000_000, 50_000_000})
+	next.Bytes = 5 * 4096
+	src.entries[key] = next
+	stats = r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, uint64(2), stats[0].DiskIO.Operations)
+	assert.InDelta(t, 0.004, stats[0].DiskIO.Time, 1e-12)
+	assert.Equal(t, uint64(2*4096), stats[0].DiskIO.Bytes)
+}
+
+func TestDiskReaderResolvesContainers(t *testing.T) {
+	const containerID = "40c03570b6f4c30bc8d69923d37ee698f5cfcced92c7b7df1c47f6f7887378a9"
+	inContainer, inSlice, unnamed := writeKey(8, 0), writeKey(8, 0), writeKey(8, 0)
+	inContainer.CgroupId, inSlice.CgroupId, unnamed.CgroupId = 100, 200, 300
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
+		inContainer: accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}),
+		inSlice:     accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}),
+		unnamed:     accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}),
+	}}
+	r := newDiskReader(src, testBounds, false, &deviceNames{sysRoot: "/nonexistent"},
+		newCgroupContainers(fakeCgroupNames{
+			100: "cri-containerd-" + containerID + ".scope",
+			200: "system.slice",
+		}))
+
+	containers := map[string]int{}
+	for _, stat := range r.readStats() {
+		containers[stat.DiskIO.ContainerID]++
+	}
+	assert.Equal(t, map[string]int{containerID: 1, "": 2}, containers,
+		"I/O charged to a non-container cgroup, or to an unknown one, has no container")
 }
