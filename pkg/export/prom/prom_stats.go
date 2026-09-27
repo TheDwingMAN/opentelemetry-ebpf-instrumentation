@@ -40,6 +40,8 @@ type statMetricsReporter struct {
 	tcpFailedConnections *Expirer[prometheus.Counter]
 	tcpRetransmits       *Expirer[prometheus.Counter]
 	tcpIo                *Expirer[prometheus.Counter]
+	diskOpDuration       *Expirer[prometheus.Histogram]
+	diskIOBytes          *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -47,6 +49,8 @@ type statMetricsReporter struct {
 	tcpFailedConnectionsAttrs []attributes.Field[*ebpf.Stat, string]
 	tcpRetransmitsAttrs       []attributes.Field[*ebpf.Stat, string]
 	tcpIoAttrs                []attributes.Field[*ebpf.Stat, string]
+	diskOpDurationAttrs       []attributes.Field[*ebpf.Stat, string]
+	diskIOBytesAttrs          []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -159,6 +163,38 @@ func newStatsReporter(
 		register = append(register, mr.tcpFailedConnections)
 	}
 
+	if cfg.CommonCfg.Features.StorageBlockDuration() {
+		log.Debug("registering stat disk operation duration metric")
+
+		mr.diskOpDurationAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskOperationDuration))
+
+		mr.diskOpDuration = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:                            attributes.StatDiskOperationDuration.Prom,
+			Help:                            "measures the block I/O latency as calculated by the kernel in seconds",
+			Buckets:                         cfg.Config.Buckets.StatDiskOperationDurationHistogram,
+			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
+			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
+			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
+		}, labelNames(mr.diskOpDurationAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskOpDuration)
+	}
+
+	if cfg.CommonCfg.Features.StorageBlockIo() {
+		log.Debug("registering stat disk io bytes metric")
+
+		mr.diskIOBytesAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskIO))
+
+		mr.diskIOBytes = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskIO.Prom,
+			Help: "count of bytes transferred at the block layer",
+		}, labelNames(mr.diskIOBytesAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskIOBytes)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -181,6 +217,8 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPFailedConnections(stat)
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
+			r.observeDiskOpDuration(stat)
+			r.observeDiskIOBytes(stat)
 		}
 	}
 }
@@ -215,4 +253,20 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 	}
 	r.tcpIo.WithLabelValues(labelValues(stat, r.tcpIoAttrs)...).
 		Metric.Add(float64(stat.TCPIo.Bytes))
+}
+
+func (r *statMetricsReporter) observeDiskOpDuration(stat *ebpf.Stat) {
+	if r.diskOpDuration == nil || stat.BlockIo == nil {
+		return
+	}
+	r.diskOpDuration.WithLabelValues(labelValues(stat, r.diskOpDurationAttrs)...).
+		Metric.Observe(float64(stat.BlockIo.LatencyNs) / 1_000_000_000.0)
+}
+
+func (r *statMetricsReporter) observeDiskIOBytes(stat *ebpf.Stat) {
+	if r.diskIOBytes == nil || stat.BlockIo == nil {
+		return
+	}
+	r.diskIOBytes.WithLabelValues(labelValues(stat, r.diskIOBytesAttrs)...).
+		Metric.Add(float64(stat.BlockIo.Bytes))
 }

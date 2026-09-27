@@ -76,6 +76,7 @@ func newStatMeterProvider(res *resource.Resource, exporter *sdkmetric.Exporter, 
 		metric.WithResource(res),
 		metric.WithReader(metric.NewPeriodicReader(*exporter, metric.WithInterval(interval))),
 		metric.WithView(statHistogramView(attributes.StatTCPRtt.OTEL, cfg.Buckets.StatTCPRttHistogram, isExponential, cfg.ExponentialHistogram)),
+		metric.WithView(statHistogramView(attributes.StatDiskOperationDuration.OTEL, cfg.Buckets.StatDiskOperationDurationHistogram, isExponential, cfg.ExponentialHistogram)),
 	)
 }
 
@@ -88,6 +89,8 @@ type statMetricsExporter struct {
 	tcpFailedConnections *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	tcpRetransmits       *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	tcpIo                *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	diskOpDuration       *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
+	diskIOBytes          *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	expireTTL            time.Duration
 	in                   <-chan []*ebpf.Stat
 }
@@ -210,6 +213,38 @@ func newStatMetricsExporter(
 		nme.tcpFailedConnections = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, tcpFailedConnections, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StorageBlockDuration() {
+		log := log.With("metricFamily", "StorageBlockDuration")
+
+		h, err := ebpfEvents.Float64Histogram(attributes.StatDiskOperationDuration.OTEL, metric2.WithUnit("s"))
+		if err != nil {
+			log.Error("creating disk operation duration histogram", "error", err)
+			return nil, err
+		}
+
+		attrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatDiskOperationDuration))
+
+		nme.diskOpDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if cfg.CommonCfg.Features.StorageBlockIo() {
+		log := log.With("metricFamily", "StorageBlockIo")
+
+		diskIOBytes, err := ebpfEvents.Int64Counter(attributes.StatDiskIO.OTEL, metric2.WithUnit("By"))
+		if err != nil {
+			log.Error("creating disk io bytes counter", "error", err)
+			return nil, err
+		}
+
+		bytesAttrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatDiskIO))
+
+		nme.diskIOBytes = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, diskIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -232,6 +267,14 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if me.tcpIo != nil && v.TCPIo != nil {
 				tcpIo, attrs := me.tcpIo.ForRecord(v)
 				tcpIo.Add(ctx, int64(v.TCPIo.Bytes), metric2.WithAttributeSet(attrs))
+			}
+			if me.diskOpDuration != nil && v.BlockIo != nil {
+				h, attrs := me.diskOpDuration.ForRecord(v)
+				h.Record(ctx, float64(v.BlockIo.LatencyNs)/1_000_000_000.0, metric2.WithAttributeSet(attrs))
+			}
+			if me.diskIOBytes != nil && v.BlockIo != nil {
+				diskIOBytes, attrs := me.diskIOBytes.ForRecord(v)
+				diskIOBytes.Add(ctx, int64(v.BlockIo.Bytes), metric2.WithAttributeSet(attrs))
 			}
 		}
 	}

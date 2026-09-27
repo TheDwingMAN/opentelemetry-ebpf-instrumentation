@@ -4,5 +4,6 @@
 //go:build obi_bpf_ignore
 #include "k_tcp.c"
 #include "tp_tcp.c"
+#include "blk_io.c"
 
 char __license[] SEC("license") = "Dual MIT/GPL";

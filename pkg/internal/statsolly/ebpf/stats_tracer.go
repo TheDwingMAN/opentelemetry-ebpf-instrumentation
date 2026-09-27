@@ -42,6 +42,8 @@ const (
 	progObiStatsKprobeTCPSendmsg                      = "obi_stats_kprobe_tcp_sendmsg"
 	progObiStatsKretprobeTCPSendmsg                   = "obi_stats_kretprobe_tcp_sendmsg"
 	progObiStatsKprobeTCPCleanupRbuf                  = "obi_stats_kprobe_tcp_cleanup_rbuf"
+	progObiStatsTpBlockRqIssue                        = "obi_stats_tp_block_rq_issue"
+	progObiStatsTpBlockRqComplete                     = "obi_stats_tp_block_rq_complete"
 )
 
 // Hook point names, grouped by attach type.
@@ -53,13 +55,15 @@ const (
 
 	// Tracepoints: group/name, are validated by TestTracepointConstantFormat
 	TracepointInetSockSetState = "sock/inet_sock_set_state"
+	TracepointBlockRqIssue     = "block/block_rq_issue"
+	TracepointBlockRqComplete  = "block/block_rq_complete"
 
 	// Raw tracepoints: name only (no group prefix).
 	RawTracepointTCPRetransmitSkb = "tcp_retransmit_skb"
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type block_io_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -79,10 +83,6 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	}
 
 	objects := StatsObjects{}
-	spec, err := LoadStats()
-	if err != nil {
-		return nil, fmt.Errorf("loading BPF data: %w", err)
-	}
 
 	// UndefinedGroup is intentional: we only need to check NetworkTCPHandshakeRole,
 	// which is a direct metric attribute.
@@ -113,20 +113,18 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	if !features.StatsTCPIo() {
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
-
-	if err := fixupSpec(spec, toDisable); err != nil {
-		return nil, fmt.Errorf("fixing up BPF spec: %w", err)
+	storageBlock := features.StorageBlock()
+	if !storageBlock {
+		toDisable = append(toDisable, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
 	}
 
-	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
-
-	sharedMaps := map[string]*ebpf.Map{}
-	var mu sync.Mutex
-	if err := ebpfconvenience.LoadSpec(spec, &objects, map[string]any{
-		"g_bpf_debug":             cfg.BpfDebug,
-		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
-	}, sharedMaps, &mu, "", nil); err != nil {
-		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
+	load := func(toDisable []string) error {
+		objects = StatsObjects{}
+		return loadStatsObjects(cfg, toDisable, &objects)
+	}
+	storageBlock, err = loadWithStorageFallback(load, toDisable, storageBlock, tlog)
+	if err != nil {
+		return nil, err
 	}
 
 	var closables []io.Closer
@@ -217,6 +215,38 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		closables = append(closables, l)
 	}
 
+	// block tracepoints: best-effort. A kernel where the block tracepoints
+	// cannot be attached must not take down the rest of the stats agent.
+	var storageLinks []io.Closer
+	for _, t := range []probe{
+		{
+			name:    TracepointBlockRqIssue,
+			program: objects.ObiStatsTpBlockRqIssue,
+			enabled: storageBlock,
+		},
+		{
+			name:    TracepointBlockRqComplete,
+			program: objects.ObiStatsTpBlockRqComplete,
+			enabled: storageBlock,
+		},
+	} {
+		if !t.enabled {
+			continue
+		}
+
+		group, tp, _ := strings.Cut(t.name, "/")
+		l, err := link.Tracepoint(group, tp, t.program, nil)
+		if err != nil {
+			tlog.Warn("failed block tracepoint attachment; disabling storage block metrics",
+				"tracepoint", t.name, "error", err)
+			closeAll(storageLinks)
+			storageLinks = nil
+			break
+		}
+		storageLinks = append(storageLinks, l)
+	}
+	closables = append(closables, storageLinks...)
+
 	// raw tracepoints
 	for _, t := range []probe{
 		{
@@ -275,6 +305,53 @@ func (m *StatsFetcher) StatsEventsMap() *ebpf.Map {
 
 func (m *StatsFetcher) DebugEventsMap() *ebpf.Map {
 	return m.objects.DebugEvents
+}
+
+// loadStatsObjects loads a fresh copy of the statsolly BPF spec with the given
+// programs stubbed out, and assigns the resulting objects.
+func loadStatsObjects(cfg *config.EBPFTracer, toDisable []string, objects *StatsObjects) error {
+	spec, err := LoadStats()
+	if err != nil {
+		return fmt.Errorf("loading BPF data: %w", err)
+	}
+
+	if err := fixupSpec(spec, toDisable); err != nil {
+		return fmt.Errorf("fixing up BPF spec: %w", err)
+	}
+
+	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
+
+	sharedMaps := map[string]*ebpf.Map{}
+	var mu sync.Mutex
+	if err := ebpfconvenience.LoadSpec(spec, objects, map[string]any{
+		"g_bpf_debug":             cfg.BpfDebug,
+		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
+	}, sharedMaps, &mu, "", nil); err != nil {
+		return fmt.Errorf("loading stats eBPF spec: %w", err)
+	}
+	return nil
+}
+
+// loadWithStorageFallback loads the spec and, if loading fails while the
+// storage block programs are enabled, stubs them out and retries once, so a
+// kernel incompatibility in the storage probes never takes down the rest of
+// the stats agent. It returns whether storage block metrics remain enabled.
+func loadWithStorageFallback(load func(toDisable []string) error, toDisable []string, storageBlock bool, log *slog.Logger) (bool, error) {
+	err := load(toDisable)
+	if err == nil {
+		return storageBlock, nil
+	}
+	if !storageBlock {
+		return false, err
+	}
+
+	log.Warn("loading stats eBPF spec failed with storage block metrics enabled;"+
+		" disabling storage block metrics and retrying (likely kernel incompatibility)", "error", err)
+	toDisable = append(toDisable, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
+	if err := load(toDisable); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // fixupSpec replaces disabled programs with no-op stubs before loading,
