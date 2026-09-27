@@ -352,25 +352,6 @@ func latencySample(bounds []float64, bucket int, count, sumNs uint64) ebpf.Laten
 	return ebpf.LatencySample{Seconds: seconds, Count: count}
 }
 
-// blkStatusErrno maps the blk_status_t values that are stable across kernel versions to the
-// errno the kernel reports for them (blk_errors in block/blk-core.c). Higher values were
-// renumbered between kernel versions.
-var blkStatusErrno = map[uint8]syscall.Errno{
-	1:  unix.EOPNOTSUPP,
-	2:  unix.ETIMEDOUT,
-	3:  unix.ENOSPC,
-	4:  unix.ENOLINK,
-	5:  unix.EREMOTEIO,
-	6:  unix.EBADE,
-	7:  unix.ENODATA,
-	8:  unix.EILSEQ,
-	9:  unix.ENOMEM,
-	10: unix.EIO,
-	11: unix.EREMCHG,
-	12: unix.EAGAIN,
-	13: unix.EBUSY,
-}
-
 // diskErrorType names the completion status of a block request after its errno, so it reads
 // the same whether the kernel reports errnos or blk_status_t values. Empty on success.
 func diskErrorType(status uint8, isBlkStatus bool) string {
