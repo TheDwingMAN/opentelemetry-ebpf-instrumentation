@@ -71,6 +71,29 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.NetworkIoDirection), networkIoDirectionStr(NetworkIoDirectionCode(direction)))
 		}
+	case attr.SystemDevice:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.DiskIO == nil {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.SystemDevice), s.DiskIO.Device)
+		}
+	case attr.DiskIODirection:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.DiskIO == nil {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.DiskIODirection), diskIODirectionStr(s.DiskIO.Direction))
+		}
+	case attr.ErrorType:
+		getter = func(s *Stat) attribute.KeyValue {
+			// error.type only applies to failed requests: return an invalid
+			// KeyValue so the attribute is omitted instead of emitted empty.
+			if s.DiskIO == nil || s.DiskIO.ErrorType == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.ErrorType), s.DiskIO.ErrorType)
+		}
 
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
@@ -121,6 +144,16 @@ func networkIoDirectionStr(d NetworkIoDirectionCode) string {
 		return string(DirectionTransmit)
 	case CodeDirectionReceive:
 		return string(DirectionReceive)
+	}
+	return ""
+}
+
+func diskIODirectionStr(d DiskIODirectionCode) string {
+	switch d {
+	case CodeDiskDirectionRead:
+		return string(DiskDirectionRead)
+	case CodeDiskDirectionWrite:
+		return string(DiskDirectionWrite)
 	}
 	return ""
 }

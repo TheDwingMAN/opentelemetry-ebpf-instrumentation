@@ -224,6 +224,17 @@ func TestDefault_DBServerDuration(t *testing.T) {
 	}, p.For(DBServerDuration))
 }
 
+func TestDefault_StatDiskOperationDuration(t *testing.T) {
+	// block I/O stats have no connection endpoints, so no src/dst attributes even with k8s enabled
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.DiskIODirection,
+		attr.ErrorType,
+		attr.SystemDevice,
+	}, p.For(StatDiskOperationDuration))
+}
+
 func TestExplicitlyIncluded(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

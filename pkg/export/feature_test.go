@@ -55,6 +55,20 @@ func TestFeatureEnv_NetworkFlowPackets(t *testing.T) {
 	assert.False(t, doc.Features.has(FeatureAll))
 }
 
+func TestFeatureStatsDiskIsOptIn(t *testing.T) {
+	stats, err := LoadFeatures([]string{"stats"})
+	require.NoError(t, err)
+	assert.False(t, stats.StatsDiskOperationDuration(), "the stats aggregate must not enable disk stats")
+
+	disk, err := LoadFeatures([]string{"stats_disk_operation_duration"})
+	require.NoError(t, err)
+	assert.True(t, disk.StatsDiskOperationDuration())
+	assert.False(t, disk.StatsTCPRtt())
+	assert.True(t, disk.StatMetrics(), "a disk-only selection must still enable the stats pipeline")
+
+	assert.True(t, FeatureAll.StatsDiskOperationDuration())
+}
+
 func TestFeatureEnv_Separator(t *testing.T) {
 	doc := struct {
 		Features Features `env:"FOO" envSeparator:","`
@@ -347,6 +361,11 @@ func TestFeatureMarshalYAML(t *testing.T) {
 			name:     "partial aggregate expands to its bits",
 			features: FeatureStatsTCPRtt | FeatureStatsTCPRetransmits,
 			expected: "features:\n    - stats_tcp_rtt\n    - stats_tcp_retransmits\n",
+		},
+		{
+			name:     "disk stats are listed apart from the stats aggregate",
+			features: FeatureStats | FeatureStatsDiskOperationDuration,
+			expected: "features:\n    - stats\n    - stats_disk_operation_duration\n",
 		},
 		{name: "all features", features: FeatureAll, expected: "features:\n    - all\n"},
 	} {

@@ -378,3 +378,23 @@ groups:
         requirement_level: opt_in
       - ref: service.peer.namespace
         requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.disk.operation.duration
+    type: metric
+    metric_name: obi.stat.disk.operation.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Duration of block I/O requests, from their issue to the device until
+      their completion, per block device, direction and outcome.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the block I/O request failed

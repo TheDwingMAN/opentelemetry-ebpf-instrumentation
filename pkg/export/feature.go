@@ -56,14 +56,19 @@ const (
 	FeatureGraph
 	FeatureApplicationRuntime
 	FeatureEBPF
+	FeatureStatsDiskOperationDuration
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
-// FeatureStats enables all stat metrics, including TCP IO.
+// FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
 // higher event volume than the other stat metrics (which fire on close, failure, or retransmit).
 // If overhead is a concern, enable the lower-frequency metrics individually and opt into stats_tcp_io explicitly.
 const FeatureStats = FeatureStatsTCPRtt | FeatureStatsTCPFailedConnections | FeatureStatsTCPRetransmits | FeatureStatsTCPIo | FeatureStatsTCPSuccessfulConnections
+
+// FeatureStatsDisk groups the block I/O stat metrics. They are not part of the `stats` aggregate:
+// their probes fire on every block request, so they have to be enabled explicitly.
+const FeatureStatsDisk = FeatureStatsDiskOperationDuration
 
 // FeatureMapper stays public so any extension package can add and remove feature
 // definitions before loading them.
@@ -74,6 +79,7 @@ var FeatureMapper = map[string]Features{
 	"stats_tcp_retransmits":            FeatureStatsTCPRetransmits,
 	"stats_tcp_io":                     FeatureStatsTCPIo,
 	"stats_tcp_successful_connections": FeatureStatsTCPSuccessfulConnections,
+	"stats_disk_operation_duration":    FeatureStatsDiskOperationDuration,
 	"network":                          FeatureNetwork,
 	"network_inter_zone":               FeatureNetworkInterZone,
 	"network_flow_packets":             FeatureNetworkFlowPackets,
@@ -375,7 +381,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats)
+	return f.any(FeatureStats | FeatureStatsDisk)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -396,6 +402,15 @@ func (f Features) StatsTCPRetransmits() bool {
 
 func (f Features) StatsTCPIo() bool {
 	return f.any(FeatureStatsTCPIo)
+}
+
+// StatsDisk reports whether any block I/O stat metric is enabled
+func (f Features) StatsDisk() bool {
+	return f.any(FeatureStatsDisk)
+}
+
+func (f Features) StatsDiskOperationDuration() bool {
+	return f.any(FeatureStatsDiskOperationDuration)
 }
 
 func (f Features) NetworkInterZone() bool {

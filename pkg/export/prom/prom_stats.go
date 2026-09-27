@@ -41,6 +41,7 @@ type statMetricsReporter struct {
 	tcpRetransmits           *Expirer[prometheus.Counter]
 	tcpIo                    *Expirer[prometheus.Counter]
 	tcpSuccessfulConnections *Expirer[prometheus.Counter]
+	diskOperationDuration    *Expirer[prometheus.Histogram]
 
 	promConnect *connector.PrometheusManager
 
@@ -49,6 +50,7 @@ type statMetricsReporter struct {
 	tcpRetransmitsAttrs           []attributes.Field[*ebpf.Stat, string]
 	tcpIoAttrs                    []attributes.Field[*ebpf.Stat, string]
 	tcpSuccessfulConnectionsAttrs []attributes.Field[*ebpf.Stat, string]
+	diskOperationDurationAttrs    []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -176,6 +178,24 @@ func newStatsReporter(
 		register = append(register, mr.tcpSuccessfulConnections)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskOperationDuration() {
+		log.Debug("registering stat disk operation duration metric")
+
+		mr.diskOperationDurationAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskOperationDuration))
+
+		mr.diskOperationDuration = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:                            attributes.StatDiskOperationDuration.Prom,
+			Help:                            "measures the duration of block I/O requests, from their issue to the device until their completion, in seconds",
+			Buckets:                         cfg.Config.Buckets.StatDiskOperationDurationHistogram,
+			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
+			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
+			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
+		}, labelNames(mr.diskOperationDurationAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskOperationDuration)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -199,6 +219,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPSuccessfulConnections(stat)
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
+			r.observeDiskOperationDuration(stat)
 		}
 	}
 }
@@ -241,4 +262,16 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 	}
 	r.tcpIo.WithLabelValues(labelValues(stat, r.tcpIoAttrs)...).
 		Metric.Add(float64(stat.TCPIo.Bytes))
+}
+
+func (r *statMetricsReporter) observeDiskOperationDuration(stat *ebpf.Stat) {
+	if r.diskOperationDuration == nil || stat.DiskIO == nil {
+		return
+	}
+	histogram := r.diskOperationDuration.WithLabelValues(labelValues(stat, r.diskOperationDurationAttrs)...).Metric
+	for _, latency := range stat.DiskIO.Latency {
+		for range latency.Count {
+			histogram.Observe(latency.Seconds)
+		}
+	}
 }

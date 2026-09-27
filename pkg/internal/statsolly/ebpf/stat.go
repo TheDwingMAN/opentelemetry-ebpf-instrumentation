@@ -19,6 +19,7 @@ const (
 	StatTypeTCPRetransmit           = StatType(StatsStatTypeK_statTypeTcpRetransmit)
 	StatTypeTCPIo                   = StatType(StatsStatTypeK_statTypeTcpIo)
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
+	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
 )
 
 type TCPFailReasonType string
@@ -81,6 +82,22 @@ const (
 	CodeDirectionTransmit = NetworkIoDirectionCode(StatsNetworkIoDirectionDirectionTransmit)
 )
 
+type DiskIODirectionType string
+
+const (
+	DiskDirectionRead  DiskIODirectionType = "read"
+	DiskDirectionWrite DiskIODirectionType = "write"
+)
+
+// DiskIODirectionCode aliases the bpf2go-generated constants derived from enum
+// disk_io_direction in bpf/statsolly/types.h.
+type DiskIODirectionCode uint8
+
+const (
+	CodeDiskDirectionRead  = DiskIODirectionCode(StatsDiskIoDirectionDiskDirectionRead)
+	CodeDiskDirectionWrite = DiskIODirectionCode(StatsDiskIoDirectionDiskDirectionWrite)
+)
+
 // Stat contains accumulated metrics from a stat, with extra metadata
 // that is added from the user space
 // REMINDER: any attribute here must be also added to the functions StatGetters
@@ -93,6 +110,7 @@ type Stat struct {
 	TCPSuccessfulConnection *TCPSuccessfulConnection `json:"-"`
 	TCPRetransmit           bool                     `json:"-"`
 	TCPIo                   *TCPIo                   `json:"-"`
+	DiskIO                  *DiskIO                  `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -115,6 +133,24 @@ type TCPSuccessfulConnection struct {
 type TCPIo struct {
 	Direction uint8  `json:"direction"`
 	Bytes     uint32 `json:"bytes"`
+}
+
+// DiskIO is the block I/O completed on a device, in a direction and with an outcome, since
+// the previous read of the kernel accumulation map.
+type DiskIO struct {
+	Device    string
+	Direction DiskIODirectionCode
+	// ErrorType is empty for successful requests
+	ErrorType string
+	// Latency of the completed requests, as one representative value per kernel histogram bucket
+	Latency []LatencySample
+}
+
+// LatencySample stands for Count requests whose latency fell in the same kernel histogram
+// bucket. Seconds is their mean latency, which always falls in that bucket.
+type LatencySample struct {
+	Seconds float64
+	Count   uint64
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.
