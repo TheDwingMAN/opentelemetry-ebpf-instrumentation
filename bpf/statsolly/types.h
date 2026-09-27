@@ -72,6 +72,7 @@ enum fs_type : u8 {
 enum fs_op : u8 {
     fs_op_read = 0,
     fs_op_write = 1,
+    fs_op_fsync = 2,
 };
 
 typedef struct fs_io {

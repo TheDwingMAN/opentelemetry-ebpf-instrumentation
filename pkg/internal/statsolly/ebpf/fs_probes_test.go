@@ -45,6 +45,7 @@ func TestFsTargetsCoverAllFilesystems(t *testing.T) {
 		seen[tgt.Fs] = true
 		assert.NotEmpty(t, tgt.ReadSyms, "fs %d has no read symbols", tgt.Fs)
 		assert.NotEmpty(t, tgt.WriteSyms, "fs %d has no write symbols", tgt.Fs)
+		assert.NotEmpty(t, tgt.FsyncSyms, "fs %d has no fsync symbols", tgt.Fs)
 		assert.NotEmpty(t, tgt.Module)
 	}
 	for _, want := range []FsTypeCode{CodeFsNFS, CodeFsCeph, CodeFsCIFS, CodeFsFUSE} {

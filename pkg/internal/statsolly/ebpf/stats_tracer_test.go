@@ -163,6 +163,51 @@ func TestFixupSpecUnknownProgram(t *testing.T) {
 	}
 }
 
+// TestFsFsyncProgramsForRoutesByFilesystem asserts that fsFsyncProgramsFor
+// picks the fsync program set matching the requested filesystem, and that an
+// unknown filesystem code returns all-nil rather than defaulting to one of
+// the known filesystems.
+func TestFsFsyncProgramsForRoutesByFilesystem(t *testing.T) {
+	objects := &StatsObjects{}
+	objects.ObiStatsFentryNfsFsync = &ebpf.Program{}
+	objects.ObiStatsFexitNfsFsync = &ebpf.Program{}
+	objects.ObiStatsKprobeNfsFsync = &ebpf.Program{}
+	objects.ObiStatsKretprobeNfsFsync = &ebpf.Program{}
+	objects.ObiStatsFentryCephFsync = &ebpf.Program{}
+	objects.ObiStatsFexitCephFsync = &ebpf.Program{}
+	objects.ObiStatsKprobeCephFsync = &ebpf.Program{}
+	objects.ObiStatsKretprobeCephFsync = &ebpf.Program{}
+	objects.ObiStatsFentryCifsFsync = &ebpf.Program{}
+	objects.ObiStatsFexitCifsFsync = &ebpf.Program{}
+	objects.ObiStatsKprobeCifsFsync = &ebpf.Program{}
+	objects.ObiStatsKretprobeCifsFsync = &ebpf.Program{}
+	objects.ObiStatsFentryFuseFsync = &ebpf.Program{}
+	objects.ObiStatsFexitFuseFsync = &ebpf.Program{}
+	objects.ObiStatsKprobeFuseFsync = &ebpf.Program{}
+	objects.ObiStatsKretprobeFuseFsync = &ebpf.Program{}
+
+	for _, tc := range []struct {
+		fs                                               FsTypeCode
+		wantFentry, wantFexit, wantKprobe, wantKretprobe *ebpf.Program
+	}{
+		{CodeFsNFS, objects.ObiStatsFentryNfsFsync, objects.ObiStatsFexitNfsFsync, objects.ObiStatsKprobeNfsFsync, objects.ObiStatsKretprobeNfsFsync},
+		{CodeFsCeph, objects.ObiStatsFentryCephFsync, objects.ObiStatsFexitCephFsync, objects.ObiStatsKprobeCephFsync, objects.ObiStatsKretprobeCephFsync},
+		{CodeFsCIFS, objects.ObiStatsFentryCifsFsync, objects.ObiStatsFexitCifsFsync, objects.ObiStatsKprobeCifsFsync, objects.ObiStatsKretprobeCifsFsync},
+		{CodeFsFUSE, objects.ObiStatsFentryFuseFsync, objects.ObiStatsFexitFuseFsync, objects.ObiStatsKprobeFuseFsync, objects.ObiStatsKretprobeFuseFsync},
+	} {
+		fentry, fexit, kprobe, kretprobe := fsFsyncProgramsFor(tc.fs, objects)
+		if fentry != tc.wantFentry || fexit != tc.wantFexit || kprobe != tc.wantKprobe || kretprobe != tc.wantKretprobe {
+			t.Errorf("fsFsyncProgramsFor(%d): got (%p,%p,%p,%p), want (%p,%p,%p,%p)",
+				tc.fs, fentry, fexit, kprobe, kretprobe, tc.wantFentry, tc.wantFexit, tc.wantKprobe, tc.wantKretprobe)
+		}
+	}
+
+	fentry, fexit, kprobe, kretprobe := fsFsyncProgramsFor(CodeFsUnknown, objects)
+	if fentry != nil || fexit != nil || kprobe != nil || kretprobe != nil {
+		t.Errorf("fsFsyncProgramsFor(unknown): got (%p,%p,%p,%p), want all nil", fentry, fexit, kprobe, kretprobe)
+	}
+}
+
 // TestTracepointConstantFormat validates that all tracepoint constants are in group/name format.
 // When adding a new tracepoint constant, add it to the hooks slice below.
 func TestTracepointConstantFormat(t *testing.T) {

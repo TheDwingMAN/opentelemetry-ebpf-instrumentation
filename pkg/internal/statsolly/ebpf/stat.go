@@ -118,6 +118,7 @@ type FsOpType string
 const (
 	FsOpRead  FsOpType = "read"
 	FsOpWrite FsOpType = "write"
+	FsOpFsync FsOpType = "fsync"
 )
 
 // FsOpCode mirrors enum fs_op in bpf/statsolly/types.h.
@@ -126,6 +127,7 @@ type FsOpCode uint8
 const (
 	CodeFsOpRead  FsOpCode = 0
 	CodeFsOpWrite FsOpCode = 1
+	CodeFsOpFsync FsOpCode = 2
 )
 
 // Stat contains accumulated metrics from a stat, with extra metadata
