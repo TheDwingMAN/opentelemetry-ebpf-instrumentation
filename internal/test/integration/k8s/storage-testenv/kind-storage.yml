@@ -1,0 +1,35 @@
+# kind cluster for developing/validating OBI storage metrics.
+#
+# IMPORTANT: kind nodes are containers sharing the HOST kernel. This cluster
+# gives you real Kubernetes semantics -- real PV/PVC objects, real kubelet
+# volume mount paths, real pod UIDs, real privileged DaemonSets -- but it does
+# NOT isolate kernel version. Testing against OBI's 5.8 floor or RHEL8 4.18
+# requires real VMs; see README.md.
+apiVersion: kind.x-k8s.io/v1alpha4
+kind: Cluster
+name: obi-storage
+nodes:
+  - role: control-plane
+    extraMounts:
+      # kernel modules, so the in-cluster NFS server can load nfsd and the
+      # NFS client modules are resolvable from inside node containers
+      - hostPath: /lib/modules
+        containerPath: /lib/modules
+        readOnly: true
+      # tracefs, for kprobe/tracepoint attachment from the OBI DaemonSet
+      - hostPath: /sys/kernel/tracing
+        containerPath: /sys/kernel/tracing
+    extraPortMappings:
+      # OBI's own Prometheus endpoint
+      - containerPort: 8999
+        hostPort: 38999
+      # Prometheus UI
+      - containerPort: 9090
+        hostPort: 39090
+  - role: worker
+    extraMounts:
+      - hostPath: /lib/modules
+        containerPath: /lib/modules
+        readOnly: true
+      - hostPath: /sys/kernel/tracing
+        containerPath: /sys/kernel/tracing

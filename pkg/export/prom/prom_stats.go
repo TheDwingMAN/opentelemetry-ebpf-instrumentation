@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -42,6 +43,8 @@ type statMetricsReporter struct {
 	tcpIo                *Expirer[prometheus.Counter]
 	diskOpDuration       *Expirer[prometheus.Histogram]
 	diskIOBytes          *Expirer[prometheus.Counter]
+	fsOpDuration         *Expirer[prometheus.Histogram]
+	fsIOBytes            *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -51,6 +54,8 @@ type statMetricsReporter struct {
 	tcpIoAttrs                []attributes.Field[*ebpf.Stat, string]
 	diskOpDurationAttrs       []attributes.Field[*ebpf.Stat, string]
 	diskIOBytesAttrs          []attributes.Field[*ebpf.Stat, string]
+	fsOpDurationAttrs         []attributes.Field[*ebpf.Stat, string]
+	fsIOBytesAttrs            []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -195,6 +200,38 @@ func newStatsReporter(
 		register = append(register, mr.diskIOBytes)
 	}
 
+	if cfg.CommonCfg.Features.StorageFSDuration() {
+		log.Debug("registering stat fs operation duration metric")
+
+		mr.fsOpDurationAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatFsOperationDuration))
+
+		mr.fsOpDuration = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:                            attributes.StatFsOperationDuration.Prom,
+			Help:                            "measures the filesystem I/O latency as calculated by the kernel in seconds",
+			Buckets:                         cfg.Config.Buckets.StatFsOperationDurationHistogram,
+			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
+			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
+			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
+		}, labelNames(mr.fsOpDurationAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.fsOpDuration)
+	}
+
+	if cfg.CommonCfg.Features.StorageFSIo() {
+		log.Debug("registering stat fs io bytes metric")
+
+		mr.fsIOBytesAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatFsIO))
+
+		mr.fsIOBytes = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatFsIO.Prom,
+			Help: "count of bytes transferred at the filesystem layer",
+		}, labelNames(mr.fsIOBytesAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.fsIOBytes)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -219,6 +256,8 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPIo(stat)
 			r.observeDiskOpDuration(stat)
 			r.observeDiskIOBytes(stat)
+			r.observeFsOpDuration(stat)
+			r.observeFsIOBytes(stat)
 		}
 	}
 }
@@ -260,7 +299,7 @@ func (r *statMetricsReporter) observeDiskOpDuration(stat *ebpf.Stat) {
 		return
 	}
 	r.diskOpDuration.WithLabelValues(labelValues(stat, r.diskOpDurationAttrs)...).
-		Metric.Observe(float64(stat.BlockIo.LatencyNs) / 1_000_000_000.0)
+		Metric.Observe(time.Duration(stat.BlockIo.LatencyNs).Seconds())
 }
 
 func (r *statMetricsReporter) observeDiskIOBytes(stat *ebpf.Stat) {
@@ -269,4 +308,20 @@ func (r *statMetricsReporter) observeDiskIOBytes(stat *ebpf.Stat) {
 	}
 	r.diskIOBytes.WithLabelValues(labelValues(stat, r.diskIOBytesAttrs)...).
 		Metric.Add(float64(stat.BlockIo.Bytes))
+}
+
+func (r *statMetricsReporter) observeFsOpDuration(stat *ebpf.Stat) {
+	if r.fsOpDuration == nil || stat.FsIo == nil {
+		return
+	}
+	r.fsOpDuration.WithLabelValues(labelValues(stat, r.fsOpDurationAttrs)...).
+		Metric.Observe(time.Duration(stat.FsIo.LatencyNs).Seconds())
+}
+
+func (r *statMetricsReporter) observeFsIOBytes(stat *ebpf.Stat) {
+	if r.fsIOBytes == nil || stat.FsIo == nil {
+		return
+	}
+	r.fsIOBytes.WithLabelValues(labelValues(stat, r.fsIOBytesAttrs)...).
+		Metric.Add(float64(stat.FsIo.Bytes))
 }

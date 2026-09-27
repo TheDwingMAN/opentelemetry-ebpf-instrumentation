@@ -32,8 +32,8 @@ struct trace_event_raw_block_rq_completion___x {
 
 // rwbs[0] == 'W' (write) or 'F' (flush) means write; anything else is a read.
 // Other op codes (e.g. discard 'D') intentionally fold into read for this skeleton (read|write only).
-static __always_inline enum blk_io_op blk_op_from_rwbs0(char rwbs0) {
-    return (rwbs0 == 'W' || rwbs0 == 'F') ? k_blk_op_write : k_blk_op_read;
+static __always_inline enum blk_io_op blk_op_from_rwbs0(const char rwbs0) {
+    return (rwbs0 == 'W' || rwbs0 == 'F') ? blk_op_write : blk_op_read;
 }
 
 SEC("tracepoint/block/block_rq_issue")
@@ -54,13 +54,13 @@ int obi_stats_tp_block_rq_complete(void *ctx) {
     char rwbs0 = 0;
 
     if (bpf_core_type_exists(struct trace_event_raw_block_rq_completion___x)) {
-        struct trace_event_raw_block_rq_completion___x *c = ctx;
+        struct trace_event_raw_block_rq_completion___x *const c = ctx;
         key.dev = BPF_CORE_READ(c, dev);
         key.sector = BPF_CORE_READ(c, sector);
         nr_sector = BPF_CORE_READ(c, nr_sector);
         rwbs0 = BPF_CORE_READ(c, rwbs[0]);
     } else {
-        struct trace_event_raw_block_rq_complete *c = ctx;
+        struct trace_event_raw_block_rq_complete *const c = ctx;
         key.dev = BPF_CORE_READ(c, dev);
         key.sector = BPF_CORE_READ(c, sector);
         nr_sector = BPF_CORE_READ(c, nr_sector);
@@ -69,23 +69,23 @@ int obi_stats_tp_block_rq_complete(void *ctx) {
 
     const u64 *issue_ns = bpf_map_lookup_elem(&blk_start, &key);
     if (!issue_ns) {
-        return 0; // no matching issue seen; skip
+        return 0;
     }
     const u64 latency = bpf_ktime_get_ns() - *issue_ns;
     bpf_map_delete_elem(&blk_start, &key);
 
-    block_io_t *e = bpf_ringbuf_reserve(&stats_events, sizeof(*e), 0);
-    if (!e) {
+    block_io_t *const se = bpf_ringbuf_reserve(&stats_events, sizeof(*se), 0);
+    if (!se) {
         bpf_d_printk("block_io: stats_events ring buffer full, dropping event");
         return 0;
     }
-    e->flags = k_event_stat_block_io;
-    e->op = blk_op_from_rwbs0(rwbs0);
-    e->_pad[0] = 0;
-    e->_pad[1] = 0;
-    e->dev = key.dev;
-    e->latency_ns = latency;
-    e->bytes = (u64)nr_sector * k_blk_bytes_per_sector;
-    bpf_ringbuf_submit(e, stats_events_flags());
+    se->flags = k_event_stat_block_io;
+    se->op = blk_op_from_rwbs0(rwbs0);
+    se->_pad[0] = 0;
+    se->_pad[1] = 0;
+    se->dev = key.dev;
+    se->latency_ns = latency;
+    se->bytes = (u64)nr_sector * k_blk_bytes_per_sector;
+    bpf_ringbuf_submit(se, stats_events_flags());
     return 0;
 }

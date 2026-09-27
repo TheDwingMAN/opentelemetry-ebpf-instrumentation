@@ -261,6 +261,7 @@ discovery:
 				GenAIClientDurationHistogram:       export.DefaultBuckets.GenAIClientDurationHistogram,
 				StatTCPRttHistogram:                export.DefaultBuckets.StatTCPRttHistogram,
 				StatDiskOperationDurationHistogram: export.DefaultBuckets.StatDiskOperationDurationHistogram,
+				StatFsOperationDurationHistogram:   export.DefaultBuckets.StatFsOperationDurationHistogram,
 			},
 			Instrumentations: []instrumentations.Instrumentation{
 				instrumentations.InstrumentationALL,
@@ -313,6 +314,7 @@ discovery:
 				GenAIClientDurationHistogram:       []float64{5, 6, 7, 8},
 				StatTCPRttHistogram:                export.DefaultBuckets.StatTCPRttHistogram,
 				StatDiskOperationDurationHistogram: export.DefaultBuckets.StatDiskOperationDurationHistogram,
+				StatFsOperationDurationHistogram:   export.DefaultBuckets.StatFsOperationDurationHistogram,
 			},
 		},
 		InternalMetrics: imetrics.InternalMetricsConfig{
@@ -953,7 +955,7 @@ func TestConfigValidateForReceiverUsesHostMetricsForStats(t *testing.T) {
 	cfg := loadConfig(t, envMap{})
 	cfg.Metrics.Features = export.FeatureStats
 
-	require.ErrorContains(t, cfg.Validate(), "at least one of 'network', 'application', 'stats' or 'storage'")
+	require.ErrorContains(t, cfg.Validate(), "at least one of 'network', 'application', 'stats' or 'storage_block'")
 	require.NoError(t, cfg.ValidateForReceiver())
 }
 

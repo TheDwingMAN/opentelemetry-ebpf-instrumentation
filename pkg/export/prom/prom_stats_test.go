@@ -52,7 +52,7 @@ func blockIoStat() *ebpf.Stat {
 		Type: ebpf.StatTypeBlockIo,
 		BlockIo: &ebpf.BlockIo{
 			Dev:       0x800010,
-			Op:        ebpf.BlockOpWrite,
+			Op:        uint8(ebpf.CodeDirectionWrite),
 			LatencyNs: 2_000_000,
 			Bytes:     4096,
 		},
