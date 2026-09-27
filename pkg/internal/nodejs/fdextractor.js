@@ -22,7 +22,13 @@
   }
 
   const { AsyncLocalStorage, createHook } = require('async_hooks');
-  const { monitorEventLoopDelay, performance } = require('perf_hooks');
+  const {
+    monitorEventLoopDelay,
+    performance,
+    PerformanceObserver,
+    constants,
+  } = require('perf_hooks');
+  const v8 = require('v8');
 
   const debug_enabled = false;
 
@@ -31,6 +37,14 @@
   // hook firing on every callback) and is skipped entirely for
   // metrics-only injections.
   const TRACES_ENABLED = false; /*OBI_TRACES_ENABLED*/
+
+  // Substituted by the injector from the same predicate that sets the
+  // g_traces_ctx_v1_enabled BPF constant (Config.PopulateTraceContext).
+  // The before hook below runs on EVERY async callback, so it is installed
+  // only when something reads traces_ctx_v1: the log enricher, the manual
+  // span bridge, or an external reader. Client spans are parented from the
+  // fd-pair map instead, so they do not depend on it.
+  const CTX_HOOK_ENABLED = false; /*OBI_CTX_HOOK_ENABLED*/
 
   if (debug_enabled) {
     console.log('OpenTelemetry eBPF Instrumentation has injected instrumentation via the NodeJS debugger');
@@ -76,7 +90,7 @@
       }
 
       try {
-        fs.accessSync(`/dev/null/obi/${pad4(incomingFd)}${pad4(outFd)}`)
+        fs.existsSync(`/dev/null/obi/${pad4(incomingFd)}${pad4(outFd)}`)
       } catch (err) {
       }
     }
@@ -119,7 +133,7 @@
 
     // Signal the BPF layer before each async callback so it can restore the correct
     // trace context for this request into traces_ctx_v1.
-    // fs.accessSync is safe inside async_hooks callbacks: synchronous fs operations
+    // fs.existsSync is safe inside async_hooks callbacks: synchronous fs operations
     // do not create AsyncWrap objects and therefore do not re-trigger this hook.
     //
     // When a callback fires OUTSIDE any request (e.g. a background timer, or a
@@ -130,31 +144,33 @@
     // request scope. To avoid a synchronous syscall on every non-request callback
     // (there can be very many), we only clear on the request -> no-request
     // transition, tracked by `ctxActive`; a subsequent request callback re-sets it.
-    let ctxActive = false;
-    orig.ctxHook = createHook({
-      before() {
-        const store = als.getStore();
-        if (store && store.incomingFd != null && store.incomingFd >= 0) {
-          ctxActive = true;
-          try {
-            fs.accessSync(`/dev/null/obi-ctx/${pad4(store.incomingFd)}`);
-          } catch (_) {}
-        } else if (ctxActive) {
-          ctxActive = false;
-          try {
-            // Explicit "no request context" signal: obi_uv_fs_access deletes the
-            // traces_ctx_v1 entry so later spans are not parented into a stale trace.
-            fs.accessSync('/dev/null/obi-noreqctx');
-          } catch (_) {}
-        }
-      },
-    });
-    orig.ctxHook.enable();
+    if (CTX_HOOK_ENABLED) {
+      let ctxActive = false;
+      orig.ctxHook = createHook({
+        before() {
+          const store = als.getStore();
+          if (store && store.incomingFd != null && store.incomingFd >= 0) {
+            ctxActive = true;
+            try {
+              fs.existsSync(`/dev/null/obi-ctx/${pad4(store.incomingFd)}`);
+            } catch (_) {}
+          } else if (ctxActive) {
+            ctxActive = false;
+            try {
+              // Explicit "no request context" signal: obi_uv_fs_access deletes the
+              // traces_ctx_v1 entry so later spans are not parented into a stale trace.
+              fs.existsSync('/dev/null/obi-noreqctx');
+            } catch (_) {}
+          }
+        },
+      });
+      orig.ctxHook.enable();
+    }
   }
 
   // Runtime metrics (nodejs.eventloop.*): sample eventLoopUtilization and
   // monitorEventLoopDelay and pass them to the eBPF layer through the same
-  // fs.access side channel; the payload format is documented at the decoder
+  // fs.existsSync side channel; the payload format is documented at the decoder
   // (bpf/generictracer/nodejs.c). The interval is fixed: this script is
   // embedded verbatim, so making it configurable means templating it.
   const RT_SAMPLING_INTERVAL_MS = 1000;
@@ -176,6 +192,13 @@
     orig.rtHistogram.disable();
     orig.rtHistogram = undefined;
   }
+  if (!RT_ENABLED && orig.gcObserver) {
+    orig.gcObserver.disconnect();
+    orig.gcObserver = undefined;
+  }
+  if (!RT_ENABLED && orig.rtPrevResources) {
+    orig.rtPrevResources = undefined;
+  }
 
   // eventLoopUtilization needs Node 14.10+. Without this guard the interval
   // callback below would throw an uncaught TypeError, which by default
@@ -193,6 +216,35 @@
       const n = Number.isFinite(v) && v > 0 ? Math.round(v) : 0;
       return n.toString(16).padStart(16, '0');
     };
+
+    if (!orig.gcObserver) {
+      // OBI wire codes (one hex char), looked up from THIS runtime's
+      // constants: the constant values differ across Node versions (e.g.
+      // major is 2 on older V8s, 4 on Node 26+), so they are never emitted
+      // verbatim. Unknown kinds are skipped so the kind slot is always
+      // exactly one character.
+      const gcKindHex = {
+        [constants.NODE_PERFORMANCE_GC_MINOR]: '1',
+        [constants.NODE_PERFORMANCE_GC_MAJOR]: '2',
+        [constants.NODE_PERFORMANCE_GC_INCREMENTAL]: '3',
+        [constants.NODE_PERFORMANCE_GC_WEAKCB]: '4',
+      };
+      orig.gcObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          // detail.kind since Node 16; before that the kind sits directly on
+          // the entry (deprecated accessor, the only form on 14.10-15.x)
+          const kind = gcKindHex[entry.detail ? entry.detail.kind : entry.kind];
+          if (!kind) {
+            continue;
+          }
+          try {
+            // entry.duration is milliseconds; the wire carries nanoseconds
+            fs.existsSync(`/dev/null/obi-v8/g${kind}${rtHex(entry.duration * 1e6)}`);
+          } catch (_) {}
+        }
+      });
+      orig.gcObserver.observe({ entryTypes: ['gc'] });
+    }
 
     orig.rtTimer = setInterval(() => {
       const h = orig.rtHistogram;
@@ -215,8 +267,39 @@
       ];
       h.reset();
       try {
-        fs.accessSync(`/dev/null/obi-rt/${fields.map(rtHex).join('')}`);
+        fs.existsSync(`/dev/null/obi-rt/${fields.map(rtHex).join('')}`);
       } catch (_) {}
+      // v8js heap metrics: one h-record per heap space, numbers at fixed
+      // offsets, the engine-defined space name last (the path NUL ends it)
+      for (const s of v8.getHeapSpaceStatistics()) {
+        try {
+          fs.existsSync(`/dev/null/obi-v8/h${rtHex(s.space_size)}${rtHex(s.space_used_size)}${rtHex(s.space_available_size)}${rtHex(s.physical_space_size)}${s.space_name}`);
+        } catch (_) {}
+      }
+      // v8js.resource.active: fold the live-resource list into per-type
+      // counts, one a-record per type. A type present on the previous tick
+      // but absent now is emitted once with count 0, or exporters would
+      // serve its stale last value until the staleness TTL.
+      // getActiveResourcesInfo needs Node 16.14+; older runtimes just skip
+      // resource metrics.
+      if (typeof process.getActiveResourcesInfo === 'function') {
+        const counts = new Map();
+        for (const type of process.getActiveResourcesInfo()) {
+          counts.set(type, (counts.get(type) || 0) + 1);
+        }
+        const present = new Set(counts.keys());
+        for (const type of orig.rtPrevResources || []) {
+          if (!counts.has(type)) {
+            counts.set(type, 0);
+          }
+        }
+        orig.rtPrevResources = present;
+        for (const [type, count] of counts) {
+          try {
+            fs.existsSync(`/dev/null/obi-v8/a${rtHex(count)}${type}`);
+          } catch (_) {}
+        }
+      }
     }, RT_SAMPLING_INTERVAL_MS);
     orig.rtTimer.unref();
   }

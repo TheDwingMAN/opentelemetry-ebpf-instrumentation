@@ -40,10 +40,11 @@ func TestStatsFsIoLayout(t *testing.T) {
 	assert.Equal(t, uintptr(32), unsafe.Offsetof(s.Error))
 }
 
-// The C discriminator values in bpf/statsolly/types.h must match these iota
-// positions; a mismatch surfaces only at runtime as "unknown stats event".
+// The C discriminator values in bpf/statsolly/types.h must match these
+// generated constant values; a mismatch surfaces only at runtime as "unknown
+// stats event".
 func TestStatTypeDiscriminators(t *testing.T) {
 	assert.Equal(t, StatTypeTCPRtt, StatType(1))
-	assert.Equal(t, StatTypeBlockIo, StatType(5))
-	assert.Equal(t, StatTypeFsIo, StatType(6))
+	assert.Equal(t, StatTypeBlockIo, StatType(6))
+	assert.Equal(t, StatTypeFsIo, StatType(7))
 }

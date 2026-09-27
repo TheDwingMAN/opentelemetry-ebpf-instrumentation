@@ -235,8 +235,8 @@ func parseKubeletMount(mountPoint, source string) (MountInfo, bool) {
 // mountServer returns the part of a mount source before its first ":", or
 // the whole source when it has none.
 func mountServer(source string) string {
-	if idx := strings.IndexByte(source, ':'); idx >= 0 {
-		return source[:idx]
+	if server, _, ok := strings.Cut(source, ":"); ok {
+		return server
 	}
 	return source
 }

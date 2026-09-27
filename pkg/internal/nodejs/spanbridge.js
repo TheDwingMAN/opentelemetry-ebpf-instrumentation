@@ -137,26 +137,26 @@
   // --- transport -----------------------------------------------------------
 
   // The span payload is smuggled to the eBPF layer as the argument of a
-  // deliberately-failing uv_fs_access() call: the obi_uv_fs_access uprobe
-  // reads the path string on syscall entry, then the syscall itself fails
-  // because the path does not exist. So the throw here is the EXPECTED,
-  // every-span outcome (ENOENT/ENOTDIR) — not an error, and not something we
-  // can log per span without flooding the app. It also does not tell us
-  // whether OBI actually consumed the event: an attached uprobe and a
-  // not-attached OBI produce the identical failure. Only a genuinely
-  // unexpected error (e.g. a malformed payload rejected before the syscall)
-  // is worth surfacing, and only under the debug flag.
+  // uv_fs_access() call that cannot succeed: the obi_uv_fs_access uprobe reads
+  // the path string on syscall entry, and the syscall itself then fails
+  // because the path does not exist. fs.existsSync reports that as false
+  // rather than by throwing, which is why it is used here — building the
+  // rejection fs.accessSync throws costs several times the call itself, on
+  // every span. The false says nothing about whether OBI consumed the event:
+  // an attached uprobe and a not-attached OBI produce the identical result.
+  //
+  // The guard remains because existsSync can still throw under Node's
+  // permission model, and an exception escaping span.end() would reach
+  // application code.
   const emit = (payload) => {
     // Stop emitting once the app's SDK owns telemetry: either we yielded via a
     // wrapped setter, or an api copy we could not wrap registered the app
     // provider straight into the global registry (detectRegistryHandoff).
     if (yielded || detectRegistryHandoff()) return;
     try {
-      fs.accessSync(SENTINEL_PREFIX + payload);
+      fs.existsSync(SENTINEL_PREFIX + payload);
     } catch (err) {
-      if (DEBUG && err && err.code !== 'ENOENT' && err.code !== 'ENOTDIR') {
-        debug('unexpected error emitting span', err);
-      }
+      debug('unexpected error emitting span', err);
     }
   };
 
@@ -215,6 +215,50 @@
     return BigInt(Date.now()) * 1000000n;
   };
   const hrNs = () => process.hrtime.bigint();
+
+  // OTel TimeInput -> epoch ns, or null when unusable. Takes app-controlled
+  // input on the span.end() hot path, so it must never throw. Values the
+  // decoder cannot represent (int64 ns) are rejected rather than shipped.
+  const MAX_EPOCH_NS = 9223372036854775807n;
+  const msToNs = (ms) => {
+    if (!Number.isFinite(ms) || ms <= 0) return null;
+    const whole = Math.trunc(ms);
+    const ns = BigInt(whole) * 1000000n + BigInt(Math.round((ms - whole) * 1e6));
+    return ns > MAX_EPOCH_NS ? null : ns;
+  };
+  const timeInputToNs = (t) => {
+    try {
+      if (t instanceof Date) {
+        return msToNs(t.getTime());
+      }
+      if (typeof t === 'number') {
+        // Matching @opentelemetry/core: a number below half of
+        // performance.timeOrigin is a performance.now()-style offset. Comparing
+        // against the full origin would misclassify epoch millis that fall just
+        // below it after a clock adjustment.
+        const origin = globalThis.performance && globalThis.performance.timeOrigin;
+        if (typeof origin === 'number' && Number.isFinite(t) && t < origin / 2) {
+          return msToNs(origin + t);
+        }
+        return msToNs(t);
+      }
+      if (
+        Array.isArray(t) &&
+        t.length === 2 &&
+        typeof t[0] === 'number' &&
+        typeof t[1] === 'number' &&
+        Number.isFinite(t[0]) &&
+        Number.isFinite(t[1]) &&
+        t[0] > 0 &&
+        t[1] >= 0
+      ) {
+        const ns = BigInt(Math.trunc(t[0])) * 1000000000n + BigInt(Math.trunc(t[1]));
+        return ns > MAX_EPOCH_NS ? null : ns;
+      }
+    } catch (_) {
+    }
+    return null;
+  };
 
   class Span {
     constructor(name, kind, parentSpanContext, extParent) {
@@ -280,10 +324,11 @@
     isRecording() {
       return !this._ended;
     }
-    end() {
+    end(endTime) {
       if (this._ended) return;
       this._ended = true;
       const durNs = hrNs() - this._startHrNs;
+      this._endWallNs = endTime === undefined ? null : timeInputToNs(endTime);
       // span.end() is idiomatically called from a finally block. It must never
       // throw into the app: with no SDK registered the alternative is a silent
       // NoopSpan, so any escape here is a regression. safeStr guards the field
@@ -326,6 +371,7 @@
         kind: this.kind,
         startNs: this._startWallNs.toString(),
         durNs: durNs.toString(),
+        endWallNs: this._endWallNs ? this._endWallNs.toString() : undefined,
         status: this.status.code,
         statusMsg: this.status.message ? truncateUtf8(safeStr(this.status.message), MAX_STATUS_MSG_LEN) : undefined,
         attrs: this._serializeAttributes(),

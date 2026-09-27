@@ -47,6 +47,18 @@ func TestNodejsRuntimeMetrics(t *testing.T) {
 	t.Run("exported values match the app's perf_hooks ground truth", func(t *testing.T) {
 		testNodejsGroundTruth(t, pq)
 	})
+	t.Run("v8js heap space metrics", func(t *testing.T) {
+		testV8HeapSpaceMetrics(t, pq)
+	})
+	t.Run("v8js heap used grows after retained allocations", func(t *testing.T) {
+		testV8HeapGrowth(t, pq)
+	})
+	t.Run("v8js gc duration histogram counts forced major collections", func(t *testing.T) {
+		testV8GCDuration(t, pq)
+	})
+	t.Run("v8js active resources census pending timers", func(t *testing.T) {
+		testV8ResourceActive(t, pq)
+	})
 	runWeaverValidation(t)
 }
 
@@ -104,6 +116,13 @@ func testNodejsEventLoopDelay(t *testing.T, pq promtest.Client) {
 	}, testTimeout, 250*time.Millisecond)
 }
 
+type nodejsHeapSpaceTruth struct {
+	Size      float64 `json:"size"`
+	Used      float64 `json:"used"`
+	Available float64 `json:"available"`
+	Physical  float64 `json:"physical"`
+}
+
 type nodejsGroundTruth struct {
 	ELU struct {
 		IdleS   float64 `json:"idle_s"`
@@ -112,6 +131,9 @@ type nodejsGroundTruth struct {
 	Delay struct {
 		P50S float64 `json:"p50_s"`
 	} `json:"delay"`
+	HeapSpaces     map[string]nodejsHeapSpaceTruth `json:"heap_spaces"`
+	GCCounts       map[string]float64              `json:"gc_counts"`
+	ResourceCounts map[string]float64              `json:"resource_counts"`
 }
 
 // testNodejsGroundTruth compares the exported metrics against the
@@ -146,6 +168,125 @@ func testNodejsGroundTruth(t *testing.T, pq promtest.Client) {
 	}, testTimeout, time.Second)
 }
 
+// testV8HeapSpaceMetrics asserts the per-space heap gauges exist and are
+// coherent: old_space is present in every V8 version, its used size is
+// positive, and used never exceeds the pre-allocated size. Space names are
+// engine-defined and version-dependent, so only old_space is pinned.
+func testV8HeapSpaceMetrics(t *testing.T, pq promtest.Client) {
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		used := queryNodejsValue(ct, pq,
+			`v8js_memory_heap_used_bytes{`+nodejsRuntimeServiceLabels+`,v8js_heap_space_name="old_space"}`)
+		require.Positive(ct, used, "old_space used must be positive")
+
+		limit := queryNodejsValue(ct, pq,
+			`v8js_memory_heap_limit_bytes{`+nodejsRuntimeServiceLabels+`,v8js_heap_space_name="old_space"}`)
+		require.GreaterOrEqual(ct, limit, used, "old_space pre-allocated size must be >= used")
+
+		// the in-process truth pins the values, not just their existence
+		gt := fetchNodejsGroundTruth(ct)
+		gtOldSpace, ok := gt.HeapSpaces["old_space"]
+		require.True(ct, ok, "ground truth must report old_space")
+		// both readings move (allocations, GC) between the two samples:
+		// same order of magnitude is enough to catch unit or field-order bugs
+		require.Greater(ct, used, gtOldSpace.Used/3)
+		require.Less(ct, used, gtOldSpace.Used*3)
+	}, testTimeout, time.Second)
+}
+
+// testV8HeapGrowth retains ~30 MB of heap objects and expects the total used
+// heap (summed over spaces — V8 decides which space the arrays land in) to
+// grow accordingly.
+func testV8HeapGrowth(t *testing.T, pq promtest.Client) {
+	var baseline float64
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		baseline = queryNodejsValue(ct, pq,
+			`sum(v8js_memory_heap_used_bytes{`+nodejsRuntimeServiceLabels+`})`)
+		require.Positive(ct, baseline)
+	}, testTimeout, time.Second)
+
+	ti.DoHTTPGet(t, "http://localhost:"+nodejsRuntimeMetricsHostPort+"/alloc?mb=30", http.StatusOK)
+
+	// well below the 30MB retained: V8 compaction and collected transients
+	// can eat a few MB, and this only needs to catch order-of-magnitude bugs
+	const fifteenMB = 15 * 1024 * 1024
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		used := queryNodejsValue(ct, pq,
+			`sum(v8js_memory_heap_used_bytes{`+nodejsRuntimeServiceLabels+`})`)
+		require.Greater(ct, used, baseline+fifteenMB,
+			"retaining 30MB must grow the exported used heap by at least 15MB")
+	}, testTimeout, time.Second)
+}
+
+// testV8GCDuration forces major collections and expects the gc duration
+// histogram to count them under v8js_gc_type="major", in step with the
+// app's own PerformanceObserver counts.
+func testV8GCDuration(t *testing.T, pq promtest.Client) {
+	majorCount := func(t require.TestingT) float64 {
+		results, err := pq.Query(
+			`v8js_gc_duration_seconds_count{` + nodejsRuntimeServiceLabels + `,v8js_gc_type="major"}`)
+		require.NoError(t, err)
+		if len(results) == 0 {
+			return 0 // no major GC observed yet: series absent
+		}
+		return promResultValue(t, results[0])
+	}
+
+	baseline := majorCount(t)
+
+	ti.DoHTTPGet(t, "http://localhost:"+nodejsRuntimeMetricsHostPort+"/gc", http.StatusOK)
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		require.Greater(ct, majorCount(ct), baseline,
+			"a forced global.gc() must be counted as a major collection")
+
+		gt := fetchNodejsGroundTruth(ct)
+		require.Positive(ct, gt.GCCounts["major"],
+			"the app's own observer must have seen the major GC")
+	}, testTimeout, time.Second)
+}
+
+// testV8ResourceActive retains never-firing timers and expects the active
+// resource gauge to census them, in step with the app's own
+// getActiveResourcesInfo() fold; clearing them must drop the exported count
+// back down (the vanished-type explicit zero).
+func testV8ResourceActive(t *testing.T, pq promtest.Client) {
+	const timers = 5
+
+	ti.DoHTTPGet(t, "http://localhost:"+nodejsRuntimeMetricsHostPort+"/resources?timers="+strconv.Itoa(timers), http.StatusOK)
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		require.GreaterOrEqual(ct, nodejsResourceCount(ct, pq, "Timeout"), float64(timers),
+			"%d retained intervals must show up as active Timeout resources", timers)
+
+		gt := fetchNodejsGroundTruth(ct)
+		require.GreaterOrEqual(ct, gt.ResourceCounts["Timeout"], float64(timers))
+
+		// the listening server is exactly one TCPServerWrap, in both views
+		require.Positive(ct, gt.ResourceCounts["TCPServerWrap"])
+		require.InDelta(ct, gt.ResourceCounts["TCPServerWrap"], nodejsResourceCount(ct, pq, "TCPServerWrap"), 0.0001)
+	}, testTimeout, time.Second)
+
+	ti.DoHTTPGet(t, "http://localhost:"+nodejsRuntimeMetricsHostPort+"/resources?timers=0", http.StatusOK)
+
+	// must drop well before the 30s staleness TTL: only the agent's explicit
+	// zero can get it there
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		require.Less(ct, nodejsResourceCount(ct, pq, "Timeout"), float64(timers),
+			"clearing the intervals must drop the exported count (explicit zero on vanish)")
+	}, 15*time.Second, time.Second)
+}
+
+// nodejsResourceCount returns the exported active count for one resource
+// type, or 0 when the series does not exist (yet, or anymore).
+func nodejsResourceCount(t require.TestingT, pq promtest.Client, resourceType string) float64 {
+	results, err := pq.Query(`v8js_resource_active{` + nodejsRuntimeServiceLabels + `,v8js_resource_type="` + resourceType + `"}`)
+	require.NoError(t, err)
+	if len(results) == 0 {
+		return 0
+	}
+	return promResultValue(t, results[0])
+}
+
 func fetchNodejsGroundTruth(t require.TestingT) nodejsGroundTruth {
 	var gt nodejsGroundTruth
 	resp, err := http.Get("http://localhost:" + nodejsRuntimeMetricsHostPort + "/ground-truth")
@@ -167,6 +308,7 @@ func assertNodejsRuntimeMetricService(t require.TestingT, results []promtest.Res
 	for _, result := range results {
 		require.Equal(t, "nodejs-runtime", result.Metric["service_name"])
 		require.Equal(t, "integration-test", result.Metric["service_namespace"])
+		require.Equal(t, "integration-test/nodejs-runtime", result.Metric["job"])
 	}
 }
 

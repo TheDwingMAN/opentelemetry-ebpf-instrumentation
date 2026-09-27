@@ -16,7 +16,7 @@ import (
 
 func TestReadFsIoIntoStat(t *testing.T) {
 	ev := ebpf.StatsFsIo{
-		Flags:     6,
+		Flags:     uint8(ebpf.StatTypeFsIo),
 		Fs:        uint8(ebpf.CodeFsNFS),
 		Op:        uint8(ebpf.CodeFsOpWrite),
 		SDev:      574,
