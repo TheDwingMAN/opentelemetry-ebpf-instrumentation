@@ -53,6 +53,7 @@ func TestLoadWithStorageFallback(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, storageOn, "storage must be reported disabled after fallback")
 		require.Len(t, calls, 2)
+		assert.Contains(t, calls[1], progObiStatsTpBlockRqInsert)
 		assert.Contains(t, calls[1], progObiStatsTpBlockRqIssue)
 		assert.Contains(t, calls[1], progObiStatsTpBlockRqComplete)
 		assert.Contains(t, calls[1], progObiStatsKprobeTCPCloseSrtt, "original disable list preserved on retry")

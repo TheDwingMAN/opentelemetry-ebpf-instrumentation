@@ -51,8 +51,11 @@ typedef struct block_io {
     enum blk_io_op op; // derived from rwbs[0]
     unsigned char _pad[2];
     u32 dev;        // kernel dev_t (major<<20 | minor)
-    u64 latency_ns; // issue -> complete
+    u64 latency_ns; // issue -> complete (service time)
+    u64 queue_ns;   // insert -> issue (queue wait time)
     u64 bytes;
+    s32 error;    // completion tracepoint's error field: 0 or -errno
+    u32 inflight; // requests still in flight on this device after this completion
 } block_io_t;
 
 // Force struct into the ELF for automatic creation of Golang struct

@@ -15,12 +15,15 @@ import (
 // consistently wrong in both directions, so assert the byte layout directly.
 func TestStatsBlockIoLayout(t *testing.T) {
 	var s StatsBlockIo
-	assert.Equal(t, uintptr(24), unsafe.Sizeof(s), "sizeof block_io_t")
+	assert.Equal(t, uintptr(40), unsafe.Sizeof(s), "sizeof block_io_t")
 	assert.Equal(t, uintptr(0), unsafe.Offsetof(s.Flags))
 	assert.Equal(t, uintptr(1), unsafe.Offsetof(s.Op))
 	assert.Equal(t, uintptr(4), unsafe.Offsetof(s.Dev))
 	assert.Equal(t, uintptr(8), unsafe.Offsetof(s.LatencyNs))
-	assert.Equal(t, uintptr(16), unsafe.Offsetof(s.Bytes))
+	assert.Equal(t, uintptr(16), unsafe.Offsetof(s.QueueNs))
+	assert.Equal(t, uintptr(24), unsafe.Offsetof(s.Bytes))
+	assert.Equal(t, uintptr(32), unsafe.Offsetof(s.Error))
+	assert.Equal(t, uintptr(36), unsafe.Offsetof(s.Inflight))
 }
 
 func TestStatsFsIoLayout(t *testing.T) {

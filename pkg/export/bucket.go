@@ -13,6 +13,7 @@ type Buckets struct {
 	GenAIClientDurationHistogram       []float64 `yaml:"gen_ai_client_operation_duration_histogram"`
 	StatTCPRttHistogram                []float64 `yaml:"stat_tcp_rtt_histogram"`
 	StatDiskOperationDurationHistogram []float64 `yaml:"stat_disk_operation_duration_histogram"`
+	StatDiskQueueDepthHistogram        []float64 `yaml:"stat_disk_queue_depth_histogram"`
 	StatFsOperationDurationHistogram   []float64 `yaml:"stat_fs_operation_duration_histogram"`
 }
 
@@ -36,6 +37,10 @@ var DefaultBuckets = Buckets{
 
 	// Covers NVMe sub-millisecond service times up to saturated-device multi-second tails.
 	StatDiskOperationDurationHistogram: []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 2.5, 5.0},
+
+	// Power-of-two queue depth buckets, from a single outstanding request up to
+	// a deeply saturated device.
+	StatDiskQueueDepthHistogram: []float64{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024},
 
 	// Network filesystem ops: sub-millisecond page-cache hits up to multi-second
 	// stalls on a degraded server.

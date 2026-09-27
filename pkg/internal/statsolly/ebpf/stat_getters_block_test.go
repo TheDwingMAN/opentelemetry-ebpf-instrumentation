@@ -26,3 +26,18 @@ func TestBlockIoGetters(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "write", opGetter(s).Value.Emit())
 }
+
+// TestBlockIoErrorTypeGetter covers the platform-independent paths: no error,
+// and a stat that carries no block I/O event. The errno-name-on-error path is
+// platform-specific (errnoName only resolves names on unix); see
+// stat_getters_block_unix_test.go.
+func TestBlockIoErrorTypeGetter(t *testing.T) {
+	errGetter, ok := StatGetters(attr.ErrorType)
+	assert.True(t, ok)
+
+	noError := &Stat{Type: StatTypeBlockIo, BlockIo: &BlockIo{Error: 0}}
+	assert.Empty(t, errGetter(noError).Value.Emit())
+
+	notBlockIo := &Stat{Type: StatTypeTCPRtt, TCPRtt: &TCPRtt{}}
+	assert.Empty(t, errGetter(notBlockIo).Value.Emit())
+}

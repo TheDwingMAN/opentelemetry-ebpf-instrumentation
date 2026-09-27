@@ -101,6 +101,10 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.FsOperation), fsOpStr(FsOpCode(op)))
 		}
+	case attr.ErrorType:
+		getter = func(s *Stat) attribute.KeyValue {
+			return attribute.String(string(attr.ErrorType), errorTypeStr(s))
+		}
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
 	}
@@ -186,4 +190,14 @@ func fsOpStr(o FsOpCode) string {
 	default:
 		return string(FsOpRead)
 	}
+}
+
+// errorTypeStr returns the errno name for a failed BlockIo completion
+// (Error holds 0 or -errno), or "" when there was no error or the stat
+// carries no block I/O event.
+func errorTypeStr(s *Stat) string {
+	if s.BlockIo == nil || s.BlockIo.Error == 0 {
+		return ""
+	}
+	return errnoName(-s.BlockIo.Error)
 }

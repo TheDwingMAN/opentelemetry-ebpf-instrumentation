@@ -42,6 +42,7 @@ const (
 	progObiStatsKprobeTCPSendmsg                      = "obi_stats_kprobe_tcp_sendmsg"
 	progObiStatsKretprobeTCPSendmsg                   = "obi_stats_kretprobe_tcp_sendmsg"
 	progObiStatsKprobeTCPCleanupRbuf                  = "obi_stats_kprobe_tcp_cleanup_rbuf"
+	progObiStatsTpBlockRqInsert                       = "obi_stats_tp_block_rq_insert"
 	progObiStatsTpBlockRqIssue                        = "obi_stats_tp_block_rq_issue"
 	progObiStatsTpBlockRqComplete                     = "obi_stats_tp_block_rq_complete"
 
@@ -89,6 +90,7 @@ const (
 
 	// Tracepoints: group/name, are validated by TestTracepointConstantFormat
 	TracepointInetSockSetState = "sock/inet_sock_set_state"
+	TracepointBlockRqInsert    = "block/block_rq_insert"
 	TracepointBlockRqIssue     = "block/block_rq_issue"
 	TracepointBlockRqComplete  = "block/block_rq_complete"
 
@@ -149,7 +151,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	}
 	storageBlock := features.StorageBlock()
 	if !storageBlock {
-		toDisable = append(toDisable, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
+		toDisable = append(toDisable, progObiStatsTpBlockRqInsert, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
 	}
 
 	var fsPlans []fsAttachPlan
@@ -262,6 +264,11 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	// cannot be attached must not take down the rest of the stats agent.
 	var storageLinks []io.Closer
 	for _, t := range []probe{
+		{
+			name:    TracepointBlockRqInsert,
+			program: objects.ObiStatsTpBlockRqInsert,
+			enabled: storageBlock,
+		},
 		{
 			name:    TracepointBlockRqIssue,
 			program: objects.ObiStatsTpBlockRqIssue,
@@ -410,7 +417,7 @@ func loadWithStorageFallback(load func(toDisable []string) error, toDisable []st
 
 	log.Warn("loading stats eBPF spec failed with storage block metrics enabled;"+
 		" disabling storage block metrics and retrying (likely kernel incompatibility)", "error", err)
-	toDisable = append(toDisable, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
+	toDisable = append(toDisable, progObiStatsTpBlockRqInsert, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
 	if err := load(toDisable); err != nil {
 		return false, err
 	}
