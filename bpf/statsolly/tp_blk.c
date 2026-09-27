@@ -3,13 +3,11 @@
 
 //go:build obi_bpf_ignore
 #include <bpfcore/vmlinux.h>
-#include <bpfcore/bpf_builtins.h>
 #include <bpfcore/bpf_helpers.h>
 #include <bpfcore/bpf_core_read.h>
 
-#include <common/scratch_mem.h>
-
 #include <statsolly/cgroup_names.h>
+#include <statsolly/disk_accum.h>
 #include <statsolly/disk_io.h>
 #include <statsolly/types.h>
 #include <statsolly/maps/disk_io_accum.h>
@@ -18,13 +16,8 @@
 // The request flags start right after the REQ_OP_BITS-wide operation field.
 enum { k_req_op_mask = (1U << __REQ_FAILFAST_DEV) - 1 };
 
-// To be injected from userspace during eBPF program load & initialization.
-volatile const u64 disk_latency_bounds_ns[k_disk_latency_max_bounds];
-volatile const u32 disk_latency_bounds_len;
 // Set when block_rq_complete reports a blk_status_t (Linux 5.16+) instead of a negative errno.
 volatile const bool disk_status_is_blk_status;
-
-SCRATCH_MEM_TYPED(disk_io_accum_init, disk_io_accum_t)
 
 // Force structs into the ELF for automatic creation of Golang struct
 const disk_io_key_t *unused_disk_io_key __attribute__((unused));
@@ -107,24 +100,6 @@ static __always_inline void record_issue(struct request *rq) {
     bpf_map_update_elem(&disk_rq_start, &key, &start, BPF_ANY);
 }
 
-static __always_inline disk_io_accum_t *lookup_or_init_accum(const disk_io_key_t *key) {
-    disk_io_accum_t *accum = bpf_map_lookup_elem(&disk_io_accum, key);
-    if (accum) {
-        return accum;
-    }
-    disk_io_accum_t *init = disk_io_accum_init_mem();
-    if (!init) {
-        return 0;
-    }
-    // in two halves: bpf_memset only unrolls up to a limited size
-    enum { k_queue_offset = __builtin_offsetof(disk_io_accum_t, queue_count) };
-    bpf_memset(init, 0, k_queue_offset);
-    bpf_memset((unsigned char *)init + k_queue_offset, 0, sizeof(*init) - k_queue_offset);
-    // BPF_NOEXIST: another CPU may have created the entry since the lookup above
-    bpf_map_update_elem(&disk_io_accum, key, init, BPF_NOEXIST);
-    return bpf_map_lookup_elem(&disk_io_accum, key);
-}
-
 // Block layer tracepoint arguments changed in Linux 5.11 (also backported to 5.10.137+ and
 // RHEL 8.6+): block_rq_issue went from (q, rq) to (rq). Userspace loads one of the two
 // programs below after checking the tracepoint prototype in the kernel BTF.
@@ -169,7 +144,7 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     bpf_map_delete_elem(&disk_rq_start, &rq_key);
     request_partition(rq, &key.part_dev, &key.partno);
 
-    disk_io_accum_t *accum = lookup_or_init_accum(&key);
+    disk_io_accum_t *accum = lookup_or_init_accum(&disk_io_accum, &key);
     if (!accum) {
         return 0;
     }

@@ -153,7 +153,9 @@ type DiskIO struct {
 	Device string
 	// Partition of Device that the I/O targets. Empty for I/O on the whole device.
 	Partition string
-	Op        DiskOpCode
+	// Stacked devices are built on other block devices, which report the same I/O too
+	Stacked bool
+	Op      DiskOpCode
 	// ErrorType is empty for successful requests
 	ErrorType string
 	// ContainerID of the cgroup the I/O is charged to. Empty for I/O charged to no container.
@@ -174,6 +176,7 @@ type DiskIO struct {
 // DiskPending is the number of block requests of an operation that a device is serving
 type DiskPending struct {
 	Device   string
+	Stacked  bool
 	Op       DiskOpCode
 	Requests int64
 }

@@ -52,6 +52,9 @@ const (
 	progObiStatsRawTpBlockRqIssue                         = "obi_stats_raw_tp_block_rq_issue"
 	progObiStatsRawTpBlockRqIssueLegacy                   = "obi_stats_raw_tp_block_rq_issue_legacy"
 	progObiStatsRawTpBlockRqComplete                      = "obi_stats_raw_tp_block_rq_complete"
+	progObiStatsRawTpBlockBioQueue                        = "obi_stats_raw_tp_block_bio_queue"
+	progObiStatsRawTpBlockBioQueueLegacy                  = "obi_stats_raw_tp_block_bio_queue_legacy"
+	progObiStatsRawTpBlockBioComplete                     = "obi_stats_raw_tp_block_bio_complete"
 	progObiStatsKprobeVfsFsyncRange                       = "obi_stats_kprobe_vfs_fsync_range"
 	progObiStatsKretprobeVfsFsyncRange                    = "obi_stats_kretprobe_vfs_fsync_range"
 	progObiStatsKprobeDoFsync                             = "obi_stats_kprobe_do_fsync"
@@ -74,6 +77,8 @@ const (
 	RawTracepointTCPRetransmitSkb = "tcp_retransmit_skb"
 	RawTracepointBlockRqIssue     = "block_rq_issue"
 	RawTracepointBlockRqComplete  = "block_rq_complete"
+	RawTracepointBlockBioQueue    = "block_bio_queue"
+	RawTracepointBlockBioComplete = "block_bio_complete"
 )
 
 // maxDiskLatencyBounds is the number of histogram boundaries the kernel can bucket latencies with:
@@ -90,6 +95,7 @@ type StatsFetcher struct {
 
 	diskAttached          bool
 	diskStatusIsBlkStatus bool
+	bioAttached           bool
 	fsSyncAttached        bool
 }
 
@@ -168,6 +174,8 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	}
 	diskAttached := diskEnabled && !blockLayout.unknown
 	toDisable = append(toDisable, diskProgramsToDisable(diskEnabled, blockLayout)...)
+	bioAttached := diskAttached && features.StatsDiskStackedVolumes() && !blockLayout.bioUnknown
+	toDisable = append(toDisable, bioProgramsToDisable(bioAttached, blockLayout)...)
 	if !features.StatsFsSyncDuration() {
 		toDisable = append(toDisable, progObiStatsKprobeVfsFsyncRange, progObiStatsKretprobeVfsFsyncRange,
 			progObiStatsKprobeDoFsync, progObiStatsKretprobeDoFsync)
@@ -338,6 +346,21 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 			program: objects.ObiStatsRawTpBlockRqComplete,
 			enabled: diskAttached,
 		},
+		{
+			name:    RawTracepointBlockBioQueue,
+			program: objects.ObiStatsRawTpBlockBioQueue,
+			enabled: bioAttached && !blockLayout.bioQueueHasQueueArg,
+		},
+		{
+			name:    RawTracepointBlockBioQueue,
+			program: objects.ObiStatsRawTpBlockBioQueueLegacy,
+			enabled: bioAttached && blockLayout.bioQueueHasQueueArg,
+		},
+		{
+			name:    RawTracepointBlockBioComplete,
+			program: objects.ObiStatsRawTpBlockBioComplete,
+			enabled: bioAttached,
+		},
 	} {
 		if !t.enabled {
 			continue
@@ -359,6 +382,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		closables:             closables,
 		diskAttached:          diskAttached,
 		diskStatusIsBlkStatus: blockLayout.completeReportsBlkStatus,
+		bioAttached:           bioAttached,
 		fsSyncAttached:        features.StatsFsSyncDuration(),
 	}, nil
 }
@@ -412,6 +436,24 @@ func (m *StatsFetcher) DiskRequestsMap() *ebpf.Map {
 	return m.objects.DiskRqStart
 }
 
+// DiskBioAccumMap returns the map where the kernel accumulates the bios of the stacked volumes, or
+// nil if the bio probes are not attached.
+func (m *StatsFetcher) DiskBioAccumMap() *ebpf.Map {
+	if !m.bioAttached {
+		return nil
+	}
+	return m.objects.DiskBioAccum
+}
+
+// DiskBioDevicesMap returns the map of the stacked volumes whose bios the kernel measures, or nil
+// if the bio probes are not attached.
+func (m *StatsFetcher) DiskBioDevicesMap() *ebpf.Map {
+	if !m.bioAttached {
+		return nil
+	}
+	return m.objects.DiskBioDevices
+}
+
 // FsSyncAccumMap returns the map where the kernel accumulates file sync latencies, or nil if the
 // file sync probes are not attached.
 func (m *StatsFetcher) FsSyncAccumMap() *ebpf.Map {
@@ -445,6 +487,10 @@ type blockTracepointLayout struct {
 	completeReportsBlkStatus bool
 	// the layout could not be told, so the disk probes can't be loaded
 	unknown bool
+	// block_bio_queue is (q, bio) instead of (bio): before Linux 5.11
+	bioQueueHasQueueArg bool
+	// the layout of the bio tracepoints could not be told, so the bio probes can't be loaded
+	bioUnknown bool
 }
 
 // kernelBlockTracepointLayout reads the block tracepoint prototypes from the kernel BTF. The kernel
@@ -483,6 +529,8 @@ const (
 	blockRqIssueParams        = 2 // data, rq
 	blockRqIssueLegacyParams  = 3 // data, q, rq
 	blockRqCompleteErrorParam = 2 // data, rq, error, nr_bytes
+	blockBioQueueParams       = 2 // data, bio
+	blockBioQueueLegacyParams = 3 // data, q, bio
 )
 
 // blockTracepointLayoutFrom tells the layout from the btf_trace_<tracepoint> prototypes
@@ -514,6 +562,17 @@ func blockTracepointLayoutFrom(proto func(string) (*btf.FuncProto, error)) (bloc
 	}
 	// blk_status_t is a u8, the errno it replaced an int
 	layout.completeReportsBlkStatus = errType.Size == 1
+
+	// the bio tracepoints only measure stacked volumes: without them, the requests still are
+	bioQueue, err := proto("btf_trace_block_bio_queue")
+	switch {
+	case err != nil:
+		layout.bioUnknown = true
+	case len(bioQueue.Params) == blockBioQueueLegacyParams:
+		layout.bioQueueHasQueueArg = true
+	case len(bioQueue.Params) != blockBioQueueParams:
+		layout.bioUnknown = true
+	}
 	return layout, nil
 }
 
@@ -547,6 +606,17 @@ func diskProgramsToDisable(enabled bool, layout blockTracepointLayout) []string 
 		return []string{progObiStatsRawTpBlockRqIssue}
 	default:
 		return []string{progObiStatsRawTpBlockRqIssueLegacy}
+	}
+}
+
+func bioProgramsToDisable(enabled bool, layout blockTracepointLayout) []string {
+	switch {
+	case !enabled:
+		return []string{progObiStatsRawTpBlockBioQueue, progObiStatsRawTpBlockBioQueueLegacy, progObiStatsRawTpBlockBioComplete}
+	case layout.bioQueueHasQueueArg:
+		return []string{progObiStatsRawTpBlockBioQueue}
+	default:
+		return []string{progObiStatsRawTpBlockBioQueueLegacy}
 	}
 }
 

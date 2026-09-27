@@ -84,6 +84,21 @@ static void test_op_from_req_op(void) {
                 "driver private operations are not measured");
 }
 
+static void test_bio_op(void) {
+    const u32 op_mask = 0xff;
+    const u32 preflush = 1U << 18;
+    assert_true(disk_bio_op(1, op_mask, preflush, 4096) == disk_op_write, "a write bio is a write");
+    assert_true(disk_bio_op(1 | preflush, op_mask, preflush, 0) == disk_op_flush,
+                "an empty write with the preflush flag is a flush");
+    assert_true(disk_bio_op(1 | preflush, op_mask, preflush, 4096) == disk_op_write,
+                "a write with data and the preflush flag is a write");
+    assert_true(disk_bio_op(1, op_mask, preflush, 0) == disk_op_write,
+                "an empty write without the preflush flag is a write");
+    assert_true(disk_bio_op(0 | preflush, op_mask, preflush, 0) == disk_op_read,
+                "the preflush flag only turns writes into flushes");
+    assert_true(disk_bio_op(3, op_mask, preflush, 1 << 20) == disk_op_discard, "a discard bio");
+}
+
 static void test_queue_ns(void) {
     assert_true(disk_queue_ns(1000, 1500) == 500, "the wait is the time from allocation to issue");
     assert_true(disk_queue_ns(1500, 1500) == 0,
@@ -110,6 +125,7 @@ int main(void) {
     test_final_completion();
     test_status_code();
     test_op_from_req_op();
+    test_bio_op();
     test_queue_ns();
     test_fs_sync_status();
 

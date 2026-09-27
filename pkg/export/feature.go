@@ -65,6 +65,7 @@ const (
 	FeatureStatsDiskFlush
 	FeatureStatsDiskDiscard
 	FeatureStatsDiskPendingOperations
+	FeatureStatsDiskStackedVolumes
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
@@ -77,7 +78,8 @@ const FeatureStats = FeatureStatsTCPRtt | FeatureStatsTCPFailedConnections | Fea
 // FeatureStatsDisk groups the block I/O stat metrics. They are not part of the `stats` aggregate:
 // their probes fire on every block request, so they have to be enabled explicitly.
 const FeatureStatsDisk = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskOperationTime |
-	FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard | FeatureStatsDiskPendingOperations
+	FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard | FeatureStatsDiskPendingOperations |
+	FeatureStatsDiskStackedVolumes
 
 // FeatureMapper stays public so any extension package can add and remove feature
 // definitions before loading them.
@@ -98,6 +100,7 @@ var FeatureMapper = map[string]Features{
 	"stats_disk_flush":                 FeatureStatsDiskFlush,
 	"stats_disk_discard":               FeatureStatsDiskDiscard,
 	"stats_disk_pending_operations":    FeatureStatsDiskPendingOperations,
+	"stats_disk_stacked_volumes":       FeatureStatsDiskStackedVolumes,
 	"network":                          FeatureNetwork,
 	"network_inter_zone":               FeatureNetworkInterZone,
 	"network_flow_packets":             FeatureNetworkFlowPackets,
@@ -461,6 +464,12 @@ func (f Features) StatsDiskDiscard() bool {
 
 func (f Features) StatsDiskPendingOperations() bool {
 	return f.any(FeatureStatsDiskPendingOperations)
+}
+
+// StatsDiskStackedVolumes reports whether the I/O of bio-based stacked volumes, such as LVM and md
+// RAID volumes, is measured too
+func (f Features) StatsDiskStackedVolumes() bool {
+	return f.any(FeatureStatsDiskStackedVolumes)
 }
 
 func (f Features) NetworkInterZone() bool {

@@ -243,36 +243,61 @@ func TestBlockTracepointLayoutFromBTF(t *testing.T) {
 		Name: "blk_status_t", Type: &btf.Typedef{Name: "u8", Type: &btf.Int{Name: "unsigned char", Size: 1}},
 	}}
 
-	protos := func(issue, complete []btf.FuncParam) func(string) (*btf.FuncProto, error) {
+	bio := btf.FuncParam{Name: "bio", Type: &btf.Pointer{Target: &btf.Struct{Name: "bio"}}}
+
+	protos := func(issue, complete, bioQueue []btf.FuncParam) func(string) (*btf.FuncProto, error) {
 		return func(name string) (*btf.FuncProto, error) {
 			switch name {
 			case "btf_trace_block_rq_issue":
 				return &btf.FuncProto{Params: issue}, nil
 			case "btf_trace_block_rq_complete":
 				return &btf.FuncProto{Params: complete}, nil
+			case "btf_trace_block_bio_queue":
+				if bioQueue != nil {
+					return &btf.FuncProto{Params: bioQueue}, nil
+				}
 			}
 			return nil, btf.ErrNotFound
 		}
 	}
 
 	current, err := blockTracepointLayoutFrom(protos(
-		[]btf.FuncParam{voidPtr, rq}, []btf.FuncParam{voidPtr, rq, blkStatusArg, nrBytes}))
+		[]btf.FuncParam{voidPtr, rq}, []btf.FuncParam{voidPtr, rq, blkStatusArg, nrBytes}, []btf.FuncParam{voidPtr, bio}))
 	require.NoError(t, err)
 	assert.Equal(t, blockTracepointLayout{completeReportsBlkStatus: true}, current)
 
 	// e.g. 5.8 and RHEL 8 up to 8.5
 	legacy, err := blockTracepointLayoutFrom(protos(
-		[]btf.FuncParam{voidPtr, queue, rq}, []btf.FuncParam{voidPtr, rq, errnoArg, nrBytes}))
+		[]btf.FuncParam{voidPtr, queue, rq}, []btf.FuncParam{voidPtr, rq, errnoArg, nrBytes}, []btf.FuncParam{voidPtr, queue, bio}))
 	require.NoError(t, err)
-	assert.Equal(t, blockTracepointLayout{issueHasQueueArg: true}, legacy)
+	assert.Equal(t, blockTracepointLayout{issueHasQueueArg: true, bioQueueHasQueueArg: true}, legacy)
 
-	// e.g. 5.11 to 5.15, and 5.10.137+ or RHEL 8.6+ with the backported block_rq_issue change
+	// e.g. 5.10.137+ or RHEL 8.6+: block_rq_issue changed, block_bio_queue didn't
+	backported, err := blockTracepointLayoutFrom(protos(
+		[]btf.FuncParam{voidPtr, rq}, []btf.FuncParam{voidPtr, rq, errnoArg, nrBytes}, []btf.FuncParam{voidPtr, queue, bio}))
+	require.NoError(t, err)
+	assert.Equal(t, blockTracepointLayout{bioQueueHasQueueArg: true}, backported)
+
+	// e.g. 5.11 to 5.15
 	mixed, err := blockTracepointLayoutFrom(protos(
-		[]btf.FuncParam{voidPtr, rq}, []btf.FuncParam{voidPtr, rq, errnoArg, nrBytes}))
+		[]btf.FuncParam{voidPtr, rq}, []btf.FuncParam{voidPtr, rq, errnoArg, nrBytes}, []btf.FuncParam{voidPtr, bio}))
 	require.NoError(t, err)
 	assert.Equal(t, blockTracepointLayout{}, mixed)
 
+	withoutBio, err := blockTracepointLayoutFrom(protos(
+		[]btf.FuncParam{voidPtr, rq}, []btf.FuncParam{voidPtr, rq, errnoArg, nrBytes}, nil))
+	require.NoError(t, err, "the requests are measured without the bio tracepoint")
+	assert.Equal(t, blockTracepointLayout{bioUnknown: true}, withoutBio)
+
 	_, err = blockTracepointLayoutFrom(protos(
-		[]btf.FuncParam{voidPtr}, []btf.FuncParam{voidPtr, rq, errnoArg, nrBytes}))
+		[]btf.FuncParam{voidPtr}, []btf.FuncParam{voidPtr, rq, errnoArg, nrBytes}, nil))
 	require.Error(t, err, "an unexpected prototype is an error, not a guess")
+}
+
+func TestBioProgramsToDisable(t *testing.T) {
+	all := []string{progObiStatsRawTpBlockBioQueue, progObiStatsRawTpBlockBioQueueLegacy, progObiStatsRawTpBlockBioComplete}
+	assert.Equal(t, all, bioProgramsToDisable(false, blockTracepointLayout{}))
+	assert.Equal(t, []string{progObiStatsRawTpBlockBioQueueLegacy}, bioProgramsToDisable(true, blockTracepointLayout{}))
+	assert.Equal(t, []string{progObiStatsRawTpBlockBioQueue},
+		bioProgramsToDisable(true, blockTracepointLayout{bioQueueHasQueueArg: true}))
 }

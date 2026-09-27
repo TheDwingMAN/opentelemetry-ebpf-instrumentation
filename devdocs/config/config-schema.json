@@ -1146,6 +1146,7 @@
               "stats_disk_operations",
               "stats_disk_pending_operations",
               "stats_disk_queue_duration",
+              "stats_disk_stacked_volumes",
               "stats_fs_sync_duration",
               "stats_tcp_failed_connections",
               "stats_tcp_io",

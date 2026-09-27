@@ -4,6 +4,7 @@
 //go:build obi_bpf_ignore
 #include "k_fsync.c"
 #include "k_tcp.c"
+#include "tp_bio.c"
 #include "tp_blk.c"
 #include "tp_tcp.c"
 

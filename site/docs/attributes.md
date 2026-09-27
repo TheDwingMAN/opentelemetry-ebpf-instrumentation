@@ -28,6 +28,7 @@ Attributes of OBI's block I/O (disk) statistics that the semantic conventions do
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
 | `obi.disk.partition` | string | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
+| `obi.disk.stacked` | boolean | development | Whether the block device (`system.device`) is built on other block devices. |  |
 
 ## `registry.obi.exception`
 

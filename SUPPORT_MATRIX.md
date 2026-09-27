@@ -198,6 +198,7 @@ OBI currently documents the following statistical instrumentation support:
 | Disk Queue Duration | Node-wide statistical metric collection | Time block I/O requests wait between their allocation and their issue to the device, per block device and direction. Opt-in with `stats_disk_queue_duration`, or `stats_disk`. | Only on devices that keep I/O statistics or use an I/O scheduler. blk-throttle and writeback throttling waits are not included. See [devdocs/metrics.md](devdocs/metrics.md) |
 | Disk Flush and Discard | Node-wide statistical metric collection | Duration of the cache flushes, and duration and bytes of the discards (TRIM), per block device and outcome. Opt-in with `stats_disk_flush` and `stats_disk_discard`, or `stats_disk`. | Flushes that the block layer generates are not charged to workloads. See [devdocs/metrics.md](devdocs/metrics.md) |
 | Disk Pending Operations | Node-wide statistical metric collection | Number of read and write requests that each block device is serving. Opt-in with `stats_disk_pending_operations`, or `stats_disk`. | Sampled every `ebpf.batch_timeout`. See [devdocs/metrics.md](devdocs/metrics.md) |
+| Disk Stacked Volumes | Node-wide statistical metric collection | The disk metrics of device mapper (LVM, dm-crypt) and md RAID volumes, measured from their bios, and the `obi.disk.stacked` attribute that marks the devices built on other devices. Opt-in with `stats_disk_stacked_volumes`, or `stats_disk`. | md RAID volumes need Linux 5.15+. See [devdocs/metrics.md](devdocs/metrics.md) |
 
 ## Runtime Metrics
 

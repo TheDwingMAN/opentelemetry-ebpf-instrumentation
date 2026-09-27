@@ -39,8 +39,9 @@ func (e ebpfRequests) requests() ([]ebpf.StatsDiskRqStartT, error) {
 }
 
 type pendingKey struct {
-	device string
-	op     ebpf.DiskOpCode
+	device  string
+	stacked bool
+	op      ebpf.DiskOpCode
 }
 
 // pendingReader counts the reads and writes that each device is serving, from the requests in
@@ -60,7 +61,7 @@ func (p *pendingReader) observe(io *ebpf.DiskIO) {
 	if !io.Op.IsTransfer() {
 		return
 	}
-	p.idleRead[pendingKey{device: io.Device, op: io.Op}] = 0
+	p.idleRead[pendingKey{device: io.Device, stacked: io.Stacked, op: io.Op}] = 0
 }
 
 func newPendingReader(source requestSource, devices *deviceNames) *pendingReader {
@@ -96,7 +97,11 @@ func (p *pendingReader) readStats() []*ebpf.Stat {
 		if !op.IsTransfer() || now-request.IssuedNs > uint64(staleRequestAge) {
 			continue
 		}
-		pending[pendingKey{device: p.devices.name(request.Major, request.Minor), op: op}]++
+		pending[pendingKey{
+			device:  p.devices.name(request.Major, request.Minor),
+			stacked: p.devices.stacked(request.Major, request.Minor),
+			op:      op,
+		}]++
 	}
 
 	for key := range p.idleRead {
@@ -117,6 +122,7 @@ func (p *pendingReader) readStats() []*ebpf.Stat {
 			Type: ebpf.StatTypeDiskPending,
 			DiskPending: &ebpf.DiskPending{
 				Device:   key.device,
+				Stacked:  key.stacked,
 				Op:       key.op,
 				Requests: pending[key],
 			},

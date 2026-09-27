@@ -55,6 +55,17 @@ static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op) {
     }
 }
 
+// disk_bio_op classifies a bio from its operation and flags. File systems flush the cache of
+// a device with an empty write that has the preflush flag.
+static __always_inline enum disk_op
+disk_bio_op(const u32 opf, const u32 op_mask, const u32 preflush_flag, const u32 size) {
+    const enum disk_op op = disk_op_from_req_op(opf & op_mask);
+    if (op == disk_op_write && size == 0 && (opf & preflush_flag)) {
+        return disk_op_flush;
+    }
+    return op;
+}
+
 enum { k_disk_queue_unknown = ~0ULL };
 
 // disk_queue_ns is the time a request waited in the block layer, from its allocation until its

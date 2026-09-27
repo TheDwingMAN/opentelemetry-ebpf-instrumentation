@@ -433,6 +433,9 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsDiskPendingOperations() {
 		want = append(want, "disk_pending_operations")
 	}
+	if features.StatsDiskStackedVolumes() {
+		want = append(want, "disk_stacked_volumes")
+	}
 
 	got := toStringSlice(featuresValue)
 	if !sameStringSet(got, want) {

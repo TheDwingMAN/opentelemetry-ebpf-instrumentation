@@ -1066,6 +1066,7 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 			"disk_flush",
 			"disk_discard",
 			"disk_pending_operations",
+			"disk_stacked_volumes",
 			"fs_sync_duration",
 		}, value(t, ext.Capture.Network, "stats", "features"))
 	})

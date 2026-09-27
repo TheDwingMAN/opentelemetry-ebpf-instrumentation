@@ -55,6 +55,9 @@ enum disk_op : u8 {
     disk_op_discard = 4,
 };
 
+// Width of the minor number in a kernel-internal dev_t (MINORBITS)
+enum { k_kernel_dev_minor_bits = 20 };
+
 // The latency histogram boundaries are configurable from userspace, up to this many.
 enum {
     k_disk_latency_max_bounds = 24,

@@ -231,6 +231,7 @@ func TestDefault_StatDiskOperationDuration(t *testing.T) {
 	assert.Equal(t, []attr.Name{
 		attr.DiskIODirection,
 		attr.ErrorType,
+		attr.DiskStacked,
 		attr.SystemDevice,
 	}, p.For(StatDiskOperationDuration))
 }
@@ -243,6 +244,7 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 		attr.K8sClusterName,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
+		attr.DiskStacked,
 		attr.SystemDevice,
 	}
 	assert.Equal(t, workload, p.For(StatDiskIO))
@@ -253,13 +255,14 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 		attr.K8sClusterName,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
+		attr.DiskStacked,
 		attr.SystemDevice,
 	}, p.For(StatDiskOperations))
 
 	// outside Kubernetes, the disk counters are reported per device only
 	p, err = NewAttrSelector(0, &SelectorConfig{})
 	require.NoError(t, err)
-	assert.Equal(t, []attr.Name{attr.DiskIODirection, attr.SystemDevice}, p.For(StatDiskIO))
+	assert.Equal(t, []attr.Name{attr.DiskIODirection, attr.DiskStacked, attr.SystemDevice}, p.For(StatDiskIO))
 }
 
 func TestDefault_StatFsSyncDuration(t *testing.T) {
@@ -307,6 +310,7 @@ func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {
 		attr.K8sOwnerName,
 		attr.K8sPodName,
 		attr.DiskPartition,
+		attr.DiskStacked,
 		attr.OBIIP,
 		attr.SystemDevice,
 	}, p.For(StatDiskOperationDuration))

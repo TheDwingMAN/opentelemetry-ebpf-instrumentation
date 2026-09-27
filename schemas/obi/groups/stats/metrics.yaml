@@ -393,6 +393,8 @@ groups:
         requirement_level: opt_in
       - ref: system.device
         requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
       - ref: obi.disk.partition
         requirement_level: opt_in
       - ref: disk.io.direction
@@ -429,6 +431,8 @@ groups:
         requirement_level: opt_in
       - ref: system.device
         requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
       - ref: obi.disk.partition
         requirement_level: opt_in
       - ref: disk.io.direction
@@ -464,6 +468,8 @@ groups:
       - ref: obi.ip
         requirement_level: opt_in
       - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.stacked
         requirement_level: recommended
       - ref: obi.disk.partition
         requirement_level: opt_in
@@ -504,6 +510,8 @@ groups:
       - ref: obi.ip
         requirement_level: opt_in
       - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.stacked
         requirement_level: recommended
       - ref: obi.disk.partition
         requirement_level: opt_in
@@ -580,6 +588,8 @@ groups:
         requirement_level: opt_in
       - ref: system.device
         requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
       - ref: obi.disk.partition
         requirement_level: opt_in
       - ref: disk.io.direction
@@ -612,6 +622,8 @@ groups:
       - ref: obi.ip
         requirement_level: opt_in
       - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.stacked
         requirement_level: recommended
       - ref: obi.disk.partition
         requirement_level: opt_in
@@ -646,6 +658,8 @@ groups:
       - ref: obi.ip
         requirement_level: opt_in
       - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.stacked
         requirement_level: recommended
       - ref: obi.disk.partition
         requirement_level: opt_in
@@ -682,6 +696,8 @@ groups:
         requirement_level: opt_in
       - ref: system.device
         requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
       - ref: obi.disk.partition
         requirement_level: opt_in
       - ref: container.id
@@ -715,6 +731,8 @@ groups:
       - ref: obi.ip
         requirement_level: opt_in
       - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.stacked
         requirement_level: recommended
       - ref: disk.io.direction
         requirement_level: recommended

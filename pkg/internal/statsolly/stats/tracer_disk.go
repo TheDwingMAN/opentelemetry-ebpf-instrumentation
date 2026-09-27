@@ -90,7 +90,10 @@ type DiskMapTracerConfig struct {
 	DiskIOAccum, FsSyncAccum *ciliumebpf.Map
 	// DiskRequests holds the block requests in flight. Nil unless their number is reported.
 	DiskRequests *ciliumebpf.Map
-	CgroupNames  *ciliumebpf.Map
+	// DiskBioAccum and DiskBioDevices are the accumulation map of the bios of the stacked volumes,
+	// and the set of volumes to measure. Nil unless the stacked volumes are measured.
+	DiskBioAccum, DiskBioDevices *ciliumebpf.Map
+	CgroupNames                  *ciliumebpf.Map
 	// DiskLatencyBounds and FsSyncLatencyBounds are the histogram boundaries, in seconds, that
 	// the kernel buckets the latencies with
 	DiskLatencyBounds, FsSyncLatencyBounds []float64
@@ -105,7 +108,9 @@ type DiskMapTracerConfig struct {
 type DiskMapTracer struct {
 	readers []statReader
 	// nil unless the requests in flight are reported
-	pending  *pendingReader
+	pending *pendingReader
+	// nil unless the stacked volumes are measured
+	bios     *bioDevices
 	interval time.Duration
 }
 
@@ -121,6 +126,12 @@ func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 		readers = append(readers, newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskIOAccum},
 			cfg.DiskLatencyBounds, cfg.DiskStatusIsBlkStatus, devices, containers))
 	}
+	var bios *bioDevices
+	if cfg.DiskBioAccum != nil && cfg.DiskBioDevices != nil {
+		readers = append(readers, newBioReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskBioAccum},
+			cfg.DiskLatencyBounds, devices, containers))
+		bios = newBioDevices("/sys", ebpfDeviceSet{set: cfg.DiskBioDevices})
+	}
 	var pending *pendingReader
 	if cfg.DiskRequests != nil {
 		pending = newPendingReader(ebpfRequests{starts: cfg.DiskRequests}, devices)
@@ -129,7 +140,7 @@ func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 		readers = append(readers, newFsSyncReader(ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: cfg.FsSyncAccum},
 			cfg.FsSyncLatencyBounds, containers))
 	}
-	return &DiskMapTracer{readers: readers, pending: pending, interval: cfg.Interval}
+	return &DiskMapTracer{readers: readers, pending: pending, bios: bios, interval: cfg.Interval}
 }
 
 func (m *DiskMapTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
@@ -137,7 +148,10 @@ func (m *DiskMapTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 		defer out.MarkCloseable()
 		ticker := time.NewTicker(m.interval)
 		defer ticker.Stop()
-		for {
+		for reads := 0; ; reads++ {
+			if m.bios != nil && reads%bioDevicesRefreshReads == 0 {
+				m.bios.refresh()
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -257,6 +271,23 @@ func newDiskReader(
 	return newAccumReader("disk_io_accum", accum, d.stat)
 }
 
+// newBioReader reads the accumulated bios of the stacked volumes, whose status is always a
+// blk_status_t
+func newBioReader(
+	accum accumSource[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT],
+	latencyBounds []float64,
+	devices *deviceNames,
+	containers *cgroupContainers,
+) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
+	d := diskStats{
+		latencyBounds:     latencyBounds,
+		statusIsBlkStatus: true,
+		devices:           devices,
+		containers:        containers,
+	}
+	return newAccumReader("disk_bio_accum", accum, d.stat)
+}
+
 type diskStats struct {
 	latencyBounds     []float64
 	statusIsBlkStatus bool
@@ -283,6 +314,7 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 		DiskIO: &ebpf.DiskIO{
 			Device:      d.devices.name(key.Major, key.Minor),
 			Partition:   d.devices.partition(key.Major, key.Minor, key.PartDev, key.Partno),
+			Stacked:     d.devices.stacked(key.Major, key.Minor),
 			Op:          ebpf.DiskOpCode(key.Op),
 			ErrorType:   diskErrorType(key.Status, d.statusIsBlkStatus),
 			ContainerID: d.containers.containerID(key.CgroupId),
@@ -436,6 +468,20 @@ type deviceNames struct {
 	sysRoot    string
 	cache      map[[2]uint32]string
 	partitions map[partitionKey]string
+	stack      map[[2]uint32]bool
+}
+
+// stacked tells whether a block device is built on other block devices (see isStacked)
+func (d *deviceNames) stacked(major, minor uint32) bool {
+	if d.stack == nil {
+		d.stack = map[[2]uint32]bool{}
+	}
+	if stacked, ok := d.stack[[2]uint32{major, minor}]; ok {
+		return stacked
+	}
+	stacked := isStacked(filepath.Join(d.sysRoot, "dev", "block", fmt.Sprintf("%d:%d", major, minor)))
+	d.stack[[2]uint32{major, minor}] = stacked
+	return stacked
 }
 
 type partitionKey struct {

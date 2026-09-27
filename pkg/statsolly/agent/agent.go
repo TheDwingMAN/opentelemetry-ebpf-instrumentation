@@ -92,6 +92,8 @@ type ebpFetcher interface {
 	DebugEventsMap() *ciliumebpf.Map
 	DiskIOAccumMap() *ciliumebpf.Map
 	DiskRequestsMap() *ciliumebpf.Map
+	DiskBioAccumMap() *ciliumebpf.Map
+	DiskBioDevicesMap() *ciliumebpf.Map
 	FsSyncAccumMap() *ciliumebpf.Map
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
@@ -187,6 +189,8 @@ func statsAgent(
 		diskTracer = stats.NewDiskMapTracer(&stats.DiskMapTracerConfig{
 			DiskIOAccum:           statsFetcher.DiskIOAccumMap(),
 			DiskRequests:          diskRequests,
+			DiskBioAccum:          statsFetcher.DiskBioAccumMap(),
+			DiskBioDevices:        statsFetcher.DiskBioDevicesMap(),
 			FsSyncAccum:           statsFetcher.FsSyncAccumMap(),
 			CgroupNames:           statsFetcher.DiskCgroupNamesMap(),
 			DiskLatencyBounds:     histograms.Disk,

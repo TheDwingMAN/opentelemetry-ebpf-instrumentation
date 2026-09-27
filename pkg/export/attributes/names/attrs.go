@@ -390,4 +390,7 @@ const (
 	DiskIODirection           = Name(semconv.DiskIODirectionKey)
 	// DiskPartition is the partition of system.device that block I/O targets, e.g. nvme0n1p1
 	DiskPartition = Name("obi.disk.partition")
+	// DiskStacked tells whether system.device is built on other block devices, which report the
+	// same I/O too
+	DiskStacked = Name("obi.disk.stacked")
 )

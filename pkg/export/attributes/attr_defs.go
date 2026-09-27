@@ -135,6 +135,7 @@ func getDefinitions(
 		map[attr.Name]Default{
 			attr.OBIIP:           false,
 			attr.SystemDevice:    true,
+			attr.DiskStacked:     true,
 			attr.DiskPartition:   false,
 			attr.DiskIODirection: true,
 			attr.ContainerID:     false,
@@ -150,6 +151,7 @@ func getDefinitions(
 		map[attr.Name]Default{
 			attr.OBIIP:         false,
 			attr.SystemDevice:  true,
+			attr.DiskStacked:   true,
 			attr.DiskPartition: false,
 			attr.ContainerID:   false,
 		},
@@ -164,6 +166,7 @@ func getDefinitions(
 		map[attr.Name]Default{
 			attr.OBIIP:           false,
 			attr.SystemDevice:    true,
+			attr.DiskStacked:     true,
 			attr.DiskIODirection: true,
 		},
 		nil,

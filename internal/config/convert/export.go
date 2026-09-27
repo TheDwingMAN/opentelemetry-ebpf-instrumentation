@@ -389,6 +389,7 @@ const (
 	statsFeatureDiskFlush                = "disk_flush"
 	statsFeatureDiskDiscard              = "disk_discard"
 	statsFeatureDiskPendingOperations    = "disk_pending_operations"
+	statsFeatureDiskStackedVolumes       = "disk_stacked_volumes"
 )
 
 func statsFeatures(features featureexport.Features) []string {
@@ -434,6 +435,9 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsDiskPendingOperations() {
 		out = append(out, statsFeatureDiskPendingOperations)
+	}
+	if features.StatsDiskStackedVolumes() {
+		out = append(out, statsFeatureDiskStackedVolumes)
 	}
 	return out
 }

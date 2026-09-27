@@ -32,7 +32,7 @@ const (
 // diskStatLabels are the Prometheus labels of all the attributes that the disk and file sync stat
 // metrics can have
 var diskStatLabels = []string{
-	"system_device", "obi_disk_partition", "disk_io_direction", "error_type", "container_id", "obi_ip",
+	"system_device", "obi_disk_partition", "obi_disk_stacked", "disk_io_direction", "error_type", "container_id", "obi_ip",
 	"k8s_cluster_name", "k8s_namespace_name", "k8s_owner_name", "k8s_kind", "k8s_pod_name", "k8s_container_name",
 }
 
@@ -68,11 +68,16 @@ func diskIOLabels(direction string) map[string]*regexp.Regexp {
 	labels["system_device"] = blockDevicePattern
 	// only there when the I/O targets a partition, which depends on the disk layout of the node
 	labels["obi_disk_partition"] = regexp.MustCompile(`^([a-z][a-z0-9-]*)?$`)
+	labels["obi_disk_stacked"] = stackedPattern
 	labels["disk_io_direction"] = regexp.MustCompile("^" + direction + "$")
 	return labels
 }
 
-var blockDevicePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+var (
+	blockDevicePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	// the node may keep its volumes on an LVM volume, reported with its disk
+	stackedPattern = regexp.MustCompile(`^(true|false)$`)
+)
 
 func assertDiskStatLabels(t assert.TestingT, series map[string]string, expected map[string]*regexp.Regexp) {
 	assert.Empty(t, promtest.LabelMismatches(series, diskStatLabels, expected), series)
@@ -189,6 +194,7 @@ func testDiskPendingOfWorkloadDevices(ctx context.Context, t *testing.T, _ *envc
 				require.Len(ct, pending, 1, "one series per device and direction")
 				assertDiskStatLabels(ct, pending[0].Metric, map[string]*regexp.Regexp{
 					"system_device":     blockDevicePattern,
+					"obi_disk_stacked":  stackedPattern,
 					"disk_io_direction": regexp.MustCompile("^" + direction + "$"),
 					"obi_ip":            regexp.MustCompile(`^[0-9a-fA-F.:]+$`),
 				})

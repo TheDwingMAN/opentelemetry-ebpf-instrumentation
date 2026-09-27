@@ -2533,6 +2533,8 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsDiskDiscard
 		case statsFeatureDiskPendingOperations:
 			out |= export.FeatureStatsDiskPendingOperations
+		case statsFeatureDiskStackedVolumes:
+			out |= export.FeatureStatsDiskStackedVolumes
 		}
 	}
 	return out

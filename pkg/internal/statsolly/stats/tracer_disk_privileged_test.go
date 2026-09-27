@@ -177,6 +177,64 @@ func TestDiskFlushesAndDiscards(t *testing.T) {
 	assert.Equal(t, uint64(discarded), discardedBytes, "the discarded bytes add up to the discarded range")
 }
 
+// TestDiskStackedVolumes writes to a device mapper volume, like an LVM one, and checks that its
+// I/O is reported on the volume, as stacked, besides the device below it
+func TestDiskStackedVolumes(t *testing.T) {
+	dmsetup, err := exec.LookPath("dmsetup")
+	if err != nil {
+		t.Skip("dmsetup is not installed")
+	}
+	features := export.FeatureStatsDiskOperations | export.FeatureStatsDiskIO | export.FeatureStatsDiskStackedVolumes
+	bounds := []float64{0.001}
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+		ebpf.LatencyHistograms{Disk: bounds})
+	require.NoError(t, err)
+	t.Cleanup(func() { fetcher.Close() })
+	require.NotNil(t, fetcher.DiskBioAccumMap(), "the bio probes must be attached on this kernel")
+
+	loopDev := attachLoopDevice(t)
+	volume := fmt.Sprintf("obi-test-%d", os.Getpid())
+	create := exec.Command(dmsetup, "create", volume, "--table",
+		fmt.Sprintf("0 %d linear %s 0", loopBackingFileSize/512, loopDev))
+	// without udev, dmsetup creates the device nodes itself
+	create.Env = append(os.Environ(), "DM_DISABLE_UDEV=1")
+	out, err := create.CombinedOutput()
+	require.NoError(t, err, string(out))
+	t.Cleanup(func() { _ = exec.Command(dmsetup, "remove", volume).Run() })
+	out, err = exec.Command(dmsetup, "info", "-c", "--noheadings", "-o", "blkdevname", volume).Output()
+	require.NoError(t, err)
+	dmName := strings.TrimSpace(string(out))
+
+	devices := &deviceNames{sysRoot: "/sys"}
+	containers := newCgroupContainers(ebpfCgroupNames{names: fetcher.DiskCgroupNamesMap()})
+	newBioDevices("/sys", ebpfDeviceSet{set: fetcher.DiskBioDevicesMap()}).refresh()
+	bios := newBioReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: fetcher.DiskBioAccumMap()},
+		bounds, devices, containers)
+	bios.readStats()
+
+	const volumeWrites = 32
+	f, err := os.OpenFile(deviceNode(t, dmName), os.O_RDWR|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	block := alignedBuffer(t, directIOBlockSize)
+	for i := range volumeWrites {
+		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+	}
+
+	var writes, written uint64
+	for _, stat := range bios.readStats() {
+		require.Equal(t, dmName, stat.DiskIO.Device, "only the stacked volumes are measured from their bios")
+		assert.True(t, stat.DiskIO.Stacked)
+		if stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
+			writes += stat.DiskIO.Operations
+			written += stat.DiskIO.Bytes
+		}
+	}
+	assert.Equal(t, uint64(volumeWrites), writes)
+	assert.Equal(t, uint64(volumeWrites*directIOBlockSize), written)
+}
+
 // attachDiskReader loads the disk probes of the given features and returns a reader of their
 // accumulation map that already forgot the I/O that happened before
 func attachDiskReader(t *testing.T, features export.Features) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
