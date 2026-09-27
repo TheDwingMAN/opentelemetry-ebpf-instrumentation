@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
@@ -69,7 +70,7 @@ func blockIoErrorStat() *ebpf.Stat {
 		BlockIo: &ebpf.BlockIo{
 			Dev:   0x800010,
 			Op:    uint8(ebpf.CodeDirectionWrite),
-			Error: -28, // -ENOSPC
+			Error: -int32(unix.ENOSPC),
 		},
 	}
 }
@@ -234,6 +235,48 @@ func TestStatsReporterRecordsDiskOperationErrors(t *testing.T) {
 	})
 	require.NotNil(t, opErrors, "errors counter not registered or not observed")
 	assert.InEpsilon(t, 1.0, opErrors.GetCounter().GetValue(), 0)
+}
+
+// blockIoNoQueueStat is a block completion whose request bypassed
+// block_rq_insert (e.g. blk-mq issued it directly): QueueNs is 0, so there is
+// no queue wait for the queue duration histogram to observe, while the other
+// disk metrics observe normally.
+func blockIoNoQueueStat() *ebpf.Stat {
+	return &ebpf.Stat{
+		Type: ebpf.StatTypeBlockIo,
+		BlockIo: &ebpf.BlockIo{
+			Dev:       0x800010,
+			Op:        uint8(ebpf.CodeDirectionWrite),
+			LatencyNs: 2_000_000,
+			QueueNs:   0,
+			Bytes:     4096,
+		},
+	}
+}
+
+// TestStatsReporterSkipsQueueDurationForZeroQueueNs asserts the A9 ruling:
+// QueueNs == 0 means no block_rq_insert record matched this completion (e.g.
+// blk-mq issued it directly), so the queue duration histogram must not
+// observe it, while the operation duration histogram -- which doesn't depend
+// on QueueNs -- still does.
+func TestStatsReporterSkipsQueueDurationForZeroQueueNs(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter := newStatsReporterWithFeatures(t, registry, export.FeatureStorageBlockDuration|export.FeatureStorageBlockQueue)
+
+	reporter.observeDiskOpDuration(blockIoNoQueueStat())
+	reporter.observeDiskQueueDuration(blockIoNoQueueStat())
+
+	diskLabels := map[string]string{
+		"system_device":     "8:16",
+		"disk_io_direction": "write",
+	}
+
+	latency := gatheredMetric(t, registry, "obi_stat_disk_operation_duration_seconds", diskLabels)
+	require.NotNil(t, latency, "operation duration must still be observed")
+	assert.Equal(t, uint64(1), latency.GetHistogram().GetSampleCount())
+
+	queueDuration := gatheredMetric(t, registry, "obi_stat_disk_queue_duration_seconds", diskLabels)
+	assert.Nil(t, queueDuration, "queue duration must not be observed for QueueNs == 0")
 }
 
 // TestStatsReporterDiskQueueAndErrorsFeatureGating asserts the queue metrics

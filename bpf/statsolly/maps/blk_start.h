@@ -17,7 +17,10 @@ struct blk_rq_key {
 // Self-evicting scratch map for in-flight request timing: entries that are
 // never matched by a completion (merges, requeues, splits, error paths)
 // would otherwise orphan and fill a plain HASH; LRU_HASH evicts the
-// least-recently-used entry instead of failing writes once full.
+// least-recently-used entry instead of failing writes once full. A
+// requeued request re-issued while its entry is still present refreshes
+// the timestamp in place rather than inserting a second entry, so it is
+// not double-counted in blk_dev_state's inflight counter.
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1 << 16);

@@ -42,13 +42,20 @@ const maxCachedMounts = 4096
 // as a miss and re-resolved. dev_t is a kernel-assigned anonymous superblock
 // number that gets reused once a mount is torn down, so an entry cached
 // forever could attribute a new pod/volume's I/O to whatever pod/volume
-// previously held that dev_t. invalidateMountCache exists for immediate,
-// event-driven invalidation, but nothing currently calls it outside tests, so
-// the TTL is what actually bounds staleness in production.
+// previously held that dev_t.
 const mountCacheTTL = time.Minute
+
+// mountCacheNegativeTTL bounds how long a device that did not resolve to a
+// kubelet volume mount is served from cache before scanForMount is retried.
+// Every non-PV mount (nfs/cifs/ceph/fuse mounts that aren't kubelet volumes,
+// or any other filesystem event whose device never resolves) is a negative
+// resolution, and without caching it, resolveMount would re-parse
+// /proc/self/mountinfo on every such event.
+const mountCacheNegativeTTL = 15 * time.Second
 
 type mountCacheEntry struct {
 	info       MountInfo
+	found      bool
 	resolvedAt time.Time
 }
 
@@ -64,14 +71,17 @@ func resolveMount(sDev uint32) (MountInfo, bool) {
 	mountMu.RLock()
 	entry, ok := mountCache[sDev]
 	mountMu.RUnlock()
-	if ok && time.Since(entry.resolvedAt) < mountCacheTTL {
-		return entry.info, true
+	if ok {
+		ttl := mountCacheTTL
+		if !entry.found {
+			ttl = mountCacheNegativeTTL
+		}
+		if time.Since(entry.resolvedAt) < ttl {
+			return entry.info, entry.found
+		}
 	}
 
-	info, ok := scanForMount(sDev)
-	if !ok {
-		return MountInfo{}, false
-	}
+	info, found := scanForMount(sDev)
 
 	mountMu.Lock()
 	if _, exists := mountCache[sDev]; !exists {
@@ -85,24 +95,10 @@ func resolveMount(sDev uint32) (MountInfo, bool) {
 		}
 		mountOrder = append(mountOrder, sDev)
 	}
-	mountCache[sDev] = mountCacheEntry{info: info, resolvedAt: time.Now()}
+	mountCache[sDev] = mountCacheEntry{info: info, found: found, resolvedAt: time.Now()}
 	mountMu.Unlock()
 
-	return info, true
-}
-
-// invalidateMountCache drops all cached dev_t -> MountInfo resolutions.
-//
-// Unlike a block device's cache, this one must not be permanent: NFS and CSI
-// mounts appear and disappear with pod lifecycle, so a stale entry would keep
-// attributing I/O to a deleted pod's volume. Callers are expected to
-// invalidate as mount state changes; this only exposes the primitive. The
-// mountCacheTTL above provides a fallback bound when nothing does.
-func invalidateMountCache() {
-	mountMu.Lock()
-	mountCache = map[uint32]mountCacheEntry{}
-	mountOrder = nil
-	mountMu.Unlock()
+	return info, found
 }
 
 // scanForMount reads mountInfoPath looking for the mount whose superblock
@@ -174,11 +170,14 @@ func mountServer(source string) string {
 // which silently prevents persistent volume attribution from ever working.
 func WarnIfNoKubeletVolumeMounts(log *slog.Logger) {
 	mounts, err := scanMounts()
-	if err == nil {
-		for _, m := range mounts {
-			if kubeletVolumeRe.MatchString(m.MountPoint) {
-				return
-			}
+	if err != nil {
+		log.Warn("cannot scan mounts for kubelet volumes; persistent volume attribution will be unavailable", "error", err)
+		return
+	}
+
+	for _, m := range mounts {
+		if kubeletVolumeRe.MatchString(m.MountPoint) {
+			return
 		}
 	}
 

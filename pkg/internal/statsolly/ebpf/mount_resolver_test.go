@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -70,10 +71,26 @@ func TestResolveMountCacheInvalidation(t *testing.T) {
 	_, ok = resolveMount(574)
 	assert.True(t, ok, "expected a stale cache hit before invalidation")
 
-	invalidateMountCache()
+	resetMountCache()
 
 	_, ok = resolveMount(574)
 	assert.False(t, ok, "expected no match after invalidation once the mount is gone")
+}
+
+func TestResolveMountNegativeCache(t *testing.T) {
+	const unrelatedLine = `50 1 0:20 / /run/user/1000 rw,nosuid,nodev,relatime shared:30 - tmpfs tmpfs rw,size=100k`
+	withMountInfo(t, unrelatedLine)
+
+	_, ok := resolveMount(574)
+	require.False(t, ok, "expected no match for a device with no kubelet volume mount")
+
+	// The device now has a matching kubelet volume mount, but the negative
+	// cache entry should still be served until mountCacheNegativeTTL elapses,
+	// proving the miss isn't rescanned on every call.
+	require.NoError(t, os.WriteFile(mountInfoPath, []byte(nfsFixtureLine+"\n"), 0o644))
+
+	_, ok = resolveMount(574)
+	assert.False(t, ok, "expected the negative cache entry to be served before its TTL elapses")
 }
 
 func TestWarnIfNoKubeletVolumeMounts_NoMatch(t *testing.T) {
@@ -99,6 +116,26 @@ func TestWarnIfNoKubeletVolumeMounts_Match(t *testing.T) {
 	assert.Empty(t, buf.String(), "expected no warning when a kubelet volume mount is present")
 }
 
+func TestWarnIfNoKubeletVolumeMounts_ScanError(t *testing.T) {
+	old := mountInfoPath
+	// No self/mountinfo file under this temp root, so scanMounts fails,
+	// exercising the scan-error path rather than the no-match path.
+	mountInfoPath = filepath.Join(t.TempDir(), "self", "mountinfo")
+	resetMountCache()
+	t.Cleanup(func() {
+		mountInfoPath = old
+		resetMountCache()
+	})
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+
+	WarnIfNoKubeletVolumeMounts(log)
+
+	assert.Contains(t, buf.String(), "cannot scan mounts for kubelet volumes")
+	assert.NotContains(t, buf.String(), "no kubelet volume mounts visible")
+}
+
 // withMountInfo points mountInfoPath at a fixture file containing the given
 // mountinfo line(s) and clears the mount cache for the duration of a test.
 func withMountInfo(t *testing.T, lines ...string) {
@@ -111,17 +148,24 @@ func withMountInfo(t *testing.T, lines ...string) {
 	require.NoError(t, os.MkdirAll(selfDir, 0o755))
 
 	path := filepath.Join(selfDir, "mountinfo")
-	content := ""
-	for _, line := range lines {
-		content += line + "\n"
-	}
+	content := strings.Join(lines, "\n") + "\n"
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	old := mountInfoPath
 	mountInfoPath = path
-	invalidateMountCache()
+	resetMountCache()
 	t.Cleanup(func() {
 		mountInfoPath = old
-		invalidateMountCache()
+		resetMountCache()
 	})
+}
+
+// resetMountCache clears the mount cache. Nothing in production needs this
+// (mountCacheTTL / mountCacheNegativeTTL bound staleness there); tests use it
+// to isolate cache state between cases.
+func resetMountCache() {
+	mountMu.Lock()
+	mountCache = map[uint32]mountCacheEntry{}
+	mountOrder = nil
+	mountMu.Unlock()
 }

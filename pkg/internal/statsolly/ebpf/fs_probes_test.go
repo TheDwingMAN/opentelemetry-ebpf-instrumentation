@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestModuleBTFExists(t *testing.T) {
@@ -18,7 +19,7 @@ func TestModuleBTFExists(t *testing.T) {
 	t.Cleanup(func() { sysKernelBTFDir = old })
 
 	assert.False(t, moduleBTFExists("nfs"))
-	assert.NoError(t, os.WriteFile(filepath.Join(dir, "nfs"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "nfs"), []byte("x"), 0o644))
 	assert.True(t, moduleBTFExists("nfs"))
 }
 
@@ -27,7 +28,7 @@ func TestResolveFsSymbol(t *testing.T) {
 	old := tracefsAvailableFuncs
 	tracefsAvailableFuncs = filepath.Join(dir, "available_filter_functions")
 	t.Cleanup(func() { tracefsAvailableFuncs = old })
-	assert.NoError(t, os.WriteFile(tracefsAvailableFuncs,
+	require.NoError(t, os.WriteFile(tracefsAvailableFuncs,
 		[]byte("cifs_strict_readv [cifs]\nnfs_file_read [nfs]\n"), 0o644))
 
 	// First candidate missing, second present.
@@ -61,7 +62,7 @@ func TestFentryCapableModuleBTF(t *testing.T) {
 
 	// Module BTF present: fentryCapable must short-circuit on it without
 	// consulting the kernel's own BTF at all.
-	assert.NoError(t, os.WriteFile(filepath.Join(dir, "nfs"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "nfs"), []byte("x"), 0o644))
 	assert.True(t, fentryCapable("nfs", "nfs_file_read"))
 
 	// No module BTF and a symbol that cannot possibly exist in vmlinux BTF

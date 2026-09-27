@@ -383,7 +383,10 @@ func (r *statMetricsReporter) observeDiskIOBytes(stat *ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observeDiskQueueDuration(stat *ebpf.Stat) {
-	if r.diskQueueDuration == nil || stat.BlockIo == nil {
+	// QueueNs == 0 means no block_rq_insert record matched this request (e.g.
+	// blk-mq issued it directly): there is no queue wait to observe, and a
+	// genuine 0ns queue wait is not observable in practice.
+	if r.diskQueueDuration == nil || stat.BlockIo == nil || stat.BlockIo.QueueNs == 0 {
 		return
 	}
 	r.diskQueueDuration.WithLabelValues(labelValues(stat, r.diskQueueDurationAttrs)...).

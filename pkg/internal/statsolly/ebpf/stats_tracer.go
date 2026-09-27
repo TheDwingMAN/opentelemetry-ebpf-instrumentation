@@ -217,13 +217,19 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 
 	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
-	load := func(toDisable []string) error {
+	load := func(toDisable []string, attachTo map[string]string) error {
 		objects = StatsObjects{}
-		return loadStatsObjects(cfg, toDisable, fsAttachTo, &objects, sharedMaps, &mu)
+		return loadStatsObjects(cfg, toDisable, attachTo, &objects, sharedMaps, &mu)
 	}
-	storageBlock, err = loadWithStorageFallback(load, toDisable, storageBlock, tlog)
+	var fsOK bool
+	storageBlock, fsOK, err = loadWithStorageFallback(load, toDisable, fsAttachTo, storageBlock, tlog)
 	if err != nil {
 		return nil, err
+	}
+	if !fsOK {
+		// Every filesystem program was stubbed out by the fallback above, so
+		// attaching any of fsPlans would either fail or attach a no-op stub.
+		fsPlans = nil
 	}
 
 	var closables []io.Closer
@@ -467,39 +473,80 @@ func loadStatsObjects(cfg *config.EBPFTracer, toDisable []string, fsAttachTo map
 	return nil
 }
 
-// loadWithStorageFallback loads the spec and, if loading fails while the
-// storage block programs are enabled, stubs them out and retries once, so a
-// kernel incompatibility in the storage probes never takes down the rest of
-// the stats agent. It returns whether storage block metrics remain enabled.
-func loadWithStorageFallback(load func(toDisable []string) error, toDisable []string, storageBlock bool, log *slog.Logger) (bool, error) {
-	err := load(toDisable)
+// loadWithStorageFallback loads the spec, degrading storage metrics through
+// up to two extra attempts when a kernel incompatibility fails the whole
+// load: first with the storage block tracepoints stubbed out (if enabled),
+// then with every filesystem program stubbed out and fsAttachTo cleared.
+// fentry/fexit programs are BTF-checked against their AttachTo target at
+// load time, so a signature mismatch on a single filesystem symbol otherwise
+// fails the whole load and takes down the rest of the stats agent with it.
+// It returns whether storage block metrics and filesystem metrics remain
+// enabled.
+func loadWithStorageFallback(
+	load func(toDisable []string, attachTo map[string]string) error,
+	toDisable []string,
+	fsAttachTo map[string]string,
+	storageBlock bool,
+	log *slog.Logger,
+) (blockOK, fsOK bool, err error) {
+	err = load(toDisable, fsAttachTo)
 	if err == nil {
-		return storageBlock, nil
-	}
-	if !storageBlock {
-		return false, err
+		return storageBlock, true, nil
 	}
 
-	log.Warn("loading stats eBPF spec failed with storage block metrics enabled;"+
-		" disabling storage block metrics and retrying (likely kernel incompatibility)", "error", err)
-	toDisable = append(toDisable, progObiStatsTpBlockRqInsert, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
-	if err := load(toDisable); err != nil {
-		return false, err
+	blockOK = storageBlock
+	if blockOK {
+		log.Warn("loading stats eBPF spec failed with storage block metrics enabled;"+
+			" disabling storage block metrics and retrying (likely kernel incompatibility)", "error", err)
+		toDisable = append(toDisable, progObiStatsTpBlockRqInsert, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
+		blockOK = false
+
+		if err = load(toDisable, fsAttachTo); err == nil {
+			return false, true, nil
+		}
 	}
-	return false, nil
+
+	log.Warn("loading stats eBPF spec failed with filesystem metrics enabled;"+
+		" disabling filesystem metrics and retrying (likely kernel incompatibility)", "error", err)
+	toDisable = append(toDisable, allFsProgramNames()...)
+	if err = load(toDisable, nil); err != nil {
+		return false, false, err
+	}
+	return blockOK, false, nil
+}
+
+// allFsProgramNames returns every fentry/fexit/kprobe/kretprobe program name
+// across every filesystem and operation family (read/write/fsync), for
+// loadWithStorageFallback's last-resort filesystem stub.
+func allFsProgramNames() []string {
+	var names []string
+	for _, tgt := range fsTargets {
+		n := fsProgNamesFor(tgt.Fs)
+		names = append(names, n.fentryPrograms()...)
+		names = append(names, n.kprobePrograms()...)
+		names = append(names, n.fentryFsyncPrograms()...)
+		names = append(names, n.kprobeFsyncPrograms()...)
+	}
+	return names
 }
 
 // fixupSpec replaces disabled programs with no-op stubs before loading,
 // preventing unused eBPF code from being loaded into the kernel.
 func fixupSpec(spec *ebpf.CollectionSpec, toDisable []string) error {
 	for _, name := range toDisable {
-		prog := spec.Programs[name]
-		if prog == nil {
+		if spec.Programs[name] == nil {
 			return fmt.Errorf("unknown program name %s", name)
 		}
+		// The stub is a kprobe whatever the original program was, mirroring
+		// common.FixupSpec. A tracing program (fentry/fexit) must supply an
+		// attach btf_id at load time, which it derives from AttachTo, and a
+		// disabled program has no valid symbol to point at -- keeping the
+		// original type makes the kernel reject the whole collection with
+		// "Tracing programs must provide btf_id". A kprobe needs no btf_id,
+		// and nothing ever attaches a disabled program.
 		spec.Programs[name] = &ebpf.ProgramSpec{
 			Name:         "stats_dummy",
-			Type:         prog.Type,
+			Type:         ebpf.Kprobe,
 			Instructions: asm.Instructions{asm.Mov.Imm(asm.R0, 0), asm.Return()},
 			License:      "Dual MIT/GPL",
 		}

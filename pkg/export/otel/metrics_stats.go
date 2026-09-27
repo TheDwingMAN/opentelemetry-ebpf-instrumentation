@@ -380,7 +380,11 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				diskIOBytes, attrs := me.diskIOBytes.ForRecord(v)
 				diskIOBytes.Add(ctx, int64(v.BlockIo.Bytes), metric2.WithAttributeSet(attrs))
 			}
-			if me.diskQueueDuration != nil && v.BlockIo != nil {
+			// QueueNs == 0 means no block_rq_insert record matched this
+			// request (e.g. blk-mq issued it directly): there is no queue
+			// wait to observe, and a genuine 0ns queue wait is not
+			// observable in practice.
+			if me.diskQueueDuration != nil && v.BlockIo != nil && v.BlockIo.QueueNs != 0 {
 				h, attrs := me.diskQueueDuration.ForRecord(v)
 				h.Record(ctx, time.Duration(v.BlockIo.QueueNs).Seconds(), metric2.WithAttributeSet(attrs))
 			}

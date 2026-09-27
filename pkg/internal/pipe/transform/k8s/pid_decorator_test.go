@@ -58,7 +58,7 @@ func TestPIDMetadataDecorator_PassesThroughItemsWithoutPID(t *testing.T) {
 	outCh := output.Subscribe()
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		t.Context(), store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+		store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -104,7 +104,7 @@ func TestPIDMetadataDecorator_DecoratesFromPIDPath(t *testing.T) {
 	outCh := output.Subscribe()
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		t.Context(), store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+		store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -145,7 +145,7 @@ func TestPIDMetadataDecorator_FallsBackToMountPodWhenPIDUnresolved(t *testing.T)
 	}
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		t.Context(), store, pidTestAttrs, pidTestPidOf, pvc, input, output,
+		store, pidTestAttrs, pidTestPidOf, pvc, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -191,7 +191,7 @@ func TestPIDMetadataDecorator_AttributesStorageClass(t *testing.T) {
 	}
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		t.Context(), store, pidTestAttrs, pidTestPidOf, pvc, input, output,
+		store, pidTestAttrs, pidTestPidOf, pvc, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -221,7 +221,7 @@ func TestPIDMetadataDecorator_NoMountFoundSkipsVolumeAttrs(t *testing.T) {
 	outCh := output.Subscribe()
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		t.Context(), store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+		store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -241,7 +241,7 @@ func TestPIDMetadataDecoratorProvider_BypassesWhenStoreNil(t *testing.T) {
 	outCh := output.Subscribe()
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		t.Context(), nil, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+		nil, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
