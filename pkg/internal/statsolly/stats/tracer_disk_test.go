@@ -54,7 +54,7 @@ func (f fakeCgroupNames) name(cgroupID uint64) (string, bool) {
 	return name, ok
 }
 
-func newTestDiskReader(src diskAccumSource) *diskReader {
+func newTestDiskReader(src *fakeDiskAccum) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
 	return newDiskReader(src, testBounds, false, &deviceNames{sysRoot: "/nonexistent"},
 		newCgroupContainers(fakeCgroupNames{}))
 }

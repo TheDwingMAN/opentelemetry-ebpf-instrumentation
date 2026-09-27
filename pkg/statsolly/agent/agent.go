@@ -164,8 +164,13 @@ func statsAgent(
 		if interval <= 0 {
 			interval = defaultDiskReadInterval
 		}
-		diskTracer = stats.NewDiskMapTracer(diskAccum, statsFetcher.DiskCgroupNamesMap(), diskLatencyBounds(cfg),
-			statsFetcher.DiskStatusIsBlkStatus(), interval)
+		diskTracer = stats.NewDiskMapTracer(&stats.DiskMapTracerConfig{
+			DiskIOAccum:           diskAccum,
+			CgroupNames:           statsFetcher.DiskCgroupNamesMap(),
+			DiskLatencyBounds:     diskLatencyBounds(cfg),
+			DiskStatusIsBlkStatus: statsFetcher.DiskStatusIsBlkStatus(),
+			Interval:              interval,
+		})
 	}
 
 	return &Stats{

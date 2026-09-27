@@ -9,9 +9,9 @@
 
 #include <common/scratch_mem.h>
 
+#include <statsolly/cgroup_names.h>
 #include <statsolly/disk_io.h>
 #include <statsolly/types.h>
-#include <statsolly/maps/disk_cgroup_names.h>
 #include <statsolly/maps/disk_io_accum.h>
 #include <statsolly/maps/disk_rq_start.h>
 
@@ -25,7 +25,6 @@ volatile const u32 disk_latency_bounds_len;
 volatile const bool disk_status_is_blk_status;
 
 SCRATCH_MEM_TYPED(disk_io_accum_init, disk_io_accum_t)
-SCRATCH_MEM_TYPED(disk_cgroup_name_init, disk_cgroup_name_t)
 
 // Force structs into the ELF for automatic creation of Golang struct
 const disk_io_key_t *unused_disk_io_key __attribute__((unused));
@@ -62,19 +61,6 @@ static __always_inline struct cgroup *request_cgroup(struct request *rq) {
         return 0;
     }
     return BPF_CORE_READ(bio, bi_blkg, blkcg, css.cgroup);
-}
-
-static __always_inline void record_cgroup_name(const u64 cgroup_id, struct cgroup *cgrp) {
-    if (bpf_map_lookup_elem(&disk_cgroup_names, &cgroup_id)) {
-        return;
-    }
-    disk_cgroup_name_t *name = disk_cgroup_name_init_mem();
-    if (!name) {
-        return;
-    }
-    bpf_memset(name, 0, sizeof(*name));
-    bpf_probe_read_kernel_str(name->name, sizeof(name->name), BPF_CORE_READ(cgrp, kn, name));
-    bpf_map_update_elem(&disk_cgroup_names, &cgroup_id, name, BPF_NOEXIST);
 }
 
 static __always_inline void record_issue(struct request *rq) {

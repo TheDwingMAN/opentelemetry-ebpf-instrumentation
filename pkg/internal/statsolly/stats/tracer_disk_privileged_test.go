@@ -47,7 +47,7 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
 
 	loopDev := attachLoopDevice(t)
-	reader := newDiskReader(ebpfDiskAccum{accum: fetcher.DiskIOAccumMap()}, bounds,
+	reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: fetcher.DiskIOAccumMap()}, bounds,
 		fetcher.DiskStatusIsBlkStatus(), &deviceNames{sysRoot: "/sys"},
 		newCgroupContainers(ebpfCgroupNames{names: fetcher.DiskCgroupNamesMap()}))
 	reader.readStats() // forget the I/O that happened before this test
@@ -104,7 +104,7 @@ func TestDiskIOIsChargedPerCgroup(t *testing.T) {
 	t.Cleanup(func() { fetcher.Close() })
 
 	loopDev := attachLoopDevice(t)
-	reader := newDiskReader(ebpfDiskAccum{accum: fetcher.DiskIOAccumMap()}, bounds,
+	reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: fetcher.DiskIOAccumMap()}, bounds,
 		fetcher.DiskStatusIsBlkStatus(), &deviceNames{sysRoot: "/sys"},
 		newCgroupContainers(ebpfCgroupNames{names: fetcher.DiskCgroupNamesMap()}))
 	reader.readStats() // forget the I/O that happened before this test
