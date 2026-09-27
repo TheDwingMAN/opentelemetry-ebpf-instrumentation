@@ -342,13 +342,30 @@ func TestScanForMountMarksSharedSuperblock(t *testing.T) {
 func TestScanForMountSinglePodIsNotShared(t *testing.T) {
 	withMountInfo(t,
 		"36 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw",
-		"36 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-shared-again rw,relatime shared:1 - nfs 10.0.0.1:/export rw",
+		"37 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw",
 	)
 
 	info, ok := scanForMount(32)
 
 	require.True(t, ok)
 	assert.False(t, info.Shared)
+	assert.Equal(t, "pvc-shared", info.PVName)
+}
+
+// A subdirectory provisioner carves several PVs out of one NFS export, and
+// NFS gives them all the export's superblock. The device cannot say which PV
+// the I/O went to, so no PV is named rather than the first one found.
+func TestScanForMountDistinctVolumesOnOneSuperblock(t *testing.T) {
+	withMountInfo(t,
+		"36 35 0:77 /pvc-aaaa /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~csi/pvc-aaaa/mount rw,relatime shared:1 - nfs4 10.0.0.1:/export/pvc-aaaa rw",
+		"37 35 0:77 /pvc-bbbb /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~csi/pvc-bbbb/mount rw,relatime shared:1 - nfs4 10.0.0.1:/export/pvc-bbbb rw",
+	)
+
+	info, ok := scanForMount(77)
+
+	require.True(t, ok, "the device is still a kubelet volume")
+	assert.Empty(t, info.PVName)
+	assert.False(t, info.Shared, "one pod mounts both, so the pod is still certain")
 }
 
 // A second pod mounting a volume flips Shared, which decides whether the

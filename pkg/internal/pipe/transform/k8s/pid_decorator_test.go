@@ -498,3 +498,39 @@ func TestPodUIDPatternMatchesBothCgroupDrivers(t *testing.T) {
 		assert.Equal(t, "44c76ce5-f953-4bd3-bc89-12621681af49", strings.ReplaceAll(m[1], "_", "-"))
 	}
 }
+
+// Several PVs on one superblock (an NFS export shared by a subdirectory
+// provisioner) leave the PV unnamed; no claim is guessed for it.
+func TestPIDMetadataDecorator_AmbiguousVolumeSkipsVolumeAttrs(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "55293f39-c745-4578-accb-f3e5cfc7b303", VolumeType: "csi"}, true
+	}
+	lookups := 0
+	pvcLookup := func(context.Context, string) (string, string, string, bool) {
+		lookups++
+		return "ns", "claim", "class", true
+	}
+
+	store := newPIDTestStore(t)
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pvcLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	input.Send([]*pidTestItem{{pidNs: 1, hostPID: 1, sDev: 77, hasPID: true}})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0].Metadata[attr.K8sPersistentVolumeName])
+	assert.Empty(t, got[0].Metadata[attr.K8sPersistentVolumeClaimName])
+	assert.Zero(t, lookups, "no claim lookup for an unnamed volume")
+}
