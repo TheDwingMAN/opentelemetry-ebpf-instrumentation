@@ -93,3 +93,32 @@ func testStatMetricsTCPIoGo(t *testing.T) {
 		})
 	}
 }
+
+// testStatMetricsDiskOperationDuration checks the latency of the O_DIRECT I/O of the disk-io
+// component. The rest of the host's block I/O is measured too, so only lower bounds are asserted.
+func testStatMetricsDiskOperationDuration(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			results, err := pq.Query(`obi_stat_disk_operation_duration_seconds_count{disk_io_direction="` + direction + `"} > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, results)
+			for _, res := range results {
+				assert.NotEmpty(ct, res.Metric["system_device"])
+				assert.Empty(ct, res.Metric["error_type"], "the disk-io component I/O doesn't fail")
+			}
+
+			sums, err := pq.Query(`obi_stat_disk_operation_duration_seconds_sum{disk_io_direction="` + direction + `"} > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, sums)
+		}, testTimeout, 100*time.Millisecond)
+	}
+}
+
+// testStatMetricsNoDiskStats checks that the stats aggregate feature doesn't enable the disk stats
+func testStatMetricsNoDiskStats(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	results, err := pq.Query(`obi_stat_disk_operation_duration_seconds_count`)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
