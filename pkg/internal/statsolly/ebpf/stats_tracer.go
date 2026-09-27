@@ -45,6 +45,9 @@ const (
 	progObiStatsTpBlockRqInsert                       = "obi_stats_tp_block_rq_insert"
 	progObiStatsTpBlockRqIssue                        = "obi_stats_tp_block_rq_issue"
 	progObiStatsTpBlockRqComplete                     = "obi_stats_tp_block_rq_complete"
+	progObiStatsRawTpBlockRqInsert                    = "obi_stats_raw_tp_block_rq_insert"
+	progObiStatsRawTpBlockRqIssue                     = "obi_stats_raw_tp_block_rq_issue"
+	progObiStatsRawTpBlockRqComplete                  = "obi_stats_raw_tp_block_rq_complete"
 
 	progObiStatsFentryNFSRead   = "obi_stats_fentry_nfs_read"
 	progObiStatsFexitNFSRead    = "obi_stats_fexit_nfs_read"
@@ -163,6 +166,12 @@ const (
 	TracepointBlockRqInsert    = "block/block_rq_insert"
 	TracepointBlockRqIssue     = "block/block_rq_issue"
 	TracepointBlockRqComplete  = "block/block_rq_complete"
+	// The same three events as raw tracepoints, attached by name without
+	// tracefs. Preferred whenever the kernel BTF lets the programs decode a
+	// request; the classic tracepoints remain for kernels where it does not.
+	RawTracepointBlockRqInsert   = "block_rq_insert"
+	RawTracepointBlockRqIssue    = "block_rq_issue"
+	RawTracepointBlockRqComplete = "block_rq_complete"
 
 	// Raw tracepoints: name only (no group prefix).
 	RawTracepointTCPRetransmitSkb = "tcp_retransmit_skb"
@@ -220,8 +229,18 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 	storageBlock := features.StorageBlock()
-	if !storageBlock {
-		toDisable = append(toDisable, progObiStatsTpBlockRqInsert, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
+	// Both block families are compiled in; only one is loaded. Raw tracepoints
+	// need no tracefs mount but must be able to decode struct request through
+	// BTF, so the choice is made here, before load, like the fentry/kprobe
+	// choice for filesystems.
+	useRawBlock := storageBlock && blockRawTracepointCapable()
+	switch {
+	case !storageBlock:
+		toDisable = append(toDisable, allBlockProgramNames()...)
+	case useRawBlock:
+		toDisable = append(toDisable, blockTracepointPrograms()...)
+	default:
+		toDisable = append(toDisable, blockRawTracepointPrograms()...)
 	}
 
 	var fsPlans []fsAttachPlan
@@ -338,40 +357,9 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 
 	// block tracepoints: best-effort. A kernel where the block tracepoints
 	// cannot be attached must not take down the rest of the stats agent.
-	var storageLinks []io.Closer
-	for _, t := range []probe{
-		{
-			name:    TracepointBlockRqInsert,
-			program: objects.ObiStatsTpBlockRqInsert,
-			enabled: storageBlock,
-		},
-		{
-			name:    TracepointBlockRqIssue,
-			program: objects.ObiStatsTpBlockRqIssue,
-			enabled: storageBlock,
-		},
-		{
-			name:    TracepointBlockRqComplete,
-			program: objects.ObiStatsTpBlockRqComplete,
-			enabled: storageBlock,
-		},
-	} {
-		if !t.enabled {
-			continue
-		}
-
-		group, tp, _ := strings.Cut(t.name, "/")
-		l, err := link.Tracepoint(group, tp, t.program, nil)
-		if err != nil {
-			tlog.Warn("failed block tracepoint attachment; disabling storage block metrics",
-				"tracepoint", t.name, "error", err)
-			closeAll(storageLinks)
-			storageLinks = nil
-			break
-		}
-		storageLinks = append(storageLinks, l)
+	if storageBlock {
+		closables = append(closables, attachBlockProbes(&objects, useRawBlock, tlog)...)
 	}
-	closables = append(closables, storageLinks...)
 
 	// filesystem I/O: best-effort per filesystem. A filesystem whose probes
 	// fail to attach is disabled on its own; the rest of the stats agent,
@@ -498,6 +486,66 @@ func loadStatsObjects(cfg *config.EBPFTracer, toDisable []string, fsAttachTo map
 // fails the whole load and takes down the rest of the stats agent with it.
 // It returns whether storage block metrics and filesystem metrics remain
 // enabled.
+func blockTracepointPrograms() []string {
+	return []string{progObiStatsTpBlockRqInsert, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete}
+}
+
+func blockRawTracepointPrograms() []string {
+	return []string{progObiStatsRawTpBlockRqInsert, progObiStatsRawTpBlockRqIssue, progObiStatsRawTpBlockRqComplete}
+}
+
+func allBlockProgramNames() []string {
+	return append(blockTracepointPrograms(), blockRawTracepointPrograms()...)
+}
+
+// attachBlockProbes attaches one block family. On any failure it detaches
+// what it managed and returns nothing: block metrics are then off, and the
+// rest of the agent keeps running.
+func attachBlockProbes(objects *StatsObjects, useRaw bool, log *slog.Logger) []io.Closer {
+	var links []io.Closer
+	fail := func(name string, err error) []io.Closer {
+		log.Warn("failed block tracepoint attachment; disabling storage block metrics",
+			"tracepoint", name, "raw", useRaw, "error", err)
+		closeAll(links)
+		return nil
+	}
+
+	if useRaw {
+		for _, t := range []struct {
+			name    string
+			program *ebpf.Program
+		}{
+			{RawTracepointBlockRqInsert, objects.ObiStatsRawTpBlockRqInsert},
+			{RawTracepointBlockRqIssue, objects.ObiStatsRawTpBlockRqIssue},
+			{RawTracepointBlockRqComplete, objects.ObiStatsRawTpBlockRqComplete},
+		} {
+			l, err := link.AttachRawTracepoint(link.RawTracepointOptions{Name: t.name, Program: t.program})
+			if err != nil {
+				return fail(t.name, err)
+			}
+			links = append(links, l)
+		}
+		return links
+	}
+
+	for _, t := range []struct {
+		name    string
+		program *ebpf.Program
+	}{
+		{TracepointBlockRqInsert, objects.ObiStatsTpBlockRqInsert},
+		{TracepointBlockRqIssue, objects.ObiStatsTpBlockRqIssue},
+		{TracepointBlockRqComplete, objects.ObiStatsTpBlockRqComplete},
+	} {
+		group, tp, _ := strings.Cut(t.name, "/")
+		l, err := link.Tracepoint(group, tp, t.program, nil)
+		if err != nil {
+			return fail(t.name, err)
+		}
+		links = append(links, l)
+	}
+	return links
+}
+
 func loadWithStorageFallback(
 	load func(toDisable []string, attachTo map[string]string) error,
 	toDisable []string,
@@ -514,7 +562,7 @@ func loadWithStorageFallback(
 	if blockOK {
 		log.Warn("loading stats eBPF spec failed with storage block metrics enabled;"+
 			" disabling storage block metrics and retrying (likely kernel incompatibility)", "error", err)
-		toDisable = append(toDisable, progObiStatsTpBlockRqInsert, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete)
+		toDisable = append(toDisable, allBlockProgramNames()...)
 		blockOK = false
 
 		if err = load(toDisable, fsAttachTo); err == nil {

@@ -117,6 +117,45 @@ func kernelBTF() *btf.Spec {
 	return kernelBTFSpec
 }
 
+// blockRawTracepointCapable reports whether the block raw tracepoints can
+// decode a request on this kernel. They read the device from the request's
+// gendisk, which is struct request.rq_disk before 5.15 and
+// struct request_queue.disk from there on; a kernel whose BTF shows neither,
+// or has no usable BTF at all as on RHEL8, takes the classic tracepoints
+// instead, and those need tracefs mounted in.
+func blockRawTracepointCapable() bool {
+	return blockRawTracepointCapableWith(kernelBTF())
+}
+
+func blockRawTracepointCapableWith(spec *btf.Spec) bool {
+	if spec == nil {
+		return false
+	}
+	return memberPointsToStruct(spec, "request_queue", "disk", "gendisk") ||
+		memberPointsToStruct(spec, "request", "rq_disk", "gendisk")
+}
+
+// memberPointsToStruct reports whether struct typ in spec has a member named
+// member whose type is a pointer to struct target.
+func memberPointsToStruct(spec *btf.Spec, typ, member, target string) bool {
+	var st *btf.Struct
+	if err := spec.TypeByName(typ, &st); err != nil {
+		return false
+	}
+	for _, m := range st.Members {
+		if m.Name != member {
+			continue
+		}
+		ptr, ok := btf.UnderlyingType(m.Type).(*btf.Pointer)
+		if !ok {
+			return false
+		}
+		pointee, ok := btf.UnderlyingType(ptr.Target).(*btf.Struct)
+		return ok && pointee.Name == target
+	}
+	return false
+}
+
 // fentryCapable reports whether fentry/fexit can attach to sym in module.
 // A built-in filesystem such as ext4, xfs or btrfs has no
 // /sys/kernel/btf/<module> of its own (moduleBTFExists is false), but its
