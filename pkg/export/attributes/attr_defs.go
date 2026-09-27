@@ -136,7 +136,38 @@ func getDefinitions(
 			attr.OBIIP:           false,
 			attr.SystemDevice:    true,
 			attr.DiskIODirection: true,
-			attr.ErrorType:       true,
+			attr.ContainerID:     false,
+		},
+		nil,
+	)
+
+	// workload that block I/O is charged to, when kubernetes metadata is enabled
+	statsDiskKubeAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sNamespaceName: true,
+			attr.K8sOwnerName:     true,
+			attr.K8sClusterName:   true,
+			attr.K8sKind:          false,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
+		},
+		nil,
+	)
+
+	// the same workload attributes, all opt-in, for the block I/O histograms, whose
+	// series count is multiplied by the number of buckets
+	statsDiskKubeOptInAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sNamespaceName: false,
+			attr.K8sOwnerName:     false,
+			attr.K8sClusterName:   false,
+			attr.K8sKind:          false,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
 		},
 		nil,
 	)
@@ -774,7 +805,24 @@ func getDefinitions(
 			},
 		},
 		StatDiskOperationDuration.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeOptInAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskOperations.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskOperationTime.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{},
 		},
 
 		// span and service graph metrics don't yet implement attribute selection,

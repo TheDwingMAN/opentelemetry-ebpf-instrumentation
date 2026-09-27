@@ -69,6 +69,25 @@ func TestFeatureStatsDiskIsOptIn(t *testing.T) {
 	assert.True(t, FeatureAll.StatsDiskOperationDuration())
 }
 
+func TestFeatureStatsDiskAggregate(t *testing.T) {
+	disk, err := LoadFeatures([]string{"stats_disk"})
+	require.NoError(t, err)
+	assert.True(t, disk.StatsDiskIO())
+	assert.True(t, disk.StatsDiskOperations())
+	assert.True(t, disk.StatsDiskOperationTime())
+	assert.True(t, disk.StatsDiskOperationDuration())
+	assert.False(t, disk.StatsTCPIo(), "the disk aggregate doesn't enable TCP stats")
+
+	counters, err := LoadFeatures([]string{"stats_disk_io", "stats_disk_operations", "stats_disk_operation_time"})
+	require.NoError(t, err)
+	assert.True(t, counters.StatsDisk())
+	assert.False(t, counters.StatsDiskOperationDuration())
+
+	stats, err := LoadFeatures([]string{"stats"})
+	require.NoError(t, err)
+	assert.False(t, stats.StatsDisk(), "the stats aggregate must not enable any disk stat")
+}
+
 func TestFeatureEnv_Separator(t *testing.T) {
 	doc := struct {
 		Features Features `env:"FOO" envSeparator:","`
@@ -366,6 +385,11 @@ func TestFeatureMarshalYAML(t *testing.T) {
 			name:     "disk stats are listed apart from the stats aggregate",
 			features: FeatureStats | FeatureStatsDiskOperationDuration,
 			expected: "features:\n    - stats\n    - stats_disk_operation_duration\n",
+		},
+		{
+			name:     "disk aggregate",
+			features: FeatureStatsDisk,
+			expected: "features:\n    - stats_disk\n",
 		},
 		{name: "all features", features: FeatureAll, expected: "features:\n    - all\n"},
 	} {

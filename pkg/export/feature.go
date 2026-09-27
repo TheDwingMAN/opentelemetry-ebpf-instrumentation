@@ -57,6 +57,9 @@ const (
 	FeatureApplicationRuntime
 	FeatureEBPF
 	FeatureStatsDiskOperationDuration
+	FeatureStatsDiskIO
+	FeatureStatsDiskOperations
+	FeatureStatsDiskOperationTime
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
@@ -68,7 +71,7 @@ const FeatureStats = FeatureStatsTCPRtt | FeatureStatsTCPFailedConnections | Fea
 
 // FeatureStatsDisk groups the block I/O stat metrics. They are not part of the `stats` aggregate:
 // their probes fire on every block request, so they have to be enabled explicitly.
-const FeatureStatsDisk = FeatureStatsDiskOperationDuration
+const FeatureStatsDisk = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskOperationTime
 
 // FeatureMapper stays public so any extension package can add and remove feature
 // definitions before loading them.
@@ -79,6 +82,10 @@ var FeatureMapper = map[string]Features{
 	"stats_tcp_retransmits":            FeatureStatsTCPRetransmits,
 	"stats_tcp_io":                     FeatureStatsTCPIo,
 	"stats_tcp_successful_connections": FeatureStatsTCPSuccessfulConnections,
+	"stats_disk":                       FeatureStatsDisk,
+	"stats_disk_io":                    FeatureStatsDiskIO,
+	"stats_disk_operations":            FeatureStatsDiskOperations,
+	"stats_disk_operation_time":        FeatureStatsDiskOperationTime,
 	"stats_disk_operation_duration":    FeatureStatsDiskOperationDuration,
 	"network":                          FeatureNetwork,
 	"network_inter_zone":               FeatureNetworkInterZone,
@@ -407,6 +414,18 @@ func (f Features) StatsTCPIo() bool {
 // StatsDisk reports whether any block I/O stat metric is enabled
 func (f Features) StatsDisk() bool {
 	return f.any(FeatureStatsDisk)
+}
+
+func (f Features) StatsDiskIO() bool {
+	return f.any(FeatureStatsDiskIO)
+}
+
+func (f Features) StatsDiskOperations() bool {
+	return f.any(FeatureStatsDiskOperations)
+}
+
+func (f Features) StatsDiskOperationTime() bool {
+	return f.any(FeatureStatsDiskOperationTime)
 }
 
 func (f Features) StatsDiskOperationDuration() bool {

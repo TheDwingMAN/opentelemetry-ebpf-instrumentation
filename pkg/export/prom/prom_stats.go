@@ -42,6 +42,9 @@ type statMetricsReporter struct {
 	tcpIo                    *Expirer[prometheus.Counter]
 	tcpSuccessfulConnections *Expirer[prometheus.Counter]
 	diskOperationDuration    *Expirer[prometheus.Histogram]
+	diskIO                   *Expirer[prometheus.Counter]
+	diskOperations           *Expirer[prometheus.Counter]
+	diskOperationTime        *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -51,6 +54,9 @@ type statMetricsReporter struct {
 	tcpIoAttrs                    []attributes.Field[*ebpf.Stat, string]
 	tcpSuccessfulConnectionsAttrs []attributes.Field[*ebpf.Stat, string]
 	diskOperationDurationAttrs    []attributes.Field[*ebpf.Stat, string]
+	diskIOAttrs                   []attributes.Field[*ebpf.Stat, string]
+	diskOperationsAttrs           []attributes.Field[*ebpf.Stat, string]
+	diskOperationTimeAttrs        []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -196,6 +202,33 @@ func newStatsReporter(
 		register = append(register, mr.diskOperationDuration)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskIO() {
+		mr.diskIOAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskIO))
+		mr.diskIO = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskIO.Prom,
+			Help: "bytes transferred by the block I/O requests that completed successfully",
+		}, labelNames(mr.diskIOAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskIO)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskOperations() {
+		mr.diskOperationsAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskOperations))
+		mr.diskOperations = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskOperations.Prom,
+			Help: "number of completed block I/O requests",
+		}, labelNames(mr.diskOperationsAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskOperations)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskOperationTime() {
+		mr.diskOperationTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskOperationTime))
+		mr.diskOperationTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskOperationTime.Prom,
+			Help: "sum of the durations of the completed block I/O requests, in seconds",
+		}, labelNames(mr.diskOperationTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskOperationTime)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -220,6 +253,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
 			r.observeDiskOperationDuration(stat)
+			r.observeDiskCounters(stat)
 		}
 	}
 }
@@ -273,5 +307,23 @@ func (r *statMetricsReporter) observeDiskOperationDuration(stat *ebpf.Stat) {
 		for range latency.Count {
 			histogram.Observe(latency.Seconds)
 		}
+	}
+}
+
+func (r *statMetricsReporter) observeDiskCounters(stat *ebpf.Stat) {
+	if stat.DiskIO == nil {
+		return
+	}
+	if r.diskIO != nil && stat.DiskIO.Bytes > 0 {
+		r.diskIO.WithLabelValues(labelValues(stat, r.diskIOAttrs)...).
+			Metric.Add(float64(stat.DiskIO.Bytes))
+	}
+	if r.diskOperations != nil {
+		r.diskOperations.WithLabelValues(labelValues(stat, r.diskOperationsAttrs)...).
+			Metric.Add(float64(stat.DiskIO.Operations))
+	}
+	if r.diskOperationTime != nil {
+		r.diskOperationTime.WithLabelValues(labelValues(stat, r.diskOperationTimeAttrs)...).
+			Metric.Add(stat.DiskIO.Time)
 	}
 }

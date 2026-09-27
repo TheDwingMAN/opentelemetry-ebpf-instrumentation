@@ -570,6 +570,24 @@ var (
 		Unit:    "s",
 		Type:    InstrumentHistogram,
 	})
+	StatDiskIO = metric(Name{
+		Section: "obi.stat.disk.io",
+		OTEL:    "obi.stat.disk.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
+	StatDiskOperations = metric(Name{
+		Section: "obi.stat.disk.operations",
+		OTEL:    "obi.stat.disk.operations",
+		Unit:    "{operation}",
+		Type:    InstrumentCounter,
+	})
+	StatDiskOperationTime = metric(Name{
+		Section: "obi.stat.disk.operation.time",
+		OTEL:    "obi.stat.disk.operation.time",
+		Unit:    "s",
+		Type:    InstrumentCounter,
+	})
 )
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.

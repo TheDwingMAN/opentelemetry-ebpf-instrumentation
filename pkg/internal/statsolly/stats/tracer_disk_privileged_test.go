@@ -96,7 +96,8 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 // container-like cgroups, and checks that each container is charged exactly its own I/O.
 func TestDiskIOIsChargedPerCgroup(t *testing.T) {
 	cgroupRoot := ioCgroupRoot(t)
-	features := export.FeatureStatsDisk
+	// a counter alone must load the disk probes, without the histogram
+	features := export.FeatureStatsDiskOperations
 	bounds := []float64{0.001}
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{}, bounds)
 	require.NoError(t, err)

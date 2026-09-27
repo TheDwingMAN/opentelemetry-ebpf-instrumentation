@@ -398,3 +398,123 @@ groups:
       - ref: error.type
         requirement_level:
           conditionally_required: if the block I/O request failed
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level: opt_in
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.disk.io
+    type: metric
+    metric_name: obi.stat.disk.io
+    instrument: counter
+    unit: "By"
+    stability: development
+    brief: >
+      Bytes transferred by the block I/O requests that completed successfully,
+      per block device, direction and workload the I/O is charged to.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.disk.operations
+    type: metric
+    metric_name: obi.stat.disk.operations
+    instrument: counter
+    unit: "{operation}"
+    stability: development
+    brief: >
+      Completed block I/O requests, per block device, direction, outcome and
+      workload the I/O is charged to.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the block I/O request failed
+
+  - id: metric.obi.obi.stat.disk.operation.time
+    type: metric
+    metric_name: obi.stat.disk.operation.time
+    instrument: counter
+    unit: "s"
+    stability: development
+    brief: >
+      Sum of the durations of the completed block I/O requests, from their
+      issue to the device until their completion, per block device, direction
+      and workload the I/O is charged to.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in

@@ -235,6 +235,55 @@ func TestDefault_StatDiskOperationDuration(t *testing.T) {
 	}, p.For(StatDiskOperationDuration))
 }
 
+func TestDefault_StatDiskCounters(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	workload := []attr.Name{
+		attr.DiskIODirection,
+		attr.K8sClusterName,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.SystemDevice,
+	}
+	assert.Equal(t, workload, p.For(StatDiskIO))
+	assert.Equal(t, workload, p.For(StatDiskOperationTime))
+	assert.Equal(t, []attr.Name{
+		attr.DiskIODirection,
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.SystemDevice,
+	}, p.For(StatDiskOperations))
+
+	// outside Kubernetes, the disk counters are reported per device only
+	p, err = NewAttrSelector(0, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{attr.DiskIODirection, attr.SystemDevice}, p.For(StatDiskIO))
+}
+
+func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{
+		SelectionCfg: Selection{
+			"obi.stat.disk.*": InclusionLists{Include: []string{"*"}},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ContainerID,
+		attr.DiskIODirection,
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.K8sContainerName,
+		attr.K8sKind,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.K8sPodName,
+		attr.OBIIP,
+		attr.SystemDevice,
+	}, p.For(StatDiskOperationDuration))
+}
+
 func TestExplicitlyIncluded(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

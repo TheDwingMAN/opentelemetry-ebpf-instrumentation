@@ -214,52 +214,7 @@ func fakeIoRecord(srcPort, dstPort uint16, direction uint8, bytes uint32) *ebpf.
 }
 
 func TestDiskStats(t *testing.T) {
-	ctx := t.Context()
-
-	registry := prometheus.NewRegistry()
-	promServer := httptest.NewServer(promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
-	t.Cleanup(promServer.Close)
-
-	stats := Stats{
-		agentIP: net.ParseIP("1.2.3.4"),
-		ctxInfo: &global.ContextInfo{
-			Prometheus: &connector.PrometheusManager{},
-		},
-		cfg: &obi.Config{
-			Prometheus: prom.PrometheusConfig{
-				Registry: registry,
-				Path:     "/metrics",
-				TTL:      time.Hour,
-				Buckets:  export.Buckets{StatDiskOperationDurationHistogram: []float64{0.001, 0.01}},
-			},
-			Metrics: perapp.GlobalMetricsConfig{Features: export.FeatureStatsDiskOperationDuration},
-		},
-	}
-
-	diskEvents := make(chan []*ebpf.Stat, 10)
-	defaultDiskTracer := newDiskTracer
-	t.Cleanup(func() { newDiskTracer = defaultDiskTracer })
-	newDiskTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
-		return func(ctx context.Context) {
-			defer out.MarkCloseable()
-			for i := range diskEvents {
-				out.SendCtx(ctx, i)
-			}
-		}
-	}
-	ringBuf := make(chan []*ebpf.Stat)
-	newRingBufTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
-		return func(ctx context.Context) {
-			defer out.MarkCloseable()
-			for i := range ringBuf {
-				out.SendCtx(ctx, i)
-			}
-		}
-	}
-
-	runner, err := stats.buildPipeline(ctx)
-	require.NoError(t, err)
-	go runner.Start(ctx)
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskOperationDuration)
 
 	diskEvents <- []*ebpf.Stat{
 		fakeDiskRecord("nvme0n1", ebpf.CodeDiskDirectionWrite, "",
@@ -282,15 +237,7 @@ func TestDiskStats(t *testing.T) {
 	}
 
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		allMetrics, err := promtest.Scrape(promServer.URL)
-		require.NoError(ct, err)
-
-		var disk []promtest.ScrapedMetric
-		for _, m := range allMetrics {
-			if strings.HasPrefix(m.Name, "obi_stat_disk_operation_duration_seconds") {
-				disk = append(disk, m)
-			}
-		}
+		disk := scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_duration_seconds")
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
 			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 4, Labels: withLe(okWrite, "0.001")},
 			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 6, Labels: withLe(okWrite, "0.01")},
@@ -304,7 +251,107 @@ func TestDiskStats(t *testing.T) {
 			{Name: "obi_stat_disk_operation_duration_seconds_sum", Value: 0.02, Labels: failedWrite},
 		}, disk)
 	}, timeout, 100*time.Millisecond)
-	close(ringBuf)
+}
+
+func TestDiskCounters(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t,
+		export.FeatureStatsDiskIO|export.FeatureStatsDiskOperations|export.FeatureStatsDiskOperationTime)
+
+	write := fakeDiskRecord("vda", ebpf.CodeDiskDirectionWrite, "")
+	write.DiskIO.Operations, write.DiskIO.Time, write.DiskIO.Bytes = 3, 0.25, 12288
+	failedWrite := fakeDiskRecord("vda", ebpf.CodeDiskDirectionWrite, "EIO")
+	failedWrite.DiskIO.Operations, failedWrite.DiskIO.Time = 1, 0.5
+	read := fakeDiskRecord("vda", ebpf.CodeDiskDirectionRead, "")
+	read.DiskIO.Operations, read.DiskIO.Time, read.DiskIO.Bytes = 2, 0.125, 8192
+	diskEvents <- []*ebpf.Stat{write, failedWrite, read}
+
+	vdaWrite := map[string]string{"system_device": "vda", "disk_io_direction": "write"}
+	vdaRead := map[string]string{"system_device": "vda", "disk_io_direction": "read"}
+	withError := func(errorType string) map[string]string {
+		out := map[string]string{"error_type": errorType}
+		maps.Copy(out, vdaWrite)
+		return out
+	}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_io_bytes_total", Value: 12288, Labels: vdaWrite},
+			{Name: "obi_stat_disk_io_bytes_total", Value: 8192, Labels: vdaRead},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_io_bytes_total"), "failed requests transfer no bytes")
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_operations_total", Value: 3, Labels: withError("")},
+			{Name: "obi_stat_disk_operations_total", Value: 1, Labels: withError("EIO")},
+			{Name: "obi_stat_disk_operations_total", Value: 2, Labels: map[string]string{
+				"system_device": "vda", "disk_io_direction": "read", "error_type": "",
+			}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operations_total"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_operation_time_seconds_total", Value: 0.75, Labels: vdaWrite},
+			{Name: "obi_stat_disk_operation_time_seconds_total", Value: 0.125, Labels: vdaRead},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_time_seconds_total"))
+	}, timeout, 100*time.Millisecond)
+}
+
+// startDiskPipeline runs the stats pipeline with the given disk features, exporting to
+// Prometheus. It returns the channel to send disk stats through and the Prometheus URL.
+func startDiskPipeline(t *testing.T, features export.Features) (chan<- []*ebpf.Stat, string) {
+	registry := prometheus.NewRegistry()
+	promServer := httptest.NewServer(promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
+	t.Cleanup(promServer.Close)
+
+	stats := Stats{
+		agentIP: net.ParseIP("1.2.3.4"),
+		ctxInfo: &global.ContextInfo{
+			Prometheus: &connector.PrometheusManager{},
+		},
+		cfg: &obi.Config{
+			Prometheus: prom.PrometheusConfig{
+				Registry: registry,
+				Path:     "/metrics",
+				TTL:      time.Hour,
+				Buckets:  export.Buckets{StatDiskOperationDurationHistogram: []float64{0.001, 0.01}},
+			},
+			Metrics: perapp.GlobalMetricsConfig{Features: features},
+		},
+	}
+
+	diskEvents := make(chan []*ebpf.Stat, 10)
+	defaultDiskTracer := newDiskTracer
+	t.Cleanup(func() { newDiskTracer = defaultDiskTracer })
+	newDiskTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+		return func(ctx context.Context) {
+			defer out.MarkCloseable()
+			for i := range diskEvents {
+				out.SendCtx(ctx, i)
+			}
+		}
+	}
+	ringBuf := make(chan []*ebpf.Stat)
+	t.Cleanup(func() { close(ringBuf) })
+	newRingBufTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+		return func(ctx context.Context) {
+			defer out.MarkCloseable()
+			for i := range ringBuf {
+				out.SendCtx(ctx, i)
+			}
+		}
+	}
+
+	runner, err := stats.buildPipeline(t.Context())
+	require.NoError(t, err)
+	go runner.Start(t.Context())
+	return diskEvents, promServer.URL
+}
+
+func scrapeDiskMetrics(ct *assert.CollectT, promURL, namePrefix string) []promtest.ScrapedMetric {
+	allMetrics, err := promtest.Scrape(promURL)
+	require.NoError(ct, err)
+	var disk []promtest.ScrapedMetric
+	for _, m := range allMetrics {
+		if strings.HasPrefix(m.Name, namePrefix) {
+			disk = append(disk, m)
+		}
+	}
+	return disk
 }
 
 func fakeDiskRecord(device string, direction ebpf.DiskIODirectionCode, errorType string, latency ...ebpf.LatencySample) *ebpf.Stat {
