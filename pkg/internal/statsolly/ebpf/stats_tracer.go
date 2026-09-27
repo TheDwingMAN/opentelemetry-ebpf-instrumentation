@@ -71,6 +71,25 @@ const (
 	progObiStatsFentryFUSEFsync = "obi_stats_fentry_fuse_fsync"
 	progObiStatsFexitFUSEFsync  = "obi_stats_fexit_fuse_fsync"
 
+	progObiStatsFentryExt4Read   = "obi_stats_fentry_ext4_read"
+	progObiStatsFexitExt4Read    = "obi_stats_fexit_ext4_read"
+	progObiStatsFentryExt4Write  = "obi_stats_fentry_ext4_write"
+	progObiStatsFexitExt4Write   = "obi_stats_fexit_ext4_write"
+	progObiStatsFentryExt4Fsync  = "obi_stats_fentry_ext4_fsync"
+	progObiStatsFexitExt4Fsync   = "obi_stats_fexit_ext4_fsync"
+	progObiStatsFentryXFSRead    = "obi_stats_fentry_xfs_read"
+	progObiStatsFexitXFSRead     = "obi_stats_fexit_xfs_read"
+	progObiStatsFentryXFSWrite   = "obi_stats_fentry_xfs_write"
+	progObiStatsFexitXFSWrite    = "obi_stats_fexit_xfs_write"
+	progObiStatsFentryXFSFsync   = "obi_stats_fentry_xfs_fsync"
+	progObiStatsFexitXFSFsync    = "obi_stats_fexit_xfs_fsync"
+	progObiStatsFentryBtrfsRead  = "obi_stats_fentry_btrfs_read"
+	progObiStatsFexitBtrfsRead   = "obi_stats_fexit_btrfs_read"
+	progObiStatsFentryBtrfsWrite = "obi_stats_fentry_btrfs_write"
+	progObiStatsFexitBtrfsWrite  = "obi_stats_fexit_btrfs_write"
+	progObiStatsFentryBtrfsFsync = "obi_stats_fentry_btrfs_fsync"
+	progObiStatsFexitBtrfsFsync  = "obi_stats_fexit_btrfs_fsync"
+
 	progObiStatsKprobeNFSRead      = "obi_stats_kprobe_nfs_read"
 	progObiStatsKretprobeNFSRead   = "obi_stats_kretprobe_nfs_read"
 	progObiStatsKprobeNFSWrite     = "obi_stats_kprobe_nfs_write"
@@ -95,6 +114,25 @@ const (
 	progObiStatsKretprobeFUSEWrite = "obi_stats_kretprobe_fuse_write"
 	progObiStatsKprobeFUSEFsync    = "obi_stats_kprobe_fuse_fsync"
 	progObiStatsKretprobeFUSEFsync = "obi_stats_kretprobe_fuse_fsync"
+
+	progObiStatsKprobeExt4Read      = "obi_stats_kprobe_ext4_read"
+	progObiStatsKretprobeExt4Read   = "obi_stats_kretprobe_ext4_read"
+	progObiStatsKprobeExt4Write     = "obi_stats_kprobe_ext4_write"
+	progObiStatsKretprobeExt4Write  = "obi_stats_kretprobe_ext4_write"
+	progObiStatsKprobeExt4Fsync     = "obi_stats_kprobe_ext4_fsync"
+	progObiStatsKretprobeExt4Fsync  = "obi_stats_kretprobe_ext4_fsync"
+	progObiStatsKprobeXFSRead       = "obi_stats_kprobe_xfs_read"
+	progObiStatsKretprobeXFSRead    = "obi_stats_kretprobe_xfs_read"
+	progObiStatsKprobeXFSWrite      = "obi_stats_kprobe_xfs_write"
+	progObiStatsKretprobeXFSWrite   = "obi_stats_kretprobe_xfs_write"
+	progObiStatsKprobeXFSFsync      = "obi_stats_kprobe_xfs_fsync"
+	progObiStatsKretprobeXFSFsync   = "obi_stats_kretprobe_xfs_fsync"
+	progObiStatsKprobeBtrfsRead     = "obi_stats_kprobe_btrfs_read"
+	progObiStatsKretprobeBtrfsRead  = "obi_stats_kretprobe_btrfs_read"
+	progObiStatsKprobeBtrfsWrite    = "obi_stats_kprobe_btrfs_write"
+	progObiStatsKretprobeBtrfsWrite = "obi_stats_kretprobe_btrfs_write"
+	progObiStatsKprobeBtrfsFsync    = "obi_stats_kprobe_btrfs_fsync"
+	progObiStatsKretprobeBtrfsFsync = "obi_stats_kretprobe_btrfs_fsync"
 )
 
 // Hook point names, grouped by attach type.
@@ -317,6 +355,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	// fail to attach is disabled on its own; the rest of the stats agent,
 	// including other filesystems, must keep running.
 	var fsLinks []io.Closer
+	localFSAttached := false
 	for _, plan := range fsPlans {
 		ls, err := attachFsPlan(&objects, plan)
 		if err != nil {
@@ -325,8 +364,18 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 			continue
 		}
 		fsLinks = append(fsLinks, ls...)
+		if plan.Fs == CodeFsExt4 || plan.Fs == CodeFsXFS || plan.Fs == CodeFsBtrfs {
+			localFSAttached = true
+		}
 	}
 	closables = append(closables, fsLinks...)
+
+	// The allowlist refresher only makes sense once a local filesystem (ext4,
+	// xfs, btrfs) is actually attached: those probes are the only ones that
+	// consult fs_dev_filter, and network filesystems never populate it.
+	if localFSAttached {
+		closables = append(closables, startFsDevFilterRefresher(tlog, objects.FsDevFilter))
+	}
 
 	// raw tracepoints
 	for _, t := range []probe{
@@ -522,6 +571,33 @@ func fsProgNamesFor(fs FsTypeCode) fsProgramNames {
 			KprobeWrite: progObiStatsKprobeFUSEWrite, KretprobeWrite: progObiStatsKretprobeFUSEWrite,
 			KprobeFsync: progObiStatsKprobeFUSEFsync, KretprobeFsync: progObiStatsKretprobeFUSEFsync,
 		}
+	case CodeFsExt4:
+		return fsProgramNames{
+			FentryRead: progObiStatsFentryExt4Read, FexitRead: progObiStatsFexitExt4Read,
+			FentryWrite: progObiStatsFentryExt4Write, FexitWrite: progObiStatsFexitExt4Write,
+			FentryFsync: progObiStatsFentryExt4Fsync, FexitFsync: progObiStatsFexitExt4Fsync,
+			KprobeRead: progObiStatsKprobeExt4Read, KretprobeRead: progObiStatsKretprobeExt4Read,
+			KprobeWrite: progObiStatsKprobeExt4Write, KretprobeWrite: progObiStatsKretprobeExt4Write,
+			KprobeFsync: progObiStatsKprobeExt4Fsync, KretprobeFsync: progObiStatsKretprobeExt4Fsync,
+		}
+	case CodeFsXFS:
+		return fsProgramNames{
+			FentryRead: progObiStatsFentryXFSRead, FexitRead: progObiStatsFexitXFSRead,
+			FentryWrite: progObiStatsFentryXFSWrite, FexitWrite: progObiStatsFexitXFSWrite,
+			FentryFsync: progObiStatsFentryXFSFsync, FexitFsync: progObiStatsFexitXFSFsync,
+			KprobeRead: progObiStatsKprobeXFSRead, KretprobeRead: progObiStatsKretprobeXFSRead,
+			KprobeWrite: progObiStatsKprobeXFSWrite, KretprobeWrite: progObiStatsKretprobeXFSWrite,
+			KprobeFsync: progObiStatsKprobeXFSFsync, KretprobeFsync: progObiStatsKretprobeXFSFsync,
+		}
+	case CodeFsBtrfs:
+		return fsProgramNames{
+			FentryRead: progObiStatsFentryBtrfsRead, FexitRead: progObiStatsFexitBtrfsRead,
+			FentryWrite: progObiStatsFentryBtrfsWrite, FexitWrite: progObiStatsFexitBtrfsWrite,
+			FentryFsync: progObiStatsFentryBtrfsFsync, FexitFsync: progObiStatsFexitBtrfsFsync,
+			KprobeRead: progObiStatsKprobeBtrfsRead, KretprobeRead: progObiStatsKretprobeBtrfsRead,
+			KprobeWrite: progObiStatsKprobeBtrfsWrite, KretprobeWrite: progObiStatsKretprobeBtrfsWrite,
+			KprobeFsync: progObiStatsKprobeBtrfsFsync, KretprobeFsync: progObiStatsKretprobeBtrfsFsync,
+		}
 	default:
 		return fsProgramNames{}
 	}
@@ -620,6 +696,21 @@ func fsProgramsFor(fs FsTypeCode, objects *StatsObjects) (fentryRead, fexitRead,
 			objects.ObiStatsFentryFuseWrite, objects.ObiStatsFexitFuseWrite,
 			objects.ObiStatsKprobeFuseRead, objects.ObiStatsKretprobeFuseRead,
 			objects.ObiStatsKprobeFuseWrite, objects.ObiStatsKretprobeFuseWrite
+	case CodeFsExt4:
+		return objects.ObiStatsFentryExt4Read, objects.ObiStatsFexitExt4Read,
+			objects.ObiStatsFentryExt4Write, objects.ObiStatsFexitExt4Write,
+			objects.ObiStatsKprobeExt4Read, objects.ObiStatsKretprobeExt4Read,
+			objects.ObiStatsKprobeExt4Write, objects.ObiStatsKretprobeExt4Write
+	case CodeFsXFS:
+		return objects.ObiStatsFentryXfsRead, objects.ObiStatsFexitXfsRead,
+			objects.ObiStatsFentryXfsWrite, objects.ObiStatsFexitXfsWrite,
+			objects.ObiStatsKprobeXfsRead, objects.ObiStatsKretprobeXfsRead,
+			objects.ObiStatsKprobeXfsWrite, objects.ObiStatsKretprobeXfsWrite
+	case CodeFsBtrfs:
+		return objects.ObiStatsFentryBtrfsRead, objects.ObiStatsFexitBtrfsRead,
+			objects.ObiStatsFentryBtrfsWrite, objects.ObiStatsFexitBtrfsWrite,
+			objects.ObiStatsKprobeBtrfsRead, objects.ObiStatsKretprobeBtrfsRead,
+			objects.ObiStatsKprobeBtrfsWrite, objects.ObiStatsKretprobeBtrfsWrite
 	default:
 		return nil, nil, nil, nil, nil, nil, nil, nil
 	}
@@ -641,6 +732,15 @@ func fsFsyncProgramsFor(fs FsTypeCode, objects *StatsObjects) (fentryFsync, fexi
 	case CodeFsFUSE:
 		return objects.ObiStatsFentryFuseFsync, objects.ObiStatsFexitFuseFsync,
 			objects.ObiStatsKprobeFuseFsync, objects.ObiStatsKretprobeFuseFsync
+	case CodeFsExt4:
+		return objects.ObiStatsFentryExt4Fsync, objects.ObiStatsFexitExt4Fsync,
+			objects.ObiStatsKprobeExt4Fsync, objects.ObiStatsKretprobeExt4Fsync
+	case CodeFsXFS:
+		return objects.ObiStatsFentryXfsFsync, objects.ObiStatsFexitXfsFsync,
+			objects.ObiStatsKprobeXfsFsync, objects.ObiStatsKretprobeXfsFsync
+	case CodeFsBtrfs:
+		return objects.ObiStatsFentryBtrfsFsync, objects.ObiStatsFexitBtrfsFsync,
+			objects.ObiStatsKprobeBtrfsFsync, objects.ObiStatsKretprobeBtrfsFsync
 	default:
 		return nil, nil, nil, nil
 	}

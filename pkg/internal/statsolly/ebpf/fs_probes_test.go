@@ -48,7 +48,23 @@ func TestFsTargetsCoverAllFilesystems(t *testing.T) {
 		assert.NotEmpty(t, tgt.FsyncSyms, "fs %d has no fsync symbols", tgt.Fs)
 		assert.NotEmpty(t, tgt.Module)
 	}
-	for _, want := range []FsTypeCode{CodeFsNFS, CodeFsCeph, CodeFsCIFS, CodeFsFUSE} {
+	for _, want := range []FsTypeCode{CodeFsNFS, CodeFsCeph, CodeFsCIFS, CodeFsFUSE, CodeFsExt4, CodeFsXFS, CodeFsBtrfs} {
 		assert.True(t, seen[want], "missing target for fs code %d", want)
 	}
+}
+
+func TestFentryCapableModuleBTF(t *testing.T) {
+	dir := t.TempDir()
+	old := sysKernelBTFDir
+	sysKernelBTFDir = dir
+	t.Cleanup(func() { sysKernelBTFDir = old })
+
+	// Module BTF present: fentryCapable must short-circuit on it without
+	// consulting the kernel's own BTF at all.
+	assert.NoError(t, os.WriteFile(filepath.Join(dir, "nfs"), []byte("x"), 0o644))
+	assert.True(t, fentryCapable("nfs", "nfs_file_read"))
+
+	// No module BTF and a symbol that cannot possibly exist in vmlinux BTF
+	// either: must fall through to false rather than panicking or hanging.
+	assert.False(t, fentryCapable("does-not-exist", "no_such_symbol_ever"))
 }

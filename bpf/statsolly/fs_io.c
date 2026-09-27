@@ -13,6 +13,7 @@
 #include <statsolly/types.h>
 #include <statsolly/maps/stats_events.h>
 #include <statsolly/maps/fs_start.h>
+#include <statsolly/maps/fs_dev_filter.h>
 
 // Kernel-internal completion marker (include/linux/errno.h), not a real
 // failure: an async iocb was queued and will complete later on its own,
@@ -21,10 +22,22 @@ enum { k_eiocbqueued = 529 };
 
 static __always_inline void
 fs_probe_entry_file(const struct file *const file, const enum fs_type fs, const enum fs_op op) {
+    const u32 s_dev = BPF_CORE_READ(file, f_inode, i_sb, s_dev);
+
+    // ext4/xfs/btrfs also back the node's own root filesystem and every
+    // container's writable layer, so only record when the device is a known
+    // PV-backed mount (fs_dev_filter, populated from userspace). Network
+    // filesystems are never used for the node's own root, so they stay
+    // unfiltered.
+    const bool is_local_fs = fs == fs_type_ext4 || fs == fs_type_xfs || fs == fs_type_btrfs;
+    if (is_local_fs && !bpf_map_lookup_elem(&fs_dev_filter, &s_dev)) {
+        return;
+    }
+
     struct fs_start_val val = {};
 
     val.ts = bpf_ktime_get_ns();
-    val.s_dev = BPF_CORE_READ(file, f_inode, i_sb, s_dev);
+    val.s_dev = s_dev;
     val.fs = fs;
     val.op = op;
 
@@ -347,6 +360,197 @@ int BPF_PROG(obi_stats_fexit_fuse_fsync,
     return 0;
 }
 
+SEC("fentry/obi_dummy_fs_read")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fentry_ext4_read, struct kiocb *iocb) {
+    (void)ctx;
+    fs_probe_entry(iocb, fs_type_ext4, fs_op_read);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_read")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fexit_ext4_read, struct kiocb *iocb, struct iov_iter *to, long ret) {
+    (void)ctx;
+    (void)iocb;
+    (void)to;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("fentry/obi_dummy_fs_write")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fentry_ext4_write, struct kiocb *iocb) {
+    (void)ctx;
+    fs_probe_entry(iocb, fs_type_ext4, fs_op_write);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_write")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fexit_ext4_write, struct kiocb *iocb, struct iov_iter *from, long ret) {
+    (void)ctx;
+    (void)iocb;
+    (void)from;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("fentry/obi_dummy_fs_fsync")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(
+    obi_stats_fentry_ext4_fsync, struct file *file, loff_t start, loff_t end, int datasync) {
+    (void)ctx;
+    (void)start;
+    (void)end;
+    (void)datasync;
+    fs_probe_entry_file(file, fs_type_ext4, fs_op_fsync);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_fsync")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fexit_ext4_fsync,
+             struct file *file,
+             loff_t start,
+             loff_t end,
+             int datasync,
+             int ret) {
+    (void)ctx;
+    (void)file;
+    (void)start;
+    (void)end;
+    (void)datasync;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("fentry/obi_dummy_fs_read")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fentry_xfs_read, struct kiocb *iocb) {
+    (void)ctx;
+    fs_probe_entry(iocb, fs_type_xfs, fs_op_read);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_read")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fexit_xfs_read, struct kiocb *iocb, struct iov_iter *to, long ret) {
+    (void)ctx;
+    (void)iocb;
+    (void)to;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("fentry/obi_dummy_fs_write")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fentry_xfs_write, struct kiocb *iocb) {
+    (void)ctx;
+    fs_probe_entry(iocb, fs_type_xfs, fs_op_write);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_write")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fexit_xfs_write, struct kiocb *iocb, struct iov_iter *from, long ret) {
+    (void)ctx;
+    (void)iocb;
+    (void)from;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("fentry/obi_dummy_fs_fsync")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(
+    obi_stats_fentry_xfs_fsync, struct file *file, loff_t start, loff_t end, int datasync) {
+    (void)ctx;
+    (void)start;
+    (void)end;
+    (void)datasync;
+    fs_probe_entry_file(file, fs_type_xfs, fs_op_fsync);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_fsync")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(
+    obi_stats_fexit_xfs_fsync, struct file *file, loff_t start, loff_t end, int datasync, int ret) {
+    (void)ctx;
+    (void)file;
+    (void)start;
+    (void)end;
+    (void)datasync;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("fentry/obi_dummy_fs_read")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fentry_btrfs_read, struct kiocb *iocb) {
+    (void)ctx;
+    fs_probe_entry(iocb, fs_type_btrfs, fs_op_read);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_read")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fexit_btrfs_read, struct kiocb *iocb, struct iov_iter *to, long ret) {
+    (void)ctx;
+    (void)iocb;
+    (void)to;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("fentry/obi_dummy_fs_write")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fentry_btrfs_write, struct kiocb *iocb) {
+    (void)ctx;
+    fs_probe_entry(iocb, fs_type_btrfs, fs_op_write);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_write")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fexit_btrfs_write, struct kiocb *iocb, struct iov_iter *from, long ret) {
+    (void)ctx;
+    (void)iocb;
+    (void)from;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("fentry/obi_dummy_fs_fsync")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(
+    obi_stats_fentry_btrfs_fsync, struct file *file, loff_t start, loff_t end, int datasync) {
+    (void)ctx;
+    (void)start;
+    (void)end;
+    (void)datasync;
+    fs_probe_entry_file(file, fs_type_btrfs, fs_op_fsync);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_fsync")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fexit_btrfs_fsync,
+             struct file *file,
+             loff_t start,
+             loff_t end,
+             int datasync,
+             int ret) {
+    (void)ctx;
+    (void)file;
+    (void)start;
+    (void)end;
+    (void)datasync;
+    fs_probe_exit(ret);
+    return 0;
+}
+
 SEC("kprobe/obi_dummy_fs_read")
 int BPF_KPROBE(obi_stats_kprobe_nfs_read, struct kiocb *iocb) {
     (void)ctx;
@@ -510,6 +714,132 @@ int BPF_KPROBE(obi_stats_kprobe_fuse_fsync, struct file *file) {
 
 SEC("kretprobe/obi_dummy_fs_fsync")
 int BPF_KRETPROBE(obi_stats_kretprobe_fuse_fsync, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_read")
+int BPF_KPROBE(obi_stats_kprobe_ext4_read, struct kiocb *iocb) {
+    (void)ctx;
+    fs_probe_entry(iocb, fs_type_ext4, fs_op_read);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_read")
+int BPF_KRETPROBE(obi_stats_kretprobe_ext4_read, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_write")
+int BPF_KPROBE(obi_stats_kprobe_ext4_write, struct kiocb *iocb) {
+    (void)ctx;
+    fs_probe_entry(iocb, fs_type_ext4, fs_op_write);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_write")
+int BPF_KRETPROBE(obi_stats_kretprobe_ext4_write, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_fsync")
+int BPF_KPROBE(obi_stats_kprobe_ext4_fsync, struct file *file) {
+    (void)ctx;
+    fs_probe_entry_file(file, fs_type_ext4, fs_op_fsync);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_fsync")
+int BPF_KRETPROBE(obi_stats_kretprobe_ext4_fsync, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_read")
+int BPF_KPROBE(obi_stats_kprobe_xfs_read, struct kiocb *iocb) {
+    (void)ctx;
+    fs_probe_entry(iocb, fs_type_xfs, fs_op_read);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_read")
+int BPF_KRETPROBE(obi_stats_kretprobe_xfs_read, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_write")
+int BPF_KPROBE(obi_stats_kprobe_xfs_write, struct kiocb *iocb) {
+    (void)ctx;
+    fs_probe_entry(iocb, fs_type_xfs, fs_op_write);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_write")
+int BPF_KRETPROBE(obi_stats_kretprobe_xfs_write, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_fsync")
+int BPF_KPROBE(obi_stats_kprobe_xfs_fsync, struct file *file) {
+    (void)ctx;
+    fs_probe_entry_file(file, fs_type_xfs, fs_op_fsync);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_fsync")
+int BPF_KRETPROBE(obi_stats_kretprobe_xfs_fsync, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_read")
+int BPF_KPROBE(obi_stats_kprobe_btrfs_read, struct kiocb *iocb) {
+    (void)ctx;
+    fs_probe_entry(iocb, fs_type_btrfs, fs_op_read);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_read")
+int BPF_KRETPROBE(obi_stats_kretprobe_btrfs_read, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_write")
+int BPF_KPROBE(obi_stats_kprobe_btrfs_write, struct kiocb *iocb) {
+    (void)ctx;
+    fs_probe_entry(iocb, fs_type_btrfs, fs_op_write);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_write")
+int BPF_KRETPROBE(obi_stats_kretprobe_btrfs_write, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_fsync")
+int BPF_KPROBE(obi_stats_kprobe_btrfs_fsync, struct file *file) {
+    (void)ctx;
+    fs_probe_entry_file(file, fs_type_btrfs, fs_op_fsync);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_fsync")
+int BPF_KRETPROBE(obi_stats_kretprobe_btrfs_fsync, long ret) {
     (void)ctx;
     fs_probe_exit(ret);
     return 0;

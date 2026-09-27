@@ -178,6 +178,12 @@ func fsTypeStr(f FsTypeCode) string {
 		return string(FsCIFS)
 	case CodeFsFUSE:
 		return string(FsFUSE)
+	case CodeFsExt4:
+		return string(FsExt4)
+	case CodeFsXFS:
+		return string(FsXFS)
+	case CodeFsBtrfs:
+		return string(FsBtrfs)
 	default:
 		return string(FsUnknown)
 	}

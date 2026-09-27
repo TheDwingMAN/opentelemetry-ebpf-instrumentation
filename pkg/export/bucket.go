@@ -42,7 +42,7 @@ var DefaultBuckets = Buckets{
 	// a deeply saturated device.
 	StatDiskQueueDepthHistogram: []float64{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024},
 
-	// Network filesystem ops: sub-millisecond page-cache hits up to multi-second
+	// Filesystem ops: sub-millisecond page-cache hits up to multi-second
 	// stalls on a degraded server.
 	StatFsOperationDurationHistogram: []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 2.5, 5.0},
 }

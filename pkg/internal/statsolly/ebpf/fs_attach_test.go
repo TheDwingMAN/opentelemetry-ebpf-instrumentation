@@ -16,7 +16,7 @@ import (
 func TestPlanFsAttachPerFilesystem(t *testing.T) {
 	// nfs: module BTF present -> fentry. ceph: symbols present but no module
 	// BTF -> kprobe. cifs: nothing present -> skipped entirely.
-	btf := func(mod string) bool { return mod == "nfs" }
+	capable := func(module, _ string) bool { return module == "nfs" }
 	sym := func(cands []string) (string, bool) {
 		for _, c := range cands {
 			if c == "nfs_file_read" || c == "nfs_file_write" ||
@@ -27,7 +27,7 @@ func TestPlanFsAttachPerFilesystem(t *testing.T) {
 		return "", false
 	}
 
-	plans := planFsAttachWith(fsTargets, btf, sym)
+	plans := planFsAttachWith(fsTargets, capable, sym)
 
 	byFs := map[FsTypeCode]fsAttachPlan{}
 	for _, p := range plans {
@@ -48,7 +48,7 @@ func TestPlanFsAttachPerFilesystem(t *testing.T) {
 func TestPlanFsAttachRequiresBothSymbols(t *testing.T) {
 	// A filesystem whose write symbol is missing must be skipped entirely
 	// rather than attached read-only.
-	btf := func(string) bool { return true }
+	capable := func(string, string) bool { return true }
 	sym := func(cands []string) (string, bool) {
 		for _, c := range cands {
 			if c == "nfs_file_read" {
@@ -57,7 +57,7 @@ func TestPlanFsAttachRequiresBothSymbols(t *testing.T) {
 		}
 		return "", false
 	}
-	plans := planFsAttachWith(fsTargets[:1], btf, sym)
+	plans := planFsAttachWith(fsTargets[:1], capable, sym)
 	assert.Empty(t, plans)
 }
 
@@ -65,7 +65,7 @@ func TestPlanFsAttachFsyncResolvedIndependently(t *testing.T) {
 	// nfs: read, write and fsync all present -> FsyncSym set.
 	// ceph: read and write present, fsync candidate absent -> plan still
 	// created (read/write attach), but FsyncSym is empty.
-	btf := func(string) bool { return true }
+	capable := func(string, string) bool { return true }
 	sym := func(cands []string) (string, bool) {
 		for _, c := range cands {
 			switch c {
@@ -77,7 +77,7 @@ func TestPlanFsAttachFsyncResolvedIndependently(t *testing.T) {
 		return "", false
 	}
 
-	plans := planFsAttachWith(fsTargets, btf, sym)
+	plans := planFsAttachWith(fsTargets, capable, sym)
 
 	byFs := map[FsTypeCode]fsAttachPlan{}
 	for _, p := range plans {
