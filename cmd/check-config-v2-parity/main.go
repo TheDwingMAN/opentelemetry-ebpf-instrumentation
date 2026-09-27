@@ -406,6 +406,15 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsTCPIo() {
 		want = append(want, "tcp_io")
 	}
+	if features.StatsDiskIO() {
+		want = append(want, "disk_io")
+	}
+	if features.StatsDiskOperations() {
+		want = append(want, "disk_operations")
+	}
+	if features.StatsDiskOperationTime() {
+		want = append(want, "disk_operation_time")
+	}
 	if features.StatsDiskOperationDuration() {
 		want = append(want, "disk_operation_duration")
 	}

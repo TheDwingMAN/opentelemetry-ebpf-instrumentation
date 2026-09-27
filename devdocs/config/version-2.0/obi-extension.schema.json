@@ -2095,6 +2095,9 @@
                   "tcp_successful_connections",
                   "tcp_retransmits",
                   "tcp_io",
+                  "disk_io",
+                  "disk_operations",
+                  "disk_operation_time",
                   "disk_operation_duration"
                 ]
               },

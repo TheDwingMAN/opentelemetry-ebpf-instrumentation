@@ -24,7 +24,7 @@ func TestV2ToRuntimeNetworkCaptureAndStatsRoundTrip(t *testing.T) {
 		export.FeatureStatsTCPFailedConnections |
 		export.FeatureStatsTCPIo |
 		export.FeatureStatsTCPSuccessfulConnections |
-		export.FeatureStatsDiskOperationDuration
+		export.FeatureStatsDisk
 
 	cfg.NetworkFlows.Enable = true
 	cfg.NetworkFlows.Source = obi.EbpfSourceTC
@@ -103,7 +103,7 @@ func TestV2ToRuntimeNetworkCaptureAndStatsRoundTrip(t *testing.T) {
 	require.Equal(t, 83, got.Stats.ReverseDNS.CacheLen)
 	require.Equal(t, 84*time.Second, got.Stats.ReverseDNS.CacheTTL)
 	require.True(t, got.Stats.Print)
-	require.Equal(t, export.FeatureNetwork|export.FeatureStatsTCPFailedConnections|export.FeatureStatsTCPIo|export.FeatureStatsTCPSuccessfulConnections|export.FeatureStatsDiskOperationDuration, got.Metrics.Features)
+	require.Equal(t, export.FeatureNetwork|export.FeatureStatsTCPFailedConnections|export.FeatureStatsTCPIo|export.FeatureStatsTCPSuccessfulConnections|export.FeatureStatsDisk, got.Metrics.Features)
 }
 
 func TestV2ToRuntimePartialNetworkCapturePreservesMissingMetadataDefaults(t *testing.T) {

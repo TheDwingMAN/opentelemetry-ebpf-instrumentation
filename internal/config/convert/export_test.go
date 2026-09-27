@@ -1052,12 +1052,15 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 		t.Parallel()
 
 		cfg := defaultRuntimeConfig()
-		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsDiskOperationDuration
+		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsDisk
 
 		_, ext := RuntimeToV2(&cfg)
 
 		require.ElementsMatch(t, []string{
 			"tcp_rtt",
+			"disk_io",
+			"disk_operations",
+			"disk_operation_time",
 			"disk_operation_duration",
 		}, value(t, ext.Capture.Network, "stats", "features"))
 	})

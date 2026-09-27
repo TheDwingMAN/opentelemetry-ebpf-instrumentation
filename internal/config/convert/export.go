@@ -380,6 +380,9 @@ const (
 	statsFeatureTCPSuccessfulConnections = "tcp_successful_connections"
 	statsFeatureTCPRetransmits           = "tcp_retransmits"
 	statsFeatureTCPIo                    = "tcp_io"
+	statsFeatureDiskIO                   = "disk_io"
+	statsFeatureDiskOperations           = "disk_operations"
+	statsFeatureDiskOperationTime        = "disk_operation_time"
 	statsFeatureDiskOperationDuration    = "disk_operation_duration"
 )
 
@@ -399,6 +402,15 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsTCPIo() {
 		out = append(out, statsFeatureTCPIo)
+	}
+	if features.StatsDiskIO() {
+		out = append(out, statsFeatureDiskIO)
+	}
+	if features.StatsDiskOperations() {
+		out = append(out, statsFeatureDiskOperations)
+	}
+	if features.StatsDiskOperationTime() {
+		out = append(out, statsFeatureDiskOperationTime)
 	}
 	if features.StatsDiskOperationDuration() {
 		out = append(out, statsFeatureDiskOperationDuration)
