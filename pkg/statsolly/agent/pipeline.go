@@ -41,8 +41,8 @@ func fsIoPID(s *ebpf.Stat) (pidNs, hostPID, sDev uint32, ok bool) {
 
 // noPVCLookup reports every volume as unbound. Used when Kubernetes is
 // disabled or no API client is reachable, so the decorator still attributes the
-// persistent volume name from the mount path without a claim name.
-func noPVCLookup(context.Context, string) (string, string, bool) { return "", "", false }
+// persistent volume name from the mount path without a claim name or storage class.
+func noPVCLookup(context.Context, string) (string, string, string, bool) { return "", "", "", false }
 
 // mockable functions for testing
 var newRingBufTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {

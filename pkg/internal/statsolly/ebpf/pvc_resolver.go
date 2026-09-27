@@ -12,16 +12,17 @@ import (
 )
 
 // PVCLookup resolves the namespace and claim name of the PersistentVolumeClaim
-// bound to a PersistentVolume, identified by its PV name.
-type PVCLookup func(ctx context.Context, pvName string) (namespace, claimName string, ok bool)
+// bound to a PersistentVolume, identified by its PV name, and the storage class name.
+type PVCLookup func(ctx context.Context, pvName string) (namespace, claimName, storageClass string, ok bool)
 
 // maxCachedPVCLookups bounds the cache built by CachedPVCLookup, so a node
 // churning through many distinct PVs cannot grow it without limit.
 const maxCachedPVCLookups = 4096
 
 type pvcCacheEntry struct {
-	namespace string
-	claimName string
+	namespace    string
+	claimName    string
+	storageClass string
 }
 
 type pvcCache struct {
@@ -40,17 +41,17 @@ func CachedPVCLookup(resolve PVCLookup) PVCLookup {
 	return c.get
 }
 
-func (c *pvcCache) get(ctx context.Context, pvName string) (string, string, bool) {
+func (c *pvcCache) get(ctx context.Context, pvName string) (string, string, string, bool) {
 	c.mu.RLock()
 	entry, ok := c.entries[pvName]
 	c.mu.RUnlock()
 	if ok {
-		return entry.namespace, entry.claimName, true
+		return entry.namespace, entry.claimName, entry.storageClass, true
 	}
 
-	namespace, claimName, ok := c.resolve(ctx, pvName)
+	namespace, claimName, storageClass, ok := c.resolve(ctx, pvName)
 	if !ok {
-		return "", "", false
+		return "", "", "", false
 	}
 
 	c.mu.Lock()
@@ -65,10 +66,10 @@ func (c *pvcCache) get(ctx context.Context, pvName string) (string, string, bool
 		}
 		c.order = append(c.order, pvName)
 	}
-	c.entries[pvName] = pvcCacheEntry{namespace: namespace, claimName: claimName}
+	c.entries[pvName] = pvcCacheEntry{namespace: namespace, claimName: claimName, storageClass: storageClass}
 	c.mu.Unlock()
 
-	return namespace, claimName, true
+	return namespace, claimName, storageClass, true
 }
 
 // ResolveMount exposes resolveMount to packages outside ebpf, such as the
@@ -79,7 +80,7 @@ func ResolveMount(sDev uint32) (MountInfo, bool) {
 }
 
 // K8sPVCLookup resolves a PersistentVolume to the claim bound to it by reading
-// the PV's spec.claimRef on demand.
+// the PV's spec.claimRef on demand, and returns the storage class name.
 //
 // This is a lazy API read rather than a watch. A PV-to-PVC binding is fixed for
 // the life of the claim, so wrapped in CachedPVCLookup it costs one GET per
@@ -87,11 +88,11 @@ func ResolveMount(sDev uint32) (MountInfo, bool) {
 // PersistentVolumeClaims instead would mean two more cluster-wide informers and
 // the RBAC to match, for data that never changes once bound.
 func K8sPVCLookup(client kubernetes.Interface) PVCLookup {
-	return func(ctx context.Context, pvName string) (string, string, bool) {
+	return func(ctx context.Context, pvName string) (string, string, string, bool) {
 		pv, err := client.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
 		if err != nil || pv.Spec.ClaimRef == nil {
-			return "", "", false
+			return "", "", "", false
 		}
-		return pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name, true
+		return pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name, pv.Spec.StorageClassName, true
 	}
 }

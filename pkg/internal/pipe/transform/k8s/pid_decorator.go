@@ -100,12 +100,15 @@ func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs,
 
 	a.Metadata[attr.K8sPersistentVolumeName] = mountInfo.PVName
 
-	namespace, claimName, ok := d.pvc(ctx, mountInfo.PVName)
+	namespace, claimName, storageClass, ok := d.pvc(ctx, mountInfo.PVName)
 	if !ok {
 		return
 	}
 
 	a.Metadata[attr.K8sPersistentVolumeClaimName] = claimName
+	if storageClass != "" {
+		a.Metadata[attr.K8sStorageClassName] = storageClass
+	}
 	if a.Metadata[attr.K8sNamespaceName] == "" {
 		a.Metadata[attr.K8sNamespaceName] = namespace
 	}
