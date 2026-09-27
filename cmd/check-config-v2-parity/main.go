@@ -406,6 +406,9 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsTCPIo() {
 		want = append(want, "tcp_io")
 	}
+	if features.StatsDiskOperationDuration() {
+		want = append(want, "disk_operation_duration")
+	}
 
 	got := toStringSlice(featuresValue)
 	if !sameStringSet(got, want) {

@@ -2077,7 +2077,7 @@
         },
         "stats": {
           "type": "object",
-          "description": "TCP stats capture controls.",
+          "description": "TCP and block I/O (disk) stats capture controls.",
           "additionalProperties": true,
           "properties": {
             "enabled": {
@@ -2094,11 +2094,12 @@
                   "tcp_failed_connections",
                   "tcp_successful_connections",
                   "tcp_retransmits",
-                  "tcp_io"
+                  "tcp_io",
+                  "disk_operation_duration"
                 ]
               },
               "default": [],
-              "description": "Enabled TCP stats families.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones and the block I/O (disk) ones.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",
