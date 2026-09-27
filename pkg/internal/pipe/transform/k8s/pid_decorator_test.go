@@ -253,3 +253,47 @@ func TestPIDMetadataDecoratorProvider_BypassesWhenStoreNil(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Same(t, item, got[0])
 }
+
+// On a ReadWriteMany volume the mount's pod is one of several. When the PID
+// path cannot name the process, the volume and claim are still certain and
+// must be reported; the pod must not be guessed from the mount.
+func TestPIDMetadataDecorator_SharedVolumeKeepsVolumeButNotPod(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	store := newPIDTestStore(t)
+	podMeta := &informer.ObjectMeta{
+		Name: "first-mounter", Namespace: "vol-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{Uid: "pod-uid-2"},
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
+
+	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-2", PVName: "pvc-shared", VolumeType: "nfs", Shared: true}, true
+	}
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	pvc := func(_ context.Context, _ string) (string, string, string, bool) {
+		return "vol-ns", "shared-claim", "obi-nfs", true
+	}
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pvc, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	input.Send([]*pidTestItem{{pidNs: 1, hostPID: 1, sDev: 42, hasPID: true}})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0].Metadata[attr.K8sPodName], "a shared volume must not name the first mounter")
+	assert.Equal(t, "pvc-shared", got[0].Metadata[attr.K8sPersistentVolumeName])
+	assert.Equal(t, "shared-claim", got[0].Metadata[attr.K8sPersistentVolumeClaimName])
+	assert.Equal(t, "obi-nfs", got[0].Metadata[attr.K8sStorageClassName])
+	assert.Equal(t, "vol-ns", got[0].Metadata[attr.K8sNamespaceName], "the claim's namespace is still certain")
+}
