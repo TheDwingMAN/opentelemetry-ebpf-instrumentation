@@ -238,3 +238,27 @@ func TestScanForMountSinglePodIsNotShared(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, info.Shared)
 }
+
+// A second pod mounting a volume flips Shared, which decides whether the
+// mount may name a pod at all; the watcher drops the cache on such a change
+// and the next lookup must see the second mount rather than the TTL.
+func TestInvalidateMountCacheSeesNewSharer(t *testing.T) {
+	const first = "36 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw"
+	const second = "37 35 0:32 / /var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw"
+	withMountInfo(t, first)
+
+	info, ok := resolveMount(32)
+	require.True(t, ok)
+	require.False(t, info.Shared)
+
+	require.NoError(t, os.WriteFile(mountInfoPath, []byte(first+"\n"+second+"\n"), 0o644))
+
+	info, _ = resolveMount(32)
+	assert.False(t, info.Shared, "still served from cache until the table is known to have changed")
+
+	invalidateMountCache()
+
+	info, ok = resolveMount(32)
+	require.True(t, ok)
+	assert.True(t, info.Shared)
+}

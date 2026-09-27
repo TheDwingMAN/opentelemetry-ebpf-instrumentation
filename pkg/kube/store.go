@@ -398,6 +398,15 @@ func (s *Store) PodByContainerID(cid string) *kube.CachedObjMeta {
 	return s.podsByContainer[cid]
 }
 
+// PodContainerByContainerID returns the pod metadata and container name for
+// a container ID, as found in a process's cgroup path. It serves lookups for
+// processes the Store does not track, where PodContainerByPIDNs cannot.
+func (s *Store) PodContainerByContainerID(cid string) (*kube.CachedObjMeta, string) {
+	s.access.RLock()
+	defer s.access.RUnlock()
+	return s.podContainerByInfo(&container.Info{ContainerID: cid})
+}
+
 func (s *Store) PodByUID(uid string) *kube.CachedObjMeta {
 	s.access.RLock()
 	defer s.access.RUnlock()
