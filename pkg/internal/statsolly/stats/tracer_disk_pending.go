@@ -4,6 +4,7 @@
 package stats // import "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 
 import (
+	"errors"
 	"log/slog"
 	"maps"
 	"slices"
@@ -40,14 +41,52 @@ func (e ebpfRequests) requests() ([]ebpf.StatsDiskRqStartT, error) {
 	return append(requests, bios...), err
 }
 
-// inFlightEntries returns the values of a map of requests or bios in flight, keyed by their address. The
-// kernel deletes entries while the map is iterated, and the iteration starts over from the first
-// entry when the entry at the cursor is gone, so the entries are deduplicated by key.
+// inFlightBatchLen is how many entries a batch lookup of the requests in flight reads at once
+const inFlightBatchLen = 1024
+
+// inFlightEntries returns the values of a map of requests or bios in flight, keyed by their
+// address. Requests complete and new ones start while the map is read, so the read must be as
+// short as possible not to count the same reader several times: a batch lookup reads it in a
+// few system calls, where iterating it takes two per entry. Kernels without batch map operations
+// (e.g. RHEL 8) iterate it.
 func inFlightEntries(starts *ciliumebpf.Map) ([]ebpf.StatsDiskRqStartT, error) {
+	if entries, err := batchInFlightEntries(starts); err == nil {
+		return entries, nil
+	}
+	return iterateInFlightEntries(starts.Iterate())
+}
+
+func batchInFlightEntries(starts *ciliumebpf.Map) ([]ebpf.StatsDiskRqStartT, error) {
+	keys := make([]uint64, inFlightBatchLen)
+	values := make([]ebpf.StatsDiskRqStartT, inFlightBatchLen)
+	var entries []ebpf.StatsDiskRqStartT
+	cursor := ciliumebpf.MapBatchCursor{}
+	for {
+		n, err := starts.BatchLookup(&cursor, keys, values, nil)
+		entries = append(entries, values[:n]...)
+		// the kernel reports the end of the map as a missing key
+		if errors.Is(err, ciliumebpf.ErrKeyNotExist) {
+			return entries, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+// mapIterator is the part of a map iterator that iterateInFlightEntries uses, for testing
+type mapIterator interface {
+	Next(keyOut, valueOut any) bool
+	Err() error
+}
+
+// iterateInFlightEntries iterates the map. The kernel deletes entries while it is iterated, and
+// the iteration starts over from the first entry when the entry at the cursor is gone, so the
+// entries are deduplicated by key.
+func iterateInFlightEntries(iter mapIterator) ([]ebpf.StatsDiskRqStartT, error) {
 	byAddress := map[uint64]ebpf.StatsDiskRqStartT{}
 	var key uint64
 	var start ebpf.StatsDiskRqStartT
-	iter := starts.Iterate()
 	for iter.Next(&key, &start) {
 		byAddress[key] = start
 	}

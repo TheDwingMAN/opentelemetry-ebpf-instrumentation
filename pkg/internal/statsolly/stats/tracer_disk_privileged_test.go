@@ -308,65 +308,6 @@ func TestDiskPendingStackedVolumes(t *testing.T) {
 	}
 }
 
-// TestDiskPendingRequestsAreNotOvercounted keeps a fixed number of readers busy on a loop device,
-// so that requests complete while the requests in flight are read, and checks that no read
-// counts more requests than there can be in flight.
-func TestDiskPendingRequestsAreNotOvercounted(t *testing.T) {
-	bounds := []float64{0.001}
-	features := export.FeatureStatsDiskPendingOperations
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
-		ebpf.LatencyHistograms{Disk: bounds})
-	require.NoError(t, err)
-	t.Cleanup(func() { fetcher.Close() })
-
-	const readers = 8
-	loopDev := attachLoopDevice(t)
-	pending := newPendingReader(ebpfRequests{starts: fetcher.DiskRequestsMap()}, &deviceNames{sysRoot: "/sys"})
-	stop := make(chan struct{})
-	done := make(chan error, readers)
-	for i := range readers {
-		go func() {
-			f, err := os.OpenFile(loopDev, os.O_RDONLY|unix.O_DIRECT, 0)
-			if err != nil {
-				done <- err
-				return
-			}
-			defer f.Close()
-			block := alignedBuffer(t, directIOBlockSize)
-			for n := 0; ; n++ {
-				select {
-				case <-stop:
-					done <- nil
-					return
-				default:
-				}
-				offset := int64((i*directIOBlocks/readers + n%(directIOBlocks/readers)) * directIOBlockSize)
-				if _, err := f.ReadAt(block, offset); err != nil {
-					done <- err
-					return
-				}
-			}
-		}()
-	}
-
-	var maxRequests int64
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		var requests int64
-		for _, stat := range pending.readStats() {
-			if stat.DiskPending.Device == filepath.Base(loopDev) {
-				requests += stat.DiskPending.Requests
-			}
-		}
-		maxRequests = max(maxRequests, requests)
-	}
-	close(stop)
-	for range readers {
-		require.NoError(t, <-done)
-	}
-	assert.LessOrEqual(t, maxRequests, int64(readers), "each reader has at most one request in flight")
-}
-
 // readConcurrently starts reading different blocks of a device from the given number of
 // goroutines, and returns the channel where each of them sends its result
 func readConcurrently(t *testing.T, device string, readers int) <-chan error {

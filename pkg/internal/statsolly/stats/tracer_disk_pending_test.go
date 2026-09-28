@@ -83,3 +83,37 @@ func TestPendingReaderForgetsIdleDevices(t *testing.T) {
 	}
 	assert.Empty(t, r.readStats(), "forgotten after being idle for long")
 }
+
+// restartingIterator yields its entries like a map iteration that starts over from the first
+// entry after some of them were deleted
+type restartingIterator struct {
+	keys   []uint64
+	starts []ebpf.StatsDiskRqStartT
+	next   int
+}
+
+func (it *restartingIterator) Next(keyOut, valueOut any) bool {
+	if it.next >= len(it.keys) {
+		return false
+	}
+	*keyOut.(*uint64) = it.keys[it.next]
+	*valueOut.(*ebpf.StatsDiskRqStartT) = it.starts[it.next]
+	it.next++
+	return true
+}
+
+func (it *restartingIterator) Err() error {
+	return nil
+}
+
+func TestIteratedRequestsAreCountedOnce(t *testing.T) {
+	read := inFlight(ebpf.StatsDiskOpDiskOpRead, 10)
+	iter := &restartingIterator{
+		// the iteration started over after the third entry
+		keys:   []uint64{0xa0, 0xb0, 0xc0, 0xa0, 0xb0, 0xd0},
+		starts: []ebpf.StatsDiskRqStartT{read, read, read, read, read, read},
+	}
+	requests, err := iterateInFlightEntries(iter)
+	require.NoError(t, err)
+	assert.Len(t, requests, 4)
+}
