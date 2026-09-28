@@ -38,6 +38,14 @@ Exception attributes OBI's Go SDK tracer sets on relayed manual spans.
 | --- | --- | --- | --- | --- |
 | `exception.message` | string | stable | The exception message. | Division by zero; Can't convert 'int' object to str implicitly |
 
+## `registry.obi.fs`
+
+Attributes of OBI's file sync statistics that the semantic conventions don't define.
+
+| Attribute | Type | Stability | Description | Examples |
+| --- | --- | --- | --- | --- |
+| `obi.fs.sync.type` | enum | development | System call that synced the files. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
+
 ## `registry.obi.gen_ai`
 
 GenAI attributes OBI emits that are not part of upstream semconv.

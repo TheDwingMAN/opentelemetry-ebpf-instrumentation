@@ -393,4 +393,8 @@ const (
 	// DiskStacked tells whether system.device is built on other block devices, which report the
 	// same I/O too
 	DiskStacked = Name("obi.disk.stacked")
+	// FsSyncType is the call that synced files: fsync, fdatasync, sync, syncfs or sync_file_range
+	FsSyncType           = Name("obi.fs.sync.type")
+	FilesystemMountpoint = Name(semconv.SystemFilesystemMountpointKey)
+	FilesystemType       = Name(semconv.SystemFilesystemTypeKey)
 )

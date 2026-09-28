@@ -1255,7 +1255,7 @@ Time block I/O requests wait between their allocation and their issue to the dev
 
 ## `obi.stat.fs.sync.duration`
 
-Duration of file syncs (fsync, fdatasync and their equivalents), per outcome and workload that synced.
+Duration of file syncs (fsync, fdatasync, sync, syncfs and sync_file_range), per call, outcome and workload that synced.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1271,7 +1271,10 @@ Duration of file syncs (fsync, fdatasync and their equivalents), per outcome and
 | `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.fs.sync.type` | enum | `recommended` | development | System call that synced the files. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
+| `system.filesystem.type` | enum | `opt_in` | development | The filesystem type | ext4 |
 
 ## `obi.stat.tcp.failed.connections`
 

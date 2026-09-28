@@ -273,6 +273,7 @@ func TestDefault_StatFsSyncDuration(t *testing.T) {
 		attr.K8sClusterName,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
+		attr.FsSyncType,
 	}, p.For(StatFsSyncDuration))
 
 	p, err = NewAttrSelector(GroupKubernetes, &SelectorConfig{
@@ -288,7 +289,10 @@ func TestDefault_StatFsSyncDuration(t *testing.T) {
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.K8sPodName,
+		attr.FsSyncType,
 		attr.OBIIP,
+		attr.FilesystemMountpoint,
+		attr.FilesystemType,
 	}, p.For(StatFsSyncDuration), "file syncs have no device or direction")
 }
 

@@ -138,7 +138,7 @@ func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 	}
 	if cfg.FsSyncAccum != nil {
 		readers = append(readers, newFsSyncReader(ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: cfg.FsSyncAccum},
-			cfg.FsSyncLatencyBounds, containers))
+			cfg.FsSyncLatencyBounds, containers, newFilesystems()))
 	}
 	return &DiskMapTracer{readers: readers, pending: pending, bios: bios, interval: cfg.Interval}
 }
@@ -331,14 +331,16 @@ func newFsSyncReader(
 	accum accumSource[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT],
 	latencyBounds []float64,
 	containers *cgroupContainers,
+	filesystems *filesystems,
 ) *accumReader[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT] {
-	f := fsSyncStats{latencyBounds: latencyBounds, containers: containers}
+	f := fsSyncStats{latencyBounds: latencyBounds, containers: containers, filesystems: filesystems}
 	return newAccumReader("fs_sync_accum", accum, f.stat)
 }
 
 type fsSyncStats struct {
 	latencyBounds []float64
 	containers    *cgroupContainers
+	filesystems   *filesystems
 }
 
 // stat returns the file syncs that completed since the previous read of the key, or nil
@@ -351,10 +353,14 @@ func (f *fsSyncStats) stat(key ebpf.StatsFsSyncKeyT, current, previous ebpf.Stat
 	if delta.operations == 0 {
 		return nil
 	}
+	fs, _ := f.filesystems.lookup(key.S_dev)
 	return &ebpf.Stat{
 		Type: ebpf.StatTypeFsSync,
 		FsSync: &ebpf.FsSync{
-			// vfs_fsync_range reports errnos on every kernel version
+			Type:           ebpf.FsSyncTypeCode(key.Type),
+			Mountpoint:     fs.mountpoint,
+			FilesystemType: fs.fsType,
+			// file syncs report errnos on every kernel version
 			ErrorType:   diskErrorType(key.Status, false),
 			ContainerID: f.containers.containerID(key.CgroupId),
 			Latency:     delta.latency,

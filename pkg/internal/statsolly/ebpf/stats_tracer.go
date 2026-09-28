@@ -59,6 +59,12 @@ const (
 	progObiStatsKretprobeVfsFsyncRange                    = "obi_stats_kretprobe_vfs_fsync_range"
 	progObiStatsKprobeDoFsync                             = "obi_stats_kprobe_do_fsync"
 	progObiStatsKretprobeDoFsync                          = "obi_stats_kretprobe_do_fsync"
+	progObiStatsKprobeSysFsync                            = "obi_stats_kprobe_sys_fsync"
+	progObiStatsKprobeSysFdatasync                        = "obi_stats_kprobe_sys_fdatasync"
+	progObiStatsKprobeSysSyncfs                           = "obi_stats_kprobe_sys_syncfs"
+	progObiStatsKprobeSysSyncFileRange                    = "obi_stats_kprobe_sys_sync_file_range"
+	progObiStatsKprobeSysSync                             = "obi_stats_kprobe_sys_sync"
+	progObiStatsKretprobeSysFsSync                        = "obi_stats_kretprobe_sys_fs_sync"
 )
 
 // Hook point names, grouped by attach type.
@@ -69,6 +75,12 @@ const (
 	KprobeTCPCleanupRbuf = "tcp_cleanup_rbuf"
 	KprobeVfsFsyncRange  = "vfs_fsync_range"
 	KprobeDoFsync        = "do_fsync"
+	// system calls: the kernel symbols are prefixed per architecture, e.g. __x64_sys_fsync
+	KprobeSysFsync         = "sys_fsync"
+	KprobeSysFdatasync     = "sys_fdatasync"
+	KprobeSysSyncfs        = "sys_syncfs"
+	KprobeSysSyncFileRange = "sys_sync_file_range"
+	KprobeSysSync          = "sys_sync"
 
 	// Tracepoints: group/name, are validated by TestTracepointConstantFormat
 	TracepointInetSockSetState = "sock/inet_sock_set_state"
@@ -86,7 +98,7 @@ const (
 const maxDiskLatencyBounds = len(StatsDiskIoAccumT{}.LatencyCount) - 1
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_rq_start_t -type disk_cgroup_name_t -type fs_sync_key_t -type fs_sync_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_rq_start_t -type disk_cgroup_name_t -type fs_sync_type -type fs_sync_key_t -type fs_sync_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -178,7 +190,9 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	toDisable = append(toDisable, bioProgramsToDisable(bioAttached, blockLayout)...)
 	if !features.StatsFsSyncDuration() {
 		toDisable = append(toDisable, progObiStatsKprobeVfsFsyncRange, progObiStatsKretprobeVfsFsyncRange,
-			progObiStatsKprobeDoFsync, progObiStatsKretprobeDoFsync)
+			progObiStatsKprobeDoFsync, progObiStatsKretprobeDoFsync,
+			progObiStatsKprobeSysFsync, progObiStatsKprobeSysFdatasync, progObiStatsKprobeSysSyncfs,
+			progObiStatsKprobeSysSyncFileRange, progObiStatsKprobeSysSync, progObiStatsKretprobeSysFsSync)
 	}
 
 	if err := fixupSpec(spec, toDisable); err != nil {
@@ -287,6 +301,10 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		closables = append(closables, l)
 	}
 
+	if features.StatsFsSyncDuration() {
+		closables = append(closables, attachSyncSyscalls(tlog, &objects)...)
+	}
+
 	// tracepoints
 	// ObiStatsTpInetSockSetStateTcpFailedConnection (or any other probes that use role)
 	// must be attached before ObiStatsTpInetSockSetStateConnRole.
@@ -385,6 +403,38 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		bioAttached:           bioAttached,
 		fsSyncAttached:        features.StatsFsSyncDuration(),
 	}, nil
+}
+
+// attachSyncSyscalls attaches the probes of the sync system calls. The entry and return probes of
+// each system call are attached together or not at all: a sync that starts without its return
+// probe would never complete. Missing system calls are skipped, the kernel functions that sync
+// files are still probed.
+func attachSyncSyscalls(log *slog.Logger, objects *StatsObjects) []io.Closer {
+	var closables []io.Closer
+	for _, syscall := range []struct {
+		name  string
+		entry *ebpf.Program
+	}{
+		{KprobeSysFsync, objects.ObiStatsKprobeSysFsync},
+		{KprobeSysFdatasync, objects.ObiStatsKprobeSysFdatasync},
+		{KprobeSysSyncfs, objects.ObiStatsKprobeSysSyncfs},
+		{KprobeSysSyncFileRange, objects.ObiStatsKprobeSysSyncFileRange},
+		{KprobeSysSync, objects.ObiStatsKprobeSysSync},
+	} {
+		entry, err := link.Kprobe(syscall.name, syscall.entry, nil)
+		if err != nil {
+			log.Debug("skipping sync system call", "syscall", syscall.name, "error", err)
+			continue
+		}
+		ret, err := link.Kretprobe(syscall.name, objects.ObiStatsKretprobeSysFsSync, nil)
+		if err != nil {
+			entry.Close()
+			log.Debug("skipping sync system call", "syscall", syscall.name, "error", err)
+			continue
+		}
+		closables = append(closables, entry, ret)
+	}
+	return closables
 }
 
 func closeAll(closables []io.Closer) {

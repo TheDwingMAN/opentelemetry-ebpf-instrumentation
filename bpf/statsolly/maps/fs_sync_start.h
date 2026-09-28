@@ -8,11 +8,23 @@
 
 #include <common/pin_internal.h>
 
-// Start time of the file sync in progress in each thread, keyed by pid_tgid
+#include <statsolly/types.h>
+
+typedef struct fs_sync_start {
+    u64 started_ns;
+    // kernel dev_t of the filesystem being synced, 0 for all of them (sync) or if unknown
+    u32 s_dev;
+    enum fs_sync_type type;
+    // started by a sync system call, which completes it, rather than by a kernel function
+    u8 from_syscall;
+    u8 _pad[2];
+} fs_sync_start_t;
+
+// The file sync in progress in each thread, keyed by pid_tgid
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1 << 12);
     __type(key, u64);
-    __type(value, u64);
+    __type(value, fs_sync_start_t);
     __uint(pinning, OBI_PIN_INTERNAL);
 } fs_sync_start SEC(".maps");

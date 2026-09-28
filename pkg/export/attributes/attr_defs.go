@@ -178,8 +178,11 @@ func getDefinitions(
 		false,
 		nil,
 		map[attr.Name]Default{
-			attr.OBIIP:       false,
-			attr.ContainerID: false,
+			attr.OBIIP:                false,
+			attr.ContainerID:          false,
+			attr.FsSyncType:           true,
+			attr.FilesystemMountpoint: false,
+			attr.FilesystemType:       false,
 		},
 		nil,
 	)

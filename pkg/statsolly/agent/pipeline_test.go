@@ -340,16 +340,18 @@ func TestFsSyncStats(t *testing.T) {
 
 	diskEvents <- []*ebpf.Stat{
 		{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{
+			Type:    ebpf.CodeFsSyncFsync,
 			Latency: []ebpf.LatencySample{{Seconds: 0.004, Count: 3}},
 		}},
 		{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{
+			Type:      ebpf.CodeFsSyncFdatasync,
 			ErrorType: "EIO",
 			Latency:   []ebpf.LatencySample{{Seconds: 0.02, Count: 1}},
 		}},
 	}
 
-	ok := map[string]string{"error_type": ""}
-	failed := map[string]string{"error_type": "EIO"}
+	ok := map[string]string{"error_type": "", "obi_fs_sync_type": "fsync"}
+	failed := map[string]string{"error_type": "EIO", "obi_fs_sync_type": "fdatasync"}
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
 			{Name: "obi_stat_fs_sync_duration_seconds_count", Value: 3, Labels: ok},

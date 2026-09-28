@@ -85,3 +85,39 @@ groups:
           Device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass
           their I/O down to the devices below them, which report it too. To count
           the I/O once, add up the devices where it is `false`.
+
+  - id: registry.obi.fs
+    type: attribute_group
+    display_name: OBI File Sync Stats
+    brief: >
+      Attributes of OBI's file sync statistics that the semantic conventions
+      don't define.
+    attributes:
+      # Mirrors `FsSyncTypeCode` in `pkg/internal/statsolly/ebpf/stat.go`.
+      - id: obi.fs.sync.type
+        type:
+          allow_custom_values: true
+          members:
+            - id: fsync
+              value: fsync
+              stability: development
+            - id: fdatasync
+              value: fdatasync
+              stability: development
+            - id: sync
+              value: sync
+              stability: development
+            - id: syncfs
+              value: syncfs
+              stability: development
+            - id: sync_file_range
+              value: sync_file_range
+              stability: development
+            - id: unknown
+              value: unknown
+              stability: development
+        stability: development
+        brief: System call that synced the files.
+        note: >
+          `sync` flushes every filesystem, so its syncs have no
+          `system.filesystem.mountpoint`.

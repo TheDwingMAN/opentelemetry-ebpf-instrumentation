@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/prometheus/procfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
@@ -294,7 +295,7 @@ func (f *fakeFsSyncAccum) delete(key ebpf.StatsFsSyncKeyT) error {
 
 func TestFsSyncReader(t *testing.T) {
 	const containerID = "40c03570b6f4c30bc8d69923d37ee698f5cfcced92c7b7df1c47f6f7887378a9"
-	ok := ebpf.StatsFsSyncKeyT{CgroupId: 100}
+	ok := ebpf.StatsFsSyncKeyT{CgroupId: 100, Type: ebpf.StatsFsSyncTypeFsSyncTypeFdatasync, S_dev: kernelDev(253, 0)}
 	failed := ebpf.StatsFsSyncKeyT{CgroupId: 100, Status: uint8(unix.EIO)}
 	syncs := func(count, latencyNs uint64) ebpf.StatsFsSyncAccumT {
 		var a ebpf.StatsFsSyncAccumT
@@ -307,7 +308,7 @@ func TestFsSyncReader(t *testing.T) {
 	}}
 	r := newFsSyncReader(src, testBounds, newCgroupContainers(fakeCgroupNames{
 		100: "cri-containerd-" + containerID + ".scope",
-	}))
+	}), fakeFilesystems(&procfs.MountInfo{MajorMinorVer: "253:0", Root: "/", MountPoint: "/data", FSType: "xfs"}))
 
 	stats := r.readStats()
 	require.Len(t, stats, 2)
@@ -318,6 +319,9 @@ func TestFsSyncReader(t *testing.T) {
 		byError[stat.FsSync.ErrorType] = stat.FsSync
 	}
 	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 4}}, byError[""].Latency)
+	assert.Equal(t, ebpf.CodeFsSyncFdatasync, byError[""].Type)
+	assert.Equal(t, "/data", byError[""].Mountpoint)
+	assert.Equal(t, "xfs", byError[""].FilesystemType)
 	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 1}}, byError["EIO"].Latency)
 
 	src.entries[ok] = syncs(6, 2_000_000)

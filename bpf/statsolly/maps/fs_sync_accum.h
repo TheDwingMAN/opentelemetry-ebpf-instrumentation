@@ -13,9 +13,12 @@
 typedef struct fs_sync_key {
     // id of the io controller cgroup of the thread that synced the file, 0 if unknown
     u64 cgroup_id;
+    // kernel dev_t of the filesystem that was synced, 0 for all of them (sync) or if unknown
+    u32 s_dev;
     // 0 on success, otherwise the errno
     u8 status;
-    u8 _pad[7];
+    enum fs_sync_type type;
+    u8 _pad[2];
 } fs_sync_key_t;
 
 // Cumulative values: the kernel never resets them, userspace reads them periodically and

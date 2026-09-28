@@ -103,6 +103,7 @@ func testStatMetricsTCPIoGo(t *testing.T) {
 var diskStatLabels = []string{
 	"system_device", "obi_disk_partition", "obi_disk_stacked", "disk_io_direction", "error_type", "container_id", "obi_ip",
 	"k8s_cluster_name", "k8s_namespace_name", "k8s_owner_name", "k8s_kind", "k8s_pod_name", "k8s_container_name",
+	"obi_fs_sync_type", "system_filesystem_mountpoint", "system_filesystem_type",
 }
 
 var (
@@ -111,7 +112,9 @@ var (
 	optionalPartitionPattern = regexp.MustCompile(`^([a-z][a-z0-9-]*)?$`)
 	ipPattern                = regexp.MustCompile(`^[0-9a-fA-F.:]+$`)
 	// the host may keep the docker volumes on an LVM volume, reported with its disk
-	stackedPattern = regexp.MustCompile(`^(true|false)$`)
+	stackedPattern    = regexp.MustCompile(`^(true|false)$`)
+	mountpointPattern = regexp.MustCompile(`^/`)
+	fsTypePattern     = regexp.MustCompile(`^[a-z0-9._]+$`)
 )
 
 // assertDiskStatLabels checks that a series of a disk or file sync stat metric has exactly the
@@ -120,19 +123,29 @@ func assertDiskStatLabels(t assert.TestingT, series map[string]string, expected 
 	assert.Empty(t, promtest.LabelMismatches(series, diskStatLabels, expected), series)
 }
 
-// fsSyncLabels are the expected attributes of the successful file syncs of a container: all the
+// workloadLabels are the expected attributes of the successful I/O of a container: all the
 // attributes are selected, and kubernetes metadata is disabled
-func fsSyncLabels(containerID string) map[string]*regexp.Regexp {
+func workloadLabels(containerID string) map[string]*regexp.Regexp {
 	return map[string]*regexp.Regexp{
 		"container_id": regexp.MustCompile("^" + containerID + "$"),
 		"obi_ip":       ipPattern,
 	}
 }
 
+// fsSyncLabels are the expected attributes of the successful fsync(2) calls of a container, which
+// also have the filesystem of the synced file
+func fsSyncLabels(containerID string) map[string]*regexp.Regexp {
+	labels := workloadLabels(containerID)
+	labels["obi_fs_sync_type"] = regexp.MustCompile(`^fsync$`)
+	labels["system_filesystem_mountpoint"] = mountpointPattern
+	labels["system_filesystem_type"] = fsTypePattern
+	return labels
+}
+
 // diskIOLabels are the expected attributes of the successful block I/O of a container, which
 // also has the device and direction of the I/O
 func diskIOLabels(containerID, direction string) map[string]*regexp.Regexp {
-	labels := fsSyncLabels(containerID)
+	labels := workloadLabels(containerID)
 	labels["system_device"] = blockDevicePattern
 	labels["obi_disk_partition"] = optionalPartitionPattern
 	labels["obi_disk_stacked"] = stackedPattern

@@ -34,6 +34,7 @@ const (
 var diskStatLabels = []string{
 	"system_device", "obi_disk_partition", "obi_disk_stacked", "disk_io_direction", "error_type", "container_id", "obi_ip",
 	"k8s_cluster_name", "k8s_namespace_name", "k8s_owner_name", "k8s_kind", "k8s_pod_name", "k8s_container_name",
+	"obi_fs_sync_type", "system_filesystem_mountpoint", "system_filesystem_type",
 }
 
 func FeatureDiskStats() features.Feature {
@@ -46,9 +47,9 @@ func FeatureDiskStats() features.Feature {
 		Feature()
 }
 
-// fsSyncLabels are the expected attributes of the successful file syncs of the disk-io workload,
-// whose metrics select all the attributes
-func fsSyncLabels() map[string]*regexp.Regexp {
+// workloadLabels are the expected attributes of the successful I/O of the disk-io workload, whose
+// metrics select all the attributes
+func workloadLabels() map[string]*regexp.Regexp {
 	return map[string]*regexp.Regexp{
 		"container_id":       regexp.MustCompile(`^[0-9a-f]{64}$`),
 		"obi_ip":             regexp.MustCompile(`^[0-9a-fA-F.:]+$`),
@@ -61,10 +62,20 @@ func fsSyncLabels() map[string]*regexp.Regexp {
 	}
 }
 
+// fsSyncLabels are the expected attributes of the successful fsync(2) calls of the disk-io
+// workload, which also have the filesystem of the synced file
+func fsSyncLabels() map[string]*regexp.Regexp {
+	labels := workloadLabels()
+	labels["obi_fs_sync_type"] = regexp.MustCompile(`^fsync$`)
+	labels["system_filesystem_mountpoint"] = regexp.MustCompile(`^/`)
+	labels["system_filesystem_type"] = regexp.MustCompile(`^[a-z0-9._]+$`)
+	return labels
+}
+
 // diskIOLabels are the expected attributes of the successful block I/O of the disk-io workload,
 // which also has the device and direction of the I/O
 func diskIOLabels(direction string) map[string]*regexp.Regexp {
-	labels := fsSyncLabels()
+	labels := workloadLabels()
 	labels["system_device"] = blockDevicePattern
 	// only there when the I/O targets a partition, which depends on the disk layout of the node
 	labels["obi_disk_partition"] = regexp.MustCompile(`^([a-z][a-z0-9-]*)?$`)

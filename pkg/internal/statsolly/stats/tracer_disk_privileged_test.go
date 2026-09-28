@@ -359,6 +359,64 @@ func TestDiskIOWriterProcess(t *testing.T) {
 	}
 }
 
+// TestFsSyncTypesAndFilesystems runs every kind of sync on a filesystem mounted for the test, and
+// checks that each is reported with its type and the filesystem it synced
+func TestFsSyncTypesAndFilesystems(t *testing.T) {
+	if _, err := os.Stat("/sys/bus/event_source/devices/kprobe/type"); err != nil {
+		t.Skip("the kernel doesn't support kprobes")
+	}
+	mountpoint := t.TempDir()
+	require.NoError(t, unix.Mount("obi-test", mountpoint, "tmpfs", 0, "size=1m"))
+	t.Cleanup(func() { _ = unix.Unmount(mountpoint, 0) })
+
+	features := export.FeatureStatsFsSyncDuration
+	bounds := []float64{0.001}
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+		ebpf.LatencyHistograms{FsSyncDuration: bounds})
+	require.NoError(t, err)
+	t.Cleanup(func() { fetcher.Close() })
+	reader := newFsSyncReader(ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: fetcher.FsSyncAccumMap()},
+		bounds, newCgroupContainers(ebpfCgroupNames{names: fetcher.DiskCgroupNamesMap()}), newFilesystems())
+	reader.readStats()
+
+	f, err := os.Create(filepath.Join(mountpoint, "synced"))
+	require.NoError(t, err)
+	defer f.Close()
+	_, err = f.WriteString("synced")
+	require.NoError(t, err)
+	fd := int(f.Fd())
+	require.NoError(t, unix.Fsync(fd))
+	require.NoError(t, unix.Fdatasync(fd))
+	require.NoError(t, unix.Fdatasync(fd))
+	require.NoError(t, unix.SyncFileRange(fd, 0, 0, unix.SYNC_FILE_RANGE_WRITE))
+	require.NoError(t, unix.Syncfs(fd))
+	unix.Sync()
+
+	onMountpoint := map[ebpf.FsSyncTypeCode]uint64{}
+	var syncs uint64
+	for _, stat := range reader.readStats() {
+		count := uint64(0)
+		for _, latency := range stat.FsSync.Latency {
+			count += latency.Count
+		}
+		switch {
+		case stat.FsSync.Type == ebpf.CodeFsSyncSync:
+			assert.Empty(t, stat.FsSync.Mountpoint, "sync(2) syncs every filesystem")
+			syncs += count
+		case stat.FsSync.Mountpoint == mountpoint:
+			assert.Equal(t, "tmpfs", stat.FsSync.FilesystemType)
+			onMountpoint[stat.FsSync.Type] += count
+		}
+	}
+	assert.Equal(t, map[ebpf.FsSyncTypeCode]uint64{
+		ebpf.CodeFsSyncFsync:         1,
+		ebpf.CodeFsSyncFdatasync:     2,
+		ebpf.CodeFsSyncSyncFileRange: 1,
+		ebpf.CodeFsSyncSyncfs:        1,
+	}, onMountpoint)
+	assert.Positive(t, syncs)
+}
+
 // TestFsSyncIsChargedPerCgroup syncs a file, and a pipe, which can't be synced, from a process in
 // a container-like cgroup, and checks that the container is charged exactly those syncs.
 func TestFsSyncIsChargedPerCgroup(t *testing.T) {
@@ -374,7 +432,7 @@ func TestFsSyncIsChargedPerCgroup(t *testing.T) {
 	t.Cleanup(func() { fetcher.Close() })
 
 	reader := newFsSyncReader(ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: fetcher.FsSyncAccumMap()},
-		bounds, newCgroupContainers(ebpfCgroupNames{names: fetcher.DiskCgroupNamesMap()}))
+		bounds, newCgroupContainers(ebpfCgroupNames{names: fetcher.DiskCgroupNamesMap()}), newFilesystems())
 	reader.readStats() // forget the syncs that happened before this test
 
 	containerID := strings.Repeat("c3", 32)

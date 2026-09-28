@@ -193,9 +193,26 @@ func (s *Stat) ContainerID() string {
 	return ""
 }
 
+// FsSyncTypeCode aliases the bpf2go-generated constants derived from enum fs_sync_type in
+// bpf/statsolly/types.h.
+type FsSyncTypeCode uint8
+
+const (
+	CodeFsSyncFsync         = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeFsync)
+	CodeFsSyncFdatasync     = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeFdatasync)
+	CodeFsSyncSync          = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeSync)
+	CodeFsSyncSyncfs        = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeSyncfs)
+	CodeFsSyncSyncFileRange = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeSyncFileRange)
+)
+
 // FsSync is the file syncs that completed with an outcome and charged to a cgroup, since the
 // previous read of the kernel accumulation map.
 type FsSync struct {
+	Type FsSyncTypeCode
+	// Mountpoint and FilesystemType of the filesystem that was synced. Empty for sync(2), which
+	// syncs all of them, or when the filesystem is not mounted in the host mount namespace.
+	Mountpoint     string
+	FilesystemType string
 	// ErrorType is empty for successful syncs
 	ErrorType string
 	// ContainerID of the cgroup of the thread that synced. Empty outside containers.

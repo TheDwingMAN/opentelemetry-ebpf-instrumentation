@@ -95,6 +95,27 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.KeyValue{}
 		}
+	case attr.FsSyncType:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.FsSync == nil {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.FsSyncType), fsSyncTypeStr(s.FsSync.Type))
+		}
+	case attr.FilesystemMountpoint:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.FsSync == nil || s.FsSync.Mountpoint == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.FilesystemMountpoint), s.FsSync.Mountpoint)
+		}
+	case attr.FilesystemType:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.FsSync == nil || s.FsSync.FilesystemType == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.FilesystemType), s.FsSync.FilesystemType)
+		}
 	case attr.DiskIODirection:
 		getter = func(s *Stat) attribute.KeyValue {
 			if direction := diskIODirectionStr(diskOp(s)); direction != "" {
@@ -213,4 +234,20 @@ func storageErrorType(s *Stat) string {
 		return s.FsSync.ErrorType
 	}
 	return ""
+}
+
+func fsSyncTypeStr(t FsSyncTypeCode) string {
+	switch t {
+	case CodeFsSyncFsync:
+		return "fsync"
+	case CodeFsSyncFdatasync:
+		return "fdatasync"
+	case CodeFsSyncSync:
+		return "sync"
+	case CodeFsSyncSyncfs:
+		return "syncfs"
+	case CodeFsSyncSyncFileRange:
+		return "sync_file_range"
+	}
+	return "unknown"
 }

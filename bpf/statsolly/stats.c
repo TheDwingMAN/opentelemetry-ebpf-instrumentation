@@ -14,5 +14,6 @@ const enum tcp_fail_reason *unused_2 __attribute__((unused));
 const enum tcp_handshake_role *unused_3 __attribute__((unused));
 const enum network_io_direction *unused_4 __attribute__((unused));
 const enum disk_op *unused_5 __attribute__((unused));
+const enum fs_sync_type *unused_6 __attribute__((unused));
 
 char __license[] SEC("license") = "Dual MIT/GPL";

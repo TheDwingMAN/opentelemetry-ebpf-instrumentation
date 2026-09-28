@@ -55,6 +55,16 @@ enum disk_op : u8 {
     disk_op_discard = 4,
 };
 
+// The call that synced files
+enum fs_sync_type : u8 {
+    fs_sync_type_unknown = 0,
+    fs_sync_type_fsync = 1,
+    fs_sync_type_fdatasync = 2,
+    fs_sync_type_sync = 3,
+    fs_sync_type_syncfs = 4,
+    fs_sync_type_sync_file_range = 5,
+};
+
 // Width of the minor number in a kernel-internal dev_t (MINORBITS)
 enum { k_kernel_dev_minor_bits = 20 };
 

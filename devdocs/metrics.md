@@ -179,12 +179,14 @@ The opt-in `obi.disk.partition` attribute is the partition that the I/O targets,
 
 #### File sync stats
 
-`obi.stat.fs.sync.duration` measures the calls to the kernel's `vfs_fsync_range` function and, on kernels that have it as a function of its own (Linux 6.12 and later), `do_fsync`. They serve `fsync(2)`, `fdatasync(2)`, `O_SYNC` and `O_DSYNC` writes, `msync(2)` with `MS_SYNC`, and their io_uring equivalents, on any filesystem, including network filesystems. It is the time an application waits for its data to be durable, which includes queueing and journaling, unlike the block I/O metrics. Limitations:
+`obi.stat.fs.sync.duration` measures the sync system calls, `fsync(2)`, `fdatasync(2)`, `sync(2)`, `syncfs(2)` and `sync_file_range(2)`, and the calls to the kernel's `vfs_fsync_range` function (and, on kernels that have it as a function of its own, Linux 6.12 and later, `do_fsync`) outside of them. Those serve `O_SYNC` and `O_DSYNC` writes, `msync(2)` with `MS_SYNC`, and the io_uring equivalents of `fsync(2)`. It works on any filesystem, including network filesystems. It is the time an application waits for its data to be durable, which includes queueing and journaling, unlike the block I/O metrics.
 
-- It needs kprobes. On kernels without them, enabling it makes StatsO11y fail to start, like the TCP IO stats.
+The `obi.fs.sync.type` attribute tells the system call apart: syncs outside of the system calls are reported as `fsync` or `fdatasync`, depending on whether they sync the metadata too. The opt-in `system.filesystem.mountpoint` and `system.filesystem.type` attributes are the filesystem of the synced file, from the mounts of the host (`/proc/1/mountinfo`): when a filesystem is mounted more than once, its mount of the root of the filesystem with the shortest path. `sync(2)` syncs every filesystem, so it has no mountpoint. Limitations:
+
+- It needs kprobes. On kernels without them, enabling it makes StatsO11y fail to start, like the TCP IO stats. The system call probes are optional: when one can't attach, the syncs of that system call are measured through the kernel functions, if they call them.
 - A sync is charged to the workload of the thread that called it, through the cgroup of its `io` controller (`blkio` on cgroup v1), so the same cgroup name rules as the disk metrics apply.
-- Stacked filesystems, like overlayfs, sync the file of the filesystem below them: in that case the sync of the lower file is measured, once per call.
-- `sync(2)`, `syncfs(2)`, `sync_file_range(2)` and the writeback of dirty pages by the kernel are not measured.
+- Stacked filesystems, like overlayfs, sync the file of the filesystem below them: outside of the system calls, the sync of the lower file is measured, once per call, with the filesystem of the lower file.
+- The writeback of dirty pages by the kernel is not measured.
 
 ### Performance considerations
 
