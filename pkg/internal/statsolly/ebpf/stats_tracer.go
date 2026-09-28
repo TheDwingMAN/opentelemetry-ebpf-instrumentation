@@ -136,17 +136,20 @@ func tlog() *slog.Logger {
 // NewStatsFetcher loads and attaches the stat probes of the enabled features
 func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, histograms LatencyHistograms) (*StatsFetcher, error) {
 	tlog := tlog()
+	// the kernel buckets each group of histograms with the union of their boundaries in the
+	// enabled exporters
 	diskLatencyBoundsNs, err := diskLatencyBoundsToNs(histograms.Disk)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("the buckets of stat_disk_operation_duration_histogram, stat_disk_queue_duration_histogram, "+
+			"stat_disk_flush_duration_histogram and stat_disk_discard_duration_histogram: %w", err)
 	}
 	fsSyncLatencyBoundsNs, err := diskLatencyBoundsToNs(histograms.FsSyncDuration)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("the buckets of stat_fs_sync_duration_histogram: %w", err)
 	}
 	nfsLatencyBoundsNs, err := diskLatencyBoundsToNs(histograms.NFS)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("the buckets of stat_nfs_client_procedure_duration_histogram: %w", err)
 	}
 	if err := rlimit.RemoveMemlock(); err != nil {
 		tlog.Warn("can't remove mem lock. The agent could not be able to start eBPF programs",
@@ -685,7 +688,7 @@ func blockTracepointLayoutFrom(proto func(string) (*btf.FuncProto, error)) (bloc
 func diskLatencyBoundsToNs(bounds []float64) ([maxDiskLatencyBounds]uint64, error) {
 	var boundsNs [maxDiskLatencyBounds]uint64
 	if len(bounds) > maxDiskLatencyBounds {
-		return boundsNs, fmt.Errorf("disk latency histograms support up to %d bucket boundaries, got %d",
+		return boundsNs, fmt.Errorf("the kernel supports up to %d distinct boundaries across the exporters, got %d",
 			maxDiskLatencyBounds, len(bounds))
 	}
 

@@ -150,25 +150,47 @@ func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *
 }
 
 // latencyHistograms returns the boundaries the kernel buckets latencies with: the union of the
-// Prometheus and OTEL exporter boundaries, so that the kernel buckets refine both. The kernel
-// buckets all the block request latencies with the same boundaries.
+// boundaries of the enabled histograms in the enabled exporters, so that the kernel buckets refine
+// all of them. The kernel buckets all the block request latencies with the same boundaries.
 func latencyHistograms(cfg *obi.Config) ebpf.LatencyHistograms {
-	prom, otel := cfg.Prometheus.Buckets, cfg.OTELMetrics.Buckets
-	return ebpf.LatencyHistograms{
-		Disk: boundsUnion(
-			prom.StatDiskOperationDurationHistogram, otel.StatDiskOperationDurationHistogram,
-			prom.StatDiskQueueDurationHistogram, otel.StatDiskQueueDurationHistogram,
-			prom.StatDiskFlushDurationHistogram, otel.StatDiskFlushDurationHistogram,
-			prom.StatDiskDiscardDurationHistogram, otel.StatDiskDiscardDurationHistogram),
-		FsSyncDuration: boundsUnion(prom.StatFsSyncDurationHistogram, otel.StatFsSyncDurationHistogram),
-		NFS:            boundsUnion(prom.StatNFSClientProcedureDurationHistogram, otel.StatNFSClientProcedureDurationHistogram),
+	var exporters []export.Buckets
+	if cfg.Prometheus.EndpointEnabled() {
+		exporters = append(exporters, cfg.Prometheus.Buckets)
 	}
+	if cfg.OTELMetrics.EndpointEnabled() {
+		exporters = append(exporters, cfg.OTELMetrics.Buckets)
+	}
+	features := cfg.Metrics.Features
+	var histograms ebpf.LatencyHistograms
+	for _, buckets := range exporters {
+		if features.StatsDiskOperationDuration() {
+			histograms.Disk = append(histograms.Disk, buckets.StatDiskOperationDurationHistogram...)
+		}
+		if features.StatsDiskQueueDuration() {
+			histograms.Disk = append(histograms.Disk, buckets.StatDiskQueueDurationHistogram...)
+		}
+		if features.StatsDiskFlush() {
+			histograms.Disk = append(histograms.Disk, buckets.StatDiskFlushDurationHistogram...)
+		}
+		if features.StatsDiskDiscard() {
+			histograms.Disk = append(histograms.Disk, buckets.StatDiskDiscardDurationHistogram...)
+		}
+		if features.StatsFsSyncDuration() {
+			histograms.FsSyncDuration = append(histograms.FsSyncDuration, buckets.StatFsSyncDurationHistogram...)
+		}
+		if features.StatsNFSClientProcedureDuration() {
+			histograms.NFS = append(histograms.NFS, buckets.StatNFSClientProcedureDurationHistogram...)
+		}
+	}
+	histograms.Disk = sortedUnique(histograms.Disk)
+	histograms.FsSyncDuration = sortedUnique(histograms.FsSyncDuration)
+	histograms.NFS = sortedUnique(histograms.NFS)
+	return histograms
 }
 
-func boundsUnion(bounds ...[]float64) []float64 {
-	union := slices.Concat(bounds...)
-	slices.Sort(union)
-	return slices.Compact(union)
+func sortedUnique(bounds []float64) []float64 {
+	slices.Sort(bounds)
+	return slices.Compact(bounds)
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests
