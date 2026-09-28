@@ -28,7 +28,8 @@ type nfsProcedureStats struct {
 
 // stat returns the NFS RPCs that completed since the previous read of the key, or nil
 func (n *nfsProcedureStats) stat(key ebpf.StatsNfsProcedureKeyT, current, previous ebpf.StatsNfsProcedureAccumT) *ebpf.Stat {
-	if anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) {
+	if anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) ||
+		anyDecreased(current.LatencySumNs[:], previous.LatencySumNs[:]) {
 		previous = ebpf.StatsNfsProcedureAccumT{}
 	}
 	delta := latencyDelta(n.latencyBounds, current.LatencyCount[:], current.LatencySumNs[:],
@@ -54,7 +55,7 @@ func newNFSIOReader(
 	containers *cgroupContainers,
 ) *accumReader[ebpf.StatsNfsIoKeyT, uint64] {
 	stat := func(key ebpf.StatsNfsIoKeyT, current, previous uint64) *ebpf.Stat {
-		// kernel counters only grow; a decrease means the LRU map evicted and re-created the entry
+		// kernel counters only grow; a decrease means the entry was deleted and re-created
 		if current < previous {
 			previous = 0
 		}

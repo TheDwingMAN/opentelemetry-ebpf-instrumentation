@@ -333,9 +333,12 @@ type diskStats struct {
 
 // stat returns the block requests that completed since the previous read of the key, or nil
 func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsDiskIoAccumT) *ebpf.Stat {
-	// kernel counters only grow; a decrease means the LRU map evicted and re-created the entry
-	if current.Bytes < previous.Bytes || anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) ||
-		anyDecreased(current.QueueCount[:], previous.QueueCount[:]) {
+	// kernel counters only grow; a decrease means the entry was deleted and re-created
+	if current.Bytes < previous.Bytes ||
+		anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) ||
+		anyDecreased(current.LatencySumNs[:], previous.LatencySumNs[:]) ||
+		anyDecreased(current.QueueCount[:], previous.QueueCount[:]) ||
+		anyDecreased(current.QueueSumNs[:], previous.QueueSumNs[:]) {
 		previous = ebpf.StatsDiskIoAccumT{}
 	}
 	delta := latencyDelta(d.latencyBounds, current.LatencyCount[:], current.LatencySumNs[:],
@@ -381,7 +384,9 @@ type fsSyncStats struct {
 
 // stat returns the file syncs that completed since the previous read of the key, or nil
 func (f *fsSyncStats) stat(key ebpf.StatsFsSyncKeyT, current, previous ebpf.StatsFsSyncAccumT) *ebpf.Stat {
-	if anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) {
+	// kernel counters only grow; a decrease means the entry was deleted and re-created
+	if anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) ||
+		anyDecreased(current.LatencySumNs[:], previous.LatencySumNs[:]) {
 		previous = ebpf.StatsFsSyncAccumT{}
 	}
 	delta := latencyDelta(f.latencyBounds, current.LatencyCount[:], current.LatencySumNs[:],

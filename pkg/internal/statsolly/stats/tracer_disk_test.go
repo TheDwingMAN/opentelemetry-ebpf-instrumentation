@@ -117,11 +117,26 @@ func TestDiskReaderRestartsAfterEviction(t *testing.T) {
 	r := newTestDiskReader(src)
 	require.Len(t, r.readStats(), 1)
 
-	// the LRU map evicted and re-created the entry: its counters restarted from zero
+	// the entry was deleted and re-created: its counters restarted from zero
 	src.entries[writeKey(8, 0)] = accum([]uint64{4, 0, 0}, []uint64{500_000, 0, 0})
 	stats := r.readStats()
 	require.Len(t, stats, 1)
 	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.0005, Count: 4}}, stats[0].DiskIO.Latency)
+}
+
+func TestDiskReaderRestartsWhenOnlyTheLatencySumDecreased(t *testing.T) {
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
+		writeKey(8, 0): accum([]uint64{2, 0, 0}, []uint64{900_000, 0, 0}),
+	}}
+	r := newTestDiskReader(src)
+	require.Len(t, r.readStats(), 1)
+
+	// re-created with as many requests, but faster ones: the latency sum went down
+	src.entries[writeKey(8, 0)] = accum([]uint64{3, 0, 0}, []uint64{100_000, 0, 0})
+	stats := r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.0001, Count: 3}}, stats[0].DiskIO.Latency)
+	assert.InDelta(t, 0.0003, stats[0].DiskIO.Time, 1e-12)
 }
 
 func TestDiskReaderDeletesIdleEntries(t *testing.T) {
