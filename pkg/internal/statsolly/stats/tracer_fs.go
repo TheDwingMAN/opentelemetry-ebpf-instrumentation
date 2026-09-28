@@ -10,7 +10,9 @@ import (
 	"github.com/prometheus/procfs"
 )
 
-// filesystemsRefreshPeriod is the minimum time between two reads of the mount table
+// filesystemsRefreshPeriod is the time between two reads of the mount table. It is read again
+// periodically even when it knows every device, as the kernel gives the numbers of unmounted
+// filesystems to new ones, e.g. the overlay filesystems of containers.
 const filesystemsRefreshPeriod = 30 * time.Second
 
 type filesystem struct {
@@ -34,19 +36,15 @@ func newFilesystems() *filesystems {
 	}
 }
 
-// lookup returns the filesystem of a kernel dev_t. It reads the mount table again when it doesn't
-// know the device, at most once per filesystemsRefreshPeriod.
+// lookup returns the filesystem of a kernel dev_t, from a mount table read at most
+// filesystemsRefreshPeriod ago
 func (f *filesystems) lookup(sDev uint32) (filesystem, bool) {
 	if sDev == 0 {
 		return filesystem{}, false
 	}
-	if fs, ok := f.byDev[sDev]; ok {
-		return fs, true
+	if f.lastRefresh.IsZero() || f.now().Sub(f.lastRefresh) >= filesystemsRefreshPeriod {
+		f.refresh()
 	}
-	if !f.lastRefresh.IsZero() && f.now().Sub(f.lastRefresh) < filesystemsRefreshPeriod {
-		return filesystem{}, false
-	}
-	f.refresh()
 	fs, ok := f.byDev[sDev]
 	return fs, ok
 }

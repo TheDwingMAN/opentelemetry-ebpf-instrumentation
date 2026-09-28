@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/prometheus/procfs"
 	"github.com/stretchr/testify/assert"
@@ -176,9 +177,23 @@ func TestDeviceNames(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "uevent"),
 		[]byte("MAJOR=259\nMINOR=0\nDEVNAME=nvme0n1\nDEVTYPE=disk\n"), 0o644))
 
-	names := &deviceNames{sysRoot: root}
+	now := time.Now()
+	names := &deviceNames{sysRoot: root, now: func() time.Time { return now }}
 	assert.Equal(t, "nvme0n1", names.name(259, 0))
 	assert.Equal(t, "8:0", names.name(8, 0), "falls back to major:minor when sysfs has no name")
+
+	// the device was detached, and its numbers given to another one
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "uevent"),
+		[]byte("MAJOR=259\nMINOR=0\nDEVNAME=nvme1n1\nDEVTYPE=disk\n"), 0o644))
+	assert.Equal(t, "nvme0n1", names.name(259, 0), "cached")
+	now = now.Add(deviceNamesCachePeriod)
+	assert.Equal(t, "nvme1n1", names.name(259, 0), "read again once the cache expired")
+
+	// a device that appears is named at its first I/O, as unknown devices are not cached
+	other := filepath.Join(root, "dev", "block", "8:0")
+	require.NoError(t, os.MkdirAll(other, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(other, "uevent"), []byte("DEVNAME=sda\n"), 0o644))
+	assert.Equal(t, "sda", names.name(8, 0))
 }
 
 // fakeSysBlock creates the sysfs entries of a disk and its partitions: /dev/block/<maj:min>/uevent

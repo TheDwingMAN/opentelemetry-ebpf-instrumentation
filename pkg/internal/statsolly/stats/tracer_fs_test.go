@@ -43,7 +43,7 @@ func TestFilesystemsResolveTheMountOfADevice(t *testing.T) {
 	assert.False(t, ok, "an unmounted filesystem")
 }
 
-func TestFilesystemsRereadTheMountTableAtMostPeriodically(t *testing.T) {
+func TestFilesystemsRereadTheMountTablePeriodically(t *testing.T) {
 	var reads int
 	var mounts []*procfs.MountInfo
 	now := time.Now()
@@ -63,4 +63,13 @@ func TestFilesystemsRereadTheMountTableAtMostPeriodically(t *testing.T) {
 	mounted, ok := fs.lookup(kernelDev(8, 1))
 	assert.True(t, ok, "read again once the period passed")
 	assert.Equal(t, "/mnt", mounted.mountpoint)
+
+	// the filesystem was unmounted, and its device number given to another one
+	mounts = []*procfs.MountInfo{{MajorMinorVer: "8:1", Root: "/", MountPoint: "/other", FSType: "xfs"}}
+	mounted, _ = fs.lookup(kernelDev(8, 1))
+	assert.Equal(t, "/mnt", mounted.mountpoint, "not read again right away")
+	now = now.Add(filesystemsRefreshPeriod)
+	mounted, _ = fs.lookup(kernelDev(8, 1))
+	assert.Equal(t, filesystem{mountpoint: "/other", fsType: "xfs"}, mounted, "read again once the period passed, even for known devices")
+	assert.Equal(t, 3, reads)
 }

@@ -510,23 +510,49 @@ func (c *cgroupContainers) containerID(cgroupID uint64) string {
 	return id
 }
 
+// deviceNamesCachePeriod is how long device names are cached: the kernel gives the numbers of
+// removed devices to new ones, e.g. the minors of detached NVMe volumes or of loop devices
+const deviceNamesCachePeriod = 30 * time.Second
+
 // deviceNames resolves block device numbers to their kernel names, e.g. 259:0 to nvme0n1
 type deviceNames struct {
-	sysRoot    string
+	sysRoot string
+	// now returns the current time, time.Now if nil
+	now      func() time.Time
+	cachedAt time.Time
+
 	cache      map[[2]uint32]string
 	partitions map[partitionKey]string
 	stack      map[[2]uint32]bool
 }
 
+// expire forgets what is cached once deviceNamesCachePeriod passed since it started caching
+func (d *deviceNames) expire() {
+	now := time.Now()
+	if d.now != nil {
+		now = d.now()
+	}
+	if d.cache != nil && now.Sub(d.cachedAt) < deviceNamesCachePeriod {
+		return
+	}
+	d.cachedAt = now
+	d.cache = map[[2]uint32]string{}
+	d.partitions = map[partitionKey]string{}
+	d.stack = map[[2]uint32]bool{}
+}
+
 // stacked tells whether a block device is built on other block devices (see isStacked)
 func (d *deviceNames) stacked(major, minor uint32) bool {
-	if d.stack == nil {
-		d.stack = map[[2]uint32]bool{}
-	}
+	d.expire()
 	if stacked, ok := d.stack[[2]uint32{major, minor}]; ok {
 		return stacked
 	}
-	stacked := isStacked(filepath.Join(d.sysRoot, "dev", "block", fmt.Sprintf("%d:%d", major, minor)))
+	dir := filepath.Join(d.sysRoot, "dev", "block", fmt.Sprintf("%d:%d", major, minor))
+	if !exists(dir) {
+		// e.g. removed since its last I/O: not cached, the numbers may be given to another device
+		return false
+	}
+	stacked := isStacked(dir)
 	d.stack[[2]uint32{major, minor}] = stacked
 	return stacked
 }
@@ -547,20 +573,20 @@ func (d *deviceNames) partition(major, minor, partDev uint32, partno uint8) stri
 	if (partDev == 0 && partno == 0) || (partMajor == major && partMinor == minor) {
 		return ""
 	}
-	if d.partitions == nil {
-		d.partitions = map[partitionKey]string{}
-	}
+	d.expire()
 	key := partitionKey{major: major, minor: minor, partDev: partDev, partno: partno}
 	if name, ok := d.partitions[key]; ok {
 		return name
 	}
 	var name string
 	if partDev != 0 {
-		name = d.name(partMajor, partMinor)
+		name = d.knownName(partMajor, partMinor)
 	} else {
-		name = d.partitionByNumber(d.name(major, minor), partno)
+		name = d.partitionByNumber(d.knownName(major, minor), partno)
 	}
-	d.partitions[key] = name
+	if name != "" {
+		d.partitions[key] = name
+	}
 	return name
 }
 
@@ -577,20 +603,27 @@ func (d *deviceNames) partitionByNumber(disk string, partno uint8) string {
 	return ""
 }
 
+// name returns the name of a block device, or its "major:minor" numbers when sysfs doesn't name it
 func (d *deviceNames) name(major, minor uint32) string {
-	if d.cache == nil {
-		d.cache = map[[2]uint32]string{}
+	if name := d.knownName(major, minor); name != "" {
+		return name
 	}
+	// e.g. hidden NVMe multipath path devices, or a device removed since its last I/O
+	return fmt.Sprintf("%d:%d", major, minor)
+}
+
+// knownName returns the name of a block device from sysfs, or an empty string. Unknown devices
+// are not cached, as their numbers may be given to another device.
+func (d *deviceNames) knownName(major, minor uint32) string {
+	d.expire()
 	if name, ok := d.cache[[2]uint32{major, minor}]; ok {
 		return name
 	}
 	numbers := fmt.Sprintf("%d:%d", major, minor)
 	name := devNameFromUevent(filepath.Join(d.sysRoot, "dev", "block", numbers, "uevent"))
-	if name == "" {
-		// e.g. hidden NVMe multipath path devices, or a device removed since its last I/O
-		name = numbers
+	if name != "" {
+		d.cache[[2]uint32{major, minor}] = name
 	}
-	d.cache[[2]uint32{major, minor}] = name
 	return name
 }
 
