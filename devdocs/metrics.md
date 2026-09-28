@@ -188,6 +188,22 @@ The `obi.fs.sync.type` attribute tells the system call apart: syncs outside of t
 - Stacked filesystems, like overlayfs, sync the file of the filesystem below them: outside of the system calls, the sync of the lower file is measured, once per call, with the filesystem of the lower file.
 - The writeback of dirty pages by the kernel is not measured.
 
+#### Pod volume devices
+
+`obi.stat.k8s.pod.volume.device` links the pods to the disks of the block I/O metrics: it is 1 for each disk that a volume that a pod of the node mounts from a PersistentVolumeClaim is on, with the pod, the volume, the claim, the PersistentVolume, the device the volume is mounted from (`obi.disk.volume.device`) and the disk (`system.device`). A volume on a stacked device, like an LVM volume over two disks, has a series for each disk. When a pod no longer mounts a volume, its series are reported once more with 0. For example, the bytes read from the disks of each PersistentVolumeClaim, by any workload:
+
+```promql
+max by (k8s_persistentvolumeclaim_name, system_device) (obi_stat_k8s_pod_volume_device == 1)
+  * on (system_device) group_left
+sum by (system_device) (rate(obi_stat_disk_io_bytes_total{disk_io_direction="read"}[5m]))
+```
+
+OBI resolves the volumes every 30 seconds, from the Kubernetes metadata and the host:
+
+- It watches the PersistentVolumes, which needs `list` and `watch` permissions on `persistentvolumes`. With the Kubernetes metadata cache (`k8s-cache`), enable its `persistent_volumes` option instead.
+- It finds the device of a volume from where the kubelet mounts it for the pod, `<kubelet root>/pods/<pod UID>/volumes/<plugin>/<PersistentVolume>`, in the mount table of the host (that of PID 1). `hostPath` PersistentVolumes, which the kubelet doesn't mount, are found by their path on the host. OBI needs the host PID namespace, like for the other disk metrics.
+- Volumes on no block device, like NFS or tmpfs ones, and on filesystems that don't report the device they are on, like Btrfs subvolumes, are not reported. Generic ephemeral volumes are not reported either.
+
 #### NFS client stats
 
 `obi.stat.nfs.client.procedure.duration` measures the RPCs of the kernel NFS client (the `nfs` ONC RPC program, any NFS version) from the `rpc_stats_latency` tracepoint: the time from the start of each RPC to its completion, including its wait for a transport slot and its retransmissions, as `/proc/self/mountstats` counts it. `obi.stat.nfs.client.io` counts the bytes that the read and write RPCs transferred, from the `nfs_readpage_done` and `nfs_writeback_done` tracepoints. Limitations:

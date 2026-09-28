@@ -636,6 +636,12 @@ var (
 		Unit:    "By",
 		Type:    InstrumentCounter,
 	})
+	StatK8sPodVolumeDevice = metric(Name{
+		Section: "obi.stat.k8s.pod.volume.device",
+		OTEL:    "obi.stat.k8s.pod.volume.device",
+		Unit:    "{volume}",
+		Type:    InstrumentUpDownCounter,
+	})
 )
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.

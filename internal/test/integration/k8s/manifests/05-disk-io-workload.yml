@@ -26,3 +26,44 @@ spec:
           volumeMounts:
             - mountPath: /data
               name: data
+---
+# A workload that writes to a volume from a PersistentVolumeClaim, which the default storage class
+# of Kind provisions as a hostPath PersistentVolume
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: disk-io-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: disk-io-pvc
+  labels:
+    app: disk-io-pvc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: disk-io-pvc
+  template:
+    metadata:
+      labels:
+        app: disk-io-pvc
+    spec:
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: disk-io-data
+      containers:
+        - name: writer
+          image: go-disk-io:dev
+          imagePullPolicy: Never # loaded into Kind from localhost
+          volumeMounts:
+            - mountPath: /data
+              name: data

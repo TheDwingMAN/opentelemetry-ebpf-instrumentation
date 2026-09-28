@@ -442,6 +442,9 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsNFSClientIO() {
 		want = append(want, "nfs_client_io")
 	}
+	if features.StatsDiskPodVolumes() {
+		want = append(want, "disk_pod_volumes")
+	}
 
 	got := toStringSlice(featuresValue)
 	if !sameStringSet(got, want) {

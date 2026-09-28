@@ -119,6 +119,9 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.FilesystemType), s.FsSync.FilesystemType)
 		}
+	case attr.K8sVolumeName, attr.K8sVolumeType, attr.K8sPersistentVolumeClaimName, attr.K8sPersistentVolumeName,
+		attr.DiskVolumeDevice:
+		getter = podVolumeGetter(name)
 	case attr.ServerAddr:
 		getter = func(s *Stat) attribute.KeyValue {
 			if server := nfsServer(s); server != "" {
@@ -228,15 +231,42 @@ func diskIODirectionStr(op DiskOpCode) string {
 	return ""
 }
 
-// diskDevice is the device of a block I/O stat, empty for any other stat
+// diskDevice is the device of a block I/O or pod volume stat, empty for any other stat
 func diskDevice(s *Stat) string {
 	switch {
 	case s.DiskIO != nil:
 		return s.DiskIO.Device
 	case s.DiskPending != nil:
 		return s.DiskPending.Device
+	case s.PodVolume != nil:
+		return s.PodVolume.Device
 	}
 	return ""
+}
+
+// k8sVolumeTypePVC is the k8s.volume.type of the volumes that mount a PersistentVolumeClaim
+const k8sVolumeTypePVC = "persistentVolumeClaim"
+
+func podVolumeGetter(name attr.Name) attributes.Getter[*Stat, attribute.KeyValue] {
+	return func(s *Stat) attribute.KeyValue {
+		if s.PodVolume == nil {
+			return attribute.KeyValue{}
+		}
+		var value string
+		switch name {
+		case attr.K8sVolumeName:
+			value = s.PodVolume.VolumeName
+		case attr.K8sVolumeType:
+			value = k8sVolumeTypePVC
+		case attr.K8sPersistentVolumeClaimName:
+			value = s.PodVolume.ClaimName
+		case attr.K8sPersistentVolumeName:
+			value = s.PodVolume.PersistentVolume
+		case attr.DiskVolumeDevice:
+			value = s.PodVolume.MountedDevice
+		}
+		return attribute.String(string(name), value)
+	}
 }
 
 func diskOp(s *Stat) DiskOpCode {

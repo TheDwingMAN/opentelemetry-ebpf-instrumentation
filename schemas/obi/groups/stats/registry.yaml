@@ -85,6 +85,14 @@ groups:
           Device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass
           their I/O down to the devices below them, which report it too. To count
           the I/O once, add up the devices where it is `false`.
+      - id: obi.disk.volume.device
+        type: string
+        stability: development
+        brief: >
+          Block device that a volume is mounted from: the disk that
+          `system.device` names, or a partition or a stacked device (such as an
+          LVM volume) on it.
+        examples: ["dm-0", "nvme0n1p1", "sdb"]
 
   - id: registry.obi.fs
     type: attribute_group

@@ -23,6 +23,9 @@ message ObjectMeta {
   // If the Kube object is not a Pod, this field will be empty.
   optional PodInfo pod = 6;
 
+  // If the Kube object is not a PersistentVolume, this field will be empty.
+  optional PersistentVolumeInfo persistent_volume = 9;
+
   // Timestamp of the last status: creation/update/deletion, in Unix seconds
   // We don't need more precision as Kubernetes events are timestamped in seconds
   int64 status_time_epoch = 7;
@@ -35,6 +38,23 @@ message PodInfo {
   string host_ip = 4;
   repeated ContainerInfo containers = 5;
   repeated Owner owners = 6;
+  repeated VolumeClaim volume_claims = 7;
+}
+
+// VolumeClaim is a volume of a Pod that mounts a PersistentVolumeClaim
+message VolumeClaim {
+  // name of the volume in the Pod
+  string volume_name = 1;
+  // name of the PersistentVolumeClaim, in the namespace of the Pod
+  string claim_name = 2;
+}
+
+message PersistentVolumeInfo {
+  // namespace and name of the PersistentVolumeClaim bound to the volume, if any
+  string claim_namespace = 1;
+  string claim_name = 2;
+  // path of local and hostPath volumes on their node
+  string local_path = 3;
 }
 
 message ContainerInfo {

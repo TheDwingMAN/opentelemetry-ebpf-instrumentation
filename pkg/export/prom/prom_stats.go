@@ -53,6 +53,7 @@ type statMetricsReporter struct {
 	diskPendingOperations    *Expirer[prometheus.Gauge]
 	nfsProcedureDuration     *Expirer[prometheus.Histogram]
 	nfsIO                    *Expirer[prometheus.Counter]
+	k8sPodVolumeDevice       *Expirer[prometheus.Gauge]
 
 	promConnect *connector.PrometheusManager
 
@@ -73,6 +74,7 @@ type statMetricsReporter struct {
 	diskPendingOperationsAttrs    []attributes.Field[*ebpf.Stat, string]
 	nfsProcedureDurationAttrs     []attributes.Field[*ebpf.Stat, string]
 	nfsIOAttrs                    []attributes.Field[*ebpf.Stat, string]
+	k8sPodVolumeDeviceAttrs       []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -260,6 +262,7 @@ func newStatsReporter(
 
 	register = append(register, mr.registerDiskOperationMetrics(cfg, provider)...)
 	register = append(register, mr.registerNFSMetrics(cfg, provider)...)
+	register = append(register, mr.registerPodVolumeMetrics(cfg, provider)...)
 
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
@@ -290,6 +293,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeDiskOperations(stat)
 			r.observeDiskPendingOperations(stat)
 			r.observeNFS(stat)
+			r.observePodVolume(stat)
 		}
 	}
 }
@@ -319,6 +323,19 @@ func (r *statMetricsReporter) registerNFSMetrics(cfg *StatsPrometheusConfig, pro
 		register = append(register, r.nfsIO)
 	}
 	return register
+}
+
+// registerPodVolumeMetrics creates the metric of the devices of the pod volumes
+func (r *statMetricsReporter) registerPodVolumeMetrics(cfg *StatsPrometheusConfig, provider *attributes.AttrSelector) []prometheus.Collector {
+	if !cfg.CommonCfg.Features.StatsDiskPodVolumes() {
+		return nil
+	}
+	r.k8sPodVolumeDeviceAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatK8sPodVolumeDevice))
+	r.k8sPodVolumeDevice = NewExpirer[prometheus.Gauge](prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: attributes.StatK8sPodVolumeDevice.Prom,
+		Help: "1 for each disk that a volume that a pod mounts from a PersistentVolumeClaim is on",
+	}, labelNames(r.k8sPodVolumeDeviceAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+	return []prometheus.Collector{r.k8sPodVolumeDevice}
 }
 
 // registerDiskOperationMetrics creates the metrics of the block requests beyond reads and
@@ -503,6 +520,14 @@ func (r *statMetricsReporter) observeNFS(stat *ebpf.Stat) {
 	if r.nfsIO != nil && stat.NFSIO != nil {
 		r.nfsIO.WithLabelValues(labelValues(stat, r.nfsIOAttrs)...).Metric.Add(float64(stat.NFSIO.Bytes))
 	}
+}
+
+func (r *statMetricsReporter) observePodVolume(stat *ebpf.Stat) {
+	if r.k8sPodVolumeDevice == nil || stat.PodVolume == nil {
+		return
+	}
+	r.k8sPodVolumeDevice.WithLabelValues(labelValues(stat, r.k8sPodVolumeDeviceAttrs)...).
+		Metric.Set(float64(stat.PodVolume.Value))
 }
 
 func (r *statMetricsReporter) observeDiskPendingOperations(stat *ebpf.Stat) {

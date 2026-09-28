@@ -5,6 +5,7 @@ package agent // import "go.opentelemetry.io/obi/pkg/statsolly/agent"
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
@@ -21,6 +22,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/pipe/transform/k8s"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/export"
+	"go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm/swarms"
@@ -39,6 +41,29 @@ var newDiskTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 		return func(_ context.Context) { out.MarkCloseable() }
 	}
 	return s.diskTracer.TraceLoop(out)
+}
+
+// newPodVolumesTracer reports the devices of the volumes of the pods of the node. It needs the
+// Kubernetes metadata.
+var newPodVolumesTracer = func(ctx context.Context, s *Stats, out *msg.Queue[[]*ebpf.Stat]) (swarm.RunFunc, error) {
+	closeOutput := func(_ context.Context) { out.MarkCloseable() }
+	if !s.cfg.Metrics.Features.StatsDiskPodVolumes() {
+		return closeOutput, nil
+	}
+	k8sInformer := s.ctxInfo.K8sInformer
+	if k8sInformer == nil || !k8sInformer.IsKubeEnabled() {
+		alog().Warn("the devices of the pod volumes are not reported: they need Kubernetes metadata")
+		return closeOutput, nil
+	}
+	store, err := k8sInformer.Get(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting the Kubernetes metadata of the pod volumes: %w", err)
+	}
+	nodeName, err := k8sInformer.CurrentNodeName(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting the node of the pod volumes: %w", err)
+	}
+	return stats.NewPodVolumesTracer(store, nodeName).TraceLoop(out), nil
 }
 
 // buildPipeline defines the different nodes in the OBI's StatsO11y module,
@@ -99,9 +124,16 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
 	swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
 
+	podVolumeStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "podVolumeStats")
+	swi.Add(func(ctx context.Context) (swarm.RunFunc, error) { return newPodVolumesTracer(ctx, s, podVolumeStats) },
+		swarm.WithID("PodVolumesTracer"))
+
+	storageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "storageStats")
+	swi.Add(mergeStats(diskStats, podVolumeStats, storageStats), swarm.WithID("StorageStatsMerger"))
+
 	kubeDecoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "kubeDecoratedDiskStats")
 	swi.Add(k8s.ContainerMetadataDecoratorProvider(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
-		(*ebpf.Stat).ContainerID, statAttrs, diskStats, kubeDecoratedDiskStats),
+		(*ebpf.Stat).ContainerID, statAttrs, storageStats, kubeDecoratedDiskStats),
 		swarm.WithID("DiskKubeDecorator"))
 
 	decoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "decoratedDiskStats")

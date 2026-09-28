@@ -46,6 +46,20 @@ type qualifiedName struct {
 	kind      string
 }
 
+type volumeClaim struct {
+	namespace string
+	name      string
+}
+
+// claimOf returns the PersistentVolumeClaim bound to a PersistentVolume, if any
+func claimOf(om *informer.ObjectMeta) (volumeClaim, bool) {
+	pv := om.GetPersistentVolume()
+	if pv.GetClaimName() == "" {
+		return volumeClaim{}, false
+	}
+	return volumeClaim{namespace: pv.ClaimNamespace, name: pv.ClaimName}, true
+}
+
 func qName(om *informer.ObjectMeta) qualifiedName {
 	return qualifiedName{name: om.Name, namespace: om.Namespace, kind: om.Kind}
 }
@@ -112,6 +126,8 @@ type Store struct {
 	objectMetaByQName map[qualifiedName]*kube.CachedObjMeta
 	// todo: can be probably removed as objectMetaByIP already caches the service name/namespace
 	otelServiceInfoByIP map[string]otelServiceNamePair
+	// PersistentVolumes by the namespace and name of the PersistentVolumeClaim bound to them
+	persistentVolumesByClaim map[volumeClaim]*informer.ObjectMeta
 
 	// Instead of subscribing to the informer directly, the rest of components
 	// will subscribe to this store, to make sure that any "new object" notification
@@ -136,20 +152,21 @@ func NewStore(
 	log := storelog()
 
 	store := &Store{
-		log:                 log,
-		containerIDs:        maps.Map2[string, app.PID, *container.Info]{},
-		namespaces:          maps.Map2[uint32, app.PID, *container.Info]{},
-		podsByContainer:     map[string]*kube.CachedObjMeta{},
-		containerByPID:      map[app.PID]*container.Info{},
-		objectMetaByIP:      map[string]*kube.CachedObjMeta{},
-		objectMetaByQName:   map[qualifiedName]*kube.CachedObjMeta{},
-		containersByOwner:   maps.Map2[string, string, *informer.ContainerInfo]{},
-		otelServiceInfoByIP: map[string]otelServiceNamePair{},
-		metadataNotifier:    kubeMetadata,
-		BaseNotifier:        meta.NewBaseNotifier(log),
-		resourceLabels:      resourceLabels,
-		serviceNameTemplate: serviceNameTemplate,
-		metrics:             internalMetrics,
+		log:                      log,
+		containerIDs:             maps.Map2[string, app.PID, *container.Info]{},
+		namespaces:               maps.Map2[uint32, app.PID, *container.Info]{},
+		podsByContainer:          map[string]*kube.CachedObjMeta{},
+		containerByPID:           map[app.PID]*container.Info{},
+		objectMetaByIP:           map[string]*kube.CachedObjMeta{},
+		objectMetaByQName:        map[qualifiedName]*kube.CachedObjMeta{},
+		containersByOwner:        maps.Map2[string, string, *informer.ContainerInfo]{},
+		otelServiceInfoByIP:      map[string]otelServiceNamePair{},
+		persistentVolumesByClaim: map[volumeClaim]*informer.ObjectMeta{},
+		metadataNotifier:         kubeMetadata,
+		BaseNotifier:             meta.NewBaseNotifier(log),
+		resourceLabels:           resourceLabels,
+		serviceNameTemplate:      serviceNameTemplate,
+		metrics:                  internalMetrics,
 	}
 	kubeMetadata.Subscribe(store)
 	return store
@@ -314,6 +331,10 @@ func (s *Store) unlockedAddObjectMeta(meta *informer.ObjectMeta) {
 
 	s.otelServiceInfoByIP = map[string]otelServiceNamePair{}
 
+	if claim, ok := claimOf(meta); ok {
+		s.persistentVolumesByClaim[claim] = meta
+	}
+
 	if meta.Pod != nil {
 		oID := fetchOwnerID(meta)
 		s.log.Debug("adding pod to store",
@@ -354,6 +375,9 @@ func (s *Store) unlockedDeleteObjectMeta(meta *informer.ObjectMeta) {
 	for _, ip := range meta.Ips {
 		delete(s.objectMetaByIP, ip)
 	}
+	if claim, ok := claimOf(meta); ok {
+		delete(s.persistentVolumesByClaim, claim)
+	}
 	if meta.Pod != nil {
 		oID := fetchOwnerID(meta)
 		s.log.Debug("deleting pod from store",
@@ -381,6 +405,28 @@ func fetchOwnerID(meta *informer.ObjectMeta) string {
 	}
 	oID := ownerID(meta.Namespace, ownerName)
 	return oID
+}
+
+// PodsWithVolumeClaims returns the pods of a node that mount PersistentVolumeClaims
+func (s *Store) PodsWithVolumeClaims(nodeName string) []*informer.ObjectMeta {
+	s.access.RLock()
+	defer s.access.RUnlock()
+	var pods []*informer.ObjectMeta
+	for _, cached := range s.objectMetaByQName {
+		pod := cached.Meta.GetPod()
+		if pod.GetNodeName() == nodeName && len(pod.GetVolumeClaims()) > 0 {
+			pods = append(pods, cached.Meta)
+		}
+	}
+	return pods
+}
+
+// PersistentVolumeByClaim returns the PersistentVolume bound to a PersistentVolumeClaim, or nil if
+// the claim is unbound or the PersistentVolumes are not watched
+func (s *Store) PersistentVolumeByClaim(namespace, claimName string) *informer.ObjectMeta {
+	s.access.RLock()
+	defer s.access.RUnlock()
+	return s.persistentVolumesByClaim[volumeClaim{namespace: namespace, name: claimName}]
 }
 
 func (s *Store) PodByContainerID(cid string) *kube.CachedObjMeta {

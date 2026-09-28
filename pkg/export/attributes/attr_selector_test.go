@@ -317,6 +317,23 @@ func TestDefault_StatNFSClient(t *testing.T) {
 	}, p.For(StatNFSClientIO))
 }
 
+func TestDefault_StatK8sPodVolumeDevice(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.K8sClusterName,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.K8sPersistentVolumeName,
+		attr.K8sPersistentVolumeClaimName,
+		attr.K8sPodName,
+		attr.K8sVolumeName,
+		attr.K8sVolumeType,
+		attr.DiskVolumeDevice,
+		attr.SystemDevice,
+	}, p.For(StatK8sPodVolumeDevice))
+}
+
 func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{
 		SelectionCfg: Selection{

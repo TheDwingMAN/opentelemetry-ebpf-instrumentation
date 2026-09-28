@@ -44,6 +44,7 @@ func FeatureDiskStats() features.Feature {
 		Assess("reports the file syncs of the workload", testFsSyncPerWorkload).
 		Assess("reports how long the I/O of the workload waits before its issue", testDiskQueuePerWorkload).
 		Assess("reports the requests in flight of the disks of the workload", testDiskPendingOfWorkloadDevices).
+		Assess("links the pods to the disks of their PersistentVolumeClaims", testPodVolumeDevices).
 		Feature()
 }
 
@@ -212,5 +213,45 @@ func testDiskPendingOfWorkloadDevices(ctx context.Context, t *testing.T, _ *envc
 			}
 		}, testTimeout, pollInterval)
 	}
+	return ctx
+}
+
+// podVolumeLabels are the Prometheus labels of obi.stat.k8s.pod.volume.device
+var podVolumeLabels = []string{
+	"k8s_cluster_name", "k8s_namespace_name", "k8s_pod_name", "k8s_owner_name", "k8s_kind",
+	"k8s_volume_name", "k8s_volume_type", "k8s_persistentvolumeclaim_name", "k8s_persistentvolume_name",
+	"obi_disk_volume_device", "system_device", "obi_ip",
+}
+
+// testPodVolumeDevices checks the device of the volume of the disk-io-pvc workload, from its
+// PersistentVolumeClaim, and that the block I/O of the workload goes to that disk
+func testPodVolumeDevices(ctx context.Context, t *testing.T, _ *envconf.Config) context.Context {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	var disk string
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		volumes, err := pq.Query(`obi_stat_k8s_pod_volume_device{k8s_owner_name="disk-io-pvc"} == 1`)
+		require.NoError(ct, err)
+		require.Len(ct, volumes, 1, "the volume is on one disk")
+		assert.Empty(ct, promtest.LabelMismatches(volumes[0].Metric, podVolumeLabels, map[string]*regexp.Regexp{
+			"k8s_cluster_name":               regexp.MustCompile(`^my-kube$`),
+			"k8s_namespace_name":             regexp.MustCompile(`^default$`),
+			"k8s_pod_name":                   regexp.MustCompile(`^disk-io-pvc-`),
+			"k8s_owner_name":                 regexp.MustCompile(`^disk-io-pvc$`),
+			"k8s_volume_name":                regexp.MustCompile(`^data$`),
+			"k8s_volume_type":                regexp.MustCompile(`^persistentVolumeClaim$`),
+			"k8s_persistentvolumeclaim_name": regexp.MustCompile(`^disk-io-data$`),
+			"k8s_persistentvolume_name":      regexp.MustCompile(`^pvc-`),
+			"obi_disk_volume_device":         blockDevicePattern,
+			"system_device":                  blockDevicePattern,
+		}), volumes[0].Metric)
+		disk = volumes[0].Metric["system_device"]
+	}, testTimeout, pollInterval)
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		written, err := pq.Query(`obi_stat_disk_io_bytes_total{k8s_owner_name="disk-io-pvc",disk_io_direction="write",system_device="` +
+			disk + `"} > 0`)
+		require.NoError(ct, err)
+		assert.NotEmpty(ct, written, "the workload writes to the disk of its volume")
+	}, testTimeout, pollInterval)
 	return ctx
 }

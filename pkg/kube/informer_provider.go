@@ -54,6 +54,8 @@ type MetadataConfig struct {
 	ResourceLabels           ResourceLabels
 	RestrictLocalNode        bool
 	ServiceNameTemplate      *template.Template
+	// PersistentVolumes watches the PersistentVolumes too. It needs extra RBAC permissions.
+	PersistentVolumes bool
 }
 
 type MetadataProvider struct {
@@ -299,6 +301,9 @@ func (mp *MetadataProvider) initLocalInformers(ctx context.Context) (*meta.Infor
 			return nil, fmt.Errorf("getting local node name: %w", err)
 		}
 		opts = append(opts, meta.RestrictNode(localNode))
+	}
+	if mp.cfg.PersistentVolumes {
+		opts = append(opts, meta.WithPersistentVolumes())
 	}
 	return meta.InitInformers(ctx, opts...)
 }

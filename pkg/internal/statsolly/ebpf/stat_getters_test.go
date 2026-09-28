@@ -139,6 +139,29 @@ func TestStatGetters_NFSIO(t *testing.T) {
 	assert.False(t, procedure(write).Valid(), "transferred bytes have no procedure")
 }
 
+func TestStatGetters_PodVolume(t *testing.T) {
+	volume := &Stat{Type: StatTypePodVolume, PodVolume: &PodVolume{
+		VolumeName: "data", ClaimName: "data-db-0", PersistentVolume: "pvc-5d1c",
+		MountedDevice: "dm-0", Device: "sda", Value: 1,
+	}}
+	for name, expected := range map[attr.Name]string{
+		attr.K8sVolumeName:                "data",
+		attr.K8sVolumeType:                "persistentVolumeClaim",
+		attr.K8sPersistentVolumeClaimName: "data-db-0",
+		attr.K8sPersistentVolumeName:      "pvc-5d1c",
+		attr.DiskVolumeDevice:             "dm-0",
+		attr.SystemDevice:                 "sda",
+	} {
+		getter, ok := StatGetters(name)
+		require.True(t, ok)
+		assert.Equal(t, expected, getter(volume).Value.AsString(), name)
+	}
+
+	volumeName, ok := StatGetters(attr.K8sVolumeName)
+	require.True(t, ok)
+	assert.False(t, volumeName(&Stat{DiskIO: &DiskIO{Device: "sda"}}).Valid(), "block I/O has no volume")
+}
+
 func TestStatContainerID(t *testing.T) {
 	assert.Equal(t, "aaaa", (&Stat{DiskIO: &DiskIO{ContainerID: "aaaa"}}).ContainerID())
 	assert.Equal(t, "bbbb", (&Stat{FsSync: &FsSync{ContainerID: "bbbb"}}).ContainerID(),

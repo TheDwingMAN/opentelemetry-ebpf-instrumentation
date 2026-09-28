@@ -819,3 +819,43 @@ groups:
         requirement_level: opt_in
       - ref: k8s.container.name
         requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.k8s.pod.volume.device
+    type: metric
+    metric_name: obi.stat.k8s.pod.volume.device
+    instrument: updowncounter
+    unit: "{volume}"
+    stability: development
+    brief: >
+      1 for each disk that a volume that a pod mounts from a
+      PersistentVolumeClaim is on, and 0 once the pod no longer mounts it.
+    note: >
+      It links the pods to the block I/O metrics of the disks their volumes are
+      on (`system.device`), through their PersistentVolumeClaims and
+      PersistentVolumes. A volume on a stacked device, such as an LVM volume
+      over several disks, has one series per disk.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: k8s.volume.name
+        requirement_level: recommended
+      - ref: k8s.volume.type
+        requirement_level: recommended
+      - ref: k8s.persistentvolumeclaim.name
+        requirement_level: recommended
+      - ref: k8s.persistentvolume.name
+        requirement_level: recommended
+      - ref: obi.disk.volume.device
+        requirement_level: recommended
+      - ref: system.device
+        requirement_level: recommended
+      - ref: k8s.cluster.name
+        requirement_level: recommended
+      - ref: k8s.namespace.name
+        requirement_level: recommended
+      - ref: k8s.pod.name
+        requirement_level: recommended
+      - ref: k8s.owner.name
+        requirement_level: recommended
+      - ref: k8s.kind
+        requirement_level: opt_in

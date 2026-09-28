@@ -29,6 +29,7 @@ Attributes of OBI's block I/O (disk) statistics that the semantic conventions do
 | --- | --- | --- | --- | --- |
 | `obi.disk.partition` | string | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
 | `obi.disk.stacked` | boolean | development | Whether the block device (`system.device`) is built on other block devices. |  |
+| `obi.disk.volume.device` | string | development | Block device that a volume is mounted from: the disk that `system.device` names, or a partition or a stacked device (such as an LVM volume) on it. | dm-0; nvme0n1p1; sdb |
 
 ## `registry.obi.exception`
 

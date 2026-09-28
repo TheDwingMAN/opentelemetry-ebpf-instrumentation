@@ -68,6 +68,7 @@ const (
 	FeatureStatsDiskStackedVolumes
 	FeatureStatsNFSClientProcedureDuration
 	FeatureStatsNFSClientIO
+	FeatureStatsDiskPodVolumes
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
@@ -109,6 +110,7 @@ var FeatureMapper = map[string]Features{
 	"stats_nfs":                           FeatureStatsNFS,
 	"stats_nfs_client_procedure_duration": FeatureStatsNFSClientProcedureDuration,
 	"stats_nfs_client_io":                 FeatureStatsNFSClientIO,
+	"stats_disk_pod_volumes":              FeatureStatsDiskPodVolumes,
 	"network":                             FeatureNetwork,
 	"network_inter_zone":                  FeatureNetworkInterZone,
 	"network_flow_packets":                FeatureNetworkFlowPackets,
@@ -410,7 +412,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStatsDisk | FeatureStatsFsSyncDuration | FeatureStatsNFS)
+	return f.any(FeatureStats | FeatureStatsDisk | FeatureStatsFsSyncDuration | FeatureStatsNFS | FeatureStatsDiskPodVolumes)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -491,6 +493,12 @@ func (f Features) StatsNFSClientProcedureDuration() bool {
 
 func (f Features) StatsNFSClientIO() bool {
 	return f.any(FeatureStatsNFSClientIO)
+}
+
+// StatsDiskPodVolumes reports whether the block devices of the pod volumes are reported. It is not
+// part of stats_disk: it needs to watch the Kubernetes PersistentVolumes.
+func (f Features) StatsDiskPodVolumes() bool {
+	return f.any(FeatureStatsDiskPodVolumes)
 }
 
 func (f Features) NetworkInterZone() bool {

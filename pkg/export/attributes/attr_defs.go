@@ -214,6 +214,36 @@ func getDefinitions(
 		nil,
 	)
 
+	// the volumes that pods mount from PersistentVolumeClaims, and the disks they are on
+	statsPodVolumeAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:                        false,
+			attr.K8sVolumeName:                true,
+			attr.K8sVolumeType:                true,
+			attr.K8sPersistentVolumeClaimName: true,
+			attr.K8sPersistentVolumeName:      true,
+			attr.DiskVolumeDevice:             true,
+			attr.SystemDevice:                 true,
+		},
+		nil,
+	)
+
+	// the pods of the volumes: the metric only exists with kubernetes metadata
+	statsPodVolumeKubeAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sNamespaceName: true,
+			attr.K8sPodName:       true,
+			attr.K8sOwnerName:     true,
+			attr.K8sClusterName:   true,
+			attr.K8sKind:          false,
+		},
+		nil,
+	)
+
 	// workload that block I/O is charged to, when kubernetes metadata is enabled
 	statsDiskKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
@@ -911,6 +941,10 @@ func getDefinitions(
 		},
 		StatNFSClientIO.Section: {
 			SubGroups:  []*AttrReportGroup{&statsNFSIOAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatK8sPodVolumeDevice.Section: {
+			SubGroups:  []*AttrReportGroup{&statsPodVolumeAttributes, &statsPodVolumeKubeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
 		StatDiskQueueDuration.Section: {

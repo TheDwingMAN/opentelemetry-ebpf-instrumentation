@@ -20,9 +20,10 @@ type Informers struct {
 	config *informersConfig
 
 	// pods and replicaSets cache the different K8s types to custom, smaller object types
-	pods     cache.SharedIndexInformer
-	nodes    cache.SharedIndexInformer
-	services cache.SharedIndexInformer
+	pods              cache.SharedIndexInformer
+	nodes             cache.SharedIndexInformer
+	services          cache.SharedIndexInformer
+	persistentVolumes cache.SharedIndexInformer
 
 	waitForSync chan struct{}
 
@@ -46,17 +47,21 @@ func (inf *Informers) Subscribe(observer Observer) {
 
 	// as a "welcome" message, we send the whole kube metadata to the new observer
 	pods := inf.pods.GetStore().List()
-	var nodes, services []any
+	var nodes, services, persistentVolumes []any
 	if !inf.config.disableNodes {
 		nodes = inf.nodes.GetStore().List()
 	}
 	if !inf.config.disableServices {
 		services = inf.services.GetStore().List()
 	}
-	storedEntities := make([]any, 0, len(pods)+len(nodes)+len(services))
+	if inf.config.persistentVolumes {
+		persistentVolumes = inf.persistentVolumes.GetStore().List()
+	}
+	storedEntities := make([]any, 0, len(pods)+len(nodes)+len(services)+len(persistentVolumes))
 	storedEntities = append(storedEntities, pods...)
 	storedEntities = append(storedEntities, nodes...)
 	storedEntities = append(storedEntities, services...)
+	storedEntities = append(storedEntities, persistentVolumes...)
 	storedEntities = inf.sortAndCut(storedEntities, fromEpoch)
 	inf.log.Debug("sending welcome snapshot to new observer",
 		"observerID", observer.ID(), "count", len(storedEntities))

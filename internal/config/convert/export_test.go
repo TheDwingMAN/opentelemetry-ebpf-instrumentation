@@ -1053,7 +1053,7 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 
 		cfg := defaultRuntimeConfig()
 		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsDisk | export.FeatureStatsFsSyncDuration |
-			export.FeatureStatsNFS
+			export.FeatureStatsNFS | export.FeatureStatsDiskPodVolumes
 
 		_, ext := RuntimeToV2(&cfg)
 
@@ -1071,6 +1071,7 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 			"fs_sync_duration",
 			"nfs_client_procedure_duration",
 			"nfs_client_io",
+			"disk_pod_volumes",
 		}, value(t, ext.Capture.Network, "stats", "features"))
 	})
 

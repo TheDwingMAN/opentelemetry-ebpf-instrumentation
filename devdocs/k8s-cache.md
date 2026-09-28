@@ -243,6 +243,7 @@ Configuration is loaded in this order (later overrides earlier):
 | `profile_port`           | `OTEL_EBPF_K8S_CACHE_PROFILE_PORT`                     | `0` (disabled) | If non-zero, starts a `net/http/pprof` listener.                          |
 | `informer_resync_period` | `OTEL_EBPF_K8S_CACHE_INFORMER_RESYNC_PERIOD`           | `30m`          | Full informer resync interval. Increase to lower API load.                |
 | `informer_send_timeout`  | `OTEL_EBPF_K8S_CACHE_INFORMER_SEND_TIMEOUT`            | `10s`          | Per-message send deadline before a slow subscriber connection is closed.  |
+| `persistent_volumes`     | `OTEL_EBPF_K8S_CACHE_PERSISTENT_VOLUMES`               | `false`        | Also watches PersistentVolumes, for OBI's `stats_disk_pod_volumes`.       |
 | `internal_metrics.port`  | `OTEL_EBPF_K8S_CACHE_INTERNAL_METRICS_PROMETHEUS_PORT` | `0` (disabled) | If non-zero, serves Prometheus metrics.                                   |
 | `internal_metrics.path`  | `OTEL_EBPF_K8S_CACHE_INTERNAL_METRICS_PROMETHEUS_PATH` | `/metrics`     | Metrics endpoint path.                                                    |
 
@@ -266,6 +267,16 @@ rules:
 `services` and `nodes` are required for NetO11y and for cluster-name
 discovery. If you disable those in your OBI config you can drop the
 corresponding rules too.
+
+With `persistent_volumes` enabled (or, without the cache, with the
+`stats_disk_pod_volumes` metrics feature), `persistentvolumes` need `list`
+and `watch` too:
+
+```yaml
+  - apiGroups: [ "" ]
+    resources: [ "persistentvolumes" ]
+    verbs: [ "list", "watch" ]
+```
 
 On OpenShift, OBI can auto-detect the cluster name from the Infrastructure CR.
 This requires an additional rule:

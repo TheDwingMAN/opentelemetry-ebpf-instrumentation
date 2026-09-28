@@ -397,4 +397,13 @@ const (
 	FsSyncType           = Name("obi.fs.sync.type")
 	FilesystemMountpoint = Name(semconv.SystemFilesystemMountpointKey)
 	FilesystemType       = Name(semconv.SystemFilesystemTypeKey)
+
+	// the volumes of the pods and the PersistentVolumes they mount
+	K8sVolumeName                = Name(semconv.K8SVolumeNameKey)
+	K8sVolumeType                = Name(semconv.K8SVolumeTypeKey)
+	K8sPersistentVolumeClaimName = Name(semconv.K8SPersistentvolumeclaimNameKey)
+	K8sPersistentVolumeName      = Name(semconv.K8SPersistentvolumeNameKey)
+	// DiskVolumeDevice is the block device that a volume is mounted from, e.g. a partition or an
+	// LVM volume on the disk that system.device names
+	DiskVolumeDevice = Name("obi.disk.volume.device")
 )

@@ -1276,6 +1276,29 @@ Duration of file syncs (fsync, fdatasync, sync, syncfs and sync_file_range), per
 | `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
 | `system.filesystem.type` | enum | `opt_in` | development | The filesystem type | ext4 |
 
+## `obi.stat.k8s.pod.volume.device`
+
+1 for each disk that a volume that a pod mounts from a PersistentVolumeClaim is on, and 0 once the pod no longer mounts it.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| updowncounter | {volume} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `k8s.cluster.name` | string | `recommended` | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.persistentvolume.name` | string | `recommended` | development | The name of the PersistentVolume. | pv-data-01 |
+| `k8s.persistentvolumeclaim.name` | string | `recommended` | development | The name of the PersistentVolumeClaim. | pvc-data-01 |
+| `k8s.pod.name` | string | `recommended` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `k8s.volume.name` | string | `recommended` | development | The name of the K8s volume. | volume0 |
+| `k8s.volume.type` | enum | `recommended` | development | The type of the K8s volume. | emptyDir; persistentVolumeClaim |
+| `obi.disk.volume.device` | string | `recommended` | development | Block device that a volume is mounted from: the disk that `system.device` names, or a partition or a stacked device (such as an LVM volume) on it. | dm-0; nvme0n1p1; sdb |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
 ## `obi.stat.nfs.client.io`
 
 Bytes that the kernel NFS client read from (`receive`) and wrote to (`transmit`) NFS servers, per server and workload that started the RPCs.

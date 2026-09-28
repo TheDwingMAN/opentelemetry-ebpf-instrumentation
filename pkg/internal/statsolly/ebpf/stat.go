@@ -24,6 +24,7 @@ const (
 	StatTypeDiskPending             = StatType(StatsStatTypeK_statTypeDiskPending)
 	StatTypeNFSProcedure            = StatType(StatsStatTypeK_statTypeNfsProcedure)
 	StatTypeNFSIO                   = StatType(StatsStatTypeK_statTypeNfsIo)
+	StatTypePodVolume               = StatType(StatsStatTypeK_statTypePodVolume)
 )
 
 type TCPFailReasonType string
@@ -127,6 +128,7 @@ type Stat struct {
 	FsSync                  *FsSync                  `json:"-"`
 	NFSProcedure            *NFSProcedure            `json:"-"`
 	NFSIO                   *NFSIO                   `json:"-"`
+	PodVolume               *PodVolume               `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -255,6 +257,21 @@ type NFSIO struct {
 	// ContainerID of the cgroup of the thread that started the RPCs. Empty outside containers.
 	ContainerID string
 	Bytes       uint64
+}
+
+// PodVolume links a volume that a pod mounts from a PersistentVolumeClaim to a disk it is on
+type PodVolume struct {
+	Namespace, PodName   string
+	OwnerName, OwnerKind string
+	VolumeName           string
+	ClaimName            string
+	PersistentVolume     string
+	// MountedDevice is the block device that the node mounts, e.g. a partition or an LVM volume
+	MountedDevice string
+	// Device is a disk that MountedDevice is on
+	Device string
+	// Value is 1 while the pod mounts the volume, and 0 once it no longer does
+	Value int64
 }
 
 // LatencySample stands for Count requests whose latency fell in the same kernel histogram

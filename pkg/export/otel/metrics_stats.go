@@ -109,6 +109,7 @@ type statMetricsExporter struct {
 	diskPendingOperations    *currentUpDownCounter[*ebpf.Stat]
 	nfsProcedureDuration     *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
 	nfsIO                    *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	k8sPodVolumeDevice       *currentUpDownCounter[*ebpf.Stat]
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
 }
@@ -314,6 +315,17 @@ func newStatMetricsExporter(
 		return nil, err
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskPodVolumes() {
+		volumes, err := ebpfEvents.Int64UpDownCounter(attributes.StatK8sPodVolumeDevice.OTEL,
+			metric2.WithUnit(attributes.StatK8sPodVolumeDevice.Unit))
+		if err != nil {
+			log.Error("creating stats k8s pod volume device counter", "error", err)
+			return nil, err
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatK8sPodVolumeDevice))
+		nme.k8sPodVolumeDevice = newCurrentUpDownCounter(ctx, volumes, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -357,6 +369,9 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if me.nfsIO != nil && v.NFSIO != nil {
 				nfsIO, attrs := me.nfsIO.ForRecord(v)
 				nfsIO.Add(ctx, int64(v.NFSIO.Bytes), metric2.WithAttributeSet(attrs))
+			}
+			if me.k8sPodVolumeDevice != nil && v.PodVolume != nil {
+				me.k8sPodVolumeDevice.Record(v, v.PodVolume.Value)
 			}
 		}
 	}

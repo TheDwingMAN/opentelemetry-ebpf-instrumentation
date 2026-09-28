@@ -402,6 +402,41 @@ func TestNFSStats(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+func TestPodVolumeStats(t *testing.T) {
+	volumes := make(chan []*ebpf.Stat, 10)
+	defaultPodVolumesTracer := newPodVolumesTracer
+	t.Cleanup(func() { newPodVolumesTracer = defaultPodVolumesTracer })
+	newPodVolumesTracer = func(_ context.Context, _ *Stats, out *msg.Queue[[]*ebpf.Stat]) (swarm.RunFunc, error) {
+		return func(ctx context.Context) {
+			defer out.MarkCloseable()
+			for i := range volumes {
+				out.SendCtx(ctx, i)
+			}
+		}, nil
+	}
+	_, promURL := startDiskPipeline(t, export.FeatureStatsDiskPodVolumes)
+
+	volume := ebpf.PodVolume{
+		Namespace: "default", PodName: "db-0", OwnerName: "db", OwnerKind: "StatefulSet",
+		VolumeName: "data", ClaimName: "data-db-0", PersistentVolume: "pvc-5d1c",
+		MountedDevice: "dm-0", Device: "sda", Value: 1,
+	}
+	volumes <- []*ebpf.Stat{{Type: ebpf.StatTypePodVolume, PodVolume: &volume}}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_k8s_pod_volume_device", Value: 1, Labels: map[string]string{
+				"k8s_volume_name":                "data",
+				"k8s_volume_type":                "persistentVolumeClaim",
+				"k8s_persistentvolumeclaim_name": "data-db-0",
+				"k8s_persistentvolume_name":      "pvc-5d1c",
+				"obi_disk_volume_device":         "dm-0",
+				"system_device":                  "sda",
+			}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_k8s_pod_volume_device"))
+	}, timeout, 100*time.Millisecond)
+}
+
 // startDiskPipeline runs the stats pipeline with the given disk features, exporting to
 // Prometheus. It returns the channel to send disk stats through and the Prometheus URL.
 func startDiskPipeline(t *testing.T, features export.Features) (chan<- []*ebpf.Stat, string) {

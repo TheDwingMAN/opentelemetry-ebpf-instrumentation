@@ -103,6 +103,20 @@ func TestFeatureStatsNFSIsOptIn(t *testing.T) {
 	}
 }
 
+func TestFeatureStatsDiskPodVolumesIsOptIn(t *testing.T) {
+	volumes, err := LoadFeatures([]string{"stats_disk_pod_volumes"})
+	require.NoError(t, err)
+	assert.True(t, volumes.StatsDiskPodVolumes())
+	assert.True(t, volumes.StatMetrics(), "a pod volumes only selection must still enable the stats pipeline")
+	assert.False(t, volumes.StatsDisk(), "it loads no block I/O probes")
+
+	for _, aggregate := range []string{"stats", "stats_disk"} {
+		features, err := LoadFeatures([]string{aggregate})
+		require.NoError(t, err)
+		assert.False(t, features.StatsDiskPodVolumes(), "%s must not watch the PersistentVolumes", aggregate)
+	}
+}
+
 func TestFeatureStatsDiskAggregate(t *testing.T) {
 	disk, err := LoadFeatures([]string{"stats_disk"})
 	require.NoError(t, err)
