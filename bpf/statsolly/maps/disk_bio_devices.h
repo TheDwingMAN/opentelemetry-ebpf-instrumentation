@@ -12,7 +12,7 @@
 // kernel dev_t. Userspace keeps it up to date, so that bios of other devices are skipped at once.
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 1 << 8);
+    __uint(max_entries, 1 << 12);
     __type(key, u32);
     __type(value, u8);
     __uint(pinning, OBI_PIN_INTERNAL);

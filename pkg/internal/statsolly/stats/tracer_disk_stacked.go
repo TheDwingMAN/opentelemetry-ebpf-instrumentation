@@ -95,7 +95,7 @@ func (b *bioDevices) refresh() {
 	}
 	for dev := range want {
 		if err := b.set.add(dev); err != nil {
-			b.log.Debug("can't add a stacked volume", "dev", dev, "error", err)
+			b.log.Warn("can't measure a stacked volume", "dev", dev, "error", err)
 		}
 	}
 }

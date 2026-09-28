@@ -20,10 +20,11 @@ typedef struct fs_sync_start {
     u8 _pad[2];
 } fs_sync_start_t;
 
-// The file sync in progress in each thread, keyed by pid_tgid
+// The file sync in progress in each thread, keyed by pid_tgid. Large enough for an LRU map not to
+// evict syncs in progress on hosts with up to 128 CPUs, see disk_cgroup_names.
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 1 << 12);
+    __uint(max_entries, 1 << 14);
     __type(key, u64);
     __type(value, fs_sync_start_t);
     __uint(pinning, OBI_PIN_INTERNAL);

@@ -13,8 +13,8 @@
 // The bios completed on the devices in disk_bio_devices, accumulated like the requests in
 // disk_io_accum. Their status is always a blk_status_t.
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 1 << 10);
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1 << 12);
     __type(key, disk_io_key_t);
     __type(value, disk_io_accum_t);
     __uint(pinning, OBI_PIN_INTERNAL);

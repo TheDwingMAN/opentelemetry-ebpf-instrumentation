@@ -28,8 +28,9 @@ typedef struct fs_sync_accum {
     u64 latency_sum_ns[k_disk_latency_max_buckets];
 } fs_sync_accum_t;
 
+// A plain hash map, like disk_io_accum
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1 << 12);
     __type(key, fs_sync_key_t);
     __type(value, fs_sync_accum_t);

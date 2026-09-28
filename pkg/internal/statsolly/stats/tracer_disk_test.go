@@ -23,10 +23,12 @@ import (
 type fakeDiskAccum struct {
 	entries map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT
 	deleted []ebpf.StatsDiskIoKeyT
+	// the error that read returns
+	err error
 }
 
 func (f *fakeDiskAccum) read() (map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT, error) {
-	return maps.Clone(f.entries), nil
+	return maps.Clone(f.entries), f.err
 }
 
 func (f *fakeDiskAccum) delete(key ebpf.StatsDiskIoKeyT) error {
@@ -61,6 +63,25 @@ func (f fakeCgroupNames) name(cgroupID uint64) (string, bool) {
 func newTestDiskReader(src *fakeDiskAccum) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
 	return newDiskReader(src, testBounds, false, &deviceNames{sysRoot: "/nonexistent"},
 		newCgroupContainers(fakeCgroupNames{}))
+}
+
+func TestDiskReaderReadsFullMaps(t *testing.T) {
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
+		writeKey(259, 0): accum([]uint64{1, 0, 0}, []uint64{500_000, 0, 0}),
+		writeKey(259, 1): accum([]uint64{1, 0, 0}, []uint64{500_000, 0, 0}),
+	}}
+	r := newTestDiskReader(src)
+	r.readStats()
+
+	// a full map is read completely: what grew is forwarded, and entries that are gone are forgotten
+	src.err = errAccumFull
+	delete(src.entries, writeKey(259, 1))
+	src.entries[writeKey(259, 0)] = accum([]uint64{3, 0, 0}, []uint64{500_000, 0, 0})
+	stats := r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, uint64(2), stats[0].DiskIO.Operations)
+	assert.True(t, r.full)
+	assert.NotContains(t, r.previous, writeKey(259, 1))
 }
 
 func TestDiskReaderForwardsDeltas(t *testing.T) {

@@ -21,10 +21,10 @@ typedef struct nfs_io_key {
 } nfs_io_key_t;
 
 // Cumulative bytes: the kernel never resets them, userspace reads them periodically and computes
-// the deltas.
+// the deltas. A plain hash map, like disk_io_accum.
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 1 << 10);
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1 << 12);
     __type(key, nfs_io_key_t);
     __type(value, u64);
     __uint(pinning, OBI_PIN_INTERNAL);

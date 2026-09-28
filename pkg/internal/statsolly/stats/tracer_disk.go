@@ -36,14 +36,18 @@ const diskIdleReadsBeforeDelete = 60
 const errorTypeOther = "_OTHER"
 
 // cgroupContainersCacheLen matches the size of the disk_cgroup_names eBPF map
-const cgroupContainersCacheLen = 1 << 10
+const cgroupContainersCacheLen = 1 << 13
 
 func dtlog() *slog.Logger {
 	return slog.With("component", "stat.DiskMapTracer")
 }
 
+// errAccumFull tells that an accumulation map was read completely, and is full
+var errAccumFull = errors.New("the accumulation map is full")
+
 // accumSource abstracts an eBPF map of cumulative values, for testing
 type accumSource[K comparable, V any] interface {
+	// read returns the entries of the map, with errAccumFull if it is full
 	read() (map[K]V, error)
 	delete(key K) error
 }
@@ -60,7 +64,13 @@ func (e ebpfAccum[K, V]) read() (map[K]V, error) {
 	for iter.Next(&key, &value) {
 		entries[key] = value
 	}
-	return entries, iter.Err()
+	if err := iter.Err(); err != nil {
+		return entries, err
+	}
+	if len(entries) >= int(e.accum.MaxEntries()) {
+		return entries, errAccumFull
+	}
+	return entries, nil
 }
 
 func (e ebpfAccum[K, V]) delete(key K) error {
@@ -205,6 +215,8 @@ type accumReader[K comparable, V any] struct {
 
 	previous  map[K]V
 	idleReads map[K]int
+	// the map was full at the previous read
+	full bool
 }
 
 func newAccumReader[K comparable, V any](
@@ -223,6 +235,17 @@ func newAccumReader[K comparable, V any](
 
 func (r *accumReader[K, V]) readStats() []*ebpf.Stat {
 	entries, err := r.accum.read()
+	full := errors.Is(err, errAccumFull)
+	if full {
+		// the kernel doesn't add new keys to a full map: they are dropped until idle ones are
+		// deleted
+		if !r.full {
+			r.log.Warn("the kernel map is full: the I/O of new workloads and devices is not measured "+
+				"until the entries of idle ones are deleted", "entries", len(entries))
+		}
+		err = nil
+	}
+	r.full = full
 	if err != nil {
 		// a partial read still forwards what it got; the rest is forwarded by the next read
 		r.log.Debug("can't read the accumulation map", "error", err)
@@ -258,7 +281,7 @@ func (r *accumReader[K, V]) forgetIfIdle(key K) {
 	delete(r.previous, key)
 }
 
-// forgetEvicted drops what is remembered about entries that the LRU map evicted
+// forgetEvicted drops what is remembered about entries that are no longer in the map
 func (r *accumReader[K, V]) forgetEvicted(entries map[K]V) {
 	for key := range r.previous {
 		if _, ok := entries[key]; !ok {

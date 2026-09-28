@@ -31,8 +31,9 @@ typedef struct nfs_procedure_accum {
     u64 latency_sum_ns[k_disk_latency_max_buckets];
 } nfs_procedure_accum_t;
 
+// A plain hash map, like disk_io_accum
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1 << 12);
     __type(key, nfs_procedure_key_t);
     __type(value, nfs_procedure_accum_t);

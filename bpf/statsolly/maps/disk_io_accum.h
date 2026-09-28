@@ -38,8 +38,11 @@ typedef struct disk_io_accum {
     u64 bytes;
 } disk_io_accum_t;
 
+// A plain hash map, not an LRU one: LRU maps evict live entries long before they are full on hosts
+// with many CPUs (Linux < 6.16), and userspace deletes the entries that stay idle, so that the map
+// doesn't fill up with the keys of workloads and devices that are gone.
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1 << 12);
     __type(key, disk_io_key_t);
     __type(value, disk_io_accum_t);
