@@ -55,6 +55,34 @@
         "sort": 1
       },
       {
+        "name": "node",
+        "label": "Node (obi.ip)",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(obi_stat_disk_operations_total{instance=~\"$instance\"}, obi_ip)",
+          "refId": "node"
+        },
+        "definition": "label_values(obi_stat_disk_operations_total{instance=~\"$instance\"}, obi_ip)",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "refresh": 2,
+        "sort": 1
+      },
+      {
         "name": "device",
         "label": "Device",
         "type": "query",
@@ -63,10 +91,10 @@
           "uid": "${datasource}"
         },
         "query": {
-          "query": "label_values(obi_stat_disk_operations_total{instance=~\"$instance\"}, system_device)",
+          "query": "label_values(obi_stat_disk_operations_total{instance=~\"$instance\", obi_ip=~\"$node\"}, system_device)",
           "refId": "device"
         },
-        "definition": "label_values(obi_stat_disk_operations_total{instance=~\"$instance\"}, system_device)",
+        "definition": "label_values(obi_stat_disk_operations_total{instance=~\"$instance\", obi_ip=~\"$node\"}, system_device)",
         "multi": true,
         "includeAll": true,
         "allValue": ".*",
@@ -144,8 +172,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (system_device, disk_io_direction) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
-          "legendFormat": "{{system_device}} {{disk_io_direction}}",
+          "expr": "sum by (obi_ip, system_device, disk_io_direction) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "legendFormat": "{{obi_ip}} {{system_device}} {{disk_io_direction}}",
           "refId": "A",
           "format": "time_series"
         }
@@ -179,8 +207,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (system_device, disk_io_direction) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
-          "legendFormat": "{{system_device}} {{disk_io_direction}}",
+          "expr": "sum by (obi_ip, system_device, disk_io_direction) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "legendFormat": "{{obi_ip}} {{system_device}} {{disk_io_direction}}",
           "refId": "A",
           "format": "time_series"
         }
@@ -214,8 +242,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (system_device, error_type) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", system_device=~\"$device\", error_type!=\"\"}[$__rate_interval]))",
-          "legendFormat": "{{system_device}} {{error_type}}",
+          "expr": "sum by (obi_ip, system_device, error_type) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", error_type!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{obi_ip}} {{system_device}} {{error_type}}",
           "refId": "A",
           "format": "time_series"
         }
@@ -249,8 +277,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le, system_device, disk_io_direction) (rate(obi_stat_disk_operation_duration_seconds_bucket{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])))",
-          "legendFormat": "{{system_device}} {{disk_io_direction}}",
+          "expr": "histogram_quantile(0.99, sum by (le, obi_ip, system_device, disk_io_direction) (rate(obi_stat_disk_operation_duration_seconds_bucket{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])))",
+          "legendFormat": "{{obi_ip}} {{system_device}} {{disk_io_direction}}",
           "refId": "A",
           "format": "time_series"
         }
@@ -284,8 +312,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le, system_device, disk_io_direction) (rate(obi_stat_disk_queue_duration_seconds_bucket{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])))",
-          "legendFormat": "{{system_device}} {{disk_io_direction}}",
+          "expr": "histogram_quantile(0.99, sum by (le, obi_ip, system_device, disk_io_direction) (rate(obi_stat_disk_queue_duration_seconds_bucket{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])))",
+          "legendFormat": "{{obi_ip}} {{system_device}} {{disk_io_direction}}",
           "refId": "A",
           "format": "time_series"
         }
@@ -319,8 +347,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (system_device) (rate(obi_stat_disk_operation_time_seconds_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])) + sum by (system_device) (rate(obi_stat_disk_queue_duration_seconds_sum{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
-          "legendFormat": "{{system_device}}",
+          "expr": "sum by (obi_ip, system_device) (rate(obi_stat_disk_operation_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])) + sum by (obi_ip, system_device) (rate(obi_stat_disk_queue_duration_seconds_sum{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "legendFormat": "{{obi_ip}} {{system_device}}",
           "refId": "A",
           "format": "time_series"
         }
@@ -354,8 +382,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (system_device, disk_io_direction) (obi_stat_disk_pending_operations{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"})",
-          "legendFormat": "{{system_device}} {{disk_io_direction}}",
+          "expr": "sum by (obi_ip, system_device, disk_io_direction) (obi_stat_disk_pending_operations{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"})",
+          "legendFormat": "{{obi_ip}} {{system_device}} {{disk_io_direction}}",
           "refId": "A",
           "format": "time_series"
         }
@@ -389,8 +417,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le, system_device) (rate(obi_stat_disk_flush_duration_seconds_bucket{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])))",
-          "legendFormat": "{{system_device}}",
+          "expr": "histogram_quantile(0.99, sum by (le, obi_ip, system_device) (rate(obi_stat_disk_flush_duration_seconds_bucket{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])))",
+          "legendFormat": "{{obi_ip}} {{system_device}}",
           "refId": "A",
           "format": "time_series"
         }
@@ -424,8 +452,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (system_device) (rate(obi_stat_disk_discard_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
-          "legendFormat": "{{system_device}}",
+          "expr": "sum by (obi_ip, system_device) (rate(obi_stat_disk_discard_io_bytes_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "legendFormat": "{{obi_ip}} {{system_device}}",
           "refId": "A",
           "format": "time_series"
         }
@@ -459,8 +487,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (system_device, disk_io_direction) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"true\"}[$__rate_interval]))",
-          "legendFormat": "{{system_device}} {{disk_io_direction}}",
+          "expr": "sum by (obi_ip, system_device, disk_io_direction) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"true\"}[$__rate_interval]))",
+          "legendFormat": "{{obi_ip}} {{system_device}} {{disk_io_direction}}",
           "refId": "A",
           "format": "time_series"
         }
@@ -494,8 +522,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (system_device, obi_disk_partition) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\", obi_disk_partition!=\"\"}[$__rate_interval]))",
-          "legendFormat": "{{obi_disk_partition}}",
+          "expr": "sum by (obi_ip, system_device, obi_disk_partition) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\", obi_disk_partition!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{obi_ip}} {{obi_disk_partition}}",
           "refId": "A",
           "format": "time_series"
         }
@@ -542,7 +570,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "topk(10, sum by (k8s_namespace_name, k8s_owner_name) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__range])))",
+          "expr": "topk(10, sum by (k8s_namespace_name, k8s_owner_name) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__range])))",
           "legendFormat": "{{k8s_namespace_name}}/{{k8s_owner_name}}",
           "refId": "A",
           "format": "time_series",
@@ -552,13 +580,16 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "Bps"
+          "unit": "Bps",
+          "min": 0,
+          "displayName": "${__field.labels.k8s_namespace_name}/${__field.labels.k8s_owner_name}"
         },
         "overrides": []
       },
       "options": {
         "orientation": "horizontal",
         "displayMode": "gradient",
+        "namePlacement": "top",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -587,7 +618,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (k8s_namespace_name, k8s_owner_name, disk_io_direction) (rate(obi_stat_disk_operation_time_seconds_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__rate_interval])) / sum by (k8s_namespace_name, k8s_owner_name, disk_io_direction) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__rate_interval]))",
+          "expr": "sum by (k8s_namespace_name, k8s_owner_name, disk_io_direction) (rate(obi_stat_disk_operation_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__rate_interval])) / sum by (k8s_namespace_name, k8s_owner_name, disk_io_direction) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{k8s_namespace_name}}/{{k8s_owner_name}} {{disk_io_direction}}",
           "refId": "A",
           "format": "time_series"
@@ -622,7 +653,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name=\"\"}[$__rate_interval])) / sum(rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "expr": "sum(rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name=\"\"}[$__rate_interval])) / sum(rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
           "legendFormat": "unattributed",
           "refId": "A",
           "format": "time_series"
@@ -670,7 +701,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (obi_fs_sync_type, error_type) (rate(obi_stat_fs_sync_duration_seconds_count{instance=~\"$instance\"}[$__rate_interval]))",
+          "expr": "sum by (obi_fs_sync_type, error_type) (rate(obi_stat_fs_sync_duration_seconds_count{instance=~\"$instance\", obi_ip=~\"$node\"}[$__rate_interval]))",
           "legendFormat": "{{obi_fs_sync_type}} {{error_type}}",
           "refId": "A",
           "format": "time_series"
@@ -705,7 +736,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le, obi_fs_sync_type) (rate(obi_stat_fs_sync_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le, obi_fs_sync_type) (rate(obi_stat_fs_sync_duration_seconds_bucket{instance=~\"$instance\", obi_ip=~\"$node\"}[$__rate_interval])))",
           "legendFormat": "{{obi_fs_sync_type}}",
           "refId": "A",
           "format": "time_series"
@@ -740,8 +771,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le, system_filesystem_mountpoint) (rate(obi_stat_fs_sync_duration_seconds_bucket{instance=~\"$instance\", system_filesystem_mountpoint!=\"\"}[$__rate_interval])))",
-          "legendFormat": "{{system_filesystem_mountpoint}}",
+          "expr": "histogram_quantile(0.99, sum by (le, obi_ip, system_filesystem_mountpoint) (rate(obi_stat_fs_sync_duration_seconds_bucket{instance=~\"$instance\", obi_ip=~\"$node\", system_filesystem_mountpoint!=\"\"}[$__rate_interval])))",
+          "legendFormat": "{{obi_ip}} {{system_filesystem_mountpoint}}",
           "refId": "A",
           "format": "time_series"
         }
@@ -788,7 +819,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (server_address, onc_rpc_procedure_name) (rate(obi_stat_nfs_client_procedure_duration_seconds_count{instance=~\"$instance\"}[$__rate_interval]))",
+          "expr": "sum by (server_address, onc_rpc_procedure_name) (rate(obi_stat_nfs_client_procedure_duration_seconds_count{instance=~\"$instance\", obi_ip=~\"$node\"}[$__rate_interval]))",
           "legendFormat": "{{server_address}} {{onc_rpc_procedure_name}}",
           "refId": "A",
           "format": "time_series"
@@ -823,7 +854,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le, server_address, onc_rpc_procedure_name) (rate(obi_stat_nfs_client_procedure_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le, server_address, onc_rpc_procedure_name) (rate(obi_stat_nfs_client_procedure_duration_seconds_bucket{instance=~\"$instance\", obi_ip=~\"$node\"}[$__rate_interval])))",
           "legendFormat": "{{server_address}} {{onc_rpc_procedure_name}}",
           "refId": "A",
           "format": "time_series"
@@ -858,7 +889,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (server_address, network_io_direction) (rate(obi_stat_nfs_client_io_bytes_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "expr": "sum by (server_address, network_io_direction) (rate(obi_stat_nfs_client_io_bytes_total{instance=~\"$instance\", obi_ip=~\"$node\"}[$__rate_interval]))",
           "legendFormat": "{{server_address}} {{network_io_direction}}",
           "refId": "A",
           "format": "time_series"
@@ -893,7 +924,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (server_address, onc_rpc_procedure_name, error_type) (rate(obi_stat_nfs_client_procedure_duration_seconds_count{instance=~\"$instance\", error_type!=\"\"}[$__rate_interval]))",
+          "expr": "sum by (server_address, onc_rpc_procedure_name, error_type) (rate(obi_stat_nfs_client_procedure_duration_seconds_count{instance=~\"$instance\", obi_ip=~\"$node\", error_type!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{server_address}} {{onc_rpc_procedure_name}} {{error_type}}",
           "refId": "A",
           "format": "time_series"
@@ -941,7 +972,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\"} == 1, \"source\", \"/\", \"k8s_namespace_name\", \"k8s_pod_name\"), \"source\", \"pod $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"k8s_namespace_name\", \"k8s_persistentvolumeclaim_name\"), \"target\", \"pvc $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
+          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\", obi_ip=~\"$node\"} == 1, \"source\", \"/\", \"k8s_namespace_name\", \"k8s_pod_name\"), \"source\", \"pod $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"k8s_namespace_name\", \"k8s_persistentvolumeclaim_name\"), \"target\", \"pvc $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
           "legendFormat": "",
           "refId": "A",
           "format": "table",
@@ -953,7 +984,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\"} == 1, \"source\", \"/\", \"k8s_namespace_name\", \"k8s_persistentvolumeclaim_name\"), \"source\", \"pvc $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"k8s_persistentvolume_name\"), \"target\", \"pv $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
+          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\", obi_ip=~\"$node\"} == 1, \"source\", \"/\", \"k8s_namespace_name\", \"k8s_persistentvolumeclaim_name\"), \"source\", \"pvc $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"k8s_persistentvolume_name\"), \"target\", \"pv $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
           "legendFormat": "",
           "refId": "B",
           "format": "table",
@@ -965,7 +996,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\"} == 1, \"source\", \"/\", \"k8s_persistentvolume_name\"), \"source\", \"pv $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"obi_disk_volume_device\"), \"target\", \"device $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
+          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\", obi_ip=~\"$node\"} == 1, \"source\", \"/\", \"k8s_persistentvolume_name\"), \"source\", \"pv $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"obi_ip\", \"obi_disk_volume_device\"), \"target\", \"device $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
           "legendFormat": "",
           "refId": "C",
           "format": "table",
@@ -977,7 +1008,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\"} == 1, \"source\", \"/\", \"obi_disk_volume_device\"), \"source\", \"device $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"system_device\"), \"target\", \"disk $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
+          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\", obi_ip=~\"$node\"} == 1, \"source\", \"/\", \"obi_ip\", \"obi_disk_volume_device\"), \"source\", \"device $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"obi_ip\", \"system_device\"), \"target\", \"disk $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
           "legendFormat": "",
           "refId": "D",
           "format": "table",
@@ -1027,7 +1058,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (k8s_namespace_name, k8s_pod_name, k8s_persistentvolumeclaim_name, k8s_persistentvolume_name, obi_disk_volume_device, system_device) (obi_stat_k8s_pod_volume_device{instance=~\"$instance\"} == 1) * on (system_device) group_left sum by (system_device) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\"}[5m]))",
+          "expr": "max by (k8s_namespace_name, k8s_pod_name, k8s_persistentvolumeclaim_name, k8s_persistentvolume_name, obi_disk_volume_device, obi_ip, system_device) (obi_stat_k8s_pod_volume_device{instance=~\"$instance\", obi_ip=~\"$node\"} == 1) * on (obi_ip, system_device) group_left sum by (obi_ip, system_device) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", obi_ip=~\"$node\"}[5m]))",
           "legendFormat": "",
           "refId": "A",
           "format": "table",
