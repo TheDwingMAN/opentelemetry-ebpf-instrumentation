@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -291,10 +292,10 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeDiskCounters(stat)
 			r.observeFsSyncDuration(stat)
 			r.observeDiskOperations(stat)
-			r.observeDiskPendingOperations(stat)
 			r.observeNFS(stat)
-			r.observePodVolume(stat)
 		}
+		r.observeDiskPendingOperations(stats)
+		r.observePodVolumes(stats)
 	}
 }
 
@@ -522,18 +523,52 @@ func (r *statMetricsReporter) observeNFS(stat *ebpf.Stat) {
 	}
 }
 
-func (r *statMetricsReporter) observePodVolume(stat *ebpf.Stat) {
-	if r.k8sPodVolumeDevice == nil || stat.PodVolume == nil {
+func (r *statMetricsReporter) observePodVolumes(stats []*ebpf.Stat) {
+	if r.k8sPodVolumeDevice == nil {
 		return
 	}
-	r.k8sPodVolumeDevice.WithLabelValues(labelValues(stat, r.k8sPodVolumeDeviceAttrs)...).
-		Metric.Set(float64(stat.PodVolume.Value))
+	setGaugeSums(r.k8sPodVolumeDevice, r.k8sPodVolumeDeviceAttrs, stats, func(stat *ebpf.Stat) (float64, bool) {
+		if stat.PodVolume == nil {
+			return 0, false
+		}
+		return float64(stat.PodVolume.Value), true
+	})
 }
 
-func (r *statMetricsReporter) observeDiskPendingOperations(stat *ebpf.Stat) {
-	if r.diskPendingOperations == nil || stat.DiskPending == nil {
+func (r *statMetricsReporter) observeDiskPendingOperations(stats []*ebpf.Stat) {
+	if r.diskPendingOperations == nil {
 		return
 	}
-	r.diskPendingOperations.WithLabelValues(labelValues(stat, r.diskPendingOperationsAttrs)...).
-		Metric.Set(float64(stat.DiskPending.Requests))
+	setGaugeSums(r.diskPendingOperations, r.diskPendingOperationsAttrs, stats, func(stat *ebpf.Stat) (float64, bool) {
+		if stat.DiskPending == nil {
+			return 0, false
+		}
+		return float64(stat.DiskPending.Requests), true
+	})
+}
+
+// setGaugeSums sets each series of a gauge to the sum of the values of the stats of a batch that
+// fall into it. Several stats fall into the same series when some of their attributes are not
+// selected, e.g. the reads and writes of a device without disk.io.direction.
+func setGaugeSums(
+	gauge *Expirer[prometheus.Gauge],
+	attrs []attributes.Field[*ebpf.Stat, string],
+	stats []*ebpf.Stat,
+	valueOf func(*ebpf.Stat) (float64, bool),
+) {
+	sums := map[string]float64{}
+	labels := map[string][]string{}
+	for _, stat := range stats {
+		value, ok := valueOf(stat)
+		if !ok {
+			continue
+		}
+		values := labelValues(stat, attrs)
+		key := strings.Join(values, "\x00")
+		sums[key] += value
+		labels[key] = values
+	}
+	for key, sum := range sums {
+		gauge.WithLabelValues(labels[key]...).Metric.Set(sum)
+	}
 }

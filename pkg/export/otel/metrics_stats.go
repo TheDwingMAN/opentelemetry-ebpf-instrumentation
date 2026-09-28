@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -356,9 +357,6 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if v.DiskIO != nil {
 				me.recordDiskIO(ctx, v)
 			}
-			if me.diskPendingOperations != nil && v.DiskPending != nil {
-				me.diskPendingOperations.Record(v, v.DiskPending.Requests)
-			}
 			if me.fsSyncDuration != nil && v.FsSync != nil {
 				fsSyncDuration, attrs := me.fsSyncDuration.ForRecord(v)
 				recordLatency(ctx, fsSyncDuration, v.FsSync.Latency, metric2.WithAttributeSet(attrs))
@@ -370,10 +368,53 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				nfsIO, attrs := me.nfsIO.ForRecord(v)
 				nfsIO.Add(ctx, int64(v.NFSIO.Bytes), metric2.WithAttributeSet(attrs))
 			}
-			if me.k8sPodVolumeDevice != nil && v.PodVolume != nil {
-				me.k8sPodVolumeDevice.Record(v, v.PodVolume.Value)
-			}
 		}
+		recordCurrentSums(me.diskPendingOperations, i, func(stat *ebpf.Stat) (int64, bool) {
+			if stat.DiskPending == nil {
+				return 0, false
+			}
+			return stat.DiskPending.Requests, true
+		})
+		recordCurrentSums(me.k8sPodVolumeDevice, i, func(stat *ebpf.Stat) (int64, bool) {
+			if stat.PodVolume == nil {
+				return 0, false
+			}
+			return stat.PodVolume.Value, true
+		})
+	}
+}
+
+// recordCurrentSums records, as the current value of each series, the sum of the values of the
+// stats of a batch that fall into it. Several stats fall into the same series when some of their
+// attributes are not selected, e.g. the reads and writes of a device without disk.io.direction.
+func recordCurrentSums(
+	counter *currentUpDownCounter[*ebpf.Stat],
+	stats []*ebpf.Stat,
+	valueOf func(*ebpf.Stat) (int64, bool),
+) {
+	if counter == nil {
+		return
+	}
+	type series struct {
+		stat *ebpf.Stat
+		sum  int64
+	}
+	sums := map[string]*series{}
+	for _, stat := range stats {
+		value, ok := valueOf(stat)
+		if !ok {
+			continue
+		}
+		_, values := attributeSet(counter.attrs, stat)
+		key := strings.Join(values, "\x00")
+		if s, ok := sums[key]; ok {
+			s.sum += value
+		} else {
+			sums[key] = &series{stat: stat, sum: value}
+		}
+	}
+	for _, s := range sums {
+		counter.Record(s.stat, s.sum)
 	}
 }
 

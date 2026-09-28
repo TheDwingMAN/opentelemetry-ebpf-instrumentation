@@ -86,7 +86,9 @@ func (p *PodVolumesTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc
 func (p *PodVolumesTracer) readStats() []*ebpf.Stat {
 	mounts, err := p.mounts()
 	if err != nil {
+		// without the mounts, the volumes would be reported as gone: the next read reports them
 		dtlog().Debug("can't read the mount table", "error", err)
+		return nil
 	}
 	current := map[ebpf.PodVolume]bool{}
 	var stats []*ebpf.Stat

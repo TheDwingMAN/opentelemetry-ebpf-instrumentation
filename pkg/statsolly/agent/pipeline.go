@@ -119,29 +119,32 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		statAttrs, dynamicDecoratedStats, dynamicFilteredStats),
 		swarm.WithID("DynamicPIDFilter"))
 
-	// Block I/O stats have no network endpoints, so they skip the IP-based nodes above and join
-	// the rest of the stats before the attribute filter.
-	diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
-	swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
+	allStats := dynamicFilteredStats
+	if s.storageStatsEnabled() {
+		// Block I/O stats have no network endpoints, so they skip the IP-based nodes above and join
+		// the rest of the stats before the attribute filter.
+		diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
+		swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
 
-	podVolumeStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "podVolumeStats")
-	swi.Add(func(ctx context.Context) (swarm.RunFunc, error) { return newPodVolumesTracer(ctx, s, podVolumeStats) },
-		swarm.WithID("PodVolumesTracer"))
+		podVolumeStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "podVolumeStats")
+		swi.Add(func(ctx context.Context) (swarm.RunFunc, error) { return newPodVolumesTracer(ctx, s, podVolumeStats) },
+			swarm.WithID("PodVolumesTracer"))
 
-	storageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "storageStats")
-	swi.Add(mergeStats(diskStats, podVolumeStats, storageStats), swarm.WithID("StorageStatsMerger"))
+		storageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "storageStats")
+		swi.Add(mergeStats(diskStats, podVolumeStats, storageStats), swarm.WithID("StorageStatsMerger"))
 
-	kubeDecoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "kubeDecoratedDiskStats")
-	swi.Add(k8s.ContainerMetadataDecoratorProvider(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
-		(*ebpf.Stat).ContainerID, statAttrs, storageStats, kubeDecoratedDiskStats),
-		swarm.WithID("DiskKubeDecorator"))
+		kubeDecoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "kubeDecoratedDiskStats")
+		swi.Add(k8s.ContainerMetadataDecoratorProvider(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
+			(*ebpf.Stat).ContainerID, statAttrs, storageStats, kubeDecoratedDiskStats),
+			swarm.WithID("DiskKubeDecorator"))
 
-	decoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "decoratedDiskStats")
-	swi.Add(decorate.Decorate(s.agentIP, statAttrs, kubeDecoratedDiskStats, decoratedDiskStats),
-		swarm.WithID("DiskStatsDecorator"))
+		decoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "decoratedDiskStats")
+		swi.Add(decorate.Decorate(s.agentIP, statAttrs, kubeDecoratedDiskStats, decoratedDiskStats),
+			swarm.WithID("DiskStatsDecorator"))
 
-	allStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "allStats")
-	swi.Add(mergeStats(dynamicFilteredStats, decoratedDiskStats, allStats), swarm.WithID("StatsMerger"))
+		allStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "allStats")
+		swi.Add(mergeStats(dynamicFilteredStats, decoratedDiskStats, allStats), swarm.WithID("StatsMerger"))
+	}
 
 	filteredStats := s.ctxInfo.OverrideStatsExportQueue
 	if filteredStats == nil {
@@ -169,6 +172,13 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		swarm.WithID("StatPrinter"))
 
 	return swi.Instance(ctx)
+}
+
+// storageStatsEnabled tells whether any disk, file sync, NFS or pod volume stat is enabled. Their
+// branch of the pipeline, and its Kubernetes decorator, is only added then.
+func (s *Stats) storageStatsEnabled() bool {
+	features := s.cfg.Metrics.Features
+	return features.StatsDisk() || features.StatsFsSyncDuration() || features.StatsNFS() || features.StatsDiskPodVolumes()
 }
 
 // mergeStats forwards the stats of both inputs to the output, and closes the output once both

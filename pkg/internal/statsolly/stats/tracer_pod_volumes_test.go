@@ -160,6 +160,16 @@ func TestPodVolumesTracer(t *testing.T) {
 	assert.Equal(t, "db", gone[0].CommonAttrs.Metadata[attr.K8sOwnerName], "with the labels of the series it ends")
 
 	assert.Len(t, tracer.readStats(), 2, "only once")
+
+	// a failed read of the mount table doesn't report the volumes as gone
+	tracer.mounts = func() ([]*procfs.MountInfo, error) { return nil, errors.New("can't read") }
+	assert.Empty(t, tracer.readStats())
+	tracer.mounts = func() ([]*procfs.MountInfo, error) { return mounts, nil }
+	stats = tracer.readStats()
+	require.Len(t, stats, 2)
+	for _, stat := range stats {
+		assert.Equal(t, int64(1), stat.PodVolume.Value)
+	}
 }
 
 func TestPhysicalDisks(t *testing.T) {

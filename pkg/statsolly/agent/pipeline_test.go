@@ -335,6 +335,25 @@ func TestDiskOperationsBeyondReadsAndWrites(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+func TestDiskPendingOperationsOfSeveralStatsInOneSeries(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskPendingOperations, func(cfg *obi.Config) {
+		cfg.Attributes.Select = attributes.Selection{
+			attributes.StatDiskPendingOperations.Section: attributes.InclusionLists{Exclude: []string{"disk.io.direction"}},
+		}
+	})
+
+	pending := func(op ebpf.DiskOpCode, requests int64) *ebpf.Stat {
+		return &ebpf.Stat{Type: ebpf.StatTypeDiskPending, DiskPending: &ebpf.DiskPending{Device: "vda", Op: op, Requests: requests}}
+	}
+	diskEvents <- []*ebpf.Stat{pending(ebpf.CodeDiskOpRead, 5), pending(ebpf.CodeDiskOpWrite, 3)}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_pending_operations", Value: 8, Labels: map[string]string{"obi_disk_stacked": "false", "system_device": "vda"}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_pending_operations"), "the reads and writes add up")
+	}, timeout, 100*time.Millisecond)
+}
+
 func TestFsSyncStats(t *testing.T) {
 	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsFsSyncDuration)
 
@@ -439,7 +458,7 @@ func TestPodVolumeStats(t *testing.T) {
 
 // startDiskPipeline runs the stats pipeline with the given disk features, exporting to
 // Prometheus. It returns the channel to send disk stats through and the Prometheus URL.
-func startDiskPipeline(t *testing.T, features export.Features) (chan<- []*ebpf.Stat, string) {
+func startDiskPipeline(t *testing.T, features export.Features, configure ...func(*obi.Config)) (chan<- []*ebpf.Stat, string) {
 	registry := prometheus.NewRegistry()
 	promServer := httptest.NewServer(promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
 	t.Cleanup(promServer.Close)
@@ -462,6 +481,10 @@ func startDiskPipeline(t *testing.T, features export.Features) (chan<- []*ebpf.S
 			},
 			Metrics: perapp.GlobalMetricsConfig{Features: features},
 		},
+	}
+
+	for _, c := range configure {
+		c(stats.cfg)
 	}
 
 	diskEvents := make(chan []*ebpf.Stat, 10)
