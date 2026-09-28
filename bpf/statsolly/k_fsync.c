@@ -79,18 +79,24 @@ static __always_inline void syscall_sync_started(const enum fs_sync_type type, c
     bpf_map_update_elem(&fs_sync_start, &pid_tgid, &start, BPF_ANY);
 }
 
+// A sync system call in progress for longer is considered stale: its kretprobe was missed, and it
+// must not keep the syncs of its thread outside of system calls from being measured.
+enum { k_fs_sync_syscall_stale_ns = 10ULL * 60 * 1000 * 1000 * 1000 };
+
 // Starts measuring a file sync that a kernel function does outside of the sync system calls:
 // O_SYNC and O_DSYNC writes, msync(2), io_uring, the NFS server... File syncs nest when a
 // stacked filesystem, like overlayfs, syncs the file below: the innermost call is measured,
 // once, and a thread whose kretprobe was missed recovers on its next sync.
 static __always_inline void function_sync_started(const int datasync, struct file *file) {
     const u64 pid_tgid = bpf_get_current_pid_tgid();
+    const u64 now = bpf_ktime_get_ns();
     const fs_sync_start_t *current = bpf_map_lookup_elem(&fs_sync_start, &pid_tgid);
-    if (current && current->from_syscall) {
+    if (current && current->from_syscall &&
+        now - current->started_ns < k_fs_sync_syscall_stale_ns) {
         return;
     }
     const fs_sync_start_t start = {
-        .started_ns = bpf_ktime_get_ns(),
+        .started_ns = now,
         .s_dev = file ? file_s_dev(file) : 0,
         .type = datasync ? fs_sync_type_fdatasync : fs_sync_type_fsync,
     };
@@ -106,7 +112,7 @@ static __always_inline void fs_sync_returned(const s32 ret, const bool from_sysc
     const u64 latency_ns = bpf_ktime_get_ns() - start->started_ns;
     struct cgroup *cgrp = current_io_cgroup();
     const fs_sync_key_t key = {
-        .cgroup_id = BPF_CORE_READ(cgrp, kn, id),
+        .cgroup_id = cgroup_id_of(cgrp),
         .s_dev = start->s_dev,
         .status = fs_sync_status(ret),
         .type = start->type,

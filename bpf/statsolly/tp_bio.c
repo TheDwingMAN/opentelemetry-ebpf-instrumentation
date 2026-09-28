@@ -18,9 +18,6 @@
 // I/O down to the devices below them as bios, never as requests of their own. Their I/O is
 // measured from the bio that is submitted to them until its completion.
 
-// The bio flags start right after the REQ_OP_BITS-wide operation field.
-enum { k_bio_op_mask = (1U << __REQ_FAILFAST_DEV) - 1 };
-
 // bio fields of kernels before Linux 5.12 (including RHEL 8), which had no bi_bdev
 struct bio___old {
     struct gendisk *bi_disk;
@@ -36,10 +33,8 @@ static __always_inline struct gendisk *bio_disk(struct bio *bio) {
 
 static __always_inline enum disk_op bio_op(struct bio *bio) {
     const u32 preflush_flag = 1U << bpf_core_enum_value(enum req_flag_bits, __REQ_PREFLUSH);
-    return disk_bio_op(BPF_CORE_READ(bio, bi_opf),
-                       k_bio_op_mask,
-                       preflush_flag,
-                       BPF_CORE_READ(bio, bi_iter.bi_size));
+    return disk_bio_op(
+        BPF_CORE_READ(bio, bi_opf), k_op_mask, preflush_flag, BPF_CORE_READ(bio, bi_iter.bi_size));
 }
 
 static __always_inline void record_bio_queue(struct bio *bio) {
@@ -92,9 +87,9 @@ int obi_stats_raw_tp_block_bio_complete(struct bpf_raw_tracepoint_args *ctx) {
     }
     const u64 latency_ns = bpf_ktime_get_ns() - start->issued_ns;
     const u32 bytes = start->bytes;
-    struct cgroup *cgrp = BPF_CORE_READ(bio, bi_blkg, blkcg, css.cgroup);
+    struct cgroup *cgrp = bio_cgroup(bio);
     const disk_io_key_t key = {
-        .cgroup_id = BPF_CORE_READ(cgrp, kn, id),
+        .cgroup_id = cgroup_id_of(cgrp),
         .major = start->major,
         .minor = start->minor,
         .op = start->op,

@@ -17,6 +17,10 @@
 volatile const u64 disk_latency_bounds_ns[k_disk_latency_max_bounds];
 volatile const u32 disk_latency_bounds_len;
 
+// The operation of block request and bio flags: the request flags start right after the
+// REQ_OP_BITS-wide operation field.
+enum { k_op_mask = (1U << __REQ_FAILFAST_DEV) - 1 };
+
 SCRATCH_MEM_TYPED(disk_io_accum_init, disk_io_accum_t)
 
 // The accumulation entry of a key in one of the disk accumulation maps, created zeroed if missing

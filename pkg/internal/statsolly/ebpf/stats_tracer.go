@@ -36,7 +36,15 @@ type probe struct {
 	// optional probes that can't be attached are skipped, e.g. when the kernel doesn't have the
 	// function
 	optional bool
+	// retprobeMaxActive is how many calls a return probe tracks at once, 0 for the kernel default
+	retprobeMaxActive int
 }
+
+// fsSyncRetprobeMaxActive is how many calls of a sync function the kernel tracks at once for their
+// return probe, its maximum. The default, about twice the number of CPUs, is exceeded when many
+// threads sync at once, e.g. when the storage stalls, and the returns of the other calls are
+// missed.
+const fsSyncRetprobeMaxActive = 4096
 
 // Program names
 const (
@@ -232,6 +240,43 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 
 	var closables []io.Closer
 
+	// kretprobes, attached before the kprobes: a call that starts once its kprobe is attached must
+	// not return before its kretprobe is, or its start is never completed
+	for _, k := range []probe{
+		{
+			name:    KprobeTCPSendMsg,
+			program: objects.ObiStatsKretprobeTcpSendmsg,
+			enabled: features.StatsTCPIo(),
+		},
+		{
+			name:              KprobeVfsFsyncRange,
+			program:           objects.ObiStatsKretprobeVfsFsyncRange,
+			enabled:           features.StatsFsSyncDuration(),
+			retprobeMaxActive: fsSyncRetprobeMaxActive,
+		},
+		{
+			name:              KprobeDoFsync,
+			program:           objects.ObiStatsKretprobeDoFsync,
+			enabled:           features.StatsFsSyncDuration(),
+			optional:          true,
+			retprobeMaxActive: fsSyncRetprobeMaxActive,
+		},
+	} {
+		if !k.enabled {
+			continue
+		}
+		l, err := attachKretprobe(tlog, k.name, k.program, k.retprobeMaxActive)
+		if err != nil && k.optional {
+			tlog.Debug("skipping optional kretprobe", "function", k.name, "error", err)
+			continue
+		}
+		if err != nil {
+			closeAll(closables)
+			return nil, fmt.Errorf("failed kretprobe attachment %s: %w", k.name, err)
+		}
+		closables = append(closables, l)
+	}
+
 	// kprobes
 	for _, k := range []probe{
 		{
@@ -278,40 +323,6 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		if err != nil {
 			closeAll(closables)
 			return nil, fmt.Errorf("failed kprobe attachment %s: %w", k.name, err)
-		}
-		closables = append(closables, l)
-	}
-
-	// kretprobes
-	for _, k := range []probe{
-		{
-			name:    KprobeTCPSendMsg,
-			program: objects.ObiStatsKretprobeTcpSendmsg,
-			enabled: features.StatsTCPIo(),
-		},
-		{
-			name:    KprobeVfsFsyncRange,
-			program: objects.ObiStatsKretprobeVfsFsyncRange,
-			enabled: features.StatsFsSyncDuration(),
-		},
-		{
-			name:     KprobeDoFsync,
-			program:  objects.ObiStatsKretprobeDoFsync,
-			enabled:  features.StatsFsSyncDuration(),
-			optional: true,
-		},
-	} {
-		if !k.enabled {
-			continue
-		}
-		l, err := link.Kretprobe(k.name, k.program, nil)
-		if err != nil && k.optional {
-			tlog.Debug("skipping optional kretprobe", "function", k.name, "error", err)
-			continue
-		}
-		if err != nil {
-			closeAll(closables)
-			return nil, fmt.Errorf("failed kretprobe attachment %s: %w", k.name, err)
 		}
 		closables = append(closables, l)
 	}
@@ -364,6 +375,14 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 			program: objects.ObiStatsRawTpTcpRetransmitSkb,
 			enabled: features.StatsTCPRetransmits(),
 		},
+		// the completions are attached before the starts, so that no start is recorded without
+		// its completion being measured: a stale start of a bio would be matched by another bio
+		// that reuses its memory
+		{
+			name:    RawTracepointBlockRqComplete,
+			program: objects.ObiStatsRawTpBlockRqComplete,
+			enabled: diskAttached,
+		},
 		{
 			name:    RawTracepointBlockRqIssue,
 			program: objects.ObiStatsRawTpBlockRqIssue,
@@ -375,9 +394,9 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 			enabled: diskAttached && blockLayout.issueHasQueueArg,
 		},
 		{
-			name:    RawTracepointBlockRqComplete,
-			program: objects.ObiStatsRawTpBlockRqComplete,
-			enabled: diskAttached,
+			name:    RawTracepointBlockBioComplete,
+			program: objects.ObiStatsRawTpBlockBioComplete,
+			enabled: bioAttached,
 		},
 		{
 			name:    RawTracepointBlockBioQueue,
@@ -388,11 +407,6 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 			name:    RawTracepointBlockBioQueue,
 			program: objects.ObiStatsRawTpBlockBioQueueLegacy,
 			enabled: bioAttached && blockLayout.bioQueueHasQueueArg,
-		},
-		{
-			name:    RawTracepointBlockBioComplete,
-			program: objects.ObiStatsRawTpBlockBioComplete,
-			enabled: bioAttached,
 		},
 	} {
 		if !t.enabled {
@@ -440,20 +454,33 @@ func attachSyncSyscalls(log *slog.Logger, objects *StatsObjects) []io.Closer {
 		{KprobeSysSyncFileRange, objects.ObiStatsKprobeSysSyncFileRange},
 		{KprobeSysSync, objects.ObiStatsKprobeSysSync},
 	} {
+		ret, err := attachKretprobe(log, syscall.name, objects.ObiStatsKretprobeSysFsSync, fsSyncRetprobeMaxActive)
+		if err != nil {
+			log.Debug("skipping sync system call", "syscall", syscall.name, "error", err)
+			continue
+		}
 		entry, err := link.Kprobe(syscall.name, syscall.entry, nil)
 		if err != nil {
+			ret.Close()
 			log.Debug("skipping sync system call", "syscall", syscall.name, "error", err)
 			continue
 		}
-		ret, err := link.Kretprobe(syscall.name, objects.ObiStatsKretprobeSysFsSync, nil)
-		if err != nil {
-			entry.Close()
-			log.Debug("skipping sync system call", "syscall", syscall.name, "error", err)
-			continue
-		}
-		closables = append(closables, entry, ret)
+		closables = append(closables, ret, entry)
 	}
 	return closables
+}
+
+// attachKretprobe attaches a return probe that tracks up to maxActive calls at once. That needs
+// tracefs: without it, the kernel default is used.
+func attachKretprobe(log *slog.Logger, symbol string, program *ebpf.Program, maxActive int) (link.Link, error) {
+	if maxActive > 0 {
+		l, err := link.Kretprobe(symbol, program, &link.KprobeOptions{RetprobeMaxActive: maxActive})
+		if err == nil {
+			return l, nil
+		}
+		log.Debug("attaching the kretprobe with the default number of instances", "function", symbol, "error", err)
+	}
+	return link.Kretprobe(symbol, program, nil)
 }
 
 func closeAll(closables []io.Closer) {

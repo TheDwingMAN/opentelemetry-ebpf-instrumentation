@@ -71,6 +71,8 @@ static void test_status_code(void) {
     // negative errno before Linux 5.16, sign-extended in the raw tracepoint argument
     assert_true(disk_status_code((u64)(s64)-5, false) == 5, "-EIO becomes errno 5");
     assert_true(disk_status_code(0, false) == 0, "errno 0 is success");
+    assert_true(disk_status_code((u64)(s64)-512, false) == k_status_other,
+                "an errno that doesn't fit in a status is not reported as a success");
 }
 
 static void test_op_from_req_op(void) {
@@ -113,6 +115,10 @@ static void test_fs_sync_status(void) {
     assert_true(fs_sync_status(0) == 0, "a successful sync has no status");
     assert_true(fs_sync_status(-5) == 5, "-EIO becomes errno 5");
     assert_true(fs_sync_status(-22) == 22, "-EINVAL becomes errno 22");
+    assert_true(fs_sync_status(-512) == k_status_other,
+                "-ERESTARTSYS doesn't fit in a status: it is not reported as a success");
+    assert_true(fs_sync_status(-524) == k_status_other,
+                "-ENOTSUPP doesn't fit in a status: it is not reported as ENOMEM");
     assert_true(!fs_sync_attempted(-9), "an invalid file descriptor is not a file sync");
     assert_true(fs_sync_attempted(-22), "a file that can't be synced is a failed file sync");
     assert_true(fs_sync_attempted(0), "a successful sync is a file sync");

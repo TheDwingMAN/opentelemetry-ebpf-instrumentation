@@ -32,6 +32,36 @@ static __always_inline struct cgroup *current_io_cgroup(void) {
     return BPF_CORE_READ(css, cgroup);
 }
 
+// The io controller cgroup that a bio is charged to, or null without CONFIG_BLK_CGROUP
+static __always_inline struct cgroup *bio_cgroup(struct bio *bio) {
+    if (!bio || !bpf_core_field_exists(bio->bi_blkg)) {
+        return 0;
+    }
+    return BPF_CORE_READ(bio, bi_blkg, blkcg, css.cgroup);
+}
+
+// kernfs_node before Linux 5.5, whose id was a union (RHEL 8 kernels have the u64 in a kABI union)
+union kernfs_node_id___old {
+    u64 id;
+} __attribute__((preserve_access_index));
+
+struct kernfs_node___old {
+    union kernfs_node_id___old id;
+} __attribute__((preserve_access_index));
+
+// The id of a cgroup, as bpf_get_current_cgroup_id() returns it, or 0 for a null cgroup
+static __always_inline u64 cgroup_id_of(struct cgroup *cgrp) {
+    if (!cgrp) {
+        return 0;
+    }
+    struct kernfs_node *kn = BPF_CORE_READ(cgrp, kn);
+    if (bpf_core_field_exists(kn->id)) {
+        return BPF_CORE_READ(kn, id);
+    }
+    const struct kernfs_node___old *old = (const void *)kn;
+    return BPF_CORE_READ(old, id.id);
+}
+
 // Records the name of the cgroup the first time I/O is charged to it
 static __always_inline void record_cgroup_name(const u64 cgroup_id, struct cgroup *cgrp) {
     if (bpf_map_lookup_elem(&disk_cgroup_names, &cgroup_id)) {

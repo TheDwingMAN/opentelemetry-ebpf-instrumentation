@@ -87,13 +87,21 @@ disk_rq_final_completion(const u32 nr_bytes, const u32 remaining_bytes, const u8
     return status != 0 || nr_bytes >= remaining_bytes;
 }
 
+// The status of errnos that don't fit in a u8, such as the kernel-internal ERESTARTSYS (512),
+// which userspace reports as _OTHER
+enum { k_status_other = 0xff };
+
+static __always_inline u8 errno_status(const u32 errno) {
+    return errno < k_status_other ? (u8)errno : (u8)k_status_other;
+}
+
 // block_rq_complete reports a negative errno before Linux 5.16 and a blk_status_t since.
 // Both are normalized to a small positive code: the blk_status_t value, or the errno.
 static __always_inline u8 disk_status_code(const u64 raw_error, const bool is_blk_status) {
     if (is_blk_status) {
         return (u8)raw_error;
     }
-    return (u8)(-(s32)raw_error);
+    return errno_status((u32)(-(s32)raw_error));
 }
 
 enum { k_errno_ebadf = 9 };
@@ -108,5 +116,5 @@ static __always_inline u8 fs_sync_status(const s32 ret) {
     if (ret >= 0) {
         return 0;
     }
-    return (u8)(-ret);
+    return errno_status((u32)(-ret));
 }

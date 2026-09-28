@@ -97,10 +97,10 @@ int obi_stats_raw_tp_rpc_task_begin(struct bpf_raw_tracepoint_args *ctx) {
     if (!cgrp) {
         return 0;
     }
-    const u64 cgroup_id = BPF_CORE_READ(cgrp, kn, id);
+    const u64 id = cgroup_id_of(cgrp);
     const u64 task_addr = (u64)task;
-    bpf_map_update_elem(&nfs_task_cgroup, &task_addr, &cgroup_id, BPF_ANY);
-    record_cgroup_name(cgroup_id, cgrp);
+    bpf_map_update_elem(&nfs_task_cgroup, &task_addr, &id, BPF_ANY);
+    record_cgroup_name(id, cgrp);
     return 0;
 }
 
