@@ -662,3 +662,17 @@ func alignedBuffer(t *testing.T, size int) []byte {
 	t.Cleanup(func() { _ = unix.Munmap(buf) })
 	return buf
 }
+
+// TestNFSStatsAreOptional checks that the NFS client stats never keep the other stats from
+// loading, whether or not the kernel has the NFS client and its BTF
+func TestNFSStatsAreOptional(t *testing.T) {
+	features := export.FeatureStatsNFS | export.FeatureStatsDiskOperations
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+		ebpf.LatencyHistograms{Disk: testBounds, NFS: testBounds})
+	require.NoError(t, err)
+	t.Cleanup(func() { fetcher.Close() })
+
+	assert.NotNil(t, fetcher.DiskIOAccumMap())
+	t.Logf("NFS procedures measured: %t, NFS bytes measured: %t",
+		fetcher.NFSProcedureAccumMap() != nil, fetcher.NFSIOAccumMap() != nil)
+}

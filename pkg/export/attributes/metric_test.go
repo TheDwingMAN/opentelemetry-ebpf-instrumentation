@@ -91,6 +91,8 @@ func TestPrometheusNames(t *testing.T) {
 		{StatDiskDiscardDuration, "obi_stat_disk_discard_duration_seconds"},
 		{StatDiskDiscardIO, "obi_stat_disk_discard_io_bytes_total"},
 		{StatDiskPendingOperations, "obi_stat_disk_pending_operations"},
+		{StatNFSClientProcedureDuration, "obi_stat_nfs_client_procedure_duration_seconds"},
+		{StatNFSClientIO, "obi_stat_nfs_client_io_bytes_total"},
 		{V8JSGCDuration, "v8js_gc_duration_seconds"},
 		{V8JSMemoryHeapLimit, "v8js_memory_heap_limit_bytes"},
 		{V8JSMemoryHeapUsed, "v8js_memory_heap_used_bytes"},

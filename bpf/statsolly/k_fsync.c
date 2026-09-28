@@ -26,24 +26,6 @@ SCRATCH_MEM_TYPED(fs_sync_accum_init, fs_sync_accum_t)
 const fs_sync_key_t *unused_fs_sync_key __attribute__((unused));
 const fs_sync_accum_t *unused_fs_sync_accum __attribute__((unused));
 
-// The io controller cgroup of the current thread: the cgroup its direct block I/O is charged to
-static __always_inline struct cgroup *current_io_cgroup(void) {
-    if (!bpf_core_enum_value_exists(enum cgroup_subsys_id, io_cgrp_id)) {
-        return 0;
-    }
-    const u32 io_id = bpf_core_enum_value(enum cgroup_subsys_id, io_cgrp_id);
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    struct css_set *cset = BPF_CORE_READ(task, cgroups);
-    if (!cset) {
-        return 0;
-    }
-    // the enum value is only known at load time, so the array element is read by address
-    struct cgroup_subsys_state *const *subsys = __builtin_preserve_access_index(&cset->subsys[0]);
-    struct cgroup_subsys_state *css = 0;
-    bpf_probe_read_kernel(&css, sizeof(css), subsys + io_id);
-    return BPF_CORE_READ(css, cgroup);
-}
-
 static __always_inline fs_sync_accum_t *lookup_or_init_fs_sync_accum(const fs_sync_key_t *key) {
     fs_sync_accum_t *accum = bpf_map_lookup_elem(&fs_sync_accum, key);
     if (accum) {

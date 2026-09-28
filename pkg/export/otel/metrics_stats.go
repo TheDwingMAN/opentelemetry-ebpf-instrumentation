@@ -83,6 +83,7 @@ func newStatMeterProvider(res *resource.Resource, exporter *sdkmetric.Exporter, 
 		metric.WithView(statHistogramView(attributes.StatDiskQueueDuration.OTEL, cfg.Buckets.StatDiskQueueDurationHistogram, isExponential, cfg.ExponentialHistogram)),
 		metric.WithView(statHistogramView(attributes.StatDiskFlushDuration.OTEL, cfg.Buckets.StatDiskFlushDurationHistogram, isExponential, cfg.ExponentialHistogram)),
 		metric.WithView(statHistogramView(attributes.StatDiskDiscardDuration.OTEL, cfg.Buckets.StatDiskDiscardDurationHistogram, isExponential, cfg.ExponentialHistogram)),
+		metric.WithView(statHistogramView(attributes.StatNFSClientProcedureDuration.OTEL, cfg.Buckets.StatNFSClientProcedureDurationHistogram, isExponential, cfg.ExponentialHistogram)),
 	)
 }
 
@@ -106,6 +107,8 @@ type statMetricsExporter struct {
 	diskDiscardDuration      *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
 	diskDiscardIO            *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskPendingOperations    *currentUpDownCounter[*ebpf.Stat]
+	nfsProcedureDuration     *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
+	nfsIO                    *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
 }
@@ -307,6 +310,10 @@ func newStatMetricsExporter(
 		return nil, err
 	}
 
+	if err := nme.createNFSMetrics(ctx, ebpfEvents, attrProv, cfg, log); err != nil {
+		return nil, err
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -343,6 +350,13 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if me.fsSyncDuration != nil && v.FsSync != nil {
 				fsSyncDuration, attrs := me.fsSyncDuration.ForRecord(v)
 				recordLatency(ctx, fsSyncDuration, v.FsSync.Latency, metric2.WithAttributeSet(attrs))
+			}
+			if v.NFSProcedure != nil {
+				recordLatencyIn(ctx, me.nfsProcedureDuration, v, v.NFSProcedure.Latency)
+			}
+			if me.nfsIO != nil && v.NFSIO != nil {
+				nfsIO, attrs := me.nfsIO.ForRecord(v)
+				nfsIO.Add(ctx, int64(v.NFSIO.Bytes), metric2.WithAttributeSet(attrs))
 			}
 		}
 	}
@@ -399,6 +413,39 @@ func (me *statMetricsExporter) createDiskOperationMetrics(
 		}
 		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskPendingOperations))
 		me.diskPendingOperations = newCurrentUpDownCounter(ctx, pending, attrs, timeNow, cfg.Metrics.TTL)
+	}
+	return nil
+}
+
+// createNFSMetrics creates the metrics of the NFS client
+func (me *statMetricsExporter) createNFSMetrics(
+	ctx context.Context,
+	meter metric2.Meter,
+	attrProv *attributes.AttrSelector,
+	cfg *StatMetricsConfig,
+	log *slog.Logger,
+) error {
+	features := cfg.CommonCfg.Features
+	if features.StatsNFSClientProcedureDuration() {
+		name := attributes.StatNFSClientProcedureDuration
+		histogram, err := meter.Float64Histogram(name.OTEL, metric2.WithUnit(name.Unit))
+		if err != nil {
+			log.Error("creating stats NFS client procedure duration histogram", "error", err)
+			return err
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(name))
+		me.nfsProcedureDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, histogram, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if features.StatsNFSClientIO() {
+		name := attributes.StatNFSClientIO
+		counter, err := meter.Int64Counter(name.OTEL, metric2.WithUnit(name.Unit))
+		if err != nil {
+			log.Error("creating stats NFS client io counter", "error", err)
+			return err
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(name))
+		me.nfsIO = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, counter, attrs, timeNow, cfg.Metrics.TTL)
 	}
 	return nil
 }

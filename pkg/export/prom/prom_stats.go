@@ -51,6 +51,8 @@ type statMetricsReporter struct {
 	diskDiscardDuration      *Expirer[prometheus.Histogram]
 	diskDiscardIO            *Expirer[prometheus.Counter]
 	diskPendingOperations    *Expirer[prometheus.Gauge]
+	nfsProcedureDuration     *Expirer[prometheus.Histogram]
+	nfsIO                    *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -69,6 +71,8 @@ type statMetricsReporter struct {
 	diskDiscardDurationAttrs      []attributes.Field[*ebpf.Stat, string]
 	diskDiscardIOAttrs            []attributes.Field[*ebpf.Stat, string]
 	diskPendingOperationsAttrs    []attributes.Field[*ebpf.Stat, string]
+	nfsProcedureDurationAttrs     []attributes.Field[*ebpf.Stat, string]
+	nfsIOAttrs                    []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -245,7 +249,7 @@ func newStatsReporter(
 		mr.fsSyncDurationAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncDuration))
 		mr.fsSyncDuration = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:                            attributes.StatFsSyncDuration.Prom,
-			Help:                            "measures the duration of file syncs (fsync, fdatasync and their equivalents), in seconds",
+			Help:                            "measures the duration of file syncs (fsync, fdatasync, sync, syncfs, sync_file_range and their equivalents), in seconds",
 			Buckets:                         cfg.Config.Buckets.StatFsSyncDurationHistogram,
 			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
 			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
@@ -255,6 +259,7 @@ func newStatsReporter(
 	}
 
 	register = append(register, mr.registerDiskOperationMetrics(cfg, provider)...)
+	register = append(register, mr.registerNFSMetrics(cfg, provider)...)
 
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
@@ -284,8 +289,36 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeFsSyncDuration(stat)
 			r.observeDiskOperations(stat)
 			r.observeDiskPendingOperations(stat)
+			r.observeNFS(stat)
 		}
 	}
+}
+
+// registerNFSMetrics creates the metrics of the NFS client
+func (r *statMetricsReporter) registerNFSMetrics(cfg *StatsPrometheusConfig, provider *attributes.AttrSelector) []prometheus.Collector {
+	features := cfg.CommonCfg.Features
+	var register []prometheus.Collector
+	if features.StatsNFSClientProcedureDuration() {
+		r.nfsProcedureDurationAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatNFSClientProcedureDuration))
+		r.nfsProcedureDuration = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:                            attributes.StatNFSClientProcedureDuration.Prom,
+			Help:                            "measures the duration of the RPCs of the NFS client, in seconds",
+			Buckets:                         cfg.Config.Buckets.StatNFSClientProcedureDurationHistogram,
+			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
+			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
+			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
+		}, labelNames(r.nfsProcedureDurationAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, r.nfsProcedureDuration)
+	}
+	if features.StatsNFSClientIO() {
+		r.nfsIOAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatNFSClientIO))
+		r.nfsIO = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatNFSClientIO.Prom,
+			Help: "bytes that the NFS client read from and wrote to servers",
+		}, labelNames(r.nfsIOAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, r.nfsIO)
+	}
+	return register
 }
 
 // registerDiskOperationMetrics creates the metrics of the block requests beyond reads and
@@ -461,6 +494,15 @@ func observeLatencyIn(histogram *Expirer[prometheus.Histogram], attrs []attribut
 		return
 	}
 	observeLatency(histogram.WithLabelValues(labelValues(stat, attrs)...).Metric, latency)
+}
+
+func (r *statMetricsReporter) observeNFS(stat *ebpf.Stat) {
+	if stat.NFSProcedure != nil {
+		observeLatencyIn(r.nfsProcedureDuration, r.nfsProcedureDurationAttrs, stat, stat.NFSProcedure.Latency)
+	}
+	if r.nfsIO != nil && stat.NFSIO != nil {
+		r.nfsIO.WithLabelValues(labelValues(stat, r.nfsIOAttrs)...).Metric.Add(float64(stat.NFSIO.Bytes))
+	}
 }
 
 func (r *statMetricsReporter) observeDiskPendingOperations(stat *ebpf.Stat) {

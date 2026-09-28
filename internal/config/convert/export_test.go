@@ -1052,7 +1052,8 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 		t.Parallel()
 
 		cfg := defaultRuntimeConfig()
-		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsDisk | export.FeatureStatsFsSyncDuration
+		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsDisk | export.FeatureStatsFsSyncDuration |
+			export.FeatureStatsNFS
 
 		_, ext := RuntimeToV2(&cfg)
 
@@ -1068,6 +1069,8 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 			"disk_pending_operations",
 			"disk_stacked_volumes",
 			"fs_sync_duration",
+			"nfs_client_procedure_duration",
+			"nfs_client_io",
 		}, value(t, ext.Capture.Network, "stats", "features"))
 	})
 

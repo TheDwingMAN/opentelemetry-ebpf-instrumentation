@@ -66,6 +66,8 @@ const (
 	FeatureStatsDiskDiscard
 	FeatureStatsDiskPendingOperations
 	FeatureStatsDiskStackedVolumes
+	FeatureStatsNFSClientProcedureDuration
+	FeatureStatsNFSClientIO
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
@@ -81,40 +83,46 @@ const FeatureStatsDisk = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO 
 	FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard | FeatureStatsDiskPendingOperations |
 	FeatureStatsDiskStackedVolumes
 
+// FeatureStatsNFS groups the NFS client stat metrics. They are not part of the `stats` aggregate.
+const FeatureStatsNFS = FeatureStatsNFSClientProcedureDuration | FeatureStatsNFSClientIO
+
 // FeatureMapper stays public so any extension package can add and remove feature
 // definitions before loading them.
 var FeatureMapper = map[string]Features{
-	"stats":                            FeatureStats,
-	"stats_tcp_rtt":                    FeatureStatsTCPRtt,
-	"stats_tcp_failed_connections":     FeatureStatsTCPFailedConnections,
-	"stats_tcp_retransmits":            FeatureStatsTCPRetransmits,
-	"stats_tcp_io":                     FeatureStatsTCPIo,
-	"stats_tcp_successful_connections": FeatureStatsTCPSuccessfulConnections,
-	"stats_disk":                       FeatureStatsDisk,
-	"stats_disk_io":                    FeatureStatsDiskIO,
-	"stats_disk_operations":            FeatureStatsDiskOperations,
-	"stats_disk_operation_time":        FeatureStatsDiskOperationTime,
-	"stats_disk_operation_duration":    FeatureStatsDiskOperationDuration,
-	"stats_fs_sync_duration":           FeatureStatsFsSyncDuration,
-	"stats_disk_queue_duration":        FeatureStatsDiskQueueDuration,
-	"stats_disk_flush":                 FeatureStatsDiskFlush,
-	"stats_disk_discard":               FeatureStatsDiskDiscard,
-	"stats_disk_pending_operations":    FeatureStatsDiskPendingOperations,
-	"stats_disk_stacked_volumes":       FeatureStatsDiskStackedVolumes,
-	"network":                          FeatureNetwork,
-	"network_inter_zone":               FeatureNetworkInterZone,
-	"network_flow_packets":             FeatureNetworkFlowPackets,
-	"application":                      FeatureApplicationRED | FeatureApplicationSizes,
-	"application_red":                  FeatureApplicationRED,
-	"application_sizes":                FeatureApplicationSizes,
-	"application_span":                 FeatureSpanLegacy,
-	"application_span_otel":            FeatureSpanOTel,
-	"application_span_sizes":           FeatureSpanSizes,
-	"application_service_graph":        FeatureGraph,
-	"application_runtime":              FeatureApplicationRuntime,
-	"ebpf":                             FeatureEBPF,
-	"all":                              FeatureAll,
-	"*":                                FeatureAll,
+	"stats":                               FeatureStats,
+	"stats_tcp_rtt":                       FeatureStatsTCPRtt,
+	"stats_tcp_failed_connections":        FeatureStatsTCPFailedConnections,
+	"stats_tcp_retransmits":               FeatureStatsTCPRetransmits,
+	"stats_tcp_io":                        FeatureStatsTCPIo,
+	"stats_tcp_successful_connections":    FeatureStatsTCPSuccessfulConnections,
+	"stats_disk":                          FeatureStatsDisk,
+	"stats_disk_io":                       FeatureStatsDiskIO,
+	"stats_disk_operations":               FeatureStatsDiskOperations,
+	"stats_disk_operation_time":           FeatureStatsDiskOperationTime,
+	"stats_disk_operation_duration":       FeatureStatsDiskOperationDuration,
+	"stats_fs_sync_duration":              FeatureStatsFsSyncDuration,
+	"stats_disk_queue_duration":           FeatureStatsDiskQueueDuration,
+	"stats_disk_flush":                    FeatureStatsDiskFlush,
+	"stats_disk_discard":                  FeatureStatsDiskDiscard,
+	"stats_disk_pending_operations":       FeatureStatsDiskPendingOperations,
+	"stats_disk_stacked_volumes":          FeatureStatsDiskStackedVolumes,
+	"stats_nfs":                           FeatureStatsNFS,
+	"stats_nfs_client_procedure_duration": FeatureStatsNFSClientProcedureDuration,
+	"stats_nfs_client_io":                 FeatureStatsNFSClientIO,
+	"network":                             FeatureNetwork,
+	"network_inter_zone":                  FeatureNetworkInterZone,
+	"network_flow_packets":                FeatureNetworkFlowPackets,
+	"application":                         FeatureApplicationRED | FeatureApplicationSizes,
+	"application_red":                     FeatureApplicationRED,
+	"application_sizes":                   FeatureApplicationSizes,
+	"application_span":                    FeatureSpanLegacy,
+	"application_span_otel":               FeatureSpanOTel,
+	"application_span_sizes":              FeatureSpanSizes,
+	"application_service_graph":           FeatureGraph,
+	"application_runtime":                 FeatureApplicationRuntime,
+	"ebpf":                                FeatureEBPF,
+	"all":                                 FeatureAll,
+	"*":                                   FeatureAll,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -402,7 +410,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStatsDisk | FeatureStatsFsSyncDuration)
+	return f.any(FeatureStats | FeatureStatsDisk | FeatureStatsFsSyncDuration | FeatureStatsNFS)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -470,6 +478,19 @@ func (f Features) StatsDiskPendingOperations() bool {
 // RAID volumes, is measured too
 func (f Features) StatsDiskStackedVolumes() bool {
 	return f.any(FeatureStatsDiskStackedVolumes)
+}
+
+// StatsNFS reports whether any NFS client stat metric is enabled
+func (f Features) StatsNFS() bool {
+	return f.any(FeatureStatsNFS)
+}
+
+func (f Features) StatsNFSClientProcedureDuration() bool {
+	return f.any(FeatureStatsNFSClientProcedureDuration)
+}
+
+func (f Features) StatsNFSClientIO() bool {
+	return f.any(FeatureStatsNFSClientIO)
 }
 
 func (f Features) NetworkInterZone() bool {

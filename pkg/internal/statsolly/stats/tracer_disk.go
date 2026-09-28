@@ -97,6 +97,11 @@ type DiskMapTracerConfig struct {
 	// DiskLatencyBounds and FsSyncLatencyBounds are the histogram boundaries, in seconds, that
 	// the kernel buckets the latencies with
 	DiskLatencyBounds, FsSyncLatencyBounds []float64
+	// NFSProcedureAccum and NFSIOAccum are the accumulation maps of the NFS client. A nil map is
+	// not read.
+	NFSProcedureAccum, NFSIOAccum *ciliumebpf.Map
+	// NFSLatencyBounds are the histogram boundaries, in seconds, of the NFS RPC latencies
+	NFSLatencyBounds []float64
 	// DiskStatusIsBlkStatus tells how the kernel reports block request completion statuses
 	// (see disk_status_code)
 	DiskStatusIsBlkStatus bool
@@ -139,6 +144,13 @@ func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 	if cfg.FsSyncAccum != nil {
 		readers = append(readers, newFsSyncReader(ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: cfg.FsSyncAccum},
 			cfg.FsSyncLatencyBounds, containers, newFilesystems()))
+	}
+	if cfg.NFSProcedureAccum != nil {
+		readers = append(readers, newNFSProcedureReader(ebpfAccum[ebpf.StatsNfsProcedureKeyT, ebpf.StatsNfsProcedureAccumT]{accum: cfg.NFSProcedureAccum},
+			cfg.NFSLatencyBounds, containers))
+	}
+	if cfg.NFSIOAccum != nil {
+		readers = append(readers, newNFSIOReader(ebpfAccum[ebpf.StatsNfsIoKeyT, uint64]{accum: cfg.NFSIOAccum}, containers))
 	}
 	return &DiskMapTracer{readers: readers, pending: pending, bios: bios, interval: cfg.Interval}
 }

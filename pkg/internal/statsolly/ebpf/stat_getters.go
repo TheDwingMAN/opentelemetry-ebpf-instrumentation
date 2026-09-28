@@ -66,8 +66,11 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 	case attr.NetworkIoDirection:
 		getter = func(s *Stat) attribute.KeyValue {
 			var direction uint8
-			if s.TCPIo != nil {
+			switch {
+			case s.TCPIo != nil:
 				direction = s.TCPIo.Direction
+			case s.NFSIO != nil:
+				direction = s.NFSIO.Direction
 			}
 			return attribute.String(string(attr.NetworkIoDirection), networkIoDirectionStr(NetworkIoDirectionCode(direction)))
 		}
@@ -115,6 +118,27 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 				return attribute.KeyValue{}
 			}
 			return attribute.String(string(attr.FilesystemType), s.FsSync.FilesystemType)
+		}
+	case attr.ServerAddr:
+		getter = func(s *Stat) attribute.KeyValue {
+			if server := nfsServer(s); server != "" {
+				return attribute.String(string(attr.ServerAddr), server)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.OncRPCProcedureName:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSProcedure == nil || s.NFSProcedure.Procedure == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.OncRPCProcedureName), s.NFSProcedure.Procedure)
+		}
+	case attr.OncRPCVersion:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSProcedure == nil {
+				return attribute.KeyValue{}
+			}
+			return attribute.Int(string(attr.OncRPCVersion), int(s.NFSProcedure.Version))
 		}
 	case attr.DiskIODirection:
 		getter = func(s *Stat) attribute.KeyValue {
@@ -225,13 +249,26 @@ func diskOp(s *Stat) DiskOpCode {
 	return 0
 }
 
-// storageErrorType is the error of a block I/O or file sync stat, empty on success
+// storageErrorType is the error of a block I/O, file sync or NFS RPC stat, empty on success
 func storageErrorType(s *Stat) string {
 	switch {
 	case s.DiskIO != nil:
 		return s.DiskIO.ErrorType
 	case s.FsSync != nil:
 		return s.FsSync.ErrorType
+	case s.NFSProcedure != nil:
+		return s.NFSProcedure.ErrorType
+	}
+	return ""
+}
+
+// nfsServer is the NFS server of an NFS client stat, empty for any other stat
+func nfsServer(s *Stat) string {
+	switch {
+	case s.NFSProcedure != nil:
+		return s.NFSProcedure.Server
+	case s.NFSIO != nil:
+		return s.NFSIO.Server
 	}
 	return ""
 }

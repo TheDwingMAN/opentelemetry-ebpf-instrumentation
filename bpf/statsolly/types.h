@@ -18,6 +18,9 @@ enum stat_type : u8 {
     k_stat_type_fs_sync = 7,
     // produced in userspace, from the requests in flight in disk_rq_start
     k_stat_type_disk_pending = 8,
+    // produced in userspace, from the NFS client accumulation maps
+    k_stat_type_nfs_procedure = 9,
+    k_stat_type_nfs_io = 10,
 };
 
 // batch size used in tcp io metric
@@ -63,6 +66,13 @@ enum fs_sync_type : u8 {
     fs_sync_type_sync = 3,
     fs_sync_type_syncfs = 4,
     fs_sync_type_sync_file_range = 5,
+};
+
+// Sizes of the NFS client names: IPv6 addresses (INET6_ADDRSTRLEN) and the longest NFSv4
+// procedure names, e.g. DESTROY_CLIENTID, with room to spare
+enum {
+    k_nfs_server_max_len = 48,
+    k_nfs_procedure_max_len = 24,
 };
 
 // Width of the minor number in a kernel-internal dev_t (MINORBITS)

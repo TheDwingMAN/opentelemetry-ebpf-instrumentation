@@ -187,6 +187,33 @@ func getDefinitions(
 		nil,
 	)
 
+	// NFS client RPC metrics attributes
+	statsNFSProcedureAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:               false,
+			attr.ContainerID:         false,
+			attr.ServerAddr:          true,
+			attr.OncRPCProcedureName: true,
+			attr.OncRPCVersion:       true,
+		},
+		nil,
+	)
+
+	// NFS client transferred bytes attributes
+	statsNFSIOAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:              false,
+			attr.ContainerID:        false,
+			attr.ServerAddr:         true,
+			attr.NetworkIoDirection: true,
+		},
+		nil,
+	)
+
 	// workload that block I/O is charged to, when kubernetes metadata is enabled
 	statsDiskKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
@@ -875,6 +902,16 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
+		},
+		StatNFSClientProcedureDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatNFSClientIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsNFSIOAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{},
 		},
 		StatDiskQueueDuration.Section: {
 			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeOptInAttributes},

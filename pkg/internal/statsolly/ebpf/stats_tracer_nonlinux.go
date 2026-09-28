@@ -20,6 +20,7 @@ type StatsFetcher struct{}
 type LatencyHistograms struct {
 	Disk           []float64
 	FsSyncDuration []float64
+	NFS            []float64
 }
 
 func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig, _ LatencyHistograms) (*StatsFetcher, error) {
@@ -56,6 +57,14 @@ func (m *StatsFetcher) DiskBioDevicesMap() *ciliumebpf.Map {
 }
 
 func (m *StatsFetcher) FsSyncAccumMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) NFSProcedureAccumMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) NFSIOAccumMap() *ciliumebpf.Map {
 	return nil
 }
 

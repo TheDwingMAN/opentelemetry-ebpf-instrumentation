@@ -90,10 +90,61 @@ func TestStatGetters_FsSync(t *testing.T) {
 	assert.False(t, containerID(succeeded).Valid())
 }
 
+func TestStatGetters_NFSProcedure(t *testing.T) {
+	failed := &Stat{Type: StatTypeNFSProcedure, NFSProcedure: &NFSProcedure{
+		Server: "10.0.0.5", Procedure: "GETATTR", Version: 4, ErrorType: "ESTALE", ContainerID: "0123abcd",
+	}}
+	succeeded := &Stat{Type: StatTypeNFSProcedure, NFSProcedure: &NFSProcedure{Server: "10.0.0.5", Procedure: "READ", Version: 3}}
+
+	server, ok := StatGetters(attr.ServerAddr)
+	require.True(t, ok)
+	assert.Equal(t, "10.0.0.5", server(failed).Value.AsString())
+
+	procedure, ok := StatGetters(attr.OncRPCProcedureName)
+	require.True(t, ok)
+	assert.Equal(t, "GETATTR", procedure(failed).Value.AsString())
+
+	version, ok := StatGetters(attr.OncRPCVersion)
+	require.True(t, ok)
+	assert.Equal(t, int64(3), version(succeeded).Value.AsInt64())
+	versionString, ok := StatStringGetters(attr.OncRPCVersion)
+	require.True(t, ok)
+	assert.Equal(t, "4", versionString(failed))
+
+	errorType, ok := StatGetters(attr.ErrorType)
+	require.True(t, ok)
+	assert.Equal(t, "ESTALE", errorType(failed).Value.AsString())
+	assert.False(t, errorType(succeeded).Valid())
+
+	containerID, ok := StatGetters(attr.ContainerID)
+	require.True(t, ok)
+	assert.Equal(t, "0123abcd", containerID(failed).Value.AsString())
+}
+
+func TestStatGetters_NFSIO(t *testing.T) {
+	read := &Stat{Type: StatTypeNFSIO, NFSIO: &NFSIO{Server: "fd00::5", Direction: uint8(CodeDirectionReceive)}}
+	write := &Stat{Type: StatTypeNFSIO, NFSIO: &NFSIO{Server: "fd00::5", Direction: uint8(CodeDirectionTransmit)}}
+
+	direction, ok := StatGetters(attr.NetworkIoDirection)
+	require.True(t, ok)
+	assert.Equal(t, "receive", direction(read).Value.AsString())
+	assert.Equal(t, "transmit", direction(write).Value.AsString())
+
+	server, ok := StatGetters(attr.ServerAddr)
+	require.True(t, ok)
+	assert.Equal(t, "fd00::5", server(write).Value.AsString())
+
+	procedure, ok := StatGetters(attr.OncRPCProcedureName)
+	require.True(t, ok)
+	assert.False(t, procedure(write).Valid(), "transferred bytes have no procedure")
+}
+
 func TestStatContainerID(t *testing.T) {
 	assert.Equal(t, "aaaa", (&Stat{DiskIO: &DiskIO{ContainerID: "aaaa"}}).ContainerID())
 	assert.Equal(t, "bbbb", (&Stat{FsSync: &FsSync{ContainerID: "bbbb"}}).ContainerID(),
 		"file syncs are charged to containers too")
+	assert.Equal(t, "cccc", (&Stat{NFSProcedure: &NFSProcedure{ContainerID: "cccc"}}).ContainerID())
+	assert.Equal(t, "dddd", (&Stat{NFSIO: &NFSIO{ContainerID: "dddd"}}).ContainerID())
 	assert.Empty(t, (&Stat{TCPRetransmit: true}).ContainerID())
 }
 

@@ -2104,11 +2104,13 @@
                   "disk_discard",
                   "disk_pending_operations",
                   "disk_stacked_volumes",
-                  "fs_sync_duration"
+                  "fs_sync_duration",
+                  "nfs_client_procedure_duration",
+                  "nfs_client_io"
                 ]
               },
               "default": [],
-              "description": "Enabled stats families: the TCP ones, the block I/O (disk) ones and file syncs.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones, the block I/O (disk) ones, file syncs and the NFS client ones.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",

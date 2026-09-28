@@ -95,6 +95,8 @@ type ebpFetcher interface {
 	DiskBioAccumMap() *ciliumebpf.Map
 	DiskBioDevicesMap() *ciliumebpf.Map
 	FsSyncAccumMap() *ciliumebpf.Map
+	NFSProcedureAccumMap() *ciliumebpf.Map
+	NFSIOAccumMap() *ciliumebpf.Map
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
 }
@@ -130,15 +132,16 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
 }
 
-// probedFeatures returns the stat features whose eBPF probes must be loaded. Block I/O and file
-// sync stats can't be matched to dynamically selected applications yet, so they are left out under
-// dynamic selection.
+// probedFeatures returns the stat features whose eBPF probes must be loaded. Block I/O, file sync
+// and NFS stats can't be matched to dynamically selected applications yet, so they are left out
+// under dynamic selection.
 func probedFeatures(log *slog.Logger, features export.Features, dynamicSelection bool) export.Features {
-	if !dynamicSelection || (!features.StatsDisk() && !features.StatsFsSyncDuration()) {
+	storage := export.FeatureStatsDisk | export.FeatureStatsFsSyncDuration | export.FeatureStatsNFS
+	if !dynamicSelection || features&storage == 0 {
 		return features
 	}
-	log.Warn("disk and file sync stat metrics are disabled: they are not supported with dynamic application selection")
-	return features &^ (export.FeatureStatsDisk | export.FeatureStatsFsSyncDuration)
+	log.Warn("disk, file sync and NFS stat metrics are disabled: they are not supported with dynamic application selection")
+	return features &^ storage
 }
 
 func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, histograms ebpf.LatencyHistograms) (ebpFetcher, error) {
@@ -157,6 +160,7 @@ func latencyHistograms(cfg *obi.Config) ebpf.LatencyHistograms {
 			prom.StatDiskFlushDurationHistogram, otel.StatDiskFlushDurationHistogram,
 			prom.StatDiskDiscardDurationHistogram, otel.StatDiskDiscardDurationHistogram),
 		FsSyncDuration: boundsUnion(prom.StatFsSyncDurationHistogram, otel.StatFsSyncDurationHistogram),
+		NFS:            boundsUnion(prom.StatNFSClientProcedureDurationHistogram, otel.StatNFSClientProcedureDurationHistogram),
 	}
 }
 
@@ -176,7 +180,8 @@ func statsAgent(
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
 	var diskTracer *stats.DiskMapTracer
-	if statsFetcher.DiskIOAccumMap() != nil || statsFetcher.FsSyncAccumMap() != nil {
+	if statsFetcher.DiskIOAccumMap() != nil || statsFetcher.FsSyncAccumMap() != nil ||
+		statsFetcher.NFSProcedureAccumMap() != nil || statsFetcher.NFSIOAccumMap() != nil {
 		interval := cfg.EBPF.BatchTimeout
 		if interval <= 0 {
 			interval = defaultDiskReadInterval
@@ -192,9 +197,12 @@ func statsAgent(
 			DiskBioAccum:          statsFetcher.DiskBioAccumMap(),
 			DiskBioDevices:        statsFetcher.DiskBioDevicesMap(),
 			FsSyncAccum:           statsFetcher.FsSyncAccumMap(),
+			NFSProcedureAccum:     statsFetcher.NFSProcedureAccumMap(),
+			NFSIOAccum:            statsFetcher.NFSIOAccumMap(),
 			CgroupNames:           statsFetcher.DiskCgroupNamesMap(),
 			DiskLatencyBounds:     histograms.Disk,
 			FsSyncLatencyBounds:   histograms.FsSyncDuration,
+			NFSLatencyBounds:      histograms.NFS,
 			DiskStatusIsBlkStatus: statsFetcher.DiskStatusIsBlkStatus(),
 			Interval:              interval,
 		})

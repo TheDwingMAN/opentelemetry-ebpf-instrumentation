@@ -83,6 +83,26 @@ func TestFeatureStatsFsSyncIsOptIn(t *testing.T) {
 	}
 }
 
+func TestFeatureStatsNFSIsOptIn(t *testing.T) {
+	nfs, err := LoadFeatures([]string{"stats_nfs"})
+	require.NoError(t, err)
+	assert.True(t, nfs.StatsNFSClientProcedureDuration())
+	assert.True(t, nfs.StatsNFSClientIO())
+	assert.True(t, nfs.StatMetrics(), "an NFS only selection must still enable the stats pipeline")
+	assert.False(t, nfs.StatsDisk())
+
+	io, err := LoadFeatures([]string{"stats_nfs_client_io"})
+	require.NoError(t, err)
+	assert.True(t, io.StatsNFS())
+	assert.False(t, io.StatsNFSClientProcedureDuration())
+
+	for _, aggregate := range []string{"stats", "stats_disk"} {
+		features, err := LoadFeatures([]string{aggregate})
+		require.NoError(t, err)
+		assert.False(t, features.StatsNFS(), "%s must not enable NFS stats", aggregate)
+	}
+}
+
 func TestFeatureStatsDiskAggregate(t *testing.T) {
 	disk, err := LoadFeatures([]string{"stats_disk"})
 	require.NoError(t, err)

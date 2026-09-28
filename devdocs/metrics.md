@@ -188,6 +188,16 @@ The `obi.fs.sync.type` attribute tells the system call apart: syncs outside of t
 - Stacked filesystems, like overlayfs, sync the file of the filesystem below them: outside of the system calls, the sync of the lower file is measured, once per call, with the filesystem of the lower file.
 - The writeback of dirty pages by the kernel is not measured.
 
+#### NFS client stats
+
+`obi.stat.nfs.client.procedure.duration` measures the RPCs of the kernel NFS client (the `nfs` ONC RPC program, any NFS version) from the `rpc_stats_latency` tracepoint: the time from the start of each RPC to its completion, including its wait for a transport slot and its retransmissions, as `/proc/self/mountstats` counts it. `obi.stat.nfs.client.io` counts the bytes that the read and write RPCs transferred, from the `nfs_readpage_done` and `nfs_writeback_done` tracepoints. Limitations:
+
+- The probes need the BTF of the `sunrpc` and `nfs` types, which are in the kernel BTF on some kernels and in the BTF of the `sunrpc` and `nfs` modules on others. Kernels have module BTF since Linux 5.11, and the modules must be loaded when OBI starts, e.g. by an NFS mount. Otherwise, OBI warns that the NFS metrics are disabled: e.g. on Linux 5.8 with `sunrpc` built as a module.
+- The arguments of the tracepoints are checked in the BTF of the modules (Linux 5.11+). Older kernels are trusted from Linux 5.8, so the NFS metrics are disabled on RHEL 8 kernels without module BTF.
+- An RPC is charged to the workload of the thread that started it, through the cgroup of its `io` controller. The kernel writes cached data back from its own threads, unless the application syncs it, so those write RPCs are charged to no workload, like block I/O writeback on cgroup v1.
+- `server.address` is the IP address of the server, as the RPC transport displays it, not the host name of the mount.
+- `error.type` is the errno of failed RPCs, or the number of NFSv4 errors that the client doesn't translate into errnos.
+
 ### Performance considerations
 
 Some stat metrics attach to kernel functions that are called very frequently (e.g. `tcp_sendmsg`, `tcp_cleanup_rbuf` for TCP IO). These probes add a small overhead on every call, so the aggregate cost is proportional to the rate of TCP sends/receives on the node. Consider:
@@ -195,6 +205,7 @@ Some stat metrics attach to kernel functions that are called very frequently (e.
 - If you need RTT, failed connections, or retransmits **without** TCP IO overhead, enable those individually (`stats_tcp_rtt`, `stats_tcp_failed_connections`, `stats_tcp_successful_connections`, `stats_tcp_retransmits`) instead of using the `stats` aggregate feature — `stats` includes `stats_tcp_io`, which fires on every `tcp_sendmsg` and `tcp_cleanup_rbuf` call.
 - The `stats_events` ring buffer and the per-metric eBPF maps (e.g. `tcp_io_accum`) have default size limits; on nodes with a very large number of concurrent connections these can be resized via the `ebpf.*` configuration knobs if events start being dropped.
 - The file sync probes (`stats_fs_sync_duration`) fire on every file sync, which is usually much less frequent than block requests.
+- The NFS client probes (`stats_nfs`) fire on every NFS RPC, and on every read and write RPC completion.
 - The disk probes (`stats_disk_*` features) fire on every block request issue and completion, so their cost grows with the node's IOPS. `stats_disk_stacked_volumes` also fires on every bio submission, and skips the bios of devices that are not stacked volumes with a single map lookup. `stats_disk_pending_operations` also reads the table of requests in flight (up to 16384 entries) every `ebpf.batch_timeout`. They don't send one ring buffer event per request: the kernel accumulates the latencies in a histogram per device, direction, outcome and cgroup (`disk_io_accum`), which userspace reads every `ebpf.batch_timeout`. The exporters still record every request into their histogram (`stats_disk_operation_duration`), so the userspace cost also grows with the IOPS: roughly hundreds of nanoseconds per request with the OTLP exporter, and tens with the Prometheus exporter. For these reasons they are not part of the `stats` aggregate and must be enabled explicitly.
 
 ### Final notes

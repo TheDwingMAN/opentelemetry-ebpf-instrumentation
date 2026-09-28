@@ -296,6 +296,27 @@ func TestDefault_StatFsSyncDuration(t *testing.T) {
 	}, p.For(StatFsSyncDuration), "file syncs have no device or direction")
 }
 
+func TestDefault_StatNFSClient(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.OncRPCProcedureName,
+		attr.OncRPCVersion,
+		attr.ServerAddr,
+	}, p.For(StatNFSClientProcedureDuration))
+	assert.Equal(t, []attr.Name{
+		attr.K8sClusterName,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.NetworkIoDirection,
+		attr.ServerAddr,
+	}, p.For(StatNFSClientIO))
+}
+
 func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{
 		SelectionCfg: Selection{

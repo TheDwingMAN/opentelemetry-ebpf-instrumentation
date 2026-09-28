@@ -13,9 +13,10 @@ import (
 )
 
 func TestProbedFeatures(t *testing.T) {
-	features := export.FeatureStatsTCPRtt | export.FeatureStatsDiskOperationDuration | export.FeatureStatsFsSyncDuration
+	features := export.FeatureStatsTCPRtt | export.FeatureStatsDiskOperationDuration | export.FeatureStatsFsSyncDuration |
+		export.FeatureStatsNFSClientIO
 
 	assert.Equal(t, features, probedFeatures(slog.Default(), features, false))
 	assert.Equal(t, export.FeatureStatsTCPRtt, probedFeatures(slog.Default(), features, true),
-		"disk and file sync stats are left out under dynamic selection, TCP stats are kept")
+		"disk, file sync and NFS stats are left out under dynamic selection, TCP stats are kept")
 }

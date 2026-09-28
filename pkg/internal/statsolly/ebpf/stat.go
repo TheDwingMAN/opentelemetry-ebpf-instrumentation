@@ -22,6 +22,8 @@ const (
 	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
 	StatTypeFsSync                  = StatType(StatsStatTypeK_statTypeFsSync)
 	StatTypeDiskPending             = StatType(StatsStatTypeK_statTypeDiskPending)
+	StatTypeNFSProcedure            = StatType(StatsStatTypeK_statTypeNfsProcedure)
+	StatTypeNFSIO                   = StatType(StatsStatTypeK_statTypeNfsIo)
 )
 
 type TCPFailReasonType string
@@ -123,6 +125,8 @@ type Stat struct {
 	DiskIO                  *DiskIO                  `json:"-"`
 	DiskPending             *DiskPending             `json:"-"`
 	FsSync                  *FsSync                  `json:"-"`
+	NFSProcedure            *NFSProcedure            `json:"-"`
+	NFSIO                   *NFSIO                   `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -181,14 +185,18 @@ type DiskPending struct {
 	Requests int64
 }
 
-// ContainerID returns the container that a block I/O or file sync stat is charged to, or an empty
-// string for any other stat
+// ContainerID returns the container that a block I/O, file sync or NFS stat is charged to, or an
+// empty string for any other stat
 func (s *Stat) ContainerID() string {
 	switch {
 	case s.DiskIO != nil:
 		return s.DiskIO.ContainerID
 	case s.FsSync != nil:
 		return s.FsSync.ContainerID
+	case s.NFSProcedure != nil:
+		return s.NFSProcedure.ContainerID
+	case s.NFSIO != nil:
+		return s.NFSIO.ContainerID
 	}
 	return ""
 }
@@ -219,6 +227,34 @@ type FsSync struct {
 	ContainerID string
 	// Latency of the syncs, as one representative value per kernel histogram bucket
 	Latency []LatencySample
+}
+
+// NFSProcedure is the NFS client RPCs of a procedure that completed with an outcome and were
+// charged to a cgroup, since the previous read of the kernel accumulation map.
+type NFSProcedure struct {
+	// Server is the address of the NFS server
+	Server string
+	// Procedure is the name of the procedure, as the NFS client names it
+	Procedure string
+	// Version of the NFS protocol
+	Version uint32
+	// ErrorType is empty for successful RPCs
+	ErrorType string
+	// ContainerID of the cgroup of the thread that started the RPCs. Empty outside containers.
+	ContainerID string
+	// Latency of the RPCs, as one representative value per kernel histogram bucket
+	Latency []LatencySample
+}
+
+// NFSIO is the bytes that the NFS client read from or wrote to a server, charged to a cgroup,
+// since the previous read of the kernel accumulation map.
+type NFSIO struct {
+	Server string
+	// Direction is receive for reads, transmit for writes
+	Direction uint8
+	// ContainerID of the cgroup of the thread that started the RPCs. Empty outside containers.
+	ContainerID string
+	Bytes       uint64
 }
 
 // LatencySample stands for Count requests whose latency fell in the same kernel histogram

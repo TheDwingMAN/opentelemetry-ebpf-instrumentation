@@ -98,7 +98,7 @@ const (
 const maxDiskLatencyBounds = len(StatsDiskIoAccumT{}.LatencyCount) - 1
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_rq_start_t -type disk_cgroup_name_t -type fs_sync_type -type fs_sync_key_t -type fs_sync_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_rq_start_t -type disk_cgroup_name_t -type fs_sync_type -type fs_sync_key_t -type fs_sync_accum_t -type nfs_procedure_key_t -type nfs_procedure_accum_t -type nfs_io_key_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -109,6 +109,7 @@ type StatsFetcher struct {
 	diskStatusIsBlkStatus bool
 	bioAttached           bool
 	fsSyncAttached        bool
+	nfs                   nfsAttached
 }
 
 // LatencyHistograms are the boundaries, in seconds, of the latency histograms that the kernel
@@ -117,6 +118,7 @@ type LatencyHistograms struct {
 	// Disk buckets the durations of the block requests and their wait before issue
 	Disk           []float64
 	FsSyncDuration []float64
+	NFS            []float64
 }
 
 func tlog() *slog.Logger {
@@ -131,6 +133,10 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		return nil, err
 	}
 	fsSyncLatencyBoundsNs, err := diskLatencyBoundsToNs(histograms.FsSyncDuration)
+	if err != nil {
+		return nil, err
+	}
+	nfsLatencyBoundsNs, err := diskLatencyBoundsToNs(histograms.NFS)
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +200,13 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 			progObiStatsKprobeSysFsync, progObiStatsKprobeSysFdatasync, progObiStatsKprobeSysSyncfs,
 			progObiStatsKprobeSysSyncFileRange, progObiStatsKprobeSysSync, progObiStatsKretprobeSysFsSync)
 	}
+	var nfsProbesAvailable nfsProbes
+	if features.StatsNFS() {
+		nfsProbesAvailable = kernelNFSProbes()
+		warnUnavailableNFSProbes(tlog, features, nfsProbesAvailable)
+	}
+	nfsLoaded := nfsLoadFor(features, nfsProbesAvailable)
+	toDisable = append(toDisable, nfsLoaded.programsToDisable()...)
 
 	if err := fixupSpec(spec, toDisable); err != nil {
 		return nil, fmt.Errorf("fixing up BPF spec: %w", err)
@@ -211,6 +224,8 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		"disk_status_is_blk_status":  blockLayout.completeReportsBlkStatus,
 		"fs_sync_latency_bounds_ns":  fsSyncLatencyBoundsNs,
 		"fs_sync_latency_bounds_len": uint32(len(histograms.FsSyncDuration)),
+		"nfs_latency_bounds_ns":      nfsLatencyBoundsNs,
+		"nfs_latency_bounds_len":     uint32(len(histograms.NFS)),
 	}, sharedMaps, &mu, "", nil); err != nil {
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
@@ -394,6 +409,9 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		closables = append(closables, l)
 	}
 
+	nfs, nfsClosables := attachNFS(tlog, &objects, nfsLoaded)
+	closables = append(closables, nfsClosables...)
+
 	return &StatsFetcher{
 		log:                   tlog,
 		objects:               &objects,
@@ -402,6 +420,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		diskStatusIsBlkStatus: blockLayout.completeReportsBlkStatus,
 		bioAttached:           bioAttached,
 		fsSyncAttached:        features.StatsFsSyncDuration(),
+		nfs:                   nfs,
 	}, nil
 }
 
@@ -514,10 +533,9 @@ func (m *StatsFetcher) FsSyncAccumMap() *ebpf.Map {
 }
 
 // DiskCgroupNamesMap returns the map where the kernel records the names of the cgroups that
-// block I/O and file syncs are charged to, or nil if neither the disk nor the file sync probes
-// are attached.
+// block I/O, file syncs and NFS RPCs are charged to, or nil if none of their probes are attached.
 func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
-	if !m.diskAttached && !m.fsSyncAttached {
+	if !m.diskAttached && !m.fsSyncAttached && !m.nfs.procedures && !m.nfs.bytes {
 		return nil
 	}
 	return m.objects.DiskCgroupNames
