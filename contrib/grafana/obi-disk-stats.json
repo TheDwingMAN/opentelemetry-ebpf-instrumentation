@@ -1,0 +1,1060 @@
+{
+  "title": "OBI disk stats",
+  "uid": "obi-disk-stats",
+  "description": "Disk, file sync, NFS client and pod volume metrics of OpenTelemetry eBPF Instrumentation (OBI)",
+  "tags": [
+    "obi",
+    "disk",
+    "storage"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Data source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(obi_stat_disk_operations_total, instance)",
+          "refId": "instance"
+        },
+        "definition": "label_values(obi_stat_disk_operations_total, instance)",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "refresh": 2,
+        "sort": 1
+      },
+      {
+        "name": "device",
+        "label": "Device",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(obi_stat_disk_operations_total{instance=~\"$instance\"}, system_device)",
+          "refId": "device"
+        },
+        "definition": "label_values(obi_stat_disk_operations_total{instance=~\"$instance\"}, system_device)",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "About",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 3
+      },
+      "targets": [],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Disk, file sync, NFS client and pod volume metrics of OBI's StatsO11y (`metrics.features`: `stats_disk`, `stats_fs_sync_duration`, `stats_nfs`, `stats_disk_pod_volumes`). Totals add up the devices where `obi_disk_stacked` is `false`, so that the I/O of LVM, md RAID and loop devices is not counted twice. See `devdocs/metrics.md` in the OBI repository."
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "Devices",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "IOPS",
+      "description": "Completed reads and writes per second, per disk and direction.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (system_device, disk_io_direction) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "legendFormat": "{{system_device}} {{disk_io_direction}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "iops"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Throughput",
+      "description": "Bytes read and written per second, per disk and direction.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (system_device, disk_io_direction) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "legendFormat": "{{system_device}} {{disk_io_direction}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Errors",
+      "description": "Failed reads and writes per second, per disk and error.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (system_device, error_type) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", system_device=~\"$device\", error_type!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{system_device}} {{error_type}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Service time p99",
+      "description": "99th percentile of the time requests take in the device, from issue to completion.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, system_device, disk_io_direction) (rate(obi_stat_disk_operation_duration_seconds_bucket{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])))",
+          "legendFormat": "{{system_device}} {{disk_io_direction}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Queue time p99",
+      "description": "99th percentile of the time requests wait before their issue to the device (I/O scheduler).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, system_device, disk_io_direction) (rate(obi_stat_disk_queue_duration_seconds_bucket{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])))",
+          "legendFormat": "{{system_device}} {{disk_io_direction}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Average queue size",
+      "description": "Requests waiting or in service on average, like iostat's aqu-sz: the rate of the time requests spend queued and in service.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (system_device) (rate(obi_stat_disk_operation_time_seconds_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])) + sum by (system_device) (rate(obi_stat_disk_queue_duration_seconds_sum{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "legendFormat": "{{system_device}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Requests in flight",
+      "description": "Reads and writes that each disk is serving, sampled.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (system_device, disk_io_direction) (obi_stat_disk_pending_operations{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"})",
+          "legendFormat": "{{system_device}} {{disk_io_direction}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Flush time p99",
+      "description": "99th percentile of the duration of the cache flushes.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, system_device) (rate(obi_stat_disk_flush_duration_seconds_bucket{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])))",
+          "legendFormat": "{{system_device}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Discarded bytes",
+      "description": "Bytes discarded (TRIM) per second.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (system_device) (rate(obi_stat_disk_discard_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "legendFormat": "{{system_device}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Stacked volumes throughput",
+      "description": "Bytes read and written per second on LVM, md RAID and loop devices. Their I/O is also counted on the disks below them.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (system_device, disk_io_direction) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"true\"}[$__rate_interval]))",
+          "legendFormat": "{{system_device}} {{disk_io_direction}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Throughput by partition",
+      "description": "Needs the opt-in obi.disk.partition attribute. I/O on the whole disk has no partition.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (system_device, obi_disk_partition) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\", obi_disk_partition!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{obi_disk_partition}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Workloads",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 15,
+      "type": "bargauge",
+      "title": "Top workloads by throughput",
+      "description": "The workloads that read and write the most on the selected disks.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "topk(10, sum by (k8s_namespace_name, k8s_owner_name) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__range])))",
+          "legendFormat": "{{k8s_namespace_name}}/{{k8s_owner_name}}",
+          "refId": "A",
+          "format": "time_series",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Average service time per workload",
+      "description": "Average time of the reads and writes of each workload in the device.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 37,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (k8s_namespace_name, k8s_owner_name, disk_io_direction) (rate(obi_stat_disk_operation_time_seconds_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__rate_interval])) / sum by (k8s_namespace_name, k8s_owner_name, disk_io_direction) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{k8s_namespace_name}}/{{k8s_owner_name}} {{disk_io_direction}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "Unattributed throughput",
+      "description": "Share of the bytes that no workload is charged with: kernel threads, journal, metadata, and writeback on cgroup v1.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 37,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name=\"\"}[$__rate_interval])) / sum(rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "legendFormat": "unattributed",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 18,
+      "type": "row",
+      "title": "File syncs",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 45,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "File syncs",
+      "description": "File syncs per second, per call and outcome.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 46,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (obi_fs_sync_type, error_type) (rate(obi_stat_fs_sync_duration_seconds_count{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{obi_fs_sync_type}} {{error_type}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "File sync time p99",
+      "description": "99th percentile of the duration of file syncs, per call.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 46,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, obi_fs_sync_type) (rate(obi_stat_fs_sync_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+          "legendFormat": "{{obi_fs_sync_type}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "File sync time p99 by filesystem",
+      "description": "Needs the opt-in system.filesystem.mountpoint attribute.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 46,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, system_filesystem_mountpoint) (rate(obi_stat_fs_sync_duration_seconds_bucket{instance=~\"$instance\", system_filesystem_mountpoint!=\"\"}[$__rate_interval])))",
+          "legendFormat": "{{system_filesystem_mountpoint}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 22,
+      "type": "row",
+      "title": "NFS client",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "NFS RPCs",
+      "description": "NFS client RPCs per second, per server and procedure.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 55,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (server_address, onc_rpc_procedure_name) (rate(obi_stat_nfs_client_procedure_duration_seconds_count{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{server_address}} {{onc_rpc_procedure_name}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "NFS RPC time p99",
+      "description": "99th percentile of the duration of the NFS client RPCs, per server and procedure.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 55,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, server_address, onc_rpc_procedure_name) (rate(obi_stat_nfs_client_procedure_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))",
+          "legendFormat": "{{server_address}} {{onc_rpc_procedure_name}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "NFS throughput",
+      "description": "Bytes read (receive) and written (transmit) per second, per server.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 55,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (server_address, network_io_direction) (rate(obi_stat_nfs_client_io_bytes_total{instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{server_address}} {{network_io_direction}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "NFS RPC errors",
+      "description": "Failed NFS client RPCs per second, per server, procedure and error.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 63,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (server_address, onc_rpc_procedure_name, error_type) (rate(obi_stat_nfs_client_procedure_duration_seconds_count{instance=~\"$instance\", error_type!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{server_address}} {{onc_rpc_procedure_name}} {{error_type}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 27,
+      "type": "row",
+      "title": "Pod volumes",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 71,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 28,
+      "type": "nodeGraph",
+      "title": "Pods, PersistentVolumeClaims, PersistentVolumes and disks",
+      "description": "The volumes that pods mount from PersistentVolumeClaims, their PersistentVolumes, the device they are mounted from and the disks it is on.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 24,
+        "h": 14
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\"} == 1, \"source\", \"/\", \"k8s_namespace_name\", \"k8s_pod_name\"), \"source\", \"pod $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"k8s_namespace_name\", \"k8s_persistentvolumeclaim_name\"), \"target\", \"pvc $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
+          "legendFormat": "",
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\"} == 1, \"source\", \"/\", \"k8s_namespace_name\", \"k8s_persistentvolumeclaim_name\"), \"source\", \"pvc $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"k8s_persistentvolume_name\"), \"target\", \"pv $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
+          "legendFormat": "",
+          "refId": "B",
+          "format": "table",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\"} == 1, \"source\", \"/\", \"k8s_persistentvolume_name\"), \"source\", \"pv $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"obi_disk_volume_device\"), \"target\", \"device $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
+          "legendFormat": "",
+          "refId": "C",
+          "format": "table",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\"} == 1, \"source\", \"/\", \"obi_disk_volume_device\"), \"source\", \"device $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"system_device\"), \"target\", \"disk $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
+          "legendFormat": "",
+          "refId": "D",
+          "format": "table",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "type": "table",
+      "title": "Pod volume disks and their throughput",
+      "description": "The disks of the pod volumes, with the bytes read and written on each disk by any workload.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 86,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (k8s_namespace_name, k8s_pod_name, k8s_persistentvolumeclaim_name, k8s_persistentvolume_name, obi_disk_volume_device, system_device) (obi_stat_k8s_pod_volume_device{instance=~\"$instance\"} == 1) * on (system_device) group_left sum by (system_device) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "",
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value": "disk throughput"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

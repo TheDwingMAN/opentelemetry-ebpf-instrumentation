@@ -188,6 +188,8 @@ The `obi.fs.sync.type` attribute tells the system call apart: syncs outside of t
 - Stacked filesystems, like overlayfs, sync the file of the filesystem below them: outside of the system calls, the sync of the lower file is measured, once per call, with the filesystem of the lower file.
 - The writeback of dirty pages by the kernel is not measured.
 
+[`contrib/grafana/obi-disk-stats.json`](../contrib/grafana/obi-disk-stats.json) is a Grafana dashboard of the disk, file sync, NFS client and pod volume metrics.
+
 #### Pod volume devices
 
 `obi.stat.k8s.pod.volume.device` links the pods to the disks of the block I/O metrics: it is 1 for each disk that a volume that a pod of the node mounts from a PersistentVolumeClaim is on, with the pod, the volume, the claim, the PersistentVolume, the device the volume is mounted from (`obi.disk.volume.device`) and the disk (`system.device`). A volume on a stacked device, like an LVM volume over two disks, has a series for each disk. When a pod no longer mounts a volume, its series are reported once more with 0. For example, the bytes read from the disks of each PersistentVolumeClaim, by any workload:
