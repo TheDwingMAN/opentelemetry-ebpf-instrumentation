@@ -577,10 +577,14 @@ func (inf *Informers) initPersistentVolumeInformer(ctx context.Context, informer
 	if _, err := pvs.AddEventHandler(inf.ipInfoEventHandler(ctx)); err != nil {
 		return fmt.Errorf("can't register PersistentVolume event handler in the K8s informer: %w", err)
 	}
+	// the informer retries forever: warn once
+	var warnForbidden sync.Once
 	if err := pvs.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 		if apierrors.IsForbidden(err) {
-			inf.log.Warn("can't watch the PersistentVolumes: the volumes of the pods are not reported until "+
-				"OBI can list and watch persistentvolumes", "error", err)
+			warnForbidden.Do(func() {
+				inf.log.Warn("can't watch the PersistentVolumes: the volumes of the pods are not reported until "+
+					"OBI can list and watch persistentvolumes", "error", err)
+			})
 			return
 		}
 		inf.log.Debug("error watching the PersistentVolumes", "error", err)
