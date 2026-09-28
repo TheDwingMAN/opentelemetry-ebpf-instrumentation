@@ -375,7 +375,9 @@ func (s *Store) unlockedDeleteObjectMeta(meta *informer.ObjectMeta) {
 	for _, ip := range meta.Ips {
 		delete(s.objectMetaByIP, ip)
 	}
-	if claim, ok := claimOf(meta); ok {
+	// the claim may be indexed to another PersistentVolume now, e.g. after the deletion of a
+	// Released one that had the same claim before
+	if claim, ok := claimOf(meta); ok && s.persistentVolumesByClaim[claim].GetName() == meta.Name {
 		delete(s.persistentVolumesByClaim, claim)
 	}
 	if meta.Pod != nil {

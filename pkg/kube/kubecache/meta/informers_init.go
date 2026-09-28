@@ -17,6 +17,7 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/informers"
@@ -153,6 +154,9 @@ func InitInformers(ctx context.Context, opts ...InformerOption) (*Informers, err
 	}
 
 	svc.log.Debug("starting kubernetes informers")
+	if svc.persistentVolumesFactory != nil {
+		svc.persistentVolumesFactory.Start(ctx.Done())
+	}
 	allSynced := sync.WaitGroup{}
 	allSynced.Add(len(createdFactories))
 	for _, factory := range createdFactories {
@@ -225,13 +229,10 @@ func (inf *Informers) initInformers(ctx context.Context, config *informersConfig
 		}
 	}
 	if inf.config.persistentVolumes {
-		pvIFactory := informerFactory
-		if config.restrictNode != "" {
-			// PersistentVolumes are cluster-scoped: they can't be filtered by "spec.nodeName"
-			pvIFactory = informers.NewSharedInformerFactory(inf.config.kubeClient, inf.config.resyncPeriod)
-			createdFactories = append(createdFactories, pvIFactory)
-		}
-		if err := inf.initPersistentVolumeInformer(ctx, pvIFactory); err != nil {
+		// PersistentVolumes are cluster-scoped: they can't be filtered by "spec.nodeName". They have
+		// a factory of their own, which isn't waited for (see persistentVolumesFactory).
+		inf.persistentVolumesFactory = informers.NewSharedInformerFactory(inf.config.kubeClient, inf.config.resyncPeriod)
+		if err := inf.initPersistentVolumeInformer(ctx, inf.persistentVolumesFactory); err != nil {
 			return nil, err
 		}
 	}
@@ -468,7 +469,9 @@ func serviceToIndexableEntity(svc *v1.Service) (any, error) {
 
 func persistentVolumeToIndexableEntity(pv *v1.PersistentVolume) (any, error) {
 	info := &informer.PersistentVolumeInfo{}
-	if claim := pv.Spec.ClaimRef; claim != nil {
+	// only a Bound PersistentVolume is the volume of its claim: a Released one keeps the claimRef
+	// of a deleted claim, whose name a new claim may have taken
+	if claim := pv.Spec.ClaimRef; claim != nil && pv.Status.Phase == v1.VolumeBound {
 		info.ClaimNamespace, info.ClaimName = claim.Namespace, claim.Name
 	}
 	switch {
@@ -573,6 +576,16 @@ func (inf *Informers) initPersistentVolumeInformer(ctx context.Context, informer
 
 	if _, err := pvs.AddEventHandler(inf.ipInfoEventHandler(ctx)); err != nil {
 		return fmt.Errorf("can't register PersistentVolume event handler in the K8s informer: %w", err)
+	}
+	if err := pvs.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
+		if apierrors.IsForbidden(err) {
+			inf.log.Warn("can't watch the PersistentVolumes: the volumes of the pods are not reported until "+
+				"OBI can list and watch persistentvolumes", "error", err)
+			return
+		}
+		inf.log.Debug("error watching the PersistentVolumes", "error", err)
+	}); err != nil {
+		return fmt.Errorf("can't set PersistentVolume watch error handler: %w", err)
 	}
 	inf.log.Debug("registered PersistentVolume event handler in the K8s informer")
 

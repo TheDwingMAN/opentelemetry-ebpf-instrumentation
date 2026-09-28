@@ -598,6 +598,7 @@ func TestPersistentVolumeToIndexableEntity(t *testing.T) {
 				HostPath: &v1.HostPathVolumeSource{Path: "/var/local-path-provisioner/pvc-5d1c"},
 			},
 		},
+		Status: v1.PersistentVolumeStatus{Phase: v1.VolumeBound},
 	})
 	require.NoError(t, err)
 	meta := entity.(*indexableEntity).EncodedMeta
@@ -619,4 +620,15 @@ func TestPersistentVolumeToIndexableEntity(t *testing.T) {
 	assert.Empty(t, entity.(*indexableEntity).EncodedMeta.PersistentVolume.ClaimName)
 	assert.Empty(t, entity.(*indexableEntity).EncodedMeta.PersistentVolume.LocalPath,
 		"CSI volumes are found by their mount")
+
+	entity, err = persistentVolumeToIndexableEntity(&v1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-released"},
+		Spec: v1.PersistentVolumeSpec{
+			ClaimRef: &v1.ObjectReference{Namespace: "default", Name: "data-db-0"},
+		},
+		Status: v1.PersistentVolumeStatus{Phase: v1.VolumeReleased},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, entity.(*indexableEntity).EncodedMeta.PersistentVolume.ClaimName,
+		"a Released PersistentVolume keeps the claimRef of a claim that is gone")
 }

@@ -148,6 +148,11 @@ func (mp *MetadataProvider) getInformer(ctx context.Context) (meta.Notifier, err
 		return mp.informer, nil
 	}
 	if mp.cfg.MetaCacheAddr != "" {
+		if mp.cfg.PersistentVolumes {
+			klog().Info("the volumes of the pods are only reported if the Kubernetes metadata cache "+
+				"watches the PersistentVolumes: check that its persistent_volumes option is enabled",
+				"address", mp.cfg.MetaCacheAddr)
+		}
 		mp.informer = mp.initRemoteInformerCacheClient(ctx)
 	} else {
 		var err error

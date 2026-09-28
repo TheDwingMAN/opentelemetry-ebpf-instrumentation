@@ -203,7 +203,8 @@ sum by (system_device) (rate(obi_stat_disk_io_bytes_total{disk_io_direction="rea
 
 OBI resolves the volumes every 30 seconds, from the Kubernetes metadata and the host:
 
-- It watches the PersistentVolumes, which needs `list` and `watch` permissions on `persistentvolumes`. With the Kubernetes metadata cache (`k8s-cache`), enable its `persistent_volumes` option instead.
+- It watches the PersistentVolumes, which needs `list` and `watch` permissions on `persistentvolumes`. Without them, OBI logs a warning and reports no volumes, and the rest of the Kubernetes metadata keeps working. With the Kubernetes metadata cache (`k8s-cache`), enable its `persistent_volumes` option instead.
+- Only `Bound` PersistentVolumes are the volume of their claim: a `Released` one keeps referring to a claim that was deleted, whose name a new claim may have taken.
 - It finds the device of a volume from where the kubelet mounts it for the pod, `<kubelet root>/pods/<pod UID>/volumes/<plugin>/<PersistentVolume>`, in the mount table of the host (that of PID 1). `hostPath` PersistentVolumes, which the kubelet doesn't mount, are found by their path on the host. OBI needs the host PID namespace, like for the other disk metrics.
 - Volumes on no block device, like NFS or tmpfs ones, and on filesystems that don't report the device they are on, like Btrfs subvolumes, are not reported. Generic ephemeral volumes are not reported either.
 

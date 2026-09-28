@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 
 	"go.opentelemetry.io/obi/pkg/kube/kubecache/informer"
@@ -24,6 +25,10 @@ type Informers struct {
 	nodes             cache.SharedIndexInformer
 	services          cache.SharedIndexInformer
 	persistentVolumes cache.SharedIndexInformer
+	// persistentVolumesFactory is started with the other factories, but the synchronization of the
+	// informers doesn't wait for it: without RBAC permissions on the PersistentVolumes, it never
+	// syncs, and that must not keep the rest of the metadata from being used
+	persistentVolumesFactory informers.SharedInformerFactory
 
 	waitForSync chan struct{}
 

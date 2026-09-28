@@ -1546,3 +1546,27 @@ func TestPodVolumesAndPersistentVolumes(t *testing.T) {
 	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_DELETED, Resource: withClaim}))
 	assert.Empty(t, store.PodsWithVolumeClaims("node-1"))
 }
+
+func TestPersistentVolumeOfARecreatedClaim(t *testing.T) {
+	store := NewStore(&fakeInformer{}, ResourceLabels{}, nil, imetrics.NoopReporter{})
+	boundTo := func(name, claim string) *informer.ObjectMeta {
+		return &informer.ObjectMeta{
+			Name: name, Kind: "PersistentVolume",
+			PersistentVolume: &informer.PersistentVolumeInfo{ClaimNamespace: "default", ClaimName: claim},
+		}
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: boundTo("pv-old", "data")}))
+
+	// the claim is deleted, created again and bound to another volume, before the events of the old
+	// volume arrive: the old volume leaving doesn't take the claim from the new one
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: boundTo("pv-new", "data")}))
+	assert.Equal(t, "pv-new", store.PersistentVolumeByClaim("default", "data").GetName())
+	released := &informer.ObjectMeta{Name: "pv-old", Kind: "PersistentVolume", PersistentVolume: &informer.PersistentVolumeInfo{}}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_UPDATED, Resource: released}))
+	assert.Equal(t, "pv-new", store.PersistentVolumeByClaim("default", "data").GetName())
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_DELETED, Resource: boundTo("pv-old", "data")}))
+	assert.Equal(t, "pv-new", store.PersistentVolumeByClaim("default", "data").GetName())
+
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_DELETED, Resource: boundTo("pv-new", "data")}))
+	assert.Nil(t, store.PersistentVolumeByClaim("default", "data"))
+}
