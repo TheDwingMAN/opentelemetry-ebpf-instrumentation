@@ -92,6 +92,7 @@ type ebpFetcher interface {
 	DebugEventsMap() *ciliumebpf.Map
 	DiskIOAccumMap() *ciliumebpf.Map
 	DiskRequestsMap() *ciliumebpf.Map
+	DiskBioRequestsMap() *ciliumebpf.Map
 	DiskBioAccumMap() *ciliumebpf.Map
 	DiskBioDevicesMap() *ciliumebpf.Map
 	FsSyncAccumMap() *ciliumebpf.Map
@@ -187,13 +188,15 @@ func statsAgent(
 			interval = defaultDiskReadInterval
 		}
 		histograms := latencyHistograms(cfg)
-		var diskRequests *ciliumebpf.Map
+		var diskRequests, diskBioRequests *ciliumebpf.Map
 		if cfg.Metrics.Features.StatsDiskPendingOperations() {
 			diskRequests = statsFetcher.DiskRequestsMap()
+			diskBioRequests = statsFetcher.DiskBioRequestsMap()
 		}
 		diskTracer = stats.NewDiskMapTracer(&stats.DiskMapTracerConfig{
 			DiskIOAccum:           statsFetcher.DiskIOAccumMap(),
 			DiskRequests:          diskRequests,
+			DiskBioRequests:       diskBioRequests,
 			DiskBioAccum:          statsFetcher.DiskBioAccumMap(),
 			DiskBioDevices:        statsFetcher.DiskBioDevicesMap(),
 			FsSyncAccum:           statsFetcher.FsSyncAccumMap(),

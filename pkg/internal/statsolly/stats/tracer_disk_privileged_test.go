@@ -180,10 +180,6 @@ func TestDiskFlushesAndDiscards(t *testing.T) {
 // TestDiskStackedVolumes writes to a device mapper volume, like an LVM one, and checks that its
 // I/O is reported on the volume, as stacked, besides the device below it
 func TestDiskStackedVolumes(t *testing.T) {
-	dmsetup, err := exec.LookPath("dmsetup")
-	if err != nil {
-		t.Skip("dmsetup is not installed")
-	}
 	features := export.FeatureStatsDiskOperations | export.FeatureStatsDiskIO | export.FeatureStatsDiskStackedVolumes
 	bounds := []float64{0.001}
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
@@ -192,18 +188,7 @@ func TestDiskStackedVolumes(t *testing.T) {
 	t.Cleanup(func() { fetcher.Close() })
 	require.NotNil(t, fetcher.DiskBioAccumMap(), "the bio probes must be attached on this kernel")
 
-	loopDev := attachLoopDevice(t)
-	volume := fmt.Sprintf("obi-test-%d", os.Getpid())
-	create := exec.Command(dmsetup, "create", volume, "--table",
-		fmt.Sprintf("0 %d linear %s 0", loopBackingFileSize/512, loopDev))
-	// without udev, dmsetup creates the device nodes itself
-	create.Env = append(os.Environ(), "DM_DISABLE_UDEV=1")
-	out, err := create.CombinedOutput()
-	require.NoError(t, err, string(out))
-	t.Cleanup(func() { _ = exec.Command(dmsetup, "remove", volume).Run() })
-	out, err = exec.Command(dmsetup, "info", "-c", "--noheadings", "-o", "blkdevname", volume).Output()
-	require.NoError(t, err)
-	dmName := strings.TrimSpace(string(out))
+	dmName := linearVolume(t, attachLoopDevice(t))
 
 	devices := &deviceNames{sysRoot: "/sys"}
 	containers := newCgroupContainers(ebpfCgroupNames{names: fetcher.DiskCgroupNamesMap()})
@@ -267,19 +252,7 @@ func TestDiskPendingRequests(t *testing.T) {
 	device := slowNullBlockDevice(t, 500*time.Millisecond)
 	pending := newPendingReader(ebpfRequests{starts: fetcher.DiskRequestsMap()}, &deviceNames{sysRoot: "/sys"})
 
-	done := make(chan error, inFlight)
-	for i := range inFlight {
-		go func() {
-			f, err := os.OpenFile(device, os.O_RDONLY|unix.O_DIRECT, 0)
-			if err != nil {
-				done <- err
-				return
-			}
-			defer f.Close()
-			_, err = f.ReadAt(alignedBuffer(t, directIOBlockSize), int64(i*directIOBlockSize))
-			done <- err
-		}()
-	}
+	done := readConcurrently(t, device, inFlight)
 	requestsOf := func() map[ebpf.DiskOpCode]int64 {
 		requests := map[ebpf.DiskOpCode]int64{}
 		for _, stat := range pending.readStats() {
@@ -297,6 +270,146 @@ func TestDiskPendingRequests(t *testing.T) {
 	}
 	assert.Equal(t, map[ebpf.DiskOpCode]int64{ebpf.CodeDiskOpRead: 0}, requestsOf(),
 		"the device is still reported once its requests complete")
+}
+
+// TestDiskPendingStackedVolumes keeps reads in flight on a device mapper volume, like an LVM one,
+// over a device that completes them slowly, and checks that they are counted on the volume too.
+func TestDiskPendingStackedVolumes(t *testing.T) {
+	bounds := []float64{0.001}
+	features := export.FeatureStatsDiskPendingOperations | export.FeatureStatsDiskStackedVolumes
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+		ebpf.LatencyHistograms{Disk: bounds})
+	require.NoError(t, err)
+	t.Cleanup(func() { fetcher.Close() })
+	require.NotNil(t, fetcher.DiskBioRequestsMap(), "the bio probes must be attached on this kernel")
+
+	const inFlight = 4
+	dmName := linearVolume(t, slowNullBlockDevice(t, 500*time.Millisecond))
+	newBioDevices("/sys", ebpfDeviceSet{set: fetcher.DiskBioDevicesMap()}).refresh()
+	pending := newPendingReader(ebpfRequests{starts: fetcher.DiskRequestsMap(), bioStarts: fetcher.DiskBioRequestsMap()},
+		&deviceNames{sysRoot: "/sys"})
+
+	done := readConcurrently(t, deviceNode(t, dmName), inFlight)
+	requestsOf := func() int64 {
+		var requests int64
+		for _, stat := range pending.readStats() {
+			if stat.DiskPending.Device == dmName && stat.DiskPending.Op == ebpf.CodeDiskOpRead {
+				assert.True(t, stat.DiskPending.Stacked)
+				requests += stat.DiskPending.Requests
+			}
+		}
+		return requests
+	}
+	require.Eventually(t, func() bool {
+		return requestsOf() == inFlight
+	}, 400*time.Millisecond, 10*time.Millisecond, "the reads are in flight on the volume while the device below serves them")
+	for range inFlight {
+		require.NoError(t, <-done)
+	}
+}
+
+// TestDiskPendingRequestsAreNotOvercounted keeps a fixed number of readers busy on a loop device,
+// so that requests complete while the requests in flight are read, and checks that no read
+// counts more requests than there can be in flight.
+func TestDiskPendingRequestsAreNotOvercounted(t *testing.T) {
+	bounds := []float64{0.001}
+	features := export.FeatureStatsDiskPendingOperations
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+		ebpf.LatencyHistograms{Disk: bounds})
+	require.NoError(t, err)
+	t.Cleanup(func() { fetcher.Close() })
+
+	const readers = 8
+	loopDev := attachLoopDevice(t)
+	pending := newPendingReader(ebpfRequests{starts: fetcher.DiskRequestsMap()}, &deviceNames{sysRoot: "/sys"})
+	stop := make(chan struct{})
+	done := make(chan error, readers)
+	for i := range readers {
+		go func() {
+			f, err := os.OpenFile(loopDev, os.O_RDONLY|unix.O_DIRECT, 0)
+			if err != nil {
+				done <- err
+				return
+			}
+			defer f.Close()
+			block := alignedBuffer(t, directIOBlockSize)
+			for n := 0; ; n++ {
+				select {
+				case <-stop:
+					done <- nil
+					return
+				default:
+				}
+				offset := int64((i*directIOBlocks/readers + n%(directIOBlocks/readers)) * directIOBlockSize)
+				if _, err := f.ReadAt(block, offset); err != nil {
+					done <- err
+					return
+				}
+			}
+		}()
+	}
+
+	var maxRequests int64
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var requests int64
+		for _, stat := range pending.readStats() {
+			if stat.DiskPending.Device == filepath.Base(loopDev) {
+				requests += stat.DiskPending.Requests
+			}
+		}
+		maxRequests = max(maxRequests, requests)
+	}
+	close(stop)
+	for range readers {
+		require.NoError(t, <-done)
+	}
+	assert.LessOrEqual(t, maxRequests, int64(readers), "each reader has at most one request in flight")
+}
+
+// readConcurrently starts reading different blocks of a device from the given number of
+// goroutines, and returns the channel where each of them sends its result
+func readConcurrently(t *testing.T, device string, readers int) <-chan error {
+	t.Helper()
+	done := make(chan error, readers)
+	for i := range readers {
+		go func() {
+			f, err := os.OpenFile(device, os.O_RDONLY|unix.O_DIRECT, 0)
+			if err != nil {
+				done <- err
+				return
+			}
+			defer f.Close()
+			_, err = f.ReadAt(alignedBuffer(t, directIOBlockSize), int64(i*directIOBlockSize))
+			done <- err
+		}()
+	}
+	return done
+}
+
+// linearVolume creates a device mapper volume over a whole device, as LVM does, and returns its
+// name. It skips the test if dmsetup is not installed.
+func linearVolume(t *testing.T, device string) string {
+	t.Helper()
+	dmsetup, err := exec.LookPath("dmsetup")
+	if err != nil {
+		t.Skip("dmsetup is not installed")
+	}
+	// the size of the device, in 512-byte sectors
+	sectors, err := os.ReadFile(filepath.Join("/sys/class/block", filepath.Base(device), "size"))
+	require.NoError(t, err)
+
+	volume := fmt.Sprintf("obi-test-%d-%d", os.Getpid(), time.Now().UnixNano())
+	create := exec.Command(dmsetup, "create", volume, "--table",
+		fmt.Sprintf("0 %s linear %s 0", strings.TrimSpace(string(sectors)), device))
+	// without udev, dmsetup creates the device nodes itself
+	create.Env = append(os.Environ(), "DM_DISABLE_UDEV=1")
+	out, err := create.CombinedOutput()
+	require.NoError(t, err, string(out))
+	t.Cleanup(func() { _ = exec.Command(dmsetup, "remove", volume).Run() })
+	out, err = exec.Command(dmsetup, "info", "-c", "--noheadings", "-o", "blkdevname", volume).Output()
+	require.NoError(t, err)
+	return strings.TrimSpace(string(out))
 }
 
 // TestDiskIOIsChargedPerCgroup writes to the same loop device from two processes in two

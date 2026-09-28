@@ -505,6 +505,15 @@ func (m *StatsFetcher) DiskRequestsMap() *ebpf.Map {
 	return m.objects.DiskRqStart
 }
 
+// DiskBioRequestsMap returns the map where the kernel tracks the bios in flight of the stacked
+// volumes, or nil if the bio probes are not attached.
+func (m *StatsFetcher) DiskBioRequestsMap() *ebpf.Map {
+	if !m.bioAttached {
+		return nil
+	}
+	return m.objects.DiskBioStart
+}
+
 // DiskBioAccumMap returns the map where the kernel accumulates the bios of the stacked volumes, or
 // nil if the bio probes are not attached.
 func (m *StatsFetcher) DiskBioAccumMap() *ebpf.Map {

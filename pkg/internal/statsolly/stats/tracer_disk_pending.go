@@ -5,6 +5,8 @@ package stats // import "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 
 import (
 	"log/slog"
+	"maps"
+	"slices"
 	"time"
 
 	ciliumebpf "github.com/cilium/ebpf"
@@ -18,24 +20,38 @@ import (
 // entries are requests whose completion was not seen, which the LRU map evicts eventually.
 const staleRequestAge = 10 * time.Minute
 
-// requestSource abstracts the disk_rq_start eBPF map, for testing
+// requestSource abstracts the disk_rq_start and disk_bio_start eBPF maps, for testing
 type requestSource interface {
 	requests() ([]ebpf.StatsDiskRqStartT, error)
 }
 
 type ebpfRequests struct {
-	starts *ciliumebpf.Map
+	// the block requests in flight, and the bios in flight of the stacked volumes (nil unless they
+	// are measured)
+	starts, bioStarts *ciliumebpf.Map
 }
 
 func (e ebpfRequests) requests() ([]ebpf.StatsDiskRqStartT, error) {
-	var requests []ebpf.StatsDiskRqStartT
+	requests, err := inFlightEntries(e.starts)
+	if err != nil || e.bioStarts == nil {
+		return requests, err
+	}
+	bios, err := inFlightEntries(e.bioStarts)
+	return append(requests, bios...), err
+}
+
+// inFlightEntries returns the values of a map of requests or bios in flight, keyed by their address. The
+// kernel deletes entries while the map is iterated, and the iteration starts over from the first
+// entry when the entry at the cursor is gone, so the entries are deduplicated by key.
+func inFlightEntries(starts *ciliumebpf.Map) ([]ebpf.StatsDiskRqStartT, error) {
+	byAddress := map[uint64]ebpf.StatsDiskRqStartT{}
 	var key uint64
 	var start ebpf.StatsDiskRqStartT
-	iter := e.starts.Iterate()
+	iter := starts.Iterate()
 	for iter.Next(&key, &start) {
-		requests = append(requests, start)
+		byAddress[key] = start
 	}
-	return requests, iter.Err()
+	return slices.Collect(maps.Values(byAddress)), iter.Err()
 }
 
 type pendingKey struct {
@@ -45,7 +61,7 @@ type pendingKey struct {
 }
 
 // pendingReader counts the reads and writes that each device is serving, from the requests in
-// flight that the kernel tracks. Unlike the accumulation readers, it reports every device that did
+// flight that the kernel tracks, or the bios in flight for the stacked volumes. Unlike the accumulation readers, it reports every device that did
 // I/O recently, including those that have no request in flight at the time of the read.
 type pendingReader struct {
 	log      *slog.Logger
