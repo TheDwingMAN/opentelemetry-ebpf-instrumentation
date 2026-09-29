@@ -49,6 +49,8 @@ func (c *Client) Query(promQL string) ([]Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("querying prometheus: %w", err)
 	}
+	defer resp.Body.Close()
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("can't read response body: %w", err)

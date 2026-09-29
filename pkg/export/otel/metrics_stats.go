@@ -38,7 +38,7 @@ type StatMetricsConfig struct {
 
 func (mc *StatMetricsConfig) Enabled() bool {
 	return mc.Metrics != nil && mc.Metrics.EndpointEnabled() &&
-		(mc.CommonCfg.Features.StatMetrics())
+		mc.CommonCfg.Features.StatMetrics()
 }
 
 func smlog() *slog.Logger {
@@ -62,7 +62,7 @@ func getFilteredStatsResourceAttrs(hostID string, attrSelector attributes.Select
 
 func createFilteredStatsResource(hostID string, attrSelector attributes.Selection) *resource.Resource {
 	attrs := getFilteredStatsResourceAttrs(hostID, attrSelector)
-	return resource.NewWithAttributes(semconv.SchemaURL, attrs...)
+	return resource.NewWithAttributes(attr.OBISchemaURL, attrs...)
 }
 
 func newStatMeterProvider(res *resource.Resource, exporter *sdkmetric.Exporter, interval time.Duration, cfg *otelcfg.MetricsConfig) *metric.MeterProvider {
@@ -91,20 +91,21 @@ func statHistogramView(metricName string, buckets []float64, isExponential bool,
 }
 
 type statMetricsExporter struct {
-	tcpRtt               *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
-	tcpFailedConnections *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
-	tcpRetransmits       *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
-	tcpIo                *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
-	diskOpDuration       *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
-	diskIOBytes          *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
-	diskQueueDuration    *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
-	diskQueueDepth       *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
-	diskOpErrors         *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
-	fsOpDuration         *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
-	fsIOBytes            *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
-	fsOpErrors           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
-	expireTTL            time.Duration
-	in                   <-chan []*ebpf.Stat
+	tcpRtt                   *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
+	tcpFailedConnections     *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	tcpRetransmits           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	tcpIo                    *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	tcpSuccessfulConnections *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	diskOpDuration           *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
+	diskIOBytes              *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	diskQueueDuration        *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
+	diskQueueDepth           *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
+	diskOpErrors             *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	fsOpDuration             *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
+	fsIOBytes                *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	fsOpErrors               *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	expireTTL                time.Duration
+	in                       <-chan []*ebpf.Stat
 }
 
 func StatMetricsExporterProvider(
@@ -223,6 +224,22 @@ func newStatMetricsExporter(
 			attrProv.For(attributes.StatTCPFailedConnections))
 
 		nme.tcpFailedConnections = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, tcpFailedConnections, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if cfg.CommonCfg.Features.StatsTCPSuccessfulConnections() {
+		log := log.With("metricFamily", "StatsTCPSuccessfulConnections")
+
+		tcpSuccessfulConnections, err := ebpfEvents.Int64Counter(attributes.StatTCPSuccessfulConnections.OTEL)
+		if err != nil {
+			log.Error("creating stats tcp successful connection counter", "error", err)
+			return nil, err
+		}
+
+		attrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatTCPSuccessfulConnections))
+
+		nme.tcpSuccessfulConnections = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, tcpSuccessfulConnections, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	if cfg.CommonCfg.Features.StorageBlockDuration() {
@@ -363,6 +380,10 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if me.tcpFailedConnections != nil && v.TCPFailedConnection != nil {
 				tcpFailedConnections, attrs := me.tcpFailedConnections.ForRecord(v)
 				tcpFailedConnections.Add(ctx, 1, metric2.WithAttributeSet(attrs))
+			}
+			if me.tcpSuccessfulConnections != nil && v.TCPSuccessfulConnection != nil {
+				tcpSuccessfulConnections, attrs := me.tcpSuccessfulConnections.ForRecord(v)
+				tcpSuccessfulConnections.Add(ctx, 1, metric2.WithAttributeSet(attrs))
 			}
 			if me.tcpRetransmits != nil && v.TCPRetransmit {
 				tcpRetransmits, attrs := me.tcpRetransmits.ForRecord(v)

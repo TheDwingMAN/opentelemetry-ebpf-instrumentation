@@ -68,7 +68,7 @@ func getDefinitions(
 		map[attr.Name]Default{
 			attr.Instance:         true,
 			attr.Job:              true,
-			attr.ServiceNamespace: true,
+			attr.ServiceNamespace: false,
 		},
 		extraGroupAttributes[GroupPrometheus],
 	)
@@ -293,9 +293,10 @@ func getDefinitions(
 		},
 	}
 
-	// ServiceName and ServiceNamespace are reported both as resource and metric attributes, as
-	// the OTEL definition requires that it is reported as resource attribute,
-	// but Cloud providers may extract this from the metric
+	// The semantic conventions define service.name and service.namespace as
+	// resource attributes, and OBI reports them there. They are also available
+	// as metric-level attributes for backends that read service identity off
+	// the series instead of joining through target_info.
 	appAttributes := NewAttrReportGroup(
 		false,
 		[]*AttrReportGroup{
@@ -304,8 +305,8 @@ func getDefinitions(
 			&appContainerAttributes,
 		},
 		map[attr.Name]Default{
-			attr.ServiceName:      true,
-			attr.ServiceNamespace: true,
+			attr.ServiceName:      false,
+			attr.ServiceNamespace: false,
 		},
 		extraGroupAttributes[GroupApp],
 	)
@@ -320,11 +321,57 @@ func getDefinitions(
 		nil,
 	)
 
+	jvmThreadAttributes := NewAttrReportGroup(
+		false,
+		[]*AttrReportGroup{&appAttributes},
+		map[attr.Name]Default{
+			attr.JVMThreadDaemon: true,
+		},
+		nil,
+	)
+
+	jvmGCAttributes := NewAttrReportGroup(
+		false,
+		[]*AttrReportGroup{&appAttributes},
+		map[attr.Name]Default{
+			attr.JVMGCName:   true,
+			attr.JVMGCAction: true,
+		},
+		nil,
+	)
+
 	nodejsEventLoopTimeAttributes := NewAttrReportGroup(
 		false,
 		[]*AttrReportGroup{&appAttributes},
 		map[attr.Name]Default{
 			attr.NodejsEventLoopState: true,
+		},
+		nil,
+	)
+
+	v8jsGCAttributes := NewAttrReportGroup(
+		false,
+		[]*AttrReportGroup{&appAttributes},
+		map[attr.Name]Default{
+			attr.V8JSGCType: true,
+		},
+		nil,
+	)
+
+	v8jsHeapSpaceAttributes := NewAttrReportGroup(
+		false,
+		[]*AttrReportGroup{&appAttributes},
+		map[attr.Name]Default{
+			attr.V8JSHeapSpaceName: true,
+		},
+		nil,
+	)
+
+	v8jsResourceAttributes := NewAttrReportGroup(
+		false,
+		[]*AttrReportGroup{&appAttributes},
+		map[attr.Name]Default{
+			attr.V8JSResourceType: true,
 		},
 		nil,
 	)
@@ -388,6 +435,7 @@ func getDefinitions(
 			attr.MessagingDestination: true,
 			attr.MessagingOpName:      true,
 			attr.ServerAddr:           true,
+			attr.ErrorType:            true,
 		},
 		extraGroupAttributes[GroupMessaging],
 	)
@@ -426,6 +474,7 @@ func getDefinitions(
 				attr.RPCMethod:             true,
 				attr.RPCSystem:             true,
 				attr.RPCResponseStatusCode: true,
+				attr.ErrorType:             true,
 			},
 		},
 		RPCServerDuration.Section: {
@@ -439,21 +488,25 @@ func getDefinitions(
 		DBClientDuration.Section: {
 			SubGroups: []*AttrReportGroup{&appAttributes},
 			Attributes: map[attr.Name]Default{
-				attr.ServerAddr:       true,
-				attr.ServerPort:       true,
-				attr.DBOperation:      true,
-				attr.DBSystemName:     true,
-				attr.ErrorType:        true,
-				attr.DBCollectionName: false,
+				attr.ServerAddr:           true,
+				attr.ServerPort:           true,
+				attr.DBOperation:          true,
+				attr.DBSystemName:         true,
+				attr.ErrorType:            true,
+				attr.DBCollectionName:     false,
+				attr.DBNamespace:          true,
+				attr.DBResponseStatusCode: true,
 			},
 		},
 		DBServerDuration.Section: {
 			SubGroups: []*AttrReportGroup{&appAttributes, &serverInfo},
 			Attributes: map[attr.Name]Default{
-				attr.DBOperation:      true,
-				attr.DBSystemName:     true,
-				attr.ErrorType:        true,
-				attr.DBCollectionName: false,
+				attr.DBOperation:          true,
+				attr.DBSystemName:         true,
+				attr.ErrorType:            true,
+				attr.DBCollectionName:     false,
+				attr.DBNamespace:          true,
+				attr.DBResponseStatusCode: true,
 			},
 		},
 		MessagingPublishDuration.Section: {
@@ -479,6 +532,15 @@ func getDefinitions(
 				attr.GenAIToolCallResult:    false,
 				attr.GenAIResponseError:     false,
 				attr.DBResponseError:        false,
+				// Conditionally Required or Recommended by OTel semconv, so emitted
+				// by default. Opt out via attributes.select.traces.exclude.
+				attr.ErrorType:              true,
+				attr.HTTPRequestMethodOrig:  true,
+				attr.DBQuerySummary:         true,
+				attr.UserAgentOriginal:      true,
+				attr.NetworkPeerAddress:     true,
+				attr.NetworkPeerPort:        true,
+				attr.NetworkProtocolVersion: true,
 			},
 		},
 		GPUCudaKernelLaunchCalls.Section: {
@@ -550,6 +612,34 @@ func getDefinitions(
 				attr.ServerAddr:         true,
 			},
 		},
+		MCPClientOperationDuration.Section: {
+			SubGroups: []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.MCPMethodName:         true,
+				attr.MCPProtocolVersion:    true,
+				attr.GenAIToolName:         true,
+				attr.GenAIPromptName:       true,
+				attr.ErrorType:             true,
+				attr.RPCResponseStatusCode: true,
+				attr.ServerAddr:            true,
+				attr.ServerPort:            true,
+				// mcp.resource.uri is opt-in upstream: a resource URI is
+				// unbounded, so it stays out of the default label set.
+				attr.MCPResourceURI: false,
+			},
+		},
+		MCPServerOperationDuration.Section: {
+			SubGroups: []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.MCPMethodName:         true,
+				attr.MCPProtocolVersion:    true,
+				attr.GenAIToolName:         true,
+				attr.GenAIPromptName:       true,
+				attr.ErrorType:             true,
+				attr.RPCResponseStatusCode: true,
+				attr.MCPResourceURI:        false,
+			},
+		},
 		GoRuntimeMemoryGCGoal.Section: {
 			SubGroups:  []*AttrReportGroup{&appAttributes},
 			Attributes: map[attr.Name]Default{},
@@ -565,6 +655,30 @@ func getDefinitions(
 		GoRuntimeScheduleDuration.Section: {
 			SubGroups:  []*AttrReportGroup{&appAttributes},
 			Attributes: map[attr.Name]Default{},
+		},
+		DotnetGCCollections.Section: {
+			SubGroups: []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.DotnetGCHeapGeneration: true,
+			},
+		},
+		CPythonGCCollections.Section: {
+			SubGroups: []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.CPythonGCGeneration: true,
+			},
+		},
+		CPythonGCCollectedObjects.Section: {
+			SubGroups: []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.CPythonGCGeneration: true,
+			},
+		},
+		CPythonGCUncollectableObjects.Section: {
+			SubGroups: []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.CPythonGCGeneration: true,
+			},
 		},
 		JVMMemoryUsed.Section: {
 			SubGroups:  []*AttrReportGroup{&jvmMemoryAttributes},
@@ -582,8 +696,64 @@ func getDefinitions(
 			SubGroups:  []*AttrReportGroup{&jvmMemoryAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
+		JVMClassLoaded.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		JVMClassUnloaded.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		JVMClassCount.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		JVMThreadCount.Section: {
+			SubGroups:  []*AttrReportGroup{&jvmThreadAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		JVMCPUTime.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		JVMCPUCount.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		JVMCPURecentUtilization.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		JVMGCDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&jvmGCAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
 		NodejsEventLoopTime.Section: {
 			SubGroups:  []*AttrReportGroup{&nodejsEventLoopTimeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		V8JSGCDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&v8jsGCAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		V8JSMemoryHeapLimit.Section: {
+			SubGroups:  []*AttrReportGroup{&v8jsHeapSpaceAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		V8JSMemoryHeapUsed.Section: {
+			SubGroups:  []*AttrReportGroup{&v8jsHeapSpaceAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		V8JSMemoryHeapSpaceAvailableSize.Section: {
+			SubGroups:  []*AttrReportGroup{&v8jsHeapSpaceAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		V8JSMemoryHeapSpacePhysicalSize.Section: {
+			SubGroups:  []*AttrReportGroup{&v8jsHeapSpaceAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		V8JSResourceActive.Section: {
+			SubGroups:  []*AttrReportGroup{&v8jsResourceAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
 		StatTCPRtt.Section: {
@@ -607,6 +777,12 @@ func getDefinitions(
 			SubGroups: []*AttrReportGroup{&statsAttributes, &statsKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.NetworkIoDirection: true,
+			},
+		},
+		StatTCPSuccessfulConnections.Section: {
+			SubGroups: []*AttrReportGroup{&statsAttributes, &statsKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.NetworkTCPHandshakeRole: false,
 			},
 		},
 		StatDiskOperationDuration.Section: {
