@@ -69,7 +69,10 @@ const (
 	//
 	// Deprecated: the metric will be removed.
 	FeatureStorageBlockQueueDepth
-	FeatureAll = Features(^uint(0)) // all bits to 1
+	// FeatureAll is what "all" and "*" select: every feature except the deprecated
+	// FeatureStorageBlockQueueDepth, which is in no umbrella and is only enabled
+	// when listed by name.
+	FeatureAll = Features(^uint(0)) &^ FeatureStorageBlockQueueDepth
 )
 
 // FeatureStorageBlock enables all block-layer storage metrics.

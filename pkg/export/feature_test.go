@@ -334,6 +334,46 @@ func TestStorageBlockQueueDepthFeatureParsing(t *testing.T) {
 	assert.Equal(t, []DeprecatedFeature{{Name: "storage_block_queue_depth"}}, depth.DeprecatedEnabled())
 }
 
+// "*" and "all" leave the deprecated queue depth out, so its shared counter and
+// its deprecation notice only come when the flag is listed by name.
+func TestStorageBlockQueueDepthNotInWildcard(t *testing.T) {
+	deprecatedNames := func(f Features) []string {
+		names := []string{}
+		for _, d := range f.DeprecatedEnabled() {
+			names = append(names, d.Name)
+		}
+		return names
+	}
+
+	for _, wildcard := range []string{`["*"]`, `["all"]`} {
+		t.Run(wildcard, func(t *testing.T) {
+			var f Features
+			require.NoError(t, yaml.Unmarshal([]byte(wildcard), &f))
+			assert.False(t, f.StorageBlockQueueDepth())
+			assert.True(t, f.StorageBlock())
+			assert.True(t, f.StorageBlockQueue())
+			assert.NotContains(t, deprecatedNames(f), "storage_block_queue_depth")
+			assert.False(t, f.InvalidSpanMetricsConfig())
+		})
+	}
+
+	var text Features
+	require.NoError(t, text.UnmarshalText([]byte("*")))
+	assert.False(t, text.StorageBlockQueueDepth())
+
+	var named Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["*", "storage_block_queue_depth"]`), &named))
+	assert.True(t, named.StorageBlockQueueDepth())
+	assert.Contains(t, deprecatedNames(named), "storage_block_queue_depth")
+	assert.False(t, named.InvalidSpanMetricsConfig(), "still the wildcard, so the span formats resolve")
+
+	out, err := yaml.Marshal(struct {
+		Features Features `yaml:"features"`
+	}{named})
+	require.NoError(t, err)
+	assert.Equal(t, "features:\n    - all\n    - storage_block_queue_depth\n", string(out))
+}
+
 func TestStorageFSFeatureParsing(t *testing.T) {
 	var f Features
 	require.NoError(t, yaml.Unmarshal([]byte(`["storage_fs"]`), &f))
