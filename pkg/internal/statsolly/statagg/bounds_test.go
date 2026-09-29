@@ -166,7 +166,7 @@ func TestExponentialLayout(t *testing.T) {
 	// 1us..100s at scale 2: indexes -80..27, plus the zero bound.
 	assert.Equal(t, int32(-80), l.FirstIndex)
 	assert.Len(t, l.Bounds, 109)
-	assert.Equal(t, 0.0, l.Bounds[0])
+	assert.Zero(t, l.Bounds[0])
 	assert.LessOrEqual(t, l.Bounds[1], 1e-6)
 	assert.GreaterOrEqual(t, l.Bounds[len(l.Bounds)-1], 100.0)
 	assert.True(t, sort.Float64sAreSorted(l.Bounds))

@@ -21,6 +21,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
@@ -283,10 +284,12 @@ func promSamples(mfs []*dto.MetricFamily, native bool) []string {
 func histogramSample(h *dto.Histogram, native bool) string {
 	s := fmt.Sprintf(" count=%d sum=%s", h.GetSampleCount(), roundSum(h.GetSampleSum()))
 	if !native {
+		var sb strings.Builder
+		sb.WriteString(s)
 		for _, b := range h.GetBucket() {
-			s += fmt.Sprintf(" le%v=%d", b.GetUpperBound(), b.GetCumulativeCount())
+			fmt.Fprintf(&sb, " le%v=%d", b.GetUpperBound(), b.GetCumulativeCount())
 		}
-		return s
+		return sb.String()
 	}
 	s += fmt.Sprintf(" schema=%d zero=%d threshold=%v", h.GetSchema(), h.GetZeroCount(), h.GetZeroThreshold())
 	return s + fmt.Sprintf(" buckets=%v", nativeBuckets(h.GetPositiveSpan(), h.GetPositiveDelta()))

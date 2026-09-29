@@ -40,8 +40,8 @@ func TestReader_SumsCPUsAndReportsOnlyChanges(t *testing.T) {
 	m.addU64(k, 0, 0, 100)
 	m.addU64(k, 3, 0, 50)
 	m.addU64(k, 2, 1, 7)
-	m.addU32(k, 1, 16, 2, 3)
-	m.addU32(k, 3, 16, 2, 4)
+	m.addU32(k, 1, 2, 3)
+	m.addU32(k, 3, 2, 4)
 
 	got := pollAll(t, r)
 	require.Len(t, got, 1)
@@ -50,7 +50,7 @@ func TestReader_SumsCPUsAndReportsOnlyChanges(t *testing.T) {
 	assert.Empty(t, pollAll(t, r), "an unchanged key is not visited")
 	assert.Equal(t, 1, r.keys["key1"].idle)
 
-	m.addU32(k, 0, 16, 0, 1)
+	m.addU32(k, 0, 0, 1)
 	got = pollAll(t, r)
 	require.Len(t, got, 1)
 	assert.Equal(t, []uint64{0, 0, 1, 0, 0}, got[0].delta)
@@ -64,15 +64,15 @@ func TestReader_BucketDeltasAreWrapSafe(t *testing.T) {
 	k := []byte("wrap")
 
 	// Both CPUs' copies of bucket 1 close to 2^32.
-	m.addU32(k, 0, 16, 1, math.MaxUint32-9)
-	m.addU32(k, 1, 16, 1, math.MaxUint32-2)
+	m.addU32(k, 0, 1, math.MaxUint32-9)
+	m.addU32(k, 1, 1, math.MaxUint32-2)
 	got := pollAll(t, r)
 	require.Len(t, got, 1)
 	assert.Equal(t, uint64(2*math.MaxUint32-11), got[0].delta[3])
 
 	// Both wrap before the next poll: 15 and 8 more values.
-	m.addU32(k, 0, 16, 1, 15)
-	m.addU32(k, 1, 16, 1, 8)
+	m.addU32(k, 0, 1, 15)
+	m.addU32(k, 1, 1, 8)
 	got = pollAll(t, r)
 	require.Len(t, got, 1)
 	assert.Equal(t, uint64(23), got[0].delta[3], "each CPU wrapped once; the delta is still exact")

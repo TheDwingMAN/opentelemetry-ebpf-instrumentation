@@ -32,7 +32,7 @@ var blockFeatures = export.FeatureStorageBlockDuration | export.FeatureStorageBl
 // nanoseconds, so a value within 1 ns of one may land a bucket off.
 func blockEvents(n int, bounds []uint64, avoid bool) []*ebpf.Stat {
 	rnd := rand.New(rand.NewPCG(11, 12))
-	devs := []uint32{252<<20 | 0, 252<<20 | 16}
+	devs := []uint32{252 << 20, 252<<20 | 16}
 	kinds := []ebpf.BlockOpCode{ebpf.CodeBlockRead, ebpf.CodeBlockWrite, ebpf.CodeBlockFlush, ebpf.CodeBlockDiscard}
 	latency := func() uint64 {
 		for {

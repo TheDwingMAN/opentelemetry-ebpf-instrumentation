@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
 	"go.opentelemetry.io/otel/attribute"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
@@ -87,10 +88,12 @@ func (m *fakeMap) addU64(key []byte, cpu, word int, n uint64) {
 	binary.NativeEndian.PutUint64(v, binary.NativeEndian.Uint64(v)+n)
 }
 
-func (m *fakeMap) addU32(key []byte, cpu, offset, word int, n uint32) {
+// addU32 adds n to bucket word of key on cpu; the tests' values have two
+// counter words before their buckets.
+func (m *fakeMap) addU32(key []byte, cpu, word int, n uint32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	v := m.value(key)[cpu*m.stride+offset+word*bucketSize:]
+	v := m.value(key)[cpu*m.stride+testWords*counterSize+word*bucketSize:]
 	binary.NativeEndian.PutUint32(v, binary.NativeEndian.Uint32(v)+n)
 }
 
@@ -129,7 +132,7 @@ func record(m *fakeMap, l *Layout, key []byte, cpu int, bytes, latNs uint64) {
 	m.addU64(key, cpu, wordBytes, bytes)
 	m.addU64(key, cpu, wordSumNs, latNs)
 	idx := sort.Search(len(l.BoundsNs), func(i int) bool { return latNs <= l.BoundsNs[i] })
-	m.addU32(key, cpu, testWords*counterSize, idx, 1)
+	m.addU32(key, cpu, idx, 1)
 }
 
 var (
@@ -186,15 +189,15 @@ type testFamily struct {
 	reg    *Registry
 }
 
-func newTestFamily(t testing.TB, cpus int, bounds []float64, mod func(*Config)) *testFamily {
-	t.Helper()
+func newTestFamily(tb testing.TB, cpus int, bounds []float64, mod func(*Config)) *testFamily {
+	tb.Helper()
 	l, err := NewExplicitLayout(bounds)
-	require.NoError(t, err)
-	return newTestFamilyLayout(t, cpus, l, mod)
+	require.NoError(tb, err)
+	return newTestFamilyLayout(tb, cpus, l, mod)
 }
 
-func newTestFamilyLayout(t testing.TB, cpus int, l *Layout, mod func(*Config)) *testFamily {
-	t.Helper()
+func newTestFamilyLayout(tb testing.TB, cpus int, l *Layout, mod func(*Config)) *testFamily {
+	tb.Helper()
 	m := newFakeMap(testKeySize, testStride(l), cpus)
 	clock := newFakeClock()
 	cfg := Config{
@@ -211,9 +214,9 @@ func newTestFamilyLayout(t testing.TB, cpus int, l *Layout, mod func(*Config)) *
 		mod(&cfg)
 	}
 	f, err := NewFamily(cfg)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	reg, err := NewRegistry(f)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	// Tests collect right away, and attach exporters when they need them.
 	f.start()
 	return &testFamily{m: m, layout: l, family: f, clock: clock, reg: reg}

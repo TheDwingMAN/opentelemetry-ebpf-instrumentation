@@ -22,10 +22,10 @@ import (
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
 )
 
-func blockStat(dev uint32, op ebpf.BlockOpCode, errno int32) *ebpf.Stat {
+func blockStat(op ebpf.BlockOpCode, errno int32) *ebpf.Stat {
 	return &ebpf.Stat{
 		Type:    ebpf.StatTypeBlockIo,
-		BlockIo: &ebpf.BlockIo{Dev: dev, Op: uint8(op), Error: errno, Bytes: 4096, LatencyNs: 100_000},
+		BlockIo: &ebpf.BlockIo{Dev: 252 << 20, Op: uint8(op), Error: errno, Bytes: 4096, LatencyNs: 100_000},
 	}
 }
 
@@ -99,11 +99,11 @@ func TestAggregatedStatDecorator_FiltersLikeThePipeline(t *testing.T) {
 			require.NoError(t, err)
 
 			events := []*ebpf.Stat{
-				blockStat(252<<20, ebpf.CodeBlockRead, 0),
-				blockStat(252<<20, ebpf.CodeBlockWrite, 0),
-				blockStat(252<<20, ebpf.CodeBlockWrite, -5),
-				blockStat(252<<20, ebpf.CodeBlockFlush, 0),
-				blockStat(252<<20, ebpf.CodeBlockDiscard, -95),
+				blockStat(ebpf.CodeBlockRead, 0),
+				blockStat(ebpf.CodeBlockWrite, 0),
+				blockStat(ebpf.CodeBlockWrite, -5),
+				blockStat(ebpf.CodeBlockFlush, 0),
+				blockStat(ebpf.CodeBlockDiscard, -95),
 				fsStat(ebpf.CodeFsOpRead, 0),
 				fsStat(ebpf.CodeFsOpFsync, -5),
 			}
@@ -154,4 +154,3 @@ func TestAggregatedStatDecorator_RejectsAnUnknownFilterAttribute(t *testing.T) {
 	_, err := s.newAggregatedStatDecorator(t.Context())
 	require.Error(t, err)
 }
-

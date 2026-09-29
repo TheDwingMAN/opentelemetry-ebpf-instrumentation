@@ -16,15 +16,15 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 )
 
-func (tf *testFamily) promCollector(t testing.TB, bounds []float64, ttl time.Duration) *Collector {
-	t.Helper()
+func (tf *testFamily) promCollector(tb testing.TB, bounds []float64, ttl time.Duration) *Collector {
+	tb.Helper()
 	c := NewCollector(tf.reg, ttl)
 	_, proj := devOpLabels(false)
 	_, projErr := devOpLabels(true)
 	labels := []string{"dev", "op"}
-	require.NoError(t, c.Add(testDuration, PromMetric{Help: "duration", Bounds: bounds, LabelNames: labels, Project: proj}))
-	require.NoError(t, c.Add(testIO, PromMetric{Help: "io", LabelNames: labels, Project: proj}))
-	require.NoError(t, c.Add(testErrors, PromMetric{Help: "errors", LabelNames: []string{"dev", "op", "err"}, Project: projErr}))
+	require.NoError(tb, c.Add(testDuration, PromMetric{Help: "duration", Bounds: bounds, LabelNames: labels, Project: proj}))
+	require.NoError(tb, c.Add(testIO, PromMetric{Help: "io", LabelNames: labels, Project: proj}))
+	require.NoError(tb, c.Add(testErrors, PromMetric{Help: "errors", LabelNames: []string{"dev", "op", "err"}, Project: projErr}))
 	return c
 }
 
@@ -112,16 +112,16 @@ func TestCollector_ExpiresSeries(t *testing.T) {
 }
 
 // promText is the text exposition of what the collectors export.
-func promText(t testing.TB, cs ...prometheus.Collector) string {
-	t.Helper()
+func promText(tb testing.TB, cs ...prometheus.Collector) string {
+	tb.Helper()
 	reg := prometheus.NewPedanticRegistry()
 	reg.MustRegister(cs...)
 	mfs, err := reg.Gather()
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	var sb strings.Builder
 	for _, mf := range mfs {
 		_, err := expfmt.MetricFamilyToText(&sb, mf)
-		require.NoError(t, err)
+		require.NoError(tb, err)
 	}
 	return sb.String()
 }
