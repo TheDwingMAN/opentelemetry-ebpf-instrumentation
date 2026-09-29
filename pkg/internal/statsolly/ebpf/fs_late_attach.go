@@ -135,6 +135,7 @@ func (a *fsAttacher) run() {
 // refresh detaches the local filesystems no kubelet volume uses any more,
 // and attaches every filesystem worth probing that is not attached yet.
 func (a *fsAttacher) refresh() {
+	startup := !a.started
 	if withPV, err := a.localPVs(); err != nil {
 		a.log.Debug("scanning kubelet volume mounts failed", "error", err)
 	} else {
@@ -163,11 +164,13 @@ func (a *fsAttacher) refresh() {
 		return
 	}
 	for _, plan := range a.plan(pending) {
-		a.attach(plan)
+		a.attach(plan, startup)
 	}
 }
 
-func (a *fsAttacher) attach(plan fsAttachPlan) {
+// attach loads and attaches plan. startup is set for the first refresh,
+// whose attaches are logged apart from the later ones.
+func (a *fsAttacher) attach(plan fsAttachPlan, startup bool) {
 	closer, err := a.loadAndAttach(plan)
 	if err != nil {
 		a.failures[plan.Fs]++
@@ -181,8 +184,19 @@ func (a *fsAttacher) attach(plan fsAttachPlan) {
 		return
 	}
 	a.attached[plan.Fs] = closer
-	a.log.Info("filesystem probes attached", "fs", fsTypeStr(plan.Fs), "fentry", plan.UseFentry && !a.noFentry[plan.Fs])
+	fentry := plan.UseFentry && !a.noFentry[plan.Fs]
+	if startup {
+		a.log.Info("filesystem probes attached", "fs", fsTypeStr(plan.Fs), "fentry", fentry)
+		return
+	}
+	// Operators and the late-mount checks grep for this message: keep it.
+	a.log.Info(lateAttachMessage, "fs", fsTypeStr(plan.Fs), "fentry", fentry)
 }
+
+// lateAttachMessage is logged for every filesystem attached after the
+// startup pass: a network filesystem whose module loaded later, or a local
+// filesystem whose first kubelet volume was mounted later.
+const lateAttachMessage = "filesystem became probeable after startup; probes attached"
 
 // loadAndAttach attaches plan, moving the filesystem to kprobes when its
 // fentry/fexit probes fail: those need the function's BTF and trampoline
