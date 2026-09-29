@@ -39,30 +39,9 @@ groups:
               stability: development
         stability: development
         brief: Classification of why a TCP connection failed.
-      # Mirrors `FsTypeName` and `FsOpType` in
-      # `pkg/internal/statsolly/ebpf/stat.go`. The filesystem is identified by
-      # which implementation the probe fired on, not by inspecting the event.
-      - id: fs.type
-        type:
-          allow_custom_values: false
-          members:
-            - id: nfs
-              value: nfs
-              stability: development
-            - id: ceph
-              value: ceph
-              stability: development
-            - id: cifs
-              value: cifs
-              stability: development
-            - id: fuse
-              value: fuse
-              stability: development
-            - id: unknown
-              value: unknown
-              stability: development
-        stability: development
-        brief: Network filesystem the operation was issued against.
+      # Mirrors `FsOpType` in `pkg/internal/statsolly/ebpf/stat.go`.
+      # The filesystem type is identified by which implementation the probe
+      # fired on, not by inspecting the event.
       - id: fs.operation
         type:
           allow_custom_values: false
@@ -248,7 +227,7 @@ groups:
       Latency of a single network filesystem read or write as the application
       experiences it, broken down by filesystem type and operation.
     attributes:
-      - ref: fs.type
+      - ref: system.filesystem.type
       - ref: fs.operation
 
   # Companion to the histogram above: volume of data moved by the same
@@ -264,5 +243,5 @@ groups:
       Count of bytes transferred through network filesystem read and write
       operations, broken down by filesystem type and operation.
     attributes:
-      - ref: fs.type
+      - ref: system.filesystem.type
       - ref: fs.operation

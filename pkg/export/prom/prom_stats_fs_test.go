@@ -52,8 +52,8 @@ func TestStatsReporterRecordsFsMetrics(t *testing.T) {
 	reporter.observeFsIOBytes(fsIoStat())
 
 	fsLabels := map[string]string{
-		"fs_type":      "nfs",
-		"fs_operation": "write",
+		"system_filesystem_type": "nfs",
+		"fs_operation":           "write",
 	}
 
 	latency := gatheredMetric(t, registry, "obi_stat_fs_operation_duration_seconds", fsLabels)
