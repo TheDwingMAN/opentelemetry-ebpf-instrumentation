@@ -234,26 +234,11 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 	storageBlock := features.StorageBlock()
-	// Both block families are compiled in; only one is loaded. Raw tracepoints
-	// need no tracefs mount but must be able to decode struct request through
-	// BTF, so the choice is made here, before load, like the fentry/kprobe
-	// choice for filesystems.
-	useRawBlock := storageBlock && blockRawTracepointCapable()
-	switch {
-	case !storageBlock:
-		toDisable = append(toDisable, allBlockProgramNames()...)
-	case useRawBlock:
-		toDisable = append(toDisable, blockTracepointPrograms()...)
-	default:
-		toDisable = append(toDisable, blockRawTracepointPrograms()...)
-	}
-
-	var fsPlans []fsAttachPlan
-	if features.StorageFS() {
-		fsPlans = planFsAttach()
-	}
-	fsToDisable, fsAttachTo := planFsToDisable(fsPlans)
-	toDisable = append(toDisable, fsToDisable...)
+	storage := planStorage(storageBlock, features.StorageFS())
+	useRawBlock := storage.useRawBlock
+	fsPlans := storage.fsPlans
+	fsAttachTo := storage.fsAttachTo
+	toDisable = append(toDisable, storage.toDisable...)
 
 	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
@@ -455,6 +440,56 @@ func (m *StatsFetcher) StatsEventsMap() *ebpf.Map {
 
 func (m *StatsFetcher) DebugEventsMap() *ebpf.Map {
 	return m.objects.DebugEvents
+}
+
+// storagePlan is what the storage programs need done to the spec before
+// load on this kernel: the programs to stub out, the kernel symbols the
+// surviving fentry/fexit programs attach to, and which block tracepoint
+// family was kept.
+type storagePlan struct {
+	toDisable   []string
+	fsAttachTo  map[string]string
+	fsPlans     []fsAttachPlan
+	useRawBlock bool
+}
+
+func planStorage(block, fs bool) storagePlan {
+	var plan storagePlan
+
+	// Both block families are compiled in; only one is loaded. Raw tracepoints
+	// need no tracefs mount but must be able to decode struct request through
+	// BTF, so the choice is made here, before load, like the fentry/kprobe
+	// choice for filesystems.
+	plan.useRawBlock = block && blockRawTracepointCapable()
+	switch {
+	case !block:
+		plan.toDisable = append(plan.toDisable, allBlockProgramNames()...)
+	case plan.useRawBlock:
+		plan.toDisable = append(plan.toDisable, blockTracepointPrograms()...)
+	default:
+		plan.toDisable = append(plan.toDisable, blockRawTracepointPrograms()...)
+	}
+
+	if fs {
+		plan.fsPlans = planFsAttach()
+	}
+	fsToDisable, fsAttachTo := planFsToDisable(plan.fsPlans)
+	plan.toDisable = append(plan.toDisable, fsToDisable...)
+	plan.fsAttachTo = fsAttachTo
+	return plan
+}
+
+// PrepareStorageSpec applies to spec what NewStatsFetcher applies before
+// loading with every storage metric enabled: one block tracepoint family,
+// each probeable filesystem's programs pointed at its kernel symbols or left
+// as kprobes, and every other storage program stubbed out. The loaded
+// collection is then exactly what a real load on this kernel would verify.
+func PrepareStorageSpec(spec *ebpf.CollectionSpec) error {
+	plan := planStorage(true, true)
+	if err := fixupSpec(spec, plan.toDisable); err != nil {
+		return err
+	}
+	return setFsAttachTargets(spec, plan.fsAttachTo)
 }
 
 // loadStatsObjects loads the stats eBPF spec into objects. sharedMaps and mu
