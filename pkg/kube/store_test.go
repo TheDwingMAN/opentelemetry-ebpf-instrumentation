@@ -1465,6 +1465,39 @@ func TestStore_MultiPID_ConcurrentAccess(t *testing.T) {
 	})
 }
 
+func TestPodByUID(t *testing.T) {
+	store := createTestStore()
+
+	pod := informer.ObjectMeta{
+		Name:      "test-pod",
+		Namespace: "test-ns",
+		Kind:      "Pod",
+		Pod: &informer.PodInfo{
+			Uid: "pod-uid-12345",
+			Containers: []*informer.ContainerInfo{
+				{Id: "container-1"},
+			},
+		},
+	}
+
+	err := store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: &pod})
+	require.NoError(t, err)
+
+	result := store.PodByUID("pod-uid-12345")
+	require.NotNil(t, result)
+	assert.Equal(t, "test-pod", result.Meta.Name)
+	assert.Equal(t, "test-ns", result.Meta.Namespace)
+
+	notFoundResult := store.PodByUID("nonexistent")
+	assert.Nil(t, notFoundResult)
+
+	err = store.On(&informer.Event{Type: informer.EventType_DELETED, Resource: &pod})
+	require.NoError(t, err)
+
+	deletedResult := store.PodByUID("pod-uid-12345")
+	assert.Nil(t, deletedResult)
+}
+
 // Helper function to create a test store
 func createTestStore() *Store {
 	n := meta.NewBaseNotifier(slog.Default())

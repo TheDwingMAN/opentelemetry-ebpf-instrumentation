@@ -266,13 +266,15 @@ func TestFeatureJSONSchemaFlagsDeprecatedNames(t *testing.T) {
 	assert.Contains(t, items.OneOf[0].Enum, "*")
 	assert.NotContains(t, items.OneOf[0].Enum, "application_span")
 	assert.NotContains(t, items.OneOf[0].Enum, "application_span_sizes")
+	assert.NotContains(t, items.OneOf[0].Enum, "storage_block_queue_depth")
 
 	assert.True(t, items.OneOf[1].Deprecated)
-	assert.Equal(t, []any{"application_span", "application_span_sizes"}, items.OneOf[1].Enum)
+	assert.Equal(t, []any{"application_span", "application_span_sizes", "storage_block_queue_depth"}, items.OneOf[1].Enum)
 
 	// the schema names the migration target instead of pointing elsewhere for it
 	assert.Contains(t, items.OneOf[1].Description, "application_span (use application_span_otel)")
 	assert.Contains(t, items.OneOf[1].Description, "application_span_sizes (no direct replacement)")
+	assert.Contains(t, items.OneOf[1].Description, "storage_block_queue_depth (no direct replacement)")
 }
 
 func TestDeprecatedEnabled(t *testing.T) {
@@ -285,6 +287,150 @@ func TestDeprecatedEnabled(t *testing.T) {
 		mustLoadFeatures(t, "application_span_sizes").DeprecatedEnabled())
 
 	assert.Empty(t, mustLoadFeatures(t, "application", "application_span_otel").DeprecatedEnabled())
+}
+
+func TestStorageBlockFeatureParsing(t *testing.T) {
+	var f Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block"]`), &f))
+	assert.True(t, f.StorageBlock())
+	assert.True(t, f.StorageBlockDuration())
+	assert.True(t, f.StorageBlockIo())
+	assert.True(t, f.StorageBlockQueue())
+	assert.True(t, f.StorageBlockErrors())
+	assert.True(t, f.StatMetrics()) // storage rides the stats pipeline
+
+	var q Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block_queue"]`), &q))
+	assert.True(t, q.StorageBlock())
+	assert.True(t, q.StorageBlockQueue())
+	assert.False(t, q.StorageBlockErrors())
+
+	var e Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block_errors"]`), &e))
+	assert.True(t, e.StorageBlock())
+	assert.True(t, e.StorageBlockErrors())
+	assert.False(t, e.StorageBlockQueue())
+}
+
+// Flushes and discards have metrics of their own, in the storage_block umbrella
+// and the wildcard. Asked for alone, they need the block probes but none of the
+// read and write metrics.
+func TestStorageBlockFlushDiscardFeatureParsing(t *testing.T) {
+	umbrella := mustLoadFeatures(t, "storage_block")
+	assert.True(t, umbrella.StorageBlockFlush())
+	assert.True(t, umbrella.StorageBlockDiscard())
+	assert.True(t, umbrella.StorageBlockReadWrite())
+
+	for _, wildcard := range []string{"*", "all"} {
+		f := mustLoadFeatures(t, wildcard)
+		assert.True(t, f.StorageBlockFlush(), wildcard)
+		assert.True(t, f.StorageBlockDiscard(), wildcard)
+	}
+
+	flush := mustLoadFeatures(t, "storage_block_flush")
+	assert.True(t, flush.StorageBlockFlush())
+	assert.False(t, flush.StorageBlockDiscard())
+	assert.True(t, flush.StorageBlock(), "flushes need the block probes")
+	assert.True(t, flush.StatMetrics(), "flushes ride the stats pipeline")
+	assert.False(t, flush.StorageBlockReadWrite())
+
+	discard := mustLoadFeatures(t, "storage_block_discard")
+	assert.True(t, discard.StorageBlockDiscard())
+	assert.False(t, discard.StorageBlockFlush())
+	assert.True(t, discard.StorageBlock(), "discards need the block probes")
+	assert.False(t, discard.StorageBlockReadWrite())
+
+	for _, name := range []string{"storage_block_duration", "storage_block_io", "storage_block_queue", "storage_block_errors", "storage_block_queue_depth"} {
+		f := mustLoadFeatures(t, name)
+		assert.True(t, f.StorageBlockReadWrite(), name)
+		assert.False(t, f.StorageBlockFlush(), name)
+		assert.False(t, f.StorageBlockDiscard(), name)
+	}
+}
+
+// The deprecated queue depth is outside the storage_block umbrella: it costs a
+// counter shared by every CPU on the block path, so it is only paid for when
+// asked for by name. Asked for alone, it still needs the block probes.
+func TestStorageBlockQueueDepthFeatureParsing(t *testing.T) {
+	var umbrella Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block"]`), &umbrella))
+	assert.False(t, umbrella.StorageBlockQueueDepth())
+
+	var queue Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block_queue"]`), &queue))
+	assert.False(t, queue.StorageBlockQueueDepth())
+
+	var depth Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block_queue_depth"]`), &depth))
+	assert.True(t, depth.StorageBlockQueueDepth())
+	assert.True(t, depth.StorageBlock(), "the queue depth needs the block probes")
+	assert.True(t, depth.StatMetrics(), "the queue depth rides the stats pipeline")
+	assert.False(t, depth.StorageBlockQueue())
+	assert.False(t, depth.StorageBlockDuration())
+	assert.Equal(t, []DeprecatedFeature{{Name: "storage_block_queue_depth"}}, depth.DeprecatedEnabled())
+}
+
+// "*" and "all" leave the deprecated queue depth out, so its shared counter and
+// its deprecation notice only come when the flag is listed by name.
+func TestStorageBlockQueueDepthNotInWildcard(t *testing.T) {
+	deprecatedNames := func(f Features) []string {
+		names := []string{}
+		for _, d := range f.DeprecatedEnabled() {
+			names = append(names, d.Name)
+		}
+		return names
+	}
+
+	for _, wildcard := range []string{`["*"]`, `["all"]`} {
+		t.Run(wildcard, func(t *testing.T) {
+			var f Features
+			require.NoError(t, yaml.Unmarshal([]byte(wildcard), &f))
+			assert.False(t, f.StorageBlockQueueDepth())
+			assert.True(t, f.StorageBlock())
+			assert.True(t, f.StorageBlockQueue())
+			assert.NotContains(t, deprecatedNames(f), "storage_block_queue_depth")
+			assert.False(t, f.InvalidSpanMetricsConfig())
+		})
+	}
+
+	var text Features
+	require.NoError(t, text.UnmarshalText([]byte("*")))
+	assert.False(t, text.StorageBlockQueueDepth())
+
+	var named Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["*", "storage_block_queue_depth"]`), &named))
+	assert.True(t, named.StorageBlockQueueDepth())
+	assert.Contains(t, deprecatedNames(named), "storage_block_queue_depth")
+	assert.False(t, named.InvalidSpanMetricsConfig(), "still the wildcard, so the span formats resolve")
+
+	out, err := yaml.Marshal(struct {
+		Features Features `yaml:"features"`
+	}{named})
+	require.NoError(t, err)
+	assert.Equal(t, "features:\n    - all\n    - storage_block_queue_depth\n", string(out))
+}
+
+func TestStorageFSFeatureParsing(t *testing.T) {
+	var f Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_fs"]`), &f))
+	assert.True(t, f.StorageFS())
+	assert.True(t, f.StorageFSDuration())
+	assert.True(t, f.StorageFSIo())
+	assert.True(t, f.StorageFSErrors())
+	assert.True(t, f.StatMetrics(), "storage_fs rides the stats pipeline")
+
+	var d Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_fs_duration"]`), &d))
+	assert.True(t, d.StorageFS())
+	assert.False(t, d.StorageFSIo())
+	assert.False(t, d.StorageFSErrors())
+
+	var e Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_fs_errors"]`), &e))
+	assert.True(t, e.StorageFS())
+	assert.True(t, e.StorageFSErrors())
+	assert.False(t, e.StorageFSDuration())
+	assert.False(t, e.StorageFSIo())
 }
 
 func TestFeatureUndefined(t *testing.T) {

@@ -165,10 +165,11 @@ Attributes used by OBI's span-metrics emission. The metric names match the outpu
 
 ## `registry.obi.stats`
 
-Attributes carried on OBI's per-connection TCP statistics. Emitted when the `stats_tcp_rtt`, `stats_tcp_failed_connections` or `stats_tcp_successful_connections` features are enabled (all rolled into the umbrella `stats` feature). Like network-flow metrics, the per-data-point attribute set is configurable via `attributes.select`.
+Attributes carried on OBI's per-connection TCP statistics and filesystem I/O stats. Emitted when the `stats_tcp_rtt`, `stats_tcp_failed_connections`, `stats_tcp_successful_connections` or `storage_fs*` features are enabled (the TCP ones are rolled into the umbrella `stats` feature; `storage_fs*` is opt-in and not part of it). Like network-flow metrics, the per-data-point attribute set is configurable via `attributes.select`.
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
+| `fs.operation` | enum | development | Filesystem operation performed. | read; write; fsync; fdatasync |
 | `network.tcp.handshake.role` | enum | development | Role of the local endpoint in the TCP three-way handshake (`client` initiated the SYN, `server` was awaiting it). | client; server; unknown |
 | `reason` | enum | development | Classification of why a TCP connection failed. | refused; reset; timed-out; host-unreachable; net-unreachable; other; unknown |
 

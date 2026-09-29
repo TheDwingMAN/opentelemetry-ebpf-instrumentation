@@ -56,8 +56,42 @@ const (
 	FeatureGraph
 	FeatureApplicationRuntime
 	FeatureEBPF
-	FeatureAll = Features(^uint(0)) // all bits to 1
+	FeatureStorageBlockDuration
+	FeatureStorageBlockIo
+	FeatureStorageBlockQueue
+	FeatureStorageBlockErrors
+	FeatureStorageFSDuration
+	FeatureStorageFSIo
+	FeatureStorageFSErrors
+	// FeatureStorageBlockQueueDepth emits the per-completion in-flight histogram
+	// obi.stat.disk.queue.depth. It is in no umbrella: it is the only block metric
+	// that needs a counter shared by every CPU on the block path.
+	//
+	// Deprecated: the metric will be removed.
+	FeatureStorageBlockQueueDepth
+	FeatureStorageBlockFlush
+	FeatureStorageBlockDiscard
+	// FeatureAll is what "all" and "*" select: every feature except the deprecated
+	// FeatureStorageBlockQueueDepth, which is in no umbrella and is only enabled
+	// when listed by name.
+	FeatureAll = Features(^uint(0)) &^ FeatureStorageBlockQueueDepth
 )
+
+// FeatureStorageBlock enables all block-layer storage metrics.
+// Note: the block tracepoints (block_rq_insert, block_rq_issue,
+// block_rq_complete) attach together whenever any storage_block* bit is set,
+// and every request pays for them. Disabling duration/io/queue/errors only
+// reduces series cardinality: their read and write events are delivered as
+// long as one of them is on. Flushes and discards are the exception: without
+// storage_block_flush or storage_block_discard their completions end in the
+// kernel, without a ring buffer event.
+const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo | FeatureStorageBlockQueue | FeatureStorageBlockErrors |
+	FeatureStorageBlockFlush | FeatureStorageBlockDiscard
+
+// FeatureStorageFS enables all filesystem metrics. All three derive from the
+// same probe pair, so disabling one does not reduce kernel-side overhead —
+// splitting them controls series cardinality only.
+const FeatureStorageFS = FeatureStorageFSDuration | FeatureStorageFSIo | FeatureStorageFSErrors
 
 // FeatureStats enables all stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -74,6 +108,18 @@ var FeatureMapper = map[string]Features{
 	"stats_tcp_retransmits":            FeatureStatsTCPRetransmits,
 	"stats_tcp_io":                     FeatureStatsTCPIo,
 	"stats_tcp_successful_connections": FeatureStatsTCPSuccessfulConnections,
+	"storage_block":                    FeatureStorageBlock,
+	"storage_block_duration":           FeatureStorageBlockDuration,
+	"storage_block_io":                 FeatureStorageBlockIo,
+	"storage_block_queue":              FeatureStorageBlockQueue,
+	"storage_block_errors":             FeatureStorageBlockErrors,
+	"storage_block_flush":              FeatureStorageBlockFlush,
+	"storage_block_discard":            FeatureStorageBlockDiscard,
+	"storage_block_queue_depth":        FeatureStorageBlockQueueDepth,
+	"storage_fs":                       FeatureStorageFS,
+	"storage_fs_duration":              FeatureStorageFSDuration,
+	"storage_fs_io":                    FeatureStorageFSIo,
+	"storage_fs_errors":                FeatureStorageFSErrors,
 	"network":                          FeatureNetwork,
 	"network_inter_zone":               FeatureNetworkInterZone,
 	"network_flow_packets":             FeatureNetworkFlowPackets,
@@ -95,8 +141,9 @@ var FeatureMapper = map[string]Features{
 // The names keep working; they are reported at startup and flagged as deprecated in the
 // generated JSON schema and configuration reference.
 var deprecatedFeatures = map[string]string{
-	"application_span":       "application_span_otel",
-	"application_span_sizes": "",
+	"application_span":          "application_span_otel",
+	"application_span_sizes":    "",
+	"storage_block_queue_depth": "",
 }
 
 // DeprecatedFeature is a deprecated feature name together with the feature that
@@ -375,7 +422,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats)
+	return f.any(FeatureStats | FeatureStorageBlock | FeatureStorageBlockQueueDepth | FeatureStorageFS)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -396,6 +443,66 @@ func (f Features) StatsTCPRetransmits() bool {
 
 func (f Features) StatsTCPIo() bool {
 	return f.any(FeatureStatsTCPIo)
+}
+
+// StorageBlock reports whether any block-layer storage metric is enabled. It
+// gates the shared setup (eBPF probes, ring buffer) that every block metric
+// needs, including the deprecated queue depth outside the umbrella.
+func (f Features) StorageBlock() bool {
+	return f.any(FeatureStorageBlock | FeatureStorageBlockQueueDepth)
+}
+
+func (f Features) StorageBlockDuration() bool {
+	return f.any(FeatureStorageBlockDuration)
+}
+
+func (f Features) StorageBlockIo() bool {
+	return f.any(FeatureStorageBlockIo)
+}
+
+func (f Features) StorageBlockQueue() bool {
+	return f.any(FeatureStorageBlockQueue)
+}
+
+func (f Features) StorageBlockErrors() bool {
+	return f.any(FeatureStorageBlockErrors)
+}
+
+func (f Features) StorageBlockQueueDepth() bool {
+	return f.any(FeatureStorageBlockQueueDepth)
+}
+
+// StorageBlockReadWrite reports whether any metric of block reads and writes is
+// enabled, the ones that carry a disk.io.direction.
+func (f Features) StorageBlockReadWrite() bool {
+	return f.any(FeatureStorageBlockDuration | FeatureStorageBlockIo | FeatureStorageBlockQueue |
+		FeatureStorageBlockErrors | FeatureStorageBlockQueueDepth)
+}
+
+func (f Features) StorageBlockFlush() bool {
+	return f.any(FeatureStorageBlockFlush)
+}
+
+func (f Features) StorageBlockDiscard() bool {
+	return f.any(FeatureStorageBlockDiscard)
+}
+
+// StorageFS reports whether any filesystem metric is enabled. It gates
+// the shared setup (eBPF probes, ring buffer) that both metrics need.
+func (f Features) StorageFS() bool {
+	return f.any(FeatureStorageFS)
+}
+
+func (f Features) StorageFSDuration() bool {
+	return f.any(FeatureStorageFSDuration)
+}
+
+func (f Features) StorageFSIo() bool {
+	return f.any(FeatureStorageFSIo)
+}
+
+func (f Features) StorageFSErrors() bool {
+	return f.any(FeatureStorageFSErrors)
 }
 
 func (f Features) NetworkInterZone() bool {

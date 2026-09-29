@@ -4,6 +4,7 @@
 //go:build obi_bpf_ignore
 #include "k_tcp.c"
 #include "tp_tcp.c"
+#include "blk_io.c"
 
 // Force emitting these enums into the ELF so bpf2go generates their Go constants
 const enum stat_type *unused_1 __attribute__((unused));

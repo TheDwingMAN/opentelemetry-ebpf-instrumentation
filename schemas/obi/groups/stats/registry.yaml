@@ -1,17 +1,18 @@
 groups:
   # `obi.ip` / `src.*` / `dst.*` are reused from `registry.obi.network` so we
   # don't duplicate the declarations here. Only the stats-specific `reason`
-  # is introduced.
+  # and `fs.operation` are introduced.
   - id: registry.obi.stats
     type: attribute_group
     display_name: OBI Connection Stats
     brief: >
-      Attributes carried on OBI's per-connection TCP statistics. Emitted
-      when the `stats_tcp_rtt`, `stats_tcp_failed_connections` or
-      `stats_tcp_successful_connections` features are enabled (all rolled
-      into the umbrella `stats` feature). Like
-      network-flow metrics, the per-data-point attribute set is configurable
-      via `attributes.select`.
+      Attributes carried on OBI's per-connection TCP statistics and
+      filesystem I/O stats. Emitted when the `stats_tcp_rtt`,
+      `stats_tcp_failed_connections`, `stats_tcp_successful_connections` or
+      `storage_fs*` features are enabled (the TCP ones are rolled into the
+      umbrella `stats` feature; `storage_fs*` is opt-in and not part of it).
+      Like network-flow metrics, the per-data-point attribute set is
+      configurable via `attributes.select`.
     attributes:
       - id: reason
         type:
@@ -60,3 +61,24 @@ groups:
         brief: >
           Role of the local endpoint in the TCP three-way handshake
           (`client` initiated the SYN, `server` was awaiting it).
+      # Mirrors `FsOpType` in `pkg/internal/statsolly/ebpf/stat.go`.
+      # The filesystem type is identified by which implementation the probe
+      # fired on, not by inspecting the event.
+      - id: fs.operation
+        type:
+          allow_custom_values: false
+          members:
+            - id: read
+              value: read
+              stability: development
+            - id: write
+              value: write
+              stability: development
+            - id: fsync
+              value: fsync
+              stability: development
+            - id: fdatasync
+              value: fdatasync
+              stability: development
+        stability: development
+        brief: Filesystem operation performed.

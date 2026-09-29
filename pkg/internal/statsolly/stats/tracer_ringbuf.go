@@ -72,6 +72,10 @@ func handleStatEvent(record *ringbuf.Record) (ebpf.Stat, error) {
 		return readTCPRetransmitIntoStat(record)
 	case ebpf.StatTypeTCPIo:
 		return readTCPIoIntoStat(record)
+	case ebpf.StatTypeBlockIo:
+		return readBlockIoIntoStat(record)
+	case ebpf.StatTypeFsIo:
+		return readFsIoIntoStat(record)
 	default:
 		return ebpf.Stat{}, fmt.Errorf("unknown stats event [type %d]", uint8(eventType))
 	}
@@ -161,5 +165,45 @@ func readTCPIoIntoStat(record *ringbuf.Record) (ebpf.Stat, error) {
 			Bytes:     total,
 		},
 		CommonAttrs: connToCommonAttrs(event.Conn),
+	}, nil
+}
+
+func readBlockIoIntoStat(record *ringbuf.Record) (ebpf.Stat, error) {
+	event, err := ebpfcommon.ReinterpretCast[ebpf.StatsBlockIo](record.RawSample)
+	if err != nil {
+		return ebpf.Stat{}, err
+	}
+	return ebpf.Stat{
+		Type: ebpf.StatTypeBlockIo,
+		BlockIo: &ebpf.BlockIo{
+			Dev:       event.Dev,
+			Op:        event.Op,
+			LatencyNs: event.LatencyNs,
+			QueueNs:   event.QueueNs,
+			Bytes:     event.Bytes,
+			Error:     event.Error,
+			Inflight:  event.Inflight,
+		},
+	}, nil
+}
+
+func readFsIoIntoStat(record *ringbuf.Record) (ebpf.Stat, error) {
+	event, err := ebpfcommon.ReinterpretCast[ebpf.StatsFsIo](record.RawSample)
+	if err != nil {
+		return ebpf.Stat{}, err
+	}
+	return ebpf.Stat{
+		Type: ebpf.StatTypeFsIo,
+		FsIo: &ebpf.FsIo{
+			Fs:        event.Fs,
+			Op:        event.Op,
+			SDev:      event.SDev,
+			HostPID:   event.HostPID,
+			PidNs:     event.PidNs,
+			LatencyNs: event.LatencyNs,
+			Bytes:     event.Bytes,
+			Error:     event.Error,
+			RootIno:   event.RootIno,
+		},
 	}, nil
 }

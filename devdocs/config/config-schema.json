@@ -259,6 +259,71 @@
             8192
           ]
         },
+        "stat_disk_operation_duration_histogram": {
+          "items": {
+            "type": "number"
+          },
+          "type": "array",
+          "default": [
+            0.0001,
+            0.00025,
+            0.0005,
+            0.001,
+            0.0025,
+            0.005,
+            0.01,
+            0.025,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1,
+            2.5,
+            5
+          ]
+        },
+        "stat_disk_queue_depth_histogram": {
+          "items": {
+            "type": "number"
+          },
+          "type": "array",
+          "default": [
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+            64,
+            128,
+            256,
+            512,
+            1024
+          ]
+        },
+        "stat_fs_operation_duration_histogram": {
+          "items": {
+            "type": "number"
+          },
+          "type": "array",
+          "default": [
+            0.0001,
+            0.00025,
+            0.0005,
+            0.001,
+            0.0025,
+            0.005,
+            0.01,
+            0.025,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1,
+            2.5,
+            5
+          ]
+        },
         "stat_tcp_rtt_histogram": {
           "items": {
             "type": "number"
@@ -1055,16 +1120,28 @@
               "stats_tcp_io",
               "stats_tcp_retransmits",
               "stats_tcp_rtt",
-              "stats_tcp_successful_connections"
+              "stats_tcp_successful_connections",
+              "storage_block",
+              "storage_block_discard",
+              "storage_block_duration",
+              "storage_block_errors",
+              "storage_block_flush",
+              "storage_block_io",
+              "storage_block_queue",
+              "storage_fs",
+              "storage_fs_duration",
+              "storage_fs_errors",
+              "storage_fs_io"
             ]
           },
           {
             "type": "string",
             "enum": [
               "application_span",
-              "application_span_sizes"
+              "application_span_sizes",
+              "storage_block_queue_depth"
             ],
-            "description": "Deprecated feature names, kept for backwards compatibility: application_span (use application_span_otel), application_span_sizes (no direct replacement).",
+            "description": "Deprecated feature names, kept for backwards compatibility: application_span (use application_span_otel), application_span_sizes (no direct replacement), storage_block_queue_depth (no direct replacement).",
             "deprecated": true
           }
         ]

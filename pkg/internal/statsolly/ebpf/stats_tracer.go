@@ -10,12 +10,17 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 
@@ -43,6 +48,12 @@ const (
 	progObiStatsKprobeTCPSendmsg                          = "obi_stats_kprobe_tcp_sendmsg"
 	progObiStatsKretprobeTCPSendmsg                       = "obi_stats_kretprobe_tcp_sendmsg"
 	progObiStatsKprobeTCPCleanupRbuf                      = "obi_stats_kprobe_tcp_cleanup_rbuf"
+	progObiStatsTpBlockRqInsert                           = "obi_stats_tp_block_rq_insert"
+	progObiStatsTpBlockRqIssue                            = "obi_stats_tp_block_rq_issue"
+	progObiStatsTpBlockRqComplete                         = "obi_stats_tp_block_rq_complete"
+	progObiStatsRawTpBlockRqInsert                        = "obi_stats_raw_tp_block_rq_insert"
+	progObiStatsRawTpBlockRqIssue                         = "obi_stats_raw_tp_block_rq_issue"
+	progObiStatsRawTpBlockRqComplete                      = "obi_stats_raw_tp_block_rq_complete"
 )
 
 // Hook point names, grouped by attach type.
@@ -54,13 +65,22 @@ const (
 
 	// Tracepoints: group/name, are validated by TestTracepointConstantFormat
 	TracepointInetSockSetState = "sock/inet_sock_set_state"
+	TracepointBlockRqInsert    = "block/block_rq_insert"
+	TracepointBlockRqIssue     = "block/block_rq_issue"
+	TracepointBlockRqComplete  = "block/block_rq_complete"
+	// The same three events as raw tracepoints, attached by name without
+	// tracefs. Preferred whenever the kernel BTF lets the programs decode a
+	// request; the classic tracepoints remain for kernels where it does not.
+	RawTracepointBlockRqInsert   = "block_rq_insert"
+	RawTracepointBlockRqIssue    = "block_rq_issue"
+	RawTracepointBlockRqComplete = "block_rq_complete"
 
 	// Raw tracepoints: name only (no group prefix).
 	RawTracepointTCPRetransmitSkb = "tcp_retransmit_skb"
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -type blk_io_op -type block_io_t -type fs_io_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -80,10 +100,6 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	}
 
 	objects := StatsObjects{}
-	spec, err := LoadStats()
-	if err != nil {
-		return nil, fmt.Errorf("loading BPF data: %w", err)
-	}
 
 	// UndefinedGroup is intentional: we only need to check NetworkTCPHandshakeRole,
 	// which is a direct metric attribute.
@@ -118,20 +134,31 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	if !features.StatsTCPIo() {
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
+	start := time.Now()
+	// The startup loads are one BTF burst; startFsAttacher's first pass ends
+	// it when filesystems are probed, this when they are not or on an error.
+	btfParse, _ := kernelBTFCache.Parse()
+	defer kernelBTFCache.Release()
 
-	if err := fixupSpec(spec, toDisable); err != nil {
-		return nil, fmt.Errorf("fixing up BPF spec: %w", err)
-	}
-
-	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
+	storageBlock := features.StorageBlock()
+	storage := planStorage(storageBlock)
+	useRawBlock := storage.useRawBlock
+	toDisable = append(toDisable, storage.toDisable...)
+	blockLoad := planBlockLoad(storageBlock, useRawBlock, features.StorageBlockQueueDepth(), func() uint32 {
+		return blockInflightEntries(sysBlockDevicesDir)
+	})
+	blockLoad.emitKinds = blockEmitKinds(*features)
+	consts := statsConstants(cfg, blockLoad)
 
 	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
-	if err := ebpfconvenience.LoadSpec(spec, &objects, map[string]any{
-		"g_bpf_debug":             cfg.BpfDebug,
-		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
-	}, sharedMaps, &mu, "", nil); err != nil {
-		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
+	load := func(toDisable []string) error {
+		objects = StatsObjects{}
+		return loadStatsObjects(cfg, blockLoad, consts, toDisable, &objects, sharedMaps, &mu, kernelBTFCache.Cache())
+	}
+	storageBlock, err = loadWithStorageFallback(load, toDisable, storageBlock, tlog)
+	if err != nil {
+		return nil, err
 	}
 
 	var closables []io.Closer
@@ -227,6 +254,25 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		closables = append(closables, l)
 	}
 
+	// block tracepoints: best-effort. A kernel where the block tracepoints
+	// cannot be attached must not take down the rest of the stats agent.
+	if storageBlock {
+		closables = append(closables, attachBlockProbes(&objects, useRawBlock, tlog)...)
+	}
+
+	// filesystem I/O: best-effort per filesystem. Each filesystem loads as a
+	// collection of its own, when it becomes probeable (network filesystems)
+	// or when the node first mounts a volume of its type (ext4, xfs, btrfs),
+	// so a filesystem the kernel rejects disables only itself.
+	if features.StorageFS() {
+		attacher, err := startFsAttacher(tlog, cfg, consts, sharedMaps, &mu)
+		if err != nil {
+			tlog.Warn("filesystem probes cannot be loaded; disabling filesystem metrics", "error", err)
+		} else {
+			closables = append(closables, attacher)
+		}
+	}
+
 	// raw tracepoints
 	for _, t := range []probe{
 		{
@@ -248,6 +294,9 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		}
 		closables = append(closables, l)
 	}
+
+	tlog.Info("stats eBPF programs loaded", "duration", time.Since(start), "kernel_btf_parse", btfParse.kernel,
+		"module_btf_parse", btfParse.modules, "btf_modules", btfParse.moduleCount)
 
 	return &StatsFetcher{
 		log:       tlog,
@@ -287,17 +336,320 @@ func (m *StatsFetcher) DebugEventsMap() *ebpf.Map {
 	return m.objects.DebugEvents
 }
 
+// storagePlan is what the block programs need done to the stats spec before
+// load on this kernel: the programs to stub out and which block tracepoint
+// family was kept. The filesystem programs are not in the stats spec; they
+// load as collections of their own (fs_tracer.go).
+type storagePlan struct {
+	toDisable   []string
+	useRawBlock bool
+}
+
+func planStorage(block bool) storagePlan {
+	var plan storagePlan
+
+	// Both block families are compiled in; only one is loaded. Raw tracepoints
+	// need no tracefs mount but must be able to decode struct request through
+	// BTF, so the choice is made here, before load, like the fentry/kprobe
+	// choice for filesystems.
+	plan.useRawBlock = block && blockRawTracepointCapable()
+	switch {
+	case !block:
+		plan.toDisable = append(plan.toDisable, allBlockProgramNames()...)
+	case plan.useRawBlock:
+		plan.toDisable = append(plan.toDisable, blockTracepointPrograms()...)
+	default:
+		plan.toDisable = append(plan.toDisable, blockRawTracepointPrograms()...)
+	}
+	return plan
+}
+
+// PrepareStorageSpec applies to spec what the stats loaders apply before
+// loading with every storage metric enabled, for the verifier tests. On the
+// stats spec it stubs out the block tracepoint family this kernel does not
+// use. On the filesystem spec it keeps both program families of every
+// filesystem, the kprobe fallback included, whatever this kernel would plan:
+// see verifierFsProbes.
+func PrepareStorageSpec(spec *ebpf.CollectionSpec) error {
+	if spec.Programs[progObiStatsRawTpBlockRqIssue] != nil {
+		if err := fixupSpec(spec, planStorage(true).toDisable); err != nil {
+			return err
+		}
+	}
+	if spec.Programs[progObiStatsFentryNFSRead] != nil {
+		return keepFsPrograms(spec, verifierFsProbes(planFsAttach(), kernelBTF()))
+	}
+	return nil
+}
+
+// statsConstants returns the load-time constants of every stats collection:
+// the main one and each filesystem's. A collection is given the ones it
+// declares (specConstants), so the values never differ between collections.
+func statsConstants(cfg *config.EBPFTracer, blockLoad blockLoadPlan) map[string]any {
+	var wantQueueDepth uint8
+	if blockLoad.wantQueueDepth {
+		wantQueueDepth = 1
+	}
+	return map[string]any{
+		"g_bpf_debug":             cfg.BpfDebug,
+		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
+		"blk_want_queue_depth":    wantQueueDepth,
+		"blk_emit_kinds":          blockLoad.emitKinds,
+	}
+}
+
+// specConstants returns the members of consts that spec declares.
+func specConstants(spec *ebpf.CollectionSpec, consts map[string]any) map[string]any {
+	declared := make(map[string]any, len(consts))
+	for name, value := range consts {
+		if _, ok := spec.Variables[name]; ok {
+			declared[name] = value
+		}
+	}
+	return declared
+}
+
+// loadStatsObjects loads the stats eBPF spec into objects. sharedMaps and mu
+// are threaded in from the caller (rather than created fresh here) so that a
+// retry via loadWithStorageFallback reuses the PinInternal maps a prior,
+// failed attempt already created instead of orphaning them and creating a
+// second set.
+func loadStatsObjects(
+	cfg *config.EBPFTracer, blockLoad blockLoadPlan, consts map[string]any, toDisable []string,
+	objects *StatsObjects, sharedMaps map[string]*ebpf.Map, mu *sync.Mutex, cache *btf.Cache,
+) error {
+	spec, err := LoadStats()
+	if err != nil {
+		return fmt.Errorf("loading BPF data: %w", err)
+	}
+
+	if err := fixupSpec(spec, toDisable); err != nil {
+		return fmt.Errorf("fixing up BPF spec: %w", err)
+	}
+
+	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
+
+	if err := setMapEntries(spec, blockLoad.mapEntries); err != nil {
+		return fmt.Errorf("sizing block maps: %w", err)
+	}
+
+	if err := ebpfconvenience.LoadSpec(spec, objects, specConstants(spec, consts), sharedMaps, mu, "", cache); err != nil {
+		return fmt.Errorf("loading stats eBPF spec: %w", err)
+	}
+	return nil
+}
+
+func blockTracepointPrograms() []string {
+	return []string{progObiStatsTpBlockRqInsert, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete}
+}
+
+func blockRawTracepointPrograms() []string {
+	return []string{progObiStatsRawTpBlockRqInsert, progObiStatsRawTpBlockRqIssue, progObiStatsRawTpBlockRqComplete}
+}
+
+func allBlockProgramNames() []string {
+	return append(blockTracepointPrograms(), blockRawTracepointPrograms()...)
+}
+
+// sysBlockDevicesDir lists every block device, with its request queue
+// settings under queue/ and one directory per hardware queue under mq/.
+const sysBlockDevicesDir = "/sys/block"
+
+const (
+	minBlockInflightEntries uint32 = 4 << 10
+	maxBlockInflightEntries uint32 = 64 << 10
+	// A map no loaded program uses must still be created; one entry is the
+	// smallest the kernel accepts.
+	unusedMapEntries uint32 = 1
+)
+
+// blockLoadPlan is what every load of the stats collection applies for the
+// block programs. The block maps are PinInternal, shared by the first load and
+// its retry without block programs, and a load whose map spec differs from the
+// shared map is rejected, so the plan is made once and reused.
+type blockLoadPlan struct {
+	mapEntries     map[string]uint32
+	wantQueueDepth bool
+	// emitKinds is blk_emit_kinds: one bit per enum blk_io_op whose
+	// completions reach userspace.
+	emitKinds uint8
+}
+
+// blockEmitKinds returns the kinds of block request the enabled metrics use.
+// The kernel ends the others at completion, without a ring buffer event, so
+// flushes and discards cost no userspace work unless their metrics are on.
+func blockEmitKinds(features export.Features) uint8 {
+	var kinds uint8
+	if features.StorageBlockReadWrite() {
+		kinds |= 1<<StatsBlkIoOpBlkOpRead | 1<<StatsBlkIoOpBlkOpWrite
+	}
+	if features.StorageBlockFlush() {
+		kinds |= 1 << StatsBlkIoOpBlkOpFlush
+	}
+	if features.StorageBlockDiscard() {
+		kinds |= 1 << StatsBlkIoOpBlkOpDiscard
+	}
+	return kinds
+}
+
+// planBlockLoad sizes the block maps for the programs that will run: the
+// in-flight map of the tracepoint family in use, from inflightEntries for the
+// raw family, and one entry for every map nothing touches, so the idle
+// family, a disabled storage_block and a disabled queue depth cost no memory.
+func planBlockLoad(block, useRaw, queueDepth bool, inflightEntries func() uint32) blockLoadPlan {
+	entries := map[string]uint32{}
+	if !block {
+		for _, name := range []string{StatsMapBlkRqInflight, StatsMapBlkRqInflightSector, StatsMapBlkInsert, StatsMapBlkDevState} {
+			entries[name] = unusedMapEntries
+		}
+		return blockLoadPlan{mapEntries: entries}
+	}
+
+	if useRaw {
+		entries[StatsMapBlkRqInflight] = inflightEntries()
+		entries[StatsMapBlkRqInflightSector] = unusedMapEntries
+	} else {
+		entries[StatsMapBlkRqInflight] = unusedMapEntries
+	}
+	if !queueDepth {
+		entries[StatsMapBlkDevState] = unusedMapEntries
+	}
+	return blockLoadPlan{mapEntries: entries, wantQueueDepth: queueDepth}
+}
+
+// blockInflightEntries sizes the request-keyed in-flight map: at most
+// nr_requests requests are in flight per hardware queue, summed over every
+// device with hardware queues (bio-based devices such as dm-linear never
+// reach the request tracepoints). The sum is clamped, leaving room for
+// devices that appear later; an unreadable sysfs gets the largest size.
+func blockInflightEntries(sysBlock string) uint32 {
+	devices, err := os.ReadDir(sysBlock)
+	if err != nil {
+		return maxBlockInflightEntries
+	}
+
+	var total uint64
+	for _, dev := range devices {
+		hwQueues, err := os.ReadDir(filepath.Join(sysBlock, dev.Name(), "mq"))
+		if err != nil || len(hwQueues) == 0 {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(sysBlock, dev.Name(), "queue", "nr_requests"))
+		if err != nil {
+			continue
+		}
+		nrRequests, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 32)
+		if err != nil {
+			continue
+		}
+		total += nrRequests * uint64(len(hwQueues))
+	}
+	return uint32(min(max(total, uint64(minBlockInflightEntries)), uint64(maxBlockInflightEntries)))
+}
+
+func setMapEntries(spec *ebpf.CollectionSpec, entries map[string]uint32) error {
+	for name, n := range entries {
+		m := spec.Maps[name]
+		if m == nil {
+			return fmt.Errorf("unknown map name %s", name)
+		}
+		m.MaxEntries = n
+	}
+	return nil
+}
+
+// attachBlockProbes attaches one block family. On any failure it detaches
+// what it managed and returns nothing: block metrics are then off, and the
+// rest of the agent keeps running.
+func attachBlockProbes(objects *StatsObjects, useRaw bool, log *slog.Logger) []io.Closer {
+	var links []io.Closer
+	fail := func(name string, err error) []io.Closer {
+		log.Warn("failed block tracepoint attachment; disabling storage block metrics",
+			"tracepoint", name, "raw", useRaw, "error", err)
+		closeAll(links)
+		return nil
+	}
+
+	// Completion attaches first: a request issued before the issue program
+	// attached has no in-flight entry and its completion is ignored, while
+	// issue attached first would leave behind the entries of requests that
+	// complete before the completion program attaches.
+	if useRaw {
+		for _, t := range []struct {
+			name    string
+			program *ebpf.Program
+		}{
+			{RawTracepointBlockRqComplete, objects.ObiStatsRawTpBlockRqComplete},
+			{RawTracepointBlockRqInsert, objects.ObiStatsRawTpBlockRqInsert},
+			{RawTracepointBlockRqIssue, objects.ObiStatsRawTpBlockRqIssue},
+		} {
+			l, err := link.AttachRawTracepoint(link.RawTracepointOptions{Name: t.name, Program: t.program})
+			if err != nil {
+				return fail(t.name, err)
+			}
+			links = append(links, l)
+		}
+		return links
+	}
+
+	for _, t := range []struct {
+		name    string
+		program *ebpf.Program
+	}{
+		{TracepointBlockRqComplete, objects.ObiStatsTpBlockRqComplete},
+		{TracepointBlockRqInsert, objects.ObiStatsTpBlockRqInsert},
+		{TracepointBlockRqIssue, objects.ObiStatsTpBlockRqIssue},
+	} {
+		group, tp, _ := strings.Cut(t.name, "/")
+		l, err := link.Tracepoint(group, tp, t.program, nil)
+		if err != nil {
+			return fail(t.name, err)
+		}
+		links = append(links, l)
+	}
+	return links
+}
+
+// loadWithStorageFallback loads the stats spec and, when a kernel
+// incompatibility fails the whole load with storage block metrics enabled,
+// retries once with the block tracepoints stubbed out. It returns whether
+// storage block metrics remain enabled. The filesystem programs are not part
+// of this load, so a filesystem the kernel rejects can never take block or
+// TCP metrics down with it.
+func loadWithStorageFallback(
+	load func(toDisable []string) error,
+	toDisable []string,
+	storageBlock bool,
+	log *slog.Logger,
+) (blockOK bool, err error) {
+	err = load(toDisable)
+	if err == nil || !storageBlock {
+		return storageBlock, err
+	}
+
+	log.Warn("loading stats eBPF spec failed with storage block metrics enabled;"+
+		" disabling storage block metrics and retrying (likely kernel incompatibility)", "error", err)
+	toDisable = append(slices.Clone(toDisable), allBlockProgramNames()...)
+	return false, load(toDisable)
+}
+
 // fixupSpec replaces disabled programs with no-op stubs before loading,
 // preventing unused eBPF code from being loaded into the kernel.
 func fixupSpec(spec *ebpf.CollectionSpec, toDisable []string) error {
 	for _, name := range toDisable {
-		prog := spec.Programs[name]
-		if prog == nil {
+		if spec.Programs[name] == nil {
 			return fmt.Errorf("unknown program name %s", name)
 		}
+		// The stub is a kprobe whatever the original program was, mirroring
+		// common.FixupSpec. A tracing program (fentry/fexit) must supply an
+		// attach btf_id at load time, which it derives from AttachTo, and a
+		// disabled program has no valid symbol to point at -- keeping the
+		// original type makes the kernel reject the whole collection with
+		// "Tracing programs must provide btf_id". A kprobe needs no btf_id,
+		// and nothing ever attaches a disabled program.
 		spec.Programs[name] = &ebpf.ProgramSpec{
 			Name:         "stats_dummy",
-			Type:         prog.Type,
+			Type:         ebpf.Kprobe,
 			Instructions: asm.Instructions{asm.Mov.Imm(asm.R0, 0), asm.Return()},
 			License:      "Dual MIT/GPL",
 		}

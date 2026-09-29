@@ -126,6 +126,24 @@ section empty once drained.
   relied on that fallback now emits no link. Handoffs whose sender is covered by a protocol
   map are unaffected. `ebpf.populate_trace_context: true` restores the fallback.
 
+- The storage metrics (`obi.stat.disk.*`, `obi.stat.fs.*`) no longer send an attribute with
+  an empty value over OTLP: `k8s.pod.name`, `k8s.namespace.name` and `k8s.container.name` on
+  filesystem I/O from a process in no pod, `k8s.persistentvolume.name`,
+  `k8s.persistentvolumeclaim.name` and `k8s.storageclass.name` on filesystem I/O that did not
+  go through a kubelet volume, and any other storage attribute a getter leaves empty are now
+  absent where they carried `""`. OBI's own Prometheus endpoint is unchanged: an empty label
+  is no label to Prometheus. On both exporters, `system.filesystem.type` and `fs.operation`
+  are now empty, rather than `unknown` and `read`, for a code OBI has no name for; the
+  current probes send none, so no emitted series changes today.
+- `error.type` on the storage metrics names kernel-internal errnos (512 to 531, such as
+  `EJUKEBOX` and `ENOTSUPP`) and the NFSv4 statuses the NFS client passes up unmapped (such as
+  `NFS4ERR_DELAY`), which were their decimal values (`528`, `10008`). A query matching the
+  decimal value no longer matches.
+- On an NFS superblock several volumes share, the first events of a newly seen mount can
+  carry no `k8s.persistentvolume.name`, claim or storage class: the mount root's inode, which
+  tells the volumes apart, is now looked up in the background instead of holding up the
+  pipeline.
+
 - A span attribute OBI parses but could not determine is no longer emitted as an empty
   string. It covers every such attribute the span exporter appends, among them
   `server.address`, `client.address`, `service.peer.name`, `url.scheme`, `url.full`,

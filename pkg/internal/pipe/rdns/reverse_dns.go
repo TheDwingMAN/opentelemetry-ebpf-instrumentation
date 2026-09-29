@@ -68,8 +68,7 @@ func ReverseDNSProvider[T any](cfg *ReverseDNS, attrs func(T) *pipe.CommonAttrs,
 		if err := checkEBPFReverseDNS(ctx, cfg, ebpfCfg); err != nil {
 			return nil, err
 		}
-		// TODO: replace by a cache with fuzzy expiration time to avoid cache stampede
-		cache := expirable.NewLRU[pipe.IPAddr, string](cfg.CacheLen, nil, cfg.CacheTTL)
+		decorate := NewItemDecorator(cfg, attrs)
 
 		log := rdlog()
 		in := input.Subscribe(msg.SubscriberName("rdns.ReverseDNS"))
@@ -78,17 +77,33 @@ func ReverseDNSProvider[T any](cfg *ReverseDNS, attrs func(T) *pipe.CommonAttrs,
 			log.Debug("starting reverse DNS node")
 			for items := range in {
 				for _, item := range items {
-					a := attrs(item)
-					if a.SrcName == "" {
-						a.SrcName = optGetName(log, cache, a.SrcAddr)
-					}
-					if a.DstName == "" {
-						a.DstName = optGetName(log, cache, a.DstAddr)
-					}
+					decorate(item)
 				}
 				output.Send(items)
 			}
 		}, nil
+	}
+}
+
+// NewItemDecorator returns what the reverse DNS node does to an item: name
+// the source and destination addresses the item has no name for. It is nil
+// when reverse DNS is disabled. Names are looked up with the method the node
+// sets up when it is instantiated.
+func NewItemDecorator[T any](cfg *ReverseDNS, attrs func(T) *pipe.CommonAttrs) func(T) {
+	if !cfg.Enabled() {
+		return nil
+	}
+	// TODO: replace by a cache with fuzzy expiration time to avoid cache stampede
+	cache := expirable.NewLRU[pipe.IPAddr, string](cfg.CacheLen, nil, cfg.CacheTTL)
+	log := rdlog()
+	return func(item T) {
+		a := attrs(item)
+		if a.SrcName == "" {
+			a.SrcName = optGetName(log, cache, a.SrcAddr)
+		}
+		if a.DstName == "" {
+			a.DstName = optGetName(log, cache, a.DstAddr)
+		}
 	}
 }
 

@@ -64,6 +64,22 @@ func MetadataDecoratorProvider[T any](
 	attrs func(T) *pipe.CommonAttrs,
 	input, output *msg.Queue[[]T],
 ) swarm.InstanceFunc {
+	return MetadataDecoratorProviderKeeping(ctx, cfg, k8sInformer, attrs, nil, input, output)
+}
+
+// MetadataDecoratorProviderKeeping is MetadataDecoratorProvider, except that
+// items for which keep returns true get the cluster name only: some items,
+// such as storage stats, have no network endpoints, so there is nothing else
+// to decorate them by, and drop_external, which judges items by their
+// endpoints, must not drop them.
+func MetadataDecoratorProviderKeeping[T any](
+	ctx context.Context,
+	cfg *transform.KubernetesDecorator,
+	k8sInformer *kube.MetadataProvider,
+	attrs func(T) *pipe.CommonAttrs,
+	keep func(T) bool,
+	input, output *msg.Queue[[]T],
+) swarm.InstanceFunc {
 	return func(_ context.Context) (swarm.RunFunc, error) {
 		if !k8sInformer.IsKubeEnabled() {
 			return swarm.Bypass(input, output)
@@ -80,22 +96,67 @@ func MetadataDecoratorProvider[T any](
 			defer output.Close()
 			swarms.ForEachInput(ctx, in, log().Debug, func(items []T) {
 				if cfg.DropExternal {
-					out := make([]T, 0, len(items))
-					for _, item := range items {
-						if nt.transform(attrs(item)) {
-							out = append(out, item)
-						}
-					}
-					output.Send(out)
+					output.Send(dropExternal(items, attrs, nt, keep))
 				} else {
-					for _, item := range items {
-						nt.transform(attrs(item))
-					}
+					decorateAll(items, attrs, nt, keep)
 					output.Send(items)
 				}
 			})
 		}, nil
 	}
+}
+
+// NewItemDecorator returns what the Kubernetes metadata decorator does to an
+// item, and whether the item stays: with drop_external, an item whose
+// endpoints are not Kubernetes objects is dropped, unless keep exempts it. It
+// is nil when Kubernetes is disabled.
+func NewItemDecorator[T any](
+	ctx context.Context,
+	cfg *transform.KubernetesDecorator,
+	k8sInformer *kube.MetadataProvider,
+	attrs func(T) *pipe.CommonAttrs,
+	keep func(T) bool,
+) (func(T) bool, error) {
+	if !k8sInformer.IsKubeEnabled() {
+		return nil, nil
+	}
+	nt, err := newDecorator(ctx, cfg, k8sInformer)
+	if err != nil {
+		return nil, fmt.Errorf("instantiating k8s.MetadataDecorator: %w", err)
+	}
+	return func(item T) bool {
+		return decorateItem(item, attrs, nt, keep) || !cfg.DropExternal
+	}, nil
+}
+
+// decorateItem decorates an item, the ones keep exempts with the cluster name
+// only, and reports whether it was matched to Kubernetes or exempted.
+func decorateItem[T any](item T, attrs func(T) *pipe.CommonAttrs, n *decorator, keep func(T) bool) bool {
+	if keep != nil && keep(item) {
+		n.labelCluster(attrs(item))
+		return true
+	}
+	return n.transform(attrs(item))
+}
+
+// decorateAll decorates items, the ones keep exempts with the cluster name
+// only.
+func decorateAll[T any](items []T, attrs func(T) *pipe.CommonAttrs, n *decorator, keep func(T) bool) {
+	for _, item := range items {
+		decorateItem(item, attrs, n, keep)
+	}
+}
+
+// dropExternal decorates items and returns those that transform matched to
+// Kubernetes, plus those keep exempts, which get the cluster name only.
+func dropExternal[T any](items []T, attrs func(T) *pipe.CommonAttrs, n *decorator, keep func(T) bool) []T {
+	out := make([]T, 0, len(items))
+	for _, item := range items {
+		if decorateItem(item, attrs, n, keep) {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 type decorator struct {
@@ -109,12 +170,21 @@ func (n *decorator) transform(a *pipe.CommonAttrs) bool {
 	if a.Metadata == nil {
 		a.Metadata = map[attr.Name]string{}
 	}
-	if n.clusterName != "" {
-		a.Metadata[attr.K8sClusterName] = n.clusterName
-	}
+	n.labelCluster(a)
 	srcOk := n.decorate(a, attrPrefixSrc, a.SrcAddr.IP().String())
 	dstOk := n.decorate(a, attrPrefixDst, a.DstAddr.IP().String())
 	return srcOk && dstOk
+}
+
+// labelCluster sets the cluster name, when known.
+func (n *decorator) labelCluster(a *pipe.CommonAttrs) {
+	if n.clusterName == "" {
+		return
+	}
+	if a.Metadata == nil {
+		a.Metadata = map[attr.Name]string{}
+	}
+	a.Metadata[attr.K8sClusterName] = n.clusterName
 }
 
 // decorate the item with Kube metadata. Returns false if there is no metadata found for such IP

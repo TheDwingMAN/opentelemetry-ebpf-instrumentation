@@ -277,14 +277,17 @@ discovery:
 			Protocol:          otelcfg.ProtocolUnset,
 			ReportersCacheLen: ReporterLRUSize,
 			Buckets: export.Buckets{
-				DurationHistogram:            []float64{0, 1, 2},
-				RequestSizeHistogram:         export.DefaultBuckets.RequestSizeHistogram,
-				ResponseSizeHistogram:        export.DefaultBuckets.ResponseSizeHistogram,
-				GenAITokenUsageHistogram:     export.DefaultBuckets.GenAITokenUsageHistogram,
-				GenAIClientDurationHistogram: export.DefaultBuckets.GenAIClientDurationHistogram,
-				StatTCPRttHistogram:          export.DefaultBuckets.StatTCPRttHistogram,
-				V8JSGCDurationHistogram:      export.DefaultBuckets.V8JSGCDurationHistogram,
-				JVMGCDurationHistogram:       export.DefaultBuckets.JVMGCDurationHistogram,
+				DurationHistogram:                  []float64{0, 1, 2},
+				RequestSizeHistogram:               export.DefaultBuckets.RequestSizeHistogram,
+				ResponseSizeHistogram:              export.DefaultBuckets.ResponseSizeHistogram,
+				GenAITokenUsageHistogram:           export.DefaultBuckets.GenAITokenUsageHistogram,
+				GenAIClientDurationHistogram:       export.DefaultBuckets.GenAIClientDurationHistogram,
+				StatTCPRttHistogram:                export.DefaultBuckets.StatTCPRttHistogram,
+				StatDiskOperationDurationHistogram: export.DefaultBuckets.StatDiskOperationDurationHistogram,
+				StatDiskQueueDepthHistogram:        export.DefaultBuckets.StatDiskQueueDepthHistogram,
+				StatFsOperationDurationHistogram:   export.DefaultBuckets.StatFsOperationDurationHistogram,
+				V8JSGCDurationHistogram:            export.DefaultBuckets.V8JSGCDurationHistogram,
+				JVMGCDurationHistogram:             export.DefaultBuckets.JVMGCDurationHistogram,
 			},
 			Instrumentations: []instrumentations.Instrumentation{
 				instrumentations.InstrumentationALL,
@@ -330,14 +333,17 @@ discovery:
 			SpanMetricsServiceCacheSize: 10000,
 			NativeHistogram:             prom.DefaultNativeHistogramConfig,
 			Buckets: export.Buckets{
-				DurationHistogram:            export.DefaultBuckets.DurationHistogram,
-				RequestSizeHistogram:         []float64{0, 10, 20, 22},
-				ResponseSizeHistogram:        []float64{0, 10, 20, 22},
-				GenAITokenUsageHistogram:     []float64{1, 2, 3, 4},
-				GenAIClientDurationHistogram: []float64{5, 6, 7, 8},
-				StatTCPRttHistogram:          export.DefaultBuckets.StatTCPRttHistogram,
-				V8JSGCDurationHistogram:      export.DefaultBuckets.V8JSGCDurationHistogram,
-				JVMGCDurationHistogram:       export.DefaultBuckets.JVMGCDurationHistogram,
+				DurationHistogram:                  export.DefaultBuckets.DurationHistogram,
+				RequestSizeHistogram:               []float64{0, 10, 20, 22},
+				ResponseSizeHistogram:              []float64{0, 10, 20, 22},
+				GenAITokenUsageHistogram:           []float64{1, 2, 3, 4},
+				GenAIClientDurationHistogram:       []float64{5, 6, 7, 8},
+				StatTCPRttHistogram:                export.DefaultBuckets.StatTCPRttHistogram,
+				StatDiskOperationDurationHistogram: export.DefaultBuckets.StatDiskOperationDurationHistogram,
+				StatDiskQueueDepthHistogram:        export.DefaultBuckets.StatDiskQueueDepthHistogram,
+				StatFsOperationDurationHistogram:   export.DefaultBuckets.StatFsOperationDurationHistogram,
+				V8JSGCDurationHistogram:            export.DefaultBuckets.V8JSGCDurationHistogram,
+				JVMGCDurationHistogram:             export.DefaultBuckets.JVMGCDurationHistogram,
 			},
 		},
 		InternalMetrics: imetrics.InternalMetricsConfig{
@@ -1150,7 +1156,7 @@ func TestConfigValidateForReceiverUsesHostMetricsForStats(t *testing.T) {
 	cfg := loadConfig(t, envMap{})
 	cfg.Metrics.Features = export.FeatureStats
 
-	require.ErrorContains(t, cfg.Validate(), "at least one of 'network', 'application' or 'stats'")
+	require.ErrorContains(t, cfg.Validate(), "at least one of 'network', 'application', 'stats', 'storage_block' or 'storage_fs'")
 	require.NoError(t, cfg.ValidateForReceiver())
 }
 

@@ -127,6 +127,23 @@ func getDefinitions(
 		extraGroupAttributes[GroupStats],
 	)
 
+	// disk I/O stat metrics attributes
+	statsDiskAttributes := AttrReportGroup{
+		Attributes: map[attr.Name]Default{
+			attr.DiskDevice:      true,
+			attr.DiskIODirection: true,
+		},
+	}
+
+	// disk queue depth is a per-device gauge; it has no read/write direction
+	// of its own (in-flight requests of both directions are counted together).
+	// Flushes and discards have no direction either.
+	statsDiskDeviceAttributes := AttrReportGroup{
+		Attributes: map[attr.Name]Default{
+			attr.DiskDevice: true,
+		},
+	}
+
 	// attributes to be reported exclusively for network metrics when
 	// kubernetes metadata is enabled
 	networkKubeAttributes := NewAttrReportGroup(
@@ -242,6 +259,40 @@ func getDefinitions(
 		},
 		extraGroupAttributes[GroupAppKube],
 	)
+
+	// persistent volume/claim attributes for filesystem I/O stat metrics,
+	// only relevant when kubernetes metadata is enabled
+	statsFsKubeAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sPersistentVolumeName:      true,
+			attr.K8sPersistentVolumeClaimName: true,
+			attr.K8sStorageClassName:          true,
+		},
+	}
+
+	// pod/namespace/container attribution for filesystem I/O stat metrics,
+	// only relevant when kubernetes metadata is enabled. A local group
+	// rather than appKubeAttributes: the pid decorator only ever sets these
+	// three fields for filesystem events, not the full application metadata
+	// set (deployment, replica set, node, ...).
+	statsFsPodAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sPodName:       true,
+			attr.K8sNamespaceName: true,
+			attr.K8sContainerName: true,
+		},
+	}
+
+	// filesystem I/O stat metrics attributes.
+	statsFsAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&statsFsPodAttributes, &statsFsKubeAttributes},
+		Attributes: map[attr.Name]Default{
+			attr.FsType:      true,
+			attr.FsOperation: true,
+		},
+	}
 
 	// The semantic conventions define service.name and service.namespace as
 	// resource attributes, and OBI reports them there. They are also available
@@ -859,6 +910,58 @@ func getDefinitions(
 			SubGroups: []*AttrReportGroup{&statsAttributes, &statsKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.NetworkTCPHandshakeRole: false,
+			},
+		},
+		StatDiskOperationDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskQueueDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskQueueDepth.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskOperationErrors.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskFlushDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskDiscardDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskDiscardIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatFsOperationDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&statsFsAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatFsIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsFsAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatFsOperationErrors.Section: {
+			SubGroups: []*AttrReportGroup{&statsFsAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
 			},
 		},
 

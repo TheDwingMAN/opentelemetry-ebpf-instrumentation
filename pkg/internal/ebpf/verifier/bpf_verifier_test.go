@@ -76,6 +76,15 @@ func loadAndVerify(t *testing.T, name string, loadFn func() (*ebpf.CollectionSpe
 		}
 		uprobe.PrepareSpecs(spec)
 
+		// Storage programs: the block tracepoint family this kernel uses,
+		// and both families of every filesystem's programs, which carry a
+		// placeholder attach target: the fentry/fexit ones pointed at the
+		// filesystem's own functions or at vmlinux stand-ins, and the
+		// kprobe/kretprobe fallback.
+		if spec.Programs["obi_stats_tp_block_rq_issue"] != nil || spec.Programs["obi_stats_fentry_nfs_read"] != nil {
+			require.NoError(t, statsolly.PrepareStorageSpec(spec), "failed to prepare storage programs")
+		}
+
 		if len(consts) > 0 && consts[0] != nil {
 			err := ebpfconvenience.RewriteConstants(spec, consts[0])
 			require.NoError(t, err, "failed to rewrite constants")
@@ -302,6 +311,12 @@ func TestBPFVerifierWithConstants(t *testing.T) {
 
 	// statsolly
 	forEachCombination(t, "statsolly/Stats", statsolly.LoadStats, []constOption{
+		{"g_bpf_debug", []any{true, false}},
+		{"stats_wakeup_data_bytes", []any{uint32(0), uint32(1 << 20)}},
+		{"blk_want_queue_depth", []any{uint8(0), uint8(1)}},
+		{"blk_emit_kinds", []any{uint8(0), uint8(0x0f)}},
+	})
+	forEachCombination(t, "statsolly/FsIo", statsolly.LoadFsIo, []constOption{
 		{"g_bpf_debug", []any{true, false}},
 		{"stats_wakeup_data_bytes", []any{uint32(0), uint32(1 << 20)}},
 	})

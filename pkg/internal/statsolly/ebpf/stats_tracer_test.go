@@ -166,6 +166,37 @@ func TestFixupSpec(t *testing.T) {
 	}
 }
 
+// A disabled fentry/fexit program must not keep its tracing type: the kernel
+// demands an attach btf_id for tracing programs, which it takes from AttachTo,
+// and a disabled program has no symbol to point at. Keeping the type made the
+// kernel reject the entire collection with "Tracing programs must provide
+// btf_id", which disabled all stats metrics on any node not running all seven
+// supported filesystems.
+func TestFixupSpecStubsTracingProgramsAsKprobes(t *testing.T) {
+	spec := &ebpf.CollectionSpec{
+		Programs: map[string]*ebpf.ProgramSpec{
+			progObiStatsFentryBtrfsFsync: {Name: "real_fentry", Type: ebpf.Tracing, AttachTo: "obi_dummy_fs_fsync"},
+			progObiStatsFexitBtrfsFsync:  {Name: "real_fexit", Type: ebpf.Tracing, AttachTo: "obi_dummy_fs_fsync"},
+			progObiStatsKprobeBtrfsFsync: {Name: "real_kprobe", Type: ebpf.Kprobe},
+		},
+	}
+
+	toDisable := []string{progObiStatsFentryBtrfsFsync, progObiStatsFexitBtrfsFsync, progObiStatsKprobeBtrfsFsync}
+	if err := fixupSpec(spec, toDisable); err != nil {
+		t.Fatalf("fixupSpec: %v", err)
+	}
+
+	for _, name := range toDisable {
+		prog := spec.Programs[name]
+		if prog.Type != ebpf.Kprobe {
+			t.Errorf("program %s: got type %v, want %v", name, prog.Type, ebpf.Kprobe)
+		}
+		if prog.AttachTo != "" {
+			t.Errorf("program %s: stub kept AttachTo %q, want empty", name, prog.AttachTo)
+		}
+	}
+}
+
 func TestFixupSpecUnknownProgram(t *testing.T) {
 	spec := &ebpf.CollectionSpec{
 		Programs: map[string]*ebpf.ProgramSpec{
@@ -182,6 +213,9 @@ func TestFixupSpecUnknownProgram(t *testing.T) {
 func TestTracepointConstantFormat(t *testing.T) {
 	hooks := []string{
 		TracepointInetSockSetState,
+		TracepointBlockRqInsert,
+		TracepointBlockRqIssue,
+		TracepointBlockRqComplete,
 	}
 	for _, hook := range hooks {
 		if _, _, ok := strings.Cut(hook, "/"); !ok {

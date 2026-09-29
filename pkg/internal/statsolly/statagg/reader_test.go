@@ -1,0 +1,141 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package statagg
+
+import (
+	"math"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// Two u64 counters and three u32 buckets, 4 bytes of padding.
+var readerLayout = ValueLayout{Counters: 2, Buckets: 3}
+
+const readerStride = 32
+
+type visited struct {
+	key   string
+	delta []uint64
+}
+
+func pollAll(t *testing.T, r *Reader) []visited {
+	t.Helper()
+	var out []visited
+	require.NoError(t, r.Poll(time.Now(), func(k *kernelKey, d Delta, _ []byte) {
+		out = append(out, visited{key: k.key, delta: append([]uint64(nil), d...)})
+	}))
+	return out
+}
+
+func TestReader_SumsCPUsAndReportsOnlyChanges(t *testing.T) {
+	m := newFakeMap(4, readerStride, 4)
+	r, err := NewReader(m, readerLayout)
+	require.NoError(t, err)
+
+	k := []byte("key1")
+	m.addU64(k, 0, 0, 100)
+	m.addU64(k, 3, 0, 50)
+	m.addU64(k, 2, 1, 7)
+	m.addU32(k, 1, 2, 3)
+	m.addU32(k, 3, 2, 4)
+
+	got := pollAll(t, r)
+	require.Len(t, got, 1)
+	assert.Equal(t, []uint64{150, 7, 0, 0, 7}, got[0].delta)
+
+	assert.Empty(t, pollAll(t, r), "an unchanged key is not visited")
+	assert.Equal(t, 1, r.keys["key1"].idle)
+
+	m.addU32(k, 0, 0, 1)
+	got = pollAll(t, r)
+	require.Len(t, got, 1)
+	assert.Equal(t, []uint64{0, 0, 1, 0, 0}, got[0].delta)
+	assert.Zero(t, r.keys["key1"].idle)
+}
+
+func TestReader_BucketDeltasAreWrapSafe(t *testing.T) {
+	m := newFakeMap(4, readerStride, 2)
+	r, err := NewReader(m, readerLayout)
+	require.NoError(t, err)
+	k := []byte("wrap")
+
+	// Both CPUs' copies of bucket 1 close to 2^32.
+	m.addU32(k, 0, 1, math.MaxUint32-9)
+	m.addU32(k, 1, 1, math.MaxUint32-2)
+	got := pollAll(t, r)
+	require.Len(t, got, 1)
+	assert.Equal(t, uint64(2*math.MaxUint32-11), got[0].delta[3])
+
+	// Both wrap before the next poll: 15 and 8 more values.
+	m.addU32(k, 0, 1, 15)
+	m.addU32(k, 1, 1, 8)
+	got = pollAll(t, r)
+	require.Len(t, got, 1)
+	assert.Equal(t, uint64(23), got[0].delta[3], "each CPU wrapped once; the delta is still exact")
+}
+
+func TestReader_SignedCountersCancelAcrossCPUs(t *testing.T) {
+	m := newFakeMap(4, readerStride, 2)
+	r, err := NewReader(m, readerLayout)
+	require.NoError(t, err)
+	k := []byte("pend")
+
+	// +3 issued on CPU 0, -2 completed on CPU 1 (two's complement).
+	m.addU64(k, 0, 0, 3)
+	m.addU64(k, 1, 0, uint64(math.MaxUint64-1))
+	got := pollAll(t, r)
+	require.Len(t, got, 1)
+	assert.Equal(t, int64(1), int64(got[0].delta[0]))
+
+	m.addU64(k, 1, 0, math.MaxUint64) // one more completion
+	got = pollAll(t, r)
+	require.Len(t, got, 1)
+	assert.Equal(t, int64(-1), int64(got[0].delta[0]))
+}
+
+func TestReader_DeleteKeepsTheFinalDelta(t *testing.T) {
+	m := newFakeMap(4, readerStride, 2)
+	r, err := NewReader(m, readerLayout)
+	require.NoError(t, err)
+	k := []byte("gone")
+	m.addU64(k, 0, 0, 10)
+	pollAll(t, r)
+
+	// Counted between the last poll and the deletion.
+	m.addU64(k, 1, 0, 5)
+	var final []uint64
+	require.NoError(t, r.Delete(r.keys["gone"], func(_ *kernelKey, d Delta, _ []byte) {
+		final = append([]uint64(nil), d...)
+	}))
+	assert.Equal(t, []uint64{5, 0, 0, 0, 0}, final)
+	assert.Empty(t, m.entries, "the key left the kernel map")
+	assert.Empty(t, r.keys, "and the reader")
+
+	// The kernel creates the key again from zero: all of it is new.
+	m.addU64(k, 0, 0, 2)
+	got := pollAll(t, r)
+	require.Len(t, got, 1)
+	assert.Equal(t, uint64(2), got[0].delta[0])
+}
+
+func TestReader_ForgetsKeysThatLeftTheMap(t *testing.T) {
+	m := newFakeMap(4, readerStride, 1)
+	r, err := NewReader(m, readerLayout)
+	require.NoError(t, err)
+	m.addU64([]byte("a"), 0, 0, 1)
+	pollAll(t, r)
+	require.Contains(t, r.keys, "a")
+
+	delete(m.entries, "a")
+	pollAll(t, r)
+	assert.NotContains(t, r.keys, "a")
+}
+
+func TestReader_LayoutMustFitTheValue(t *testing.T) {
+	_, err := NewReader(newFakeMap(4, 16, 1), ValueLayout{Counters: 2, Buckets: 1})
+	require.Error(t, err)
+}

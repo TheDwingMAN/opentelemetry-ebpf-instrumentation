@@ -19,6 +19,8 @@ const (
 	StatTypeTCPRetransmit           = StatType(StatsStatTypeK_statTypeTcpRetransmit)
 	StatTypeTCPIo                   = StatType(StatsStatTypeK_statTypeTcpIo)
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
+	StatTypeBlockIo                 = StatType(StatsStatTypeK_statTypeBlockIo)
+	StatTypeFsIo                    = StatType(StatsStatTypeK_statTypeFsIo)
 )
 
 type TCPFailReasonType string
@@ -81,6 +83,79 @@ const (
 	CodeDirectionTransmit = NetworkIoDirectionCode(StatsNetworkIoDirectionDirectionTransmit)
 )
 
+type DiskIoDirectionType string
+
+const (
+	DirectionRead  DiskIoDirectionType = "read"
+	DirectionWrite DiskIoDirectionType = "write"
+)
+
+// DiskIoDirectionCode aliases the read and write members of the
+// bpf2go-generated enum blk_io_op in bpf/statsolly/types.h: the kinds of block
+// request that have a direction.
+type DiskIoDirectionCode uint8
+
+const (
+	CodeDirectionRead  = DiskIoDirectionCode(StatsBlkIoOpBlkOpRead)
+	CodeDirectionWrite = DiskIoDirectionCode(StatsBlkIoOpBlkOpWrite)
+)
+
+// BlockOpCode aliases the bpf2go-generated enum blk_io_op in
+// bpf/statsolly/types.h: what a block request was.
+type BlockOpCode uint8
+
+const (
+	CodeBlockRead    = BlockOpCode(StatsBlkIoOpBlkOpRead)
+	CodeBlockWrite   = BlockOpCode(StatsBlkIoOpBlkOpWrite)
+	CodeBlockFlush   = BlockOpCode(StatsBlkIoOpBlkOpFlush)
+	CodeBlockDiscard = BlockOpCode(StatsBlkIoOpBlkOpDiscard)
+)
+
+type FsTypeName string
+
+const (
+	FsNFS   FsTypeName = "nfs"
+	FsCeph  FsTypeName = "ceph"
+	FsCIFS  FsTypeName = "cifs"
+	FsFUSE  FsTypeName = "fuse"
+	FsExt4  FsTypeName = "ext4"
+	FsXFS   FsTypeName = "xfs"
+	FsBtrfs FsTypeName = "btrfs"
+)
+
+// FsTypeCode mirrors enum fs_type in bpf/statsolly/types.h.
+type FsTypeCode uint8
+
+const (
+	CodeFsUnknown FsTypeCode = 0
+	CodeFsNFS     FsTypeCode = 1
+	CodeFsCeph    FsTypeCode = 2
+	CodeFsCIFS    FsTypeCode = 3
+	CodeFsFUSE    FsTypeCode = 4
+	CodeFsExt4    FsTypeCode = 5
+	CodeFsXFS     FsTypeCode = 6
+	CodeFsBtrfs   FsTypeCode = 7
+)
+
+type FsOpType string
+
+const (
+	FsOpRead      FsOpType = "read"
+	FsOpWrite     FsOpType = "write"
+	FsOpFsync     FsOpType = "fsync"
+	FsOpFdatasync FsOpType = "fdatasync"
+)
+
+// FsOpCode mirrors enum fs_op in bpf/statsolly/types.h.
+type FsOpCode uint8
+
+const (
+	CodeFsOpRead      FsOpCode = 0
+	CodeFsOpWrite     FsOpCode = 1
+	CodeFsOpFsync     FsOpCode = 2
+	CodeFsOpFdatasync FsOpCode = 3
+)
+
 // Stat contains accumulated metrics from a stat, with extra metadata
 // that is added from the user space
 // REMINDER: any attribute here must be also added to the functions StatGetters
@@ -93,6 +168,8 @@ type Stat struct {
 	TCPSuccessfulConnection *TCPSuccessfulConnection `json:"-"`
 	TCPRetransmit           bool                     `json:"-"`
 	TCPIo                   *TCPIo                   `json:"-"`
+	BlockIo                 *BlockIo                 `json:"-"`
+	FsIo                    *FsIo                    `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -115,6 +192,64 @@ type TCPSuccessfulConnection struct {
 type TCPIo struct {
 	Direction uint8  `json:"direction"`
 	Bytes     uint32 `json:"bytes"`
+}
+
+type BlockIo struct {
+	Dev uint32 `json:"dev"`
+	// Op is a BlockOpCode.
+	Op        uint8  `json:"op"`
+	LatencyNs uint64 `json:"latency_ns"`
+	QueueNs   uint64 `json:"queue_ns"`
+	Bytes     uint64 `json:"bytes"`
+	Error     int32  `json:"error"`
+	Inflight  uint32 `json:"inflight"`
+}
+
+// IsReadWrite reports whether b is a read or a write request: the only ones
+// that feed the metrics with a disk.io.direction. It is false for a nil b.
+func (b *BlockIo) IsReadWrite() bool {
+	return b != nil && (BlockOpCode(b.Op) == CodeBlockRead || BlockOpCode(b.Op) == CodeBlockWrite)
+}
+
+// IsFlush reports whether b is a cache flush request. It is false for a nil b.
+func (b *BlockIo) IsFlush() bool {
+	return b != nil && BlockOpCode(b.Op) == CodeBlockFlush
+}
+
+// IsDiscard reports whether b is a discard (or secure erase) request. It is
+// false for a nil b.
+func (b *BlockIo) IsDiscard() bool {
+	return b != nil && BlockOpCode(b.Op) == CodeBlockDiscard
+}
+
+type FsIo struct {
+	Fs        uint8  `json:"fs"`
+	Op        uint8  `json:"op"`
+	SDev      uint32 `json:"s_dev"`
+	HostPID   uint32 `json:"host_pid"`
+	PidNs     uint32 `json:"pid_ns"`
+	LatencyNs uint64 `json:"latency_ns"`
+	Bytes     uint64 `json:"bytes"`
+	Error     int32  `json:"error"`
+	// RootIno is the inode of the root of the mount the file was reached
+	// through, which tells apart volumes that share SDev.
+	RootIno uint64 `json:"root_ino"`
+	// Mount holds the attributes of the mount the file was reached through,
+	// or nil when it is no Kubernetes volume. The PID decorator sets it.
+	Mount *MountAttrs `json:"-"`
+}
+
+// MountAttrs are the attributes of a filesystem stat that depend only on the
+// mount the I/O went through. They are resolved once per mount and shared by
+// every stat of that mount, so the value is never modified once set: a new
+// resolution makes a new MountAttrs.
+type MountAttrs struct {
+	PVName       string
+	PVCName      string
+	StorageClass string
+	// PVCNamespace names the pod namespace of I/O whose process is in no
+	// known pod.
+	PVCNamespace string
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.
@@ -167,6 +302,39 @@ type StatsTCPIo struct {
 	Pad       [1]uint8
 	Bytes     [TCPIoBatchSize]uint32
 	Conn
+}
+
+// StatsBlockIo mirrors block_io_t in bpf/statsolly/types.h.
+type StatsBlockIo struct {
+	_         structs.HostLayout
+	Flags     uint8
+	Op        uint8
+	Pad       [2]uint8
+	Dev       uint32
+	LatencyNs uint64
+	QueueNs   uint64
+	Bytes     uint64
+	Error     int32
+	Inflight  uint32
+	PartDev   uint32
+	Pad2      [4]uint8
+}
+
+// StatsFsIo mirrors fs_io_t in bpf/statsolly/types.h.
+type StatsFsIo struct {
+	_         structs.HostLayout
+	Flags     uint8
+	Fs        uint8
+	Op        uint8
+	Pad       [1]uint8
+	SDev      uint32
+	HostPID   uint32
+	PidNs     uint32
+	LatencyNs uint64
+	Bytes     uint64
+	Error     int32
+	Pad2      [4]uint8
+	RootIno   uint64
 }
 
 // TCPIoBatchSize mirrors k_tcp_io_batch_size in bpf/statsolly/types.h.

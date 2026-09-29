@@ -129,6 +129,111 @@ To add a new metric, follow these guidelines:
 
 12. Register the metric in the schema registry: add a `metric.*` entry in [schemas/obi/groups/stats/metrics.yaml](../schemas/obi/groups/stats/metrics.yaml).
 
+### Storage metrics
+
+Storage metrics have two independent layers: block-layer I/O from the `block_rq_*` tracepoints ([bpf/statsolly/blk_io.c](../bpf/statsolly/blk_io.c)), and filesystem-layer I/O from `file_operations` probes on nfs/ceph/cifs/fuse/ext4/xfs/btrfs ([bpf/statsolly/fs_io.c](../bpf/statsolly/fs_io.c)).
+
+| Metric (OTel / Prometheus) | Instrument | Unit | Attributes | Feature flag |
+|---|---|---|---|---|
+| `obi.stat.disk.operation.duration` / `obi_stat_disk_operation_duration_seconds` | histogram | `s` | `system.device`, `disk.io.direction` | `storage_block_duration` |
+| `obi.stat.disk.io` / `obi_stat_disk_io_bytes_total` | counter | `By` | `system.device`, `disk.io.direction` | `storage_block_io` |
+| `obi.stat.disk.queue.duration` / `obi_stat_disk_queue_duration_seconds` | histogram | `s` | `system.device`, `disk.io.direction` | `storage_block_queue` |
+| `obi.stat.disk.queue.depth` / `obi_stat_disk_queue_depth` (deprecated) | histogram | `{operation}` | `system.device` | `storage_block_queue_depth` |
+| `obi.stat.disk.operation.errors` / `obi_stat_disk_operation_errors_total` | counter | `{error}` | `system.device`, `disk.io.direction`, `error.type` | `storage_block_errors` |
+| `obi.stat.disk.flush.duration` / `obi_stat_disk_flush_duration_seconds` | histogram | `s` | `system.device`, `error.type` (failed flushes only) | `storage_block_flush` |
+| `obi.stat.disk.discard.duration` / `obi_stat_disk_discard_duration_seconds` | histogram | `s` | `system.device`, `error.type` (failed discards only) | `storage_block_discard` |
+| `obi.stat.disk.discard.io` / `obi_stat_disk_discard_io_bytes_total` | counter | `By` | `system.device` | `storage_block_discard` |
+| `obi.stat.fs.operation.duration` / `obi_stat_fs_operation_duration_seconds` | histogram | `s` | `system.filesystem.type`, `fs.operation`, + pod/PV/PVC/storage-class (below) | `storage_fs_duration` |
+| `obi.stat.fs.io` / `obi_stat_fs_io_bytes_total` | counter | `By` | `system.filesystem.type`, `fs.operation`, + pod/PV/PVC/storage-class (below) | `storage_fs_io` |
+| `obi.stat.fs.operation.errors` / `obi_stat_fs_operation_errors_total` | counter | `{error}` | `system.filesystem.type`, `fs.operation`, `error.type`, + pod/PV/PVC/storage-class (below) | `storage_fs_errors` |
+
+`storage_block` and `storage_fs` are umbrella flags that enable every sub-metric of their layer at once; there is no single umbrella flag covering both layers ([pkg/export/feature.go](../pkg/export/feature.go)). The one exception is the deprecated `obi.stat.disk.queue.depth`: it needs a per-device in-flight counter that every CPU issuing or completing block I/O updates, so it is left out of `storage_block`, and of `*` and `all`, and only kept, and paid for, when `storage_block_queue_depth` is listed by name. Note that `metrics.features: ["*"]` (or `all`) otherwise selects every family, storage included, with the probe attachment and series cardinality that implies; list the flags explicitly to keep storage off. `fs.operation` is `read`, `write`, `fsync` or `fdatasync`. Both sync calls reach the filesystem through the same kernel operation; OBI separates them because a database flushing data only behaves differently from one also flushing metadata. Query `fs_operation=~"fsync|fdatasync"` for all durability waits. `disk.io.direction` is `read` or `write`, and only reads and writes feed the metrics that carry it (`operation.duration`, `io`, `queue.duration`, `operation.errors`, and the deprecated `queue.depth`). Writes are `REQ_OP_WRITE`, `REQ_OP_WRITE_ZEROES` and `REQ_OP_ZONE_APPEND`, including a data write that carries a preflush. A cache flush (`REQ_OP_FLUSH`, the request the kernel issues for fsync and fdatasync) is not a zero-byte write: it goes to `obi.stat.disk.flush.duration`. A discard (`REQ_OP_DISCARD`, and `REQ_OP_SECURE_ERASE`) is not a read: it goes to `obi.stat.disk.discard.duration` and `obi.stat.disk.discard.io`, so an `fstrim` shows as discarded bytes rather than read throughput. `obi.stat.disk.discard.io` counts only the bytes of discards that completed successfully: a failed discard released nothing, and is seen as an `error.type` on `obi.stat.disk.discard.duration`. Flush and discard failures are not counted in `operation.errors`; their histograms carry `error.type` when the request failed and omit it when it succeeded. Without `storage_block_flush` or `storage_block_discard`, the kernel program ends those requests without sending an event to userspace, so they cost only their in-flight map entry. Other operations (zone management, driver-private commands) are not reported. `system.filesystem.type` is one of `nfs`, `ceph`, `cifs`, `fuse`, `ext4`, `xfs`, `btrfs`, identified by which probe fired, not by inspecting the event.
+
+How the block counts relate to `/proc/diskstats`, per whole disk:
+
+- Flushes: `obi_stat_disk_flush_duration_seconds_count` matches the diskstats flushes.
+- Writes: `obi_stat_disk_operation_duration_seconds_count{disk_io_direction="write"}` matches the diskstats writes, with two exceptions. diskstats also counts as a write each empty `REQ_PREFLUSH` write request (0 bytes, such as a dm-thin metadata commit or a flush passed through a loop device). That request is never issued to the device: the kernel issues a flush for it instead (none on a device without a write-back cache), and OBI counts only that flush. And diskstats counts a secure erase (`REQ_OP_SECURE_ERASE`) as a write, where OBI counts it as a discard, since it releases blocks rather than moves data.
+- Discarded bytes: diskstats counts the sectors of a failed discard too, `obi.stat.disk.discard.io` does not (see above). A failed read or write still counts its bytes in `obi.stat.disk.io`, as in diskstats.
+
+Two limits apply only to the classic-tracepoint fallback (`tracepoint/block/*`, used when the kernel BTF does not let the raw tracepoint programs find a request's disk):
+
+- It names a request by `(dev, sector)`, and every flush reports sector 0, so all flushes on a disk share one key (with any request at sector 0). Concurrent flushes on one disk collide: the later issue replaces the earlier one's entry, the first completion ends it and the second finds nothing, so they are recorded as one flush, timed from the later issue.
+- It classifies from the `rwbs` string, which has no letter for `REQ_OP_WRITE_ZEROES` or `REQ_OP_ZONE_APPEND` (both are `N`), so it ignores them, while the raw path counts them as writes.
+
+`obi.stat.disk.queue.duration` only observes requests that actually passed through `block_rq_insert`. blk-mq can dispatch straight to the hardware queue (`blk_mq_try_issue_directly`), common on an unsaturated NVMe device; those requests have no queue wait and are left out of the histogram rather than recorded as zero. It shares its bucket boundaries with `obi.stat.disk.operation.duration` (`Buckets.StatDiskOperationDurationHistogram`), and so do `obi.stat.disk.flush.duration` and `obi.stat.disk.discard.duration`; `obi.stat.disk.queue.depth` and `obi.stat.fs.operation.duration` each have their own (`Buckets.StatDiskQueueDepthHistogram`, `Buckets.StatFsOperationDurationHistogram`) — see [pkg/export/bucket.go](../pkg/export/bucket.go).
+
+#### Node-wide vs pod-attributed
+
+Block metrics come from the request-queue tracepoints (`block_rq_insert`/`block_rq_issue`/`block_rq_complete`), which see the device and the request but not the process that issued it. They are node-wide: no pod, namespace, or PV/PVC attribute is ever attached, only `system.device`, `disk.io.direction` and `error.type`. A request is followed from `block_rq_issue` to its final `block_rq_complete` by its `struct request` pointer, so requests that share a device and sector (the flush requests of several hardware queues) are told apart. A driver that completes a request in pieces (SCSI after a partial transfer) fires `block_rq_complete` once per piece; the request is recorded once, with all its bytes, when the last piece or a failed one completes. On a device without FUA, a write the flush machinery handles (one with a preflush or FUA) completes twice: with its bytes, which records it, then with none after the post-flush; the second completion finds no entry and is ignored, while the flushes are recorded as flushes.
+
+Filesystem metrics come from probes on each filesystem's own `file_operations` read/write/fsync implementation, which runs in the calling process's context, so they carry `k8s.pod.name` and `k8s.namespace.name`, plus `k8s.persistentvolume.name`, `k8s.persistentvolumeclaim.name` and `k8s.storageclass.name` once the mount the file was reached through resolves to a kubelet volume mount. The probes report the superblock device and the inode of the mount's root directory; the root inode tells apart volumes that share a superblock, as every PV carved out of one NFS export does (`scanForMount` in [pkg/internal/statsolly/ebpf/mount_resolver.go](../pkg/internal/statsolly/ebpf/mount_resolver.go)). When it cannot be told, the volume is left unnamed rather than guessed (`statsFsAttributes`, `statsFsKubeAttributes` in [pkg/export/attributes/attr_defs.go](../pkg/export/attributes/attr_defs.go)). All Kubernetes attributes, including the PV/PVC/storage-class ones, are disabled when Kubernetes metadata is off.
+
+Reads a process performs with `splice(2)`, `sendfile(2)` or
+`copy_file_range(2)` take the filesystem's `splice_read` operation rather than
+`read_iter`, so they need their own probe. They are recorded as
+`fs.operation=read` on nfs, ext4, btrfs and fuse, which have a dedicated
+symbol. Ceph, CIFS and XFS use the generic `filemap_splice_read`, which every
+filesystem on the node shares including container root filesystems, so probing
+it would defeat the point of hooking each filesystem separately; splice reads
+on those three are not recorded. Writes have no equivalent path.
+
+`k8s.pod.name` and `k8s.container.name` are resolved from the issuing process's own cgroup (`/proc/<pid>/cgroup`), which works for any container process, instrumented or not. A process that exited before its events were decorated is resolved through its PID namespace, and failing that the pod falls back to the volume mount's owner when the volume has exactly one; the container is then left unset.
+
+Buffered writes (no `O_SYNC`, `O_DIRECT` or fsync) complete once the data is in the page cache, so their `obi.stat.fs.operation.duration` measures the copy into memory, not the round trip to the NFS server or the disk. The server's or device's latency shows in `fs_operation="fsync"`/`"fdatasync"` and in the block metrics.
+
+Capacity and usage (bytes used/free/total on a volume) are out of scope here on purpose: join kubelet's own `kubelet_volume_stats_*` metrics on `k8s.persistentvolumeclaim.name` for that.
+
+#### Attributes that do not apply, and error names
+
+Storage metrics set an attribute only when it applies. Over OTLP, a string attribute whose value is empty is left out of the data point rather than sent as `""`: `k8s.pod.name`, `k8s.namespace.name` and `k8s.container.name` on I/O from a process in no pod, the PV, PVC and storage class on I/O that did not go through a kubelet volume, and `system.filesystem.type` or `fs.operation` for a code this build has no name for (never `unknown` or `read`). `newStorageExpirer` in [pkg/export/otel/metrics_stats.go](../pkg/export/otel/metrics_stats.go) does this for every storage metric; the TCP stat metrics are unchanged. Prometheus label sets are fixed per metric, so OBI's Prometheus endpoint keeps these labels with an empty value, which Prometheus stores as no label.
+
+`error.type` is the errno name (`EIO`, `EACCES`), else the name of a kernel-internal errno (512 to 531, such as `EJUKEBOX` when an NFSv3 server asks the client to retry later, or `ENOTSUPP`), else the name of an NFSv4 status the NFS client passes up unmapped (10001 to 10096, such as `NFS4ERR_DELAY` and `NFS4ERR_GRACE`), else the decimal value ([pkg/internal/statsolly/ebpf/errno.go](../pkg/internal/statsolly/ebpf/errno.go)). Kernel-internal errnos and NFSv4 statuses used to be decimal (`528`, `10008`).
+
+The PV, PVC and storage class of a filesystem stat depend only on the mount the I/O went through, so the PID decorator resolves them once per mount, looking the claim up once per mount resolution, and the stat carries a pointer to the result (`FsIo.Mount`); the getters read its fields. Telling apart the volumes that share a superblock needs the inode of each candidate mount point's root. That lookup runs in the background and never holds up the pipeline: until it returns, the first events of such a mount carry no volume attributes, and the mount is resolved again once the inode is known. It used to wait for the lookup, up to 1 s per mount point. A lookup still running after 30 s (a hard NFS mount of a server that does not answer) is logged as a warning naming the mount point, and at most 64 lookups run at once: past that, the volumes of further mounts on a shared superblock stay unnamed until one returns. A change to the mount table drops only the resolutions of the devices whose mounts it added or removed, and the root inodes of those mount points, rather than every resolution on the node.
+
+#### Device-mapper coverage
+
+Block metrics attach to the request-queue tracepoints, which see the underlying physical device, not any layer stacked on top of it. For LVM, LVM-S, or dm-crypt-backed volumes, `obi.stat.disk.*` reports against the physical device (`sda`, `nvme0n1`, …), never the `dm-N` device on top of it. Those volumes are still observed per pod/PVC, but only at the filesystem layer — ext4/xfs/btrfs mounted on the logical volume, through the PV-mount allowlist described next.
+
+#### Filesystem coverage and the PV-mount allowlist
+
+Probes attach to each filesystem implementation's own read/write/fsync symbols (`nfs_file_read`, `ceph_read_iter`, `cifs_strict_readv`/`cifs_loose_read_iter`, `fuse_file_read_iter`, `ext4_file_read_iter`, `xfs_file_read_iter`, `btrfs_file_read_iter`, and their write/fsync counterparts — `fsTargets` in [pkg/internal/statsolly/ebpf/fs_probes.go](../pkg/internal/statsolly/ebpf/fs_probes.go)) rather than one generic VFS hook, so a node not using a given filesystem pays nothing for it. Detection is per filesystem, so a node can have `nfs` loaded and not `ceph`.
+
+`ext4`, `xfs` and `btrfs` back the node's own root filesystem and every container's writable layer, in addition to PersistentVolumes, so those three are also gated through an allowlist (`fs_dev_filter`, [pkg/internal/statsolly/ebpf/fs_dev_filter.go](../pkg/internal/statsolly/ebpf/fs_dev_filter.go)): only a device that is both one of those three filesystems *and* actually backs a kubelet volume mount is allowed to record events. The allowlist is reconciled against the node's current kubelet volume mounts every 30 seconds. NFS, Ceph, CIFS and FUSE are not filtered this way, since they're never used for a node's own root or container writable layer.
+
+The probes of `ext4`, `xfs` and `btrfs` are attached only while a kubelet volume of that filesystem is mounted on the node, and detached once two checks in a row have found none, so a node without such a volume (NFS-only, or no PersistentVolume at all) pays no probe on the reads and writes of its own services and container layers. A network filesystem is attached from the moment its module is loaded, which for NFS, CIFS, Ceph and FUSE is usually the node's first mount of that type, possibly after OBI started. Both are checked every 30 seconds (`fsAttacher` in [pkg/internal/statsolly/ebpf/fs_late_attach.go](../pkg/internal/statsolly/ebpf/fs_late_attach.go)).
+
+#### Filesystem load isolation
+
+The filesystem programs are a BPF object of their own (`FsIo`, [pkg/internal/statsolly/ebpf/fs_tracer.go](../pkg/internal/statsolly/ebpf/fs_tracer.go)), apart from the TCP and block programs. Each filesystem loads as a collection containing only the programs its plan attaches; its maps (the event ring buffer, the in-flight map `fs_start` and the allowlist) are the `OBI_PIN_INTERNAL` maps every stats collection shares, and every load uses the same load-time constants. The loads of a burst — the startup loads, or one 30-second check that loads a filesystem — share one kernel BTF cache, so vmlinux and module BTF are parsed once per burst and dropped when it ends; the startup log reports the parse times (`kernel_btf_parse`, `module_btf_parse`). A filesystem whose programs the kernel rejects is disabled on its own: the TCP, block and other filesystem probes keep running. When a filesystem's `fentry`/`fexit` programs fail to load or attach for a reason that rules them out on this kernel (no BTF for the function, no trampoline support, a function the kernel will not trace or a verifier rejection), it is tried at once with `kprobe`/`kretprobe` and stays on them; any other failure is retried with `fentry`/`fexit` on the next check. A filesystem that fails 3 times in a row, 30 seconds apart, is left alone until OBI restarts.
+
+cilium/ebpf relocates every load against the BTF of all loaded kernel modules, so a module whose BTF cannot be parsed fails every load, the stats collection's included. For the filesystem loads only, OBI then retries against the kernel BTF and the filesystem's own module.
+
+#### Filesystem program naming
+
+The general StatsO11y convention above (`obi_stats_{probe_type}_{kernel_func}[_{purpose}]`) names a program after the specific kernel function it hooks. Filesystem probes can't follow that literally, because the actual symbol to attach (e.g. `cifs_strict_readv` vs `cifs_loose_read_iter`) is chosen per node at load time, not at compile time. Instead, each filesystem's read/write/fsync programs are compiled once against a placeholder `SEC("fentry/obi_dummy_fs_read")` (etc.) attach point and named by filesystem and operation instead of by kernel function — `obi_stats_fentry_nfs_read`, `obi_stats_kprobe_cifs_write`, and so on ([bpf/statsolly/fs_io.c](../bpf/statsolly/fs_io.c)). The real attach target is set from Go at load time (`fsPlanProbes` / `keepFsPrograms` in [fs_tracer.go](../pkg/internal/statsolly/ebpf/fs_tracer.go)).
+
+#### fentry vs kprobe attach
+
+Per filesystem and per symbol, OBI prefers `fentry`/`fexit` over classic `kprobe`/`kretprobe`. `fentry` is used when either the module exposes its own BTF under `/sys/kernel/btf/<module>`, or — for the built-in filesystems (ext4/xfs/btrfs), which have no module BTF of their own — the symbol resolves in the kernel's own (vmlinux) BTF. When neither is true, OBI falls back to kprobe/kretprobe; this is the path exercised on RHEL8-family kernels (4.18 + eBPF backports), which lack `CONFIG_DEBUG_INFO_BTF_MODULES` (`fentryCapable` in [pkg/internal/statsolly/ebpf/fs_probes.go](../pkg/internal/statsolly/ebpf/fs_probes.go)). The fallback attaches with the kernel's default kretprobe `maxactive`, so under high filesystem concurrency some return probes are dropped and their operations go unrecorded; `fentry`/`fexit` has no such limit.
+
+#### Runtime requirements
+
+- **No tracefs mount is needed.** The block probes attach as raw tracepoints decoded through kernel BTF. Only when the kernel's BTF does not say where a request's disk lives does OBI fall back to the classic tracepoints, which need `/sys/kernel/tracing` mounted into the container; the log then says `neither debugfs nor tracefs are mounted`.
+- **`hostPID: true`.** The filesystem probes attribute I/O by host PID, and
+  the same setting makes the host init's mount table readable at
+  `/proc/1/mountinfo` (or, on OpenShift nodes with mount namespace
+  encapsulation, the kubelet's own table). That is where the kubelet's volume
+  mounts are listed, and it is how a device is resolved to a PersistentVolume.
+  No `/var/lib/kubelet` mount is needed. Without
+  `hostPID` OBI falls back to its own mount table, and then only volumes
+  mounted into its own container can be attributed.
+
+  > no kubelet volume mounts visible; persistent volume attribution needs hostPID so the host's and the kubelet's mount tables can be read
+
+  (`WarnIfNoKubeletVolumeMounts` in [pkg/internal/statsolly/ebpf/mount_resolver.go](../pkg/internal/statsolly/ebpf/mount_resolver.go), called from `buildPipeline` in [pkg/statsolly/agent/pipeline.go](../pkg/statsolly/agent/pipeline.go).)
+- **OpenShift** needs the `privileged` SCC bound to the DaemonSet's ServiceAccount; the official Helm chart does not grant it automatically.
+
 ### Known limitations
 
 #### `src.port` may be reported as `0`
