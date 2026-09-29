@@ -51,18 +51,21 @@ const (
 	FeatureEBPF
 	FeatureStorageBlockDuration
 	FeatureStorageBlockIo
+	FeatureStorageBlockQueue
+	FeatureStorageBlockErrors
 	FeatureStorageFSDuration
 	FeatureStorageFSIo
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
 // FeatureStorageBlock enables all block-layer storage metrics.
-// Note: both metrics are derived from the same block_rq_issue/block_rq_complete
-// tracepoint pair, so disabling one does not reduce kernel-side overhead — the
-// probe still fires and the event is still delivered. Splitting them is about
-// series cardinality, letting a user take the latency distribution without the
-// byte counter or vice versa.
-const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo
+// Note: all four metrics are derived from the same block_rq_issue/block_rq_complete
+// tracepoint pair (FeatureStorageBlockQueue additionally attaches block_rq_insert),
+// so disabling one of duration/io does not reduce kernel-side overhead — the probe
+// still fires and the event is still delivered. Splitting them is about series
+// cardinality, letting a user take the latency distribution without the byte
+// counter or vice versa.
+const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo | FeatureStorageBlockQueue | FeatureStorageBlockErrors
 
 // FeatureStorageFS enables all network-filesystem metrics. Both derive from the
 // same probe pair, so disabling one does not reduce kernel-side overhead —
@@ -86,6 +89,8 @@ var FeatureMapper = map[string]Features{
 	"storage_block":                FeatureStorageBlock,
 	"storage_block_duration":       FeatureStorageBlockDuration,
 	"storage_block_io":             FeatureStorageBlockIo,
+	"storage_block_queue":          FeatureStorageBlockQueue,
+	"storage_block_errors":         FeatureStorageBlockErrors,
 	"storage_fs":                   FeatureStorageFS,
 	"storage_fs_duration":          FeatureStorageFSDuration,
 	"storage_fs_io":                FeatureStorageFSIo,
@@ -368,6 +373,14 @@ func (f Features) StorageBlockDuration() bool {
 
 func (f Features) StorageBlockIo() bool {
 	return f.any(FeatureStorageBlockIo)
+}
+
+func (f Features) StorageBlockQueue() bool {
+	return f.any(FeatureStorageBlockQueue)
+}
+
+func (f Features) StorageBlockErrors() bool {
+	return f.any(FeatureStorageBlockErrors)
 }
 
 // StorageFS reports whether any network-filesystem metric is enabled. It gates

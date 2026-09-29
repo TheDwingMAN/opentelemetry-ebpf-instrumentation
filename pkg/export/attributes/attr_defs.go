@@ -135,6 +135,14 @@ func getDefinitions(
 		},
 	}
 
+	// disk queue depth is a per-device gauge; it has no read/write direction
+	// of its own (in-flight requests of both directions are counted together).
+	statsDiskDeviceAttributes := AttrReportGroup{
+		Attributes: map[attr.Name]Default{
+			attr.DiskDevice: true,
+		},
+	}
+
 	// attributes to be reported exclusively for network metrics when
 	// kubernetes metadata is enabled
 	networkKubeAttributes := NewAttrReportGroup(
@@ -596,6 +604,20 @@ func getDefinitions(
 		StatDiskIO.Section: {
 			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
 			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskQueueDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskQueueDepth.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskOperationErrors.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
 		},
 		StatFsOperationDuration.Section: {
 			SubGroups:  []*AttrReportGroup{&statsFsAttributes},

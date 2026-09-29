@@ -270,6 +270,25 @@
             5
           ]
         },
+        "stat_disk_queue_depth_histogram": {
+          "items": {
+            "type": "number"
+          },
+          "type": "array",
+          "default": [
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+            64,
+            128,
+            256,
+            512,
+            1024
+          ]
+        },
         "stat_fs_operation_duration_histogram": {
           "items": {
             "type": "number"
@@ -994,7 +1013,9 @@
               "stats_tcp_rtt",
               "storage_block",
               "storage_block_duration",
+              "storage_block_errors",
               "storage_block_io",
+              "storage_block_queue",
               "storage_fs",
               "storage_fs_duration",
               "storage_fs_io"

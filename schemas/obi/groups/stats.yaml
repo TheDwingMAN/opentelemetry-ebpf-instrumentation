@@ -208,6 +208,60 @@ groups:
       - ref: system.device
       - ref: disk.io.direction
 
+  # Companion to the service-time histogram above, but for the other half of a
+  # request's lifetime: how long it waited before being dispatched. Requires
+  # the `block_rq_insert` tracepoint in addition to `block_rq_issue` /
+  # `block_rq_complete`, gated separately as `storage_block_queue` since it is
+  # extra kernel-side overhead the base duration/io metrics don't pay.
+  - id: metric.obi_stat_disk_queue_duration
+    type: metric
+    metric_name: obi.stat.disk.queue.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Time a disk I/O request spent queued before being dispatched to the
+      device, measured from `block_rq_insert` to `block_rq_issue`, broken down
+      by device and direction.
+    attributes:
+      - ref: system.device
+      - ref: disk.io.direction
+
+  # Queue depth, not queue latency: the count of requests still in flight on
+  # the device immediately after this one completed. Observed once per
+  # completion rather than time-averaged, so it approximates instantaneous
+  # saturation rather than a true utilization integral. Shares the
+  # `storage_block_queue` feature gate with the queue duration metric above.
+  - id: metric.obi_stat_disk_queue_depth
+    type: metric
+    metric_name: obi.stat.disk.queue.depth
+    instrument: histogram
+    unit: "{operation}"
+    stability: development
+    brief: >
+      Number of block I/O requests still in flight on the device immediately
+      after this request completed, observed per completion and broken down
+      by device.
+    attributes:
+      - ref: system.device
+
+  # Failed completions, keyed by the upstream error.type attribute so the
+  # failure mode (ENOSPC, EIO, ...) is queryable without an OBI-specific
+  # attribute. Emitted when the `storage_block_errors` feature is enabled.
+  - id: metric.obi_stat_disk_operation_errors
+    type: metric
+    metric_name: obi.stat.disk.operation.errors
+    instrument: counter
+    unit: "{error}"
+    stability: development
+    brief: >
+      Count of block I/O requests that completed with a non-zero error,
+      broken down by device, direction and errno.
+    attributes:
+      - ref: system.device
+      - ref: disk.io.direction
+      - ref: error.type
+
   # Network filesystem stats. Emitted when the `storage_fs` feature is enabled.
   # Probes attach to each filesystem's own file_operations read/write
   # implementations (nfs_file_read, ceph_read_iter, cifs_loose_read_iter,

@@ -143,3 +143,108 @@ func TestStatMetricsExporter_DiskMetrics(t *testing.T) {
 	assert.Equal(t, diskAttrs, ioBytes.Attributes)
 	assert.Equal(t, int64(4096), ioBytes.IntVal)
 }
+
+// TestStatMetricsExporter_DiskQueueAndErrorMetrics covers the three metrics
+// added on top of the base duration/io pair: queue wait, queue depth and
+// operation errors. Only storage_block_queue and storage_block_errors are
+// enabled (not duration/io), which doubles as a gating test: the base disk
+// metrics must not appear when their own feature bit is off.
+func TestStatMetricsExporter_DiskQueueAndErrorMetrics(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	otelExporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: cfg}},
+		&StatMetricsConfig{
+			Metrics: cfg,
+			SelectorCfg: &attributes.SelectorConfig{
+				SelectionCfg: attributes.Selection{
+					attributes.StatDiskQueueDuration.Section: attributes.InclusionLists{
+						Include: []string{"*"},
+					},
+					attributes.StatDiskQueueDepth.Section: attributes.InclusionLists{
+						Include: []string{"*"},
+					},
+					attributes.StatDiskOperationErrors.Section: attributes.InclusionLists{
+						Include: []string{"*"},
+					},
+				},
+			},
+			CommonCfg: &perapp.GlobalMetricsConfig{Features: export.FeatureStorageBlockQueue | export.FeatureStorageBlockErrors},
+		}, stats)(ctx)
+	require.NoError(t, err)
+
+	go otelExporter(ctx)
+
+	// WHEN it receives a failed block I/O completion with queue wait and
+	// in-flight information
+	stats.Send([]*ebpf.Stat{
+		{
+			Type: ebpf.StatTypeBlockIo,
+			BlockIo: &ebpf.BlockIo{
+				Dev:       0x800010,
+				Op:        uint8(ebpf.CodeDirectionWrite),
+				LatencyNs: 2_000_000,
+				QueueNs:   500_000,
+				Bytes:     4096,
+				Error:     -28, // -ENOSPC
+				Inflight:  3,
+			},
+		},
+	})
+
+	seen := map[string]collector.MetricRecord{}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case rec := <-otlp.Records():
+				if _, ok := seen[rec.Name]; !ok {
+					seen[rec.Name] = rec
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.Contains(ct, seen, "obi.stat.disk.queue.duration")
+		assert.Contains(ct, seen, "obi.stat.disk.queue.depth")
+		assert.Contains(ct, seen, "obi.stat.disk.operation.errors")
+	}, timeout, 100*time.Millisecond)
+
+	// Gating: storage_block_duration/storage_block_io are off, so neither of
+	// the base disk metrics should have been exported.
+	assert.NotContains(t, seen, "obi.stat.disk.operation.duration")
+	assert.NotContains(t, seen, "obi.stat.disk.io")
+
+	diskAttrs := map[string]string{
+		"system.device":     "8:16",
+		"disk.io.direction": "write",
+	}
+
+	queueDuration := seen["obi.stat.disk.queue.duration"]
+	assert.Equal(t, diskAttrs, queueDuration.Attributes)
+	assert.InEpsilon(t, 0.0005, queueDuration.FloatVal, 0.0001)
+	assert.Equal(t, 1, queueDuration.Count)
+
+	queueDepth := seen["obi.stat.disk.queue.depth"]
+	assert.Equal(t, map[string]string{"system.device": "8:16"}, queueDepth.Attributes)
+	assert.InEpsilon(t, 3.0, queueDepth.FloatVal, 0.0001)
+	assert.Equal(t, 1, queueDepth.Count)
+
+	opErrors := seen["obi.stat.disk.operation.errors"]
+	assert.Equal(t, map[string]string{
+		"system.device":     "8:16",
+		"disk.io.direction": "write",
+		"error.type":        "ENOSPC",
+	}, opErrors.Attributes)
+	assert.Equal(t, int64(1), opErrors.IntVal)
+}

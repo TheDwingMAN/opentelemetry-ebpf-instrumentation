@@ -46,7 +46,7 @@ func newStatsReporterWithFeatures(
 }
 
 // blockIoStat is one completed block request: 4 KiB written to major 8 / minor 16
-// taking 2ms.
+// taking 2ms, after 0.5ms queued, with 3 other requests left in flight.
 func blockIoStat() *ebpf.Stat {
 	return &ebpf.Stat{
 		Type: ebpf.StatTypeBlockIo,
@@ -54,7 +54,22 @@ func blockIoStat() *ebpf.Stat {
 			Dev:       0x800010,
 			Op:        uint8(ebpf.CodeDirectionWrite),
 			LatencyNs: 2_000_000,
+			QueueNs:   500_000,
 			Bytes:     4096,
+			Inflight:  3,
+		},
+	}
+}
+
+// blockIoErrorStat is a failed block completion on the same device/direction
+// as blockIoStat, with a non-zero error (-ENOSPC).
+func blockIoErrorStat() *ebpf.Stat {
+	return &ebpf.Stat{
+		Type: ebpf.StatTypeBlockIo,
+		BlockIo: &ebpf.BlockIo{
+			Dev:   0x800010,
+			Op:    uint8(ebpf.CodeDirectionWrite),
+			Error: -28, // -ENOSPC
 		},
 	}
 }
@@ -157,14 +172,103 @@ func TestStatsReporterSkipsDiskMetricsWithoutFeature(t *testing.T) {
 
 	assert.Nil(t, reporter.diskOpDuration)
 	assert.Nil(t, reporter.diskIOBytes)
+	assert.Nil(t, reporter.diskQueueDuration)
+	assert.Nil(t, reporter.diskQueueDepth)
+	assert.Nil(t, reporter.diskOpErrors)
 
 	// Observing is a no-op rather than a nil-pointer panic.
 	reporter.observeDiskOpDuration(blockIoStat())
 	reporter.observeDiskIOBytes(blockIoStat())
+	reporter.observeDiskQueueDuration(blockIoStat())
+	reporter.observeDiskQueueDepth(blockIoStat())
+	reporter.observeDiskOpErrors(blockIoErrorStat())
 
 	families, err := registry.Gather()
 	require.NoError(t, err)
 	for _, f := range families {
-		assert.NotContains(t, f.GetName(), "disk_io")
+		assert.NotContains(t, f.GetName(), "disk")
+	}
+}
+
+// TestStatsReporterRecordsDiskQueueMetrics asserts a single block I/O event
+// feeds both queue metrics -- queue wait and queue depth -- with the same
+// device/direction (queue wait) or device-only (queue depth) labels as the
+// base disk metrics.
+func TestStatsReporterRecordsDiskQueueMetrics(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter := newStatsReporterWithFeatures(t, registry, export.FeatureStorageBlockQueue)
+
+	reporter.observeDiskQueueDuration(blockIoStat())
+	reporter.observeDiskQueueDepth(blockIoStat())
+
+	queueDuration := gatheredMetric(t, registry, "obi_stat_disk_queue_duration_seconds", map[string]string{
+		"system_device":     "8:16",
+		"disk_io_direction": "write",
+	})
+	require.NotNil(t, queueDuration, "queue duration histogram not registered or not observed")
+	assert.Equal(t, uint64(1), queueDuration.GetHistogram().GetSampleCount())
+	assert.InEpsilon(t, 0.0005, queueDuration.GetHistogram().GetSampleSum(), 0.0001)
+
+	queueDepth := gatheredMetric(t, registry, "obi_stat_disk_queue_depth", map[string]string{
+		"system_device": "8:16",
+	})
+	require.NotNil(t, queueDepth, "queue depth histogram not registered or not observed")
+	assert.Equal(t, uint64(1), queueDepth.GetHistogram().GetSampleCount())
+	assert.InEpsilon(t, 3.0, queueDepth.GetHistogram().GetSampleSum(), 0.0001)
+}
+
+// TestStatsReporterRecordsDiskOperationErrors asserts the error counter only
+// increments for a failed completion, keyed by the errno name, and a
+// successful completion (Error == 0) leaves it untouched.
+func TestStatsReporterRecordsDiskOperationErrors(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter := newStatsReporterWithFeatures(t, registry, export.FeatureStorageBlockErrors)
+
+	reporter.observeDiskOpErrors(blockIoStat()) // Error == 0: must not count
+	reporter.observeDiskOpErrors(blockIoErrorStat())
+
+	opErrors := gatheredMetric(t, registry, "obi_stat_disk_operation_errors_total", map[string]string{
+		"system_device":     "8:16",
+		"disk_io_direction": "write",
+		"error_type":        "ENOSPC",
+	})
+	require.NotNil(t, opErrors, "errors counter not registered or not observed")
+	assert.InEpsilon(t, 1.0, opErrors.GetCounter().GetValue(), 0)
+}
+
+// TestStatsReporterDiskQueueAndErrorsFeatureGating asserts the queue metrics
+// and the errors counter are each independently selectable, mirroring
+// TestStatsReporterDiskFeatureGating for the base duration/io pair.
+func TestStatsReporterDiskQueueAndErrorsFeatureGating(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		features   export.Features
+		wantQueue  bool
+		wantErrors bool
+	}{
+		{"umbrella enables both", export.FeatureStorageBlock, true, true},
+		{"queue only", export.FeatureStorageBlockQueue, true, false},
+		{"errors only", export.FeatureStorageBlockErrors, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := prometheus.NewRegistry()
+			reporter := newStatsReporterWithFeatures(t, registry, tc.features)
+
+			reporter.observeDiskQueueDuration(blockIoStat())
+			reporter.observeDiskOpErrors(blockIoErrorStat())
+
+			queueDuration := gatheredMetric(t, registry, "obi_stat_disk_queue_duration_seconds", map[string]string{
+				"system_device":     "8:16",
+				"disk_io_direction": "write",
+			})
+			opErrors := gatheredMetric(t, registry, "obi_stat_disk_operation_errors_total", map[string]string{
+				"system_device":     "8:16",
+				"disk_io_direction": "write",
+				"error_type":        "ENOSPC",
+			})
+
+			assert.Equal(t, tc.wantQueue, queueDuration != nil, "queue duration histogram presence")
+			assert.Equal(t, tc.wantErrors, opErrors != nil, "errors counter presence")
+		})
 	}
 }
