@@ -6,7 +6,6 @@
 package ebpf
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -91,50 +90,65 @@ func TestPlanFsAttachFsyncResolvedIndependently(t *testing.T) {
 	assert.Empty(t, byFs[CodeFsCeph].FsyncSym, "ceph_fsync absent, FsyncSym must stay empty")
 }
 
-// TestPlanFsToDisableFsyncIndependent asserts that an unresolvable fsync
-// candidate disables only the fsync program families for that filesystem,
-// leaving its read/write attachment untouched, and that a resolvable fsync
-// symbol is wired into attachTo like read/write already are.
-func TestPlanFsToDisableFsyncIndependent(t *testing.T) {
-	plans := []fsAttachPlan{
-		// fentry mode, fsync resolved.
-		{Fs: CodeFsNFS, UseFentry: true, ReadSym: "nfs_file_read", WriteSym: "nfs_file_write", FsyncSym: "nfs_file_fsync"},
-		// fentry mode, fsync unresolved: read/write must still attach.
-		{Fs: CodeFsCeph, UseFentry: true, ReadSym: "ceph_read_iter", WriteSym: "ceph_write_iter", FsyncSym: ""},
-		// kprobe mode, fsync resolved.
-		{Fs: CodeFsCIFS, UseFentry: false, ReadSym: "cifs_loose_read_iter", WriteSym: "cifs_file_write_iter", FsyncSym: "cifs_fsync"},
-		// CodeFsFUSE intentionally absent: module not loaded at all.
+// An fsync symbol that cannot be probed drops only the fsync probes of that
+// filesystem, and a probeable one is attached like read and write, through
+// the family the plan chose.
+func TestFsPlanProbesFsyncIndependent(t *testing.T) {
+	progs := func(probes []fsProbe) map[string]string {
+		m := map[string]string{}
+		for _, p := range probes {
+			m[p.prog] = p.sym
+		}
+		return m
 	}
 
-	toDisable, attachTo := planFsToDisable(plans)
+	nfs := fsProgNamesFor(CodeFsNFS)
+	got := progs(fsPlanProbes(fsAttachPlan{
+		Fs: CodeFsNFS, UseFentry: true,
+		ReadSym: "nfs_file_read", WriteSym: "nfs_file_write", FsyncSym: "nfs_file_fsync",
+	}))
+	assert.Equal(t, map[string]string{
+		nfs.FentryRead: "nfs_file_read", nfs.FexitRead: "nfs_file_read",
+		nfs.FentryWrite: "nfs_file_write", nfs.FexitWrite: "nfs_file_write",
+		nfs.FentryFsync: "nfs_file_fsync", nfs.FexitFsync: "nfs_file_fsync",
+	}, got, "fentry mode: only fentry/fexit programs, fsync included")
 
-	nfsNames := fsProgNamesFor(CodeFsNFS)
-	assert.NotContains(t, toDisable, nfsNames.FentryFsync, "nfs fsync resolved, fentry fsync must stay enabled")
-	assert.NotContains(t, toDisable, nfsNames.FexitFsync)
-	assert.Contains(t, toDisable, nfsNames.KprobeFsync, "nfs uses fentry mode, kprobe fsync must be stubbed")
-	assert.Contains(t, toDisable, nfsNames.KretprobeFsync)
-	assert.Equal(t, "nfs_file_fsync", attachTo[nfsNames.FentryFsync])
-	assert.Equal(t, "nfs_file_fsync", attachTo[nfsNames.FexitFsync])
+	ceph := fsProgNamesFor(CodeFsCeph)
+	got = progs(fsPlanProbes(fsAttachPlan{
+		Fs: CodeFsCeph, UseFentry: true,
+		ReadSym: "ceph_read_iter", WriteSym: "ceph_write_iter",
+	}))
+	assert.Equal(t, map[string]string{
+		ceph.FentryRead: "ceph_read_iter", ceph.FexitRead: "ceph_read_iter",
+		ceph.FentryWrite: "ceph_write_iter", ceph.FexitWrite: "ceph_write_iter",
+	}, got, "fsync unresolved: read and write still attach")
 
-	cephNames := fsProgNamesFor(CodeFsCeph)
-	assert.NotContains(t, toDisable, cephNames.FentryRead, "ceph read/write must stay enabled despite missing fsync")
-	assert.NotContains(t, toDisable, cephNames.FentryWrite)
-	assert.Contains(t, toDisable, cephNames.FentryFsync, "ceph fsync unresolved, fentry fsync must be disabled")
-	assert.Contains(t, toDisable, cephNames.FexitFsync)
-	assert.Contains(t, toDisable, cephNames.KprobeFsync, "ceph fsync unresolved, kprobe fsync must also be disabled")
-	assert.Contains(t, toDisable, cephNames.KretprobeFsync)
-	assert.NotContains(t, attachTo, cephNames.FentryFsync)
+	cifs := fsProgNamesFor(CodeFsCIFS)
+	got = progs(fsPlanProbes(fsAttachPlan{
+		Fs: CodeFsCIFS, UseFentry: false,
+		ReadSym: "cifs_loose_read_iter", WriteSym: "cifs_file_write_iter", FsyncSym: "cifs_fsync",
+	}))
+	assert.Equal(t, map[string]string{
+		cifs.KprobeRead: "cifs_loose_read_iter", cifs.KretprobeRead: "cifs_loose_read_iter",
+		cifs.KprobeWrite: "cifs_file_write_iter", cifs.KretprobeWrite: "cifs_file_write_iter",
+		cifs.KprobeFsync: "cifs_fsync", cifs.KretprobeFsync: "cifs_fsync",
+	}, got, "kprobe mode: only kprobe/kretprobe programs")
+}
 
-	cifsNames := fsProgNamesFor(CodeFsCIFS)
-	assert.Contains(t, toDisable, cifsNames.FentryFsync, "cifs uses kprobe mode, fentry fsync must be stubbed")
-	assert.Contains(t, toDisable, cifsNames.FexitFsync)
-	assert.NotContains(t, toDisable, cifsNames.KprobeFsync, "cifs fsync resolved, kprobe fsync must stay enabled")
-	assert.NotContains(t, toDisable, cifsNames.KretprobeFsync)
-	assert.NotContains(t, attachTo, cifsNames.KprobeFsync, "kprobe attach target is set at Attach time, not via AttachTo")
-
-	fuseNames := fsProgNamesFor(CodeFsFUSE)
-	for _, name := range slices.Concat(fuseNames.fentryFsyncPrograms(), fuseNames.kprobeFsyncPrograms()) {
-		assert.Contains(t, toDisable, name, "fuse unplanned, all its programs including fsync must be disabled")
+// Every exit probe attaches before its entry probe, or a call entering in
+// between would leave a start behind that no exit ever consumes.
+func TestFsPlanProbesAttachExitFirst(t *testing.T) {
+	for _, fentry := range []bool{true, false} {
+		probes := fsPlanProbes(fsAttachPlan{
+			Fs: CodeFsExt4, UseFentry: fentry,
+			ReadSym: "r", WriteSym: "w", FsyncSym: "f", SpliceReadSym: "s",
+		})
+		require.Len(t, probes, 8)
+		for i := 0; i < len(probes); i += 2 {
+			assert.True(t, probes[i].exit, "probe %d (%s) must be an exit probe", i, probes[i].prog)
+			assert.False(t, probes[i+1].exit, "probe %d (%s) must be an entry probe", i+1, probes[i+1].prog)
+			assert.Equal(t, probes[i].sym, probes[i+1].sym)
+		}
 	}
 }
 
@@ -164,18 +178,21 @@ func TestPlanFsAttachSpliceReadResolvedIndependently(t *testing.T) {
 }
 
 // Ceph, CIFS and XFS have no dedicated splice_read symbol, so their plans
-// carry none and planFsToDisable must not try to stub a program that the
-// collection does not contain.
-func TestPlanFsToDisableSkipsAbsentSpliceFamilies(t *testing.T) {
-	plans := []fsAttachPlan{
+// carry none and no splice program is asked for; NFS's is attached through
+// the chosen family only.
+func TestFsPlanProbesSkipsAbsentSpliceFamilies(t *testing.T) {
+	probes := planFsProbes([]fsAttachPlan{
 		{Fs: CodeFsCeph, UseFentry: true, ReadSym: "ceph_read_iter", WriteSym: "ceph_write_iter"},
 		{Fs: CodeFsNFS, UseFentry: true, ReadSym: "nfs_file_read", WriteSym: "nfs_file_write", SpliceReadSym: "nfs_file_splice_read"},
+	})
+
+	got := map[string]string{}
+	for _, p := range probes {
+		assert.NotEmpty(t, p.prog, "an empty name is not a program")
+		got[p.prog] = p.sym
 	}
-
-	toDisable, attachTo := planFsToDisable(plans)
-
-	assert.NotContains(t, toDisable, "", "an empty name would fail fixupSpec")
-	assert.Equal(t, "nfs_file_splice_read", attachTo[progObiStatsFentrySpliceNFS])
-	assert.Equal(t, "nfs_file_splice_read", attachTo[progObiStatsFexitSpliceNFS])
-	assert.Contains(t, toDisable, progObiStatsKprobeSpliceNFS, "the kprobe family loses when fentry wins")
+	assert.Equal(t, "nfs_file_splice_read", got[progObiStatsFentrySpliceNFS])
+	assert.Equal(t, "nfs_file_splice_read", got[progObiStatsFexitSpliceNFS])
+	assert.NotContains(t, got, progObiStatsKprobeSpliceNFS, "the kprobe family loses when fentry wins")
+	assert.Len(t, got, 4+6)
 }

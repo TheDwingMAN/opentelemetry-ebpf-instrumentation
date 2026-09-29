@@ -197,27 +197,6 @@ func TestFixupSpecStubsTracingProgramsAsKprobes(t *testing.T) {
 	}
 }
 
-// Every filesystem program must be stubbable: allFsProgramNames feeds the
-// loader's last-resort retry, and a name the spec does not know makes
-// fixupSpec fail and takes the whole stats pipeline down with it.
-func TestAllFsProgramNamesAreStubbable(t *testing.T) {
-	names := allFsProgramNames()
-	programs := map[string]*ebpf.ProgramSpec{}
-	for _, n := range names {
-		programs[n] = &ebpf.ProgramSpec{Name: n, Type: ebpf.Tracing, AttachTo: "obi_dummy_fs_read"}
-	}
-
-	spec := &ebpf.CollectionSpec{Programs: programs}
-	if err := fixupSpec(spec, names); err != nil {
-		t.Fatalf("fixupSpec over allFsProgramNames: %v", err)
-	}
-	for _, n := range names {
-		if spec.Programs[n].Type != ebpf.Kprobe {
-			t.Errorf("program %s was not stubbed as a kprobe", n)
-		}
-	}
-}
-
 func TestFixupSpecUnknownProgram(t *testing.T) {
 	spec := &ebpf.CollectionSpec{
 		Programs: map[string]*ebpf.ProgramSpec{
@@ -226,66 +205,6 @@ func TestFixupSpecUnknownProgram(t *testing.T) {
 	}
 	if err := fixupSpec(spec, []string{"nonexistent_prog"}); err == nil {
 		t.Error("expected error for unknown program name, got nil")
-	}
-}
-
-// TestFsFsyncProgramsForRoutesByFilesystem asserts that fsFsyncProgramsFor
-// picks the fsync program set matching the requested filesystem, and that an
-// unknown filesystem code returns all-nil rather than defaulting to one of
-// the known filesystems.
-func TestFsFsyncProgramsForRoutesByFilesystem(t *testing.T) {
-	objects := &StatsObjects{}
-	objects.ObiStatsFentryNfsFsync = &ebpf.Program{}
-	objects.ObiStatsFexitNfsFsync = &ebpf.Program{}
-	objects.ObiStatsKprobeNfsFsync = &ebpf.Program{}
-	objects.ObiStatsKretprobeNfsFsync = &ebpf.Program{}
-	objects.ObiStatsFentryCephFsync = &ebpf.Program{}
-	objects.ObiStatsFexitCephFsync = &ebpf.Program{}
-	objects.ObiStatsKprobeCephFsync = &ebpf.Program{}
-	objects.ObiStatsKretprobeCephFsync = &ebpf.Program{}
-	objects.ObiStatsFentryCifsFsync = &ebpf.Program{}
-	objects.ObiStatsFexitCifsFsync = &ebpf.Program{}
-	objects.ObiStatsKprobeCifsFsync = &ebpf.Program{}
-	objects.ObiStatsKretprobeCifsFsync = &ebpf.Program{}
-	objects.ObiStatsFentryFuseFsync = &ebpf.Program{}
-	objects.ObiStatsFexitFuseFsync = &ebpf.Program{}
-	objects.ObiStatsKprobeFuseFsync = &ebpf.Program{}
-	objects.ObiStatsKretprobeFuseFsync = &ebpf.Program{}
-	objects.ObiStatsFentryExt4Fsync = &ebpf.Program{}
-	objects.ObiStatsFexitExt4Fsync = &ebpf.Program{}
-	objects.ObiStatsKprobeExt4Fsync = &ebpf.Program{}
-	objects.ObiStatsKretprobeExt4Fsync = &ebpf.Program{}
-	objects.ObiStatsFentryXfsFsync = &ebpf.Program{}
-	objects.ObiStatsFexitXfsFsync = &ebpf.Program{}
-	objects.ObiStatsKprobeXfsFsync = &ebpf.Program{}
-	objects.ObiStatsKretprobeXfsFsync = &ebpf.Program{}
-	objects.ObiStatsFentryBtrfsFsync = &ebpf.Program{}
-	objects.ObiStatsFexitBtrfsFsync = &ebpf.Program{}
-	objects.ObiStatsKprobeBtrfsFsync = &ebpf.Program{}
-	objects.ObiStatsKretprobeBtrfsFsync = &ebpf.Program{}
-
-	for _, tc := range []struct {
-		fs                                               FsTypeCode
-		wantFentry, wantFexit, wantKprobe, wantKretprobe *ebpf.Program
-	}{
-		{CodeFsNFS, objects.ObiStatsFentryNfsFsync, objects.ObiStatsFexitNfsFsync, objects.ObiStatsKprobeNfsFsync, objects.ObiStatsKretprobeNfsFsync},
-		{CodeFsCeph, objects.ObiStatsFentryCephFsync, objects.ObiStatsFexitCephFsync, objects.ObiStatsKprobeCephFsync, objects.ObiStatsKretprobeCephFsync},
-		{CodeFsCIFS, objects.ObiStatsFentryCifsFsync, objects.ObiStatsFexitCifsFsync, objects.ObiStatsKprobeCifsFsync, objects.ObiStatsKretprobeCifsFsync},
-		{CodeFsFUSE, objects.ObiStatsFentryFuseFsync, objects.ObiStatsFexitFuseFsync, objects.ObiStatsKprobeFuseFsync, objects.ObiStatsKretprobeFuseFsync},
-		{CodeFsExt4, objects.ObiStatsFentryExt4Fsync, objects.ObiStatsFexitExt4Fsync, objects.ObiStatsKprobeExt4Fsync, objects.ObiStatsKretprobeExt4Fsync},
-		{CodeFsXFS, objects.ObiStatsFentryXfsFsync, objects.ObiStatsFexitXfsFsync, objects.ObiStatsKprobeXfsFsync, objects.ObiStatsKretprobeXfsFsync},
-		{CodeFsBtrfs, objects.ObiStatsFentryBtrfsFsync, objects.ObiStatsFexitBtrfsFsync, objects.ObiStatsKprobeBtrfsFsync, objects.ObiStatsKretprobeBtrfsFsync},
-	} {
-		fentry, fexit, kprobe, kretprobe := fsFsyncProgramsFor(tc.fs, objects)
-		if fentry != tc.wantFentry || fexit != tc.wantFexit || kprobe != tc.wantKprobe || kretprobe != tc.wantKretprobe {
-			t.Errorf("fsFsyncProgramsFor(%d): got (%p,%p,%p,%p), want (%p,%p,%p,%p)",
-				tc.fs, fentry, fexit, kprobe, kretprobe, tc.wantFentry, tc.wantFexit, tc.wantKprobe, tc.wantKretprobe)
-		}
-	}
-
-	fentry, fexit, kprobe, kretprobe := fsFsyncProgramsFor(CodeFsUnknown, objects)
-	if fentry != nil || fexit != nil || kprobe != nil || kretprobe != nil {
-		t.Errorf("fsFsyncProgramsFor(unknown): got (%p,%p,%p,%p), want all nil", fentry, fexit, kprobe, kretprobe)
 	}
 }
 

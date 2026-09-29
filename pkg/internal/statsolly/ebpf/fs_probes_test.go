@@ -58,30 +58,6 @@ func TestResolveFsSymbolFallsBackToKallsyms(t *testing.T) {
 	assert.Equal(t, "nfs_file_read", sym)
 }
 
-// The late attacher plans only filesystems it has not attached yet whose
-// module is loaded; with none, it does not read the symbol table at all.
-func TestPlanPendingFsAttachOnlyLoadedModules(t *testing.T) {
-	dir := t.TempDir()
-	oldModules, oldTracefs, oldKallsyms := sysModuleDir, tracefsAvailableFuncs, procKallsyms
-	sysModuleDir = filepath.Join(dir, "module")
-	tracefsAvailableFuncs = filepath.Join(dir, "available_filter_functions")
-	procKallsyms = filepath.Join(dir, "kallsyms")
-	t.Cleanup(func() { sysModuleDir, tracefsAvailableFuncs, procKallsyms = oldModules, oldTracefs, oldKallsyms })
-	require.NoError(t, os.MkdirAll(sysModuleDir, 0o755))
-	require.NoError(t, os.WriteFile(tracefsAvailableFuncs,
-		[]byte("nfs_file_read [nfs]\nnfs_file_write [nfs]\nceph_read_iter [ceph]\nceph_write_iter [ceph]\n"), 0o644))
-
-	assert.Empty(t, planPendingFsAttach(map[FsTypeCode]bool{}), "no module loaded")
-
-	require.NoError(t, os.MkdirAll(filepath.Join(sysModuleDir, "nfs"), 0o755))
-	plans := planPendingFsAttach(map[FsTypeCode]bool{})
-	require.Len(t, plans, 1, "ceph's symbols are listed but its module is not loaded")
-	assert.Equal(t, CodeFsNFS, plans[0].Fs)
-	assert.Equal(t, "nfs_file_read", plans[0].ReadSym)
-
-	assert.Empty(t, planPendingFsAttach(map[FsTypeCode]bool{CodeFsNFS: true}), "nfs already attached")
-}
-
 func TestFsTargetsCoverAllFilesystems(t *testing.T) {
 	seen := map[FsTypeCode]bool{}
 	for _, tgt := range fsTargets {

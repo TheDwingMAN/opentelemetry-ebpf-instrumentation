@@ -76,10 +76,11 @@ func loadAndVerify(t *testing.T, name string, loadFn func() (*ebpf.CollectionSpe
 		}
 		uprobe.PrepareSpecs(spec)
 
-		// Storage filesystem programs carry a placeholder attach target until
-		// the loader points them at this kernel's symbols or turns them into
-		// kprobes; verify them the way they would actually load here.
-		if spec.Programs["obi_stats_tp_block_rq_issue"] != nil {
+		// Storage programs are verified the way they would actually load
+		// here: one block tracepoint family, and the filesystem programs,
+		// which carry a placeholder attach target, pointed at this kernel's
+		// symbols or turned into kprobes.
+		if spec.Programs["obi_stats_tp_block_rq_issue"] != nil || spec.Programs["obi_stats_fentry_nfs_read"] != nil {
 			require.NoError(t, statsolly.PrepareStorageSpec(spec), "failed to prepare storage programs")
 		}
 
@@ -313,5 +314,9 @@ func TestBPFVerifierWithConstants(t *testing.T) {
 		{"stats_wakeup_data_bytes", []any{uint32(0), uint32(1 << 20)}},
 		{"blk_want_queue_depth", []any{uint8(0), uint8(1)}},
 		{"blk_emit_kinds", []any{uint8(0), uint8(0x0f)}},
+	})
+	forEachCombination(t, "statsolly/FsIo", statsolly.LoadFsIo, []constOption{
+		{"g_bpf_debug", []any{true, false}},
+		{"stats_wakeup_data_bytes", []any{uint32(0), uint32(1 << 20)}},
 	})
 }

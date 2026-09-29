@@ -1065,3 +1065,5 @@ int BPF_KRETPROBE(obi_stats_kretprobe_btrfs_splice_read, long ret) {
     fs_probe_exit(ret);
     return 0;
 }
+
+char __license[] SEC("license") = "Dual MIT/GPL";

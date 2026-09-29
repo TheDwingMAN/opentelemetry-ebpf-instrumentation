@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/cilium/ebpf/btf"
 )
@@ -98,26 +98,29 @@ func moduleBTFExists(mod string) bool {
 	return err == nil
 }
 
-// kernelBTFSpecOnce/kernelBTFSpec cache the parsed kernel BTF across every
-// fentryCapable call: LoadKernelSpec parses the whole vmlinux BTF blob on
-// each invocation, and every built-in filesystem probed here (ext4, xfs,
-// btrfs) shares this one lookup.
-var (
-	kernelBTFSpecOnce sync.Once
-	kernelBTFSpec     *btf.Spec
-)
+// kernelBTFCache holds the parsed kernel BTF for every stats collection load
+// and every probe plan of this process. Parsing vmlinux BTF costs tens of
+// milliseconds and megabytes of memory, and without a shared cache cilium
+// parses it, and every module's BTF, again for each collection it loads.
+var kernelBTFCache = btf.NewCache()
 
+// kernelBTF returns the kernel's BTF, or nil when it has none: expected on
+// RHEL8-family kernels, where fentryCapable is then false for every symbol
+// and the filesystems attach through kprobes instead.
 func kernelBTF() *btf.Spec {
-	kernelBTFSpecOnce.Do(func() {
-		// Absence of kernel BTF (or an unreadable /sys/kernel/btf/vmlinux) is
-		// expected on RHEL8-family kernels; fentryCapable falls back to false
-		// for such symbols, and the caller attaches via kprobe instead.
-		spec, err := btf.LoadKernelSpec()
-		if err == nil {
-			kernelBTFSpec = spec
-		}
-	})
-	return kernelBTFSpec
+	spec, err := kernelBTFCache.Kernel()
+	if err != nil {
+		return nil
+	}
+	return spec
+}
+
+// timeKernelBTFParse parses the kernel BTF into kernelBTFCache, if nothing has
+// yet, and returns how long that took.
+func timeKernelBTFParse() time.Duration {
+	start := time.Now()
+	kernelBTF()
+	return time.Since(start)
 }
 
 // blockRawTracepointCapable reports whether the block raw tracepoints can
@@ -246,7 +249,10 @@ func moduleLoaded(module string) bool {
 }
 
 type fsAttachPlan struct {
-	Fs        FsTypeCode
+	Fs FsTypeCode
+	// Module is the kernel module the filesystem lives in, or is named after
+	// when built in.
+	Module    string
 	UseFentry bool
 	ReadSym   string
 	WriteSym  string
@@ -278,6 +284,7 @@ func planFsAttachWith(
 		spliceReadSym, _ := resolve(tgt.SpliceReadSyms)
 		plans = append(plans, fsAttachPlan{
 			Fs:            tgt.Fs,
+			Module:        tgt.Module,
 			UseFentry:     fentryCapable(tgt.Module, readSym),
 			ReadSym:       readSym,
 			WriteSym:      writeSym,
@@ -289,20 +296,10 @@ func planFsAttachWith(
 }
 
 func planFsAttach() []fsAttachPlan {
-	return planFsAttachWith(fsTargets, fentryCapable, symbolResolver(fsTargets))
+	return planFsTargets(fsTargets)
 }
 
-// planPendingFsAttach plans only the filesystems not in done whose module is
-// loaded. With none of them loaded, as on most ticks, it reads nothing.
-func planPendingFsAttach(done map[FsTypeCode]bool) []fsAttachPlan {
-	var pending []fsTarget
-	for _, tgt := range fsTargets {
-		if !done[tgt.Fs] && moduleLoaded(tgt.Module) {
-			pending = append(pending, tgt)
-		}
-	}
-	if len(pending) == 0 {
-		return nil
-	}
-	return planFsAttachWith(pending, fentryCapable, symbolResolver(pending))
+// planFsTargets plans targets from a single read of the symbol table.
+func planFsTargets(targets []fsTarget) []fsAttachPlan {
+	return planFsAttachWith(targets, fentryCapable, symbolResolver(targets))
 }
