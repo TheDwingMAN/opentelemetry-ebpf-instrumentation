@@ -51,15 +51,15 @@ type closeCounter struct{ n *int }
 func (c closeCounter) Close() error { *c.n++; return nil }
 
 // A filesystem that appears after startup is attached exactly once; the ones
-// attached at startup are never attached again, and one that fails is not
-// retried on every tick.
+// attached at startup are never attached again, and one that fails is retried
+// a few times, then left alone.
 func TestLateFsAttacherAttachesNewFilesystemsOnce(t *testing.T) {
 	var planned []fsAttachPlan
 	var attempts []FsTypeCode
 	closed := 0
 	a := &lateFsAttacher{
 		log:  slog.Default(),
-		plan: func() []fsAttachPlan { return planned },
+		plan: func(map[FsTypeCode]bool) []fsAttachPlan { return planned },
 		done: map[FsTypeCode]bool{CodeFsXFS: true}, // attached at startup
 		attachFn: func(p fsAttachPlan) ([]io.Closer, error) {
 			attempts = append(attempts, p.Fs)
@@ -82,9 +82,11 @@ func TestLateFsAttacherAttachesNewFilesystemsOnce(t *testing.T) {
 	a.attachNew()
 	assert.Equal(t, []FsTypeCode{CodeFsNFS, CodeFsCIFS}, attempts)
 
-	// Next tick: nothing new, and the failed cifs is not retried.
-	a.attachNew()
-	assert.Len(t, attempts, 2)
+	// cifs is retried on the following ticks, then given up on.
+	for range fsLateAttachTries + 2 {
+		a.attachNew()
+	}
+	assert.Equal(t, []FsTypeCode{CodeFsNFS, CodeFsCIFS, CodeFsCIFS, CodeFsCIFS}, attempts)
 
 	close(a.stopped) // run() was never started
 	require.NoError(t, a.Close())

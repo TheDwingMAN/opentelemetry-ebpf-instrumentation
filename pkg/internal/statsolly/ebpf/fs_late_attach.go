@@ -23,6 +23,12 @@ import (
 // that type, which on a freshly started node comes after OBI.
 const fsLateAttachInterval = 30 * time.Second
 
+// fsLateAttachTries bounds how often a filesystem whose probes fail to attach
+// is tried again, one tick apart, before it is left alone until OBI restarts.
+// A module still initializing can fail once; a verifier rejection fails every
+// time.
+const fsLateAttachTries = 3
+
 // lateFsAttacher attaches the probes of a filesystem that became probeable
 // after the stats collection was loaded. Each such filesystem gets a small
 // collection of its own, containing only its programs; the maps they write
@@ -31,13 +37,16 @@ const fsLateAttachInterval = 30 * time.Second
 type lateFsAttacher struct {
 	log  *slog.Logger
 	load func(toDisable []string, attachTo map[string]string, objects *StatsObjects) error
-	plan func() []fsAttachPlan
+	// plan returns the filesystems probeable now among those not in done.
+	plan func(done map[FsTypeCode]bool) []fsAttachPlan
 	// attachFn is attach, replaceable in tests that cannot load BPF.
 	attachFn func(fsAttachPlan) ([]io.Closer, error)
 
-	// done holds every filesystem already attached or already tried, so a
-	// filesystem that fails to attach is not retried on every tick.
+	// done holds every filesystem already attached or given up on, so a
+	// filesystem that keeps failing to attach is not retried on every tick.
 	done map[FsTypeCode]bool
+	// failures counts failed attach attempts per filesystem.
+	failures map[FsTypeCode]int
 	// startLocalFilter starts the ext4/xfs/btrfs device allowlist refresher
 	// the first time a local filesystem attaches late; nil when it already
 	// runs.
@@ -65,18 +74,28 @@ func (a *lateFsAttacher) run() {
 
 // attachNew attaches every planned filesystem not attached or tried yet.
 func (a *lateFsAttacher) attachNew() {
-	for _, plan := range a.plan() {
+	for _, plan := range a.plan(a.done) {
 		if a.done[plan.Fs] {
 			continue
 		}
-		a.done[plan.Fs] = true
 
 		closables, err := a.attachFn(plan)
 		if err != nil {
+			if a.failures == nil {
+				a.failures = map[FsTypeCode]int{}
+			}
+			a.failures[plan.Fs]++
+			if a.failures[plan.Fs] < fsLateAttachTries {
+				a.log.Warn("filesystem became probeable but its probes failed to attach; retrying",
+					"fs", fsTypeStr(plan.Fs), "fentry", plan.UseFentry, "error", err)
+				continue
+			}
+			a.done[plan.Fs] = true
 			a.log.Warn("filesystem became probeable but its probes failed to attach; not retrying",
 				"fs", fsTypeStr(plan.Fs), "fentry", plan.UseFentry, "error", err)
 			continue
 		}
+		a.done[plan.Fs] = true
 		a.mu.Lock()
 		a.closables = append(a.closables, closables...)
 		a.mu.Unlock()
@@ -166,7 +185,7 @@ func startLateFsAttacher(
 		load: func(toDisable []string, attachTo map[string]string, objects *StatsObjects) error {
 			return loadStatsObjects(cfg, toDisable, attachTo, objects, sharedMaps, mu)
 		},
-		plan:    planFsAttach,
+		plan:    planPendingFsAttach,
 		done:    map[FsTypeCode]bool{},
 		stop:    make(chan struct{}),
 		stopped: make(chan struct{}),
