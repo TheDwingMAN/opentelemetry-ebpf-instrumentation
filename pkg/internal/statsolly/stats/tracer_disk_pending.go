@@ -4,94 +4,16 @@
 package stats // import "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 
 import (
-	"errors"
+	"bufio"
+	"fmt"
 	"log/slog"
-	"maps"
-	"slices"
-	"time"
-
-	ciliumebpf "github.com/cilium/ebpf"
-	"golang.org/x/sys/unix"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 )
-
-// staleRequestAge is how long after its issue an entry of disk_rq_start stops counting as a
-// request in flight. Devices time out and complete (or fail) requests much sooner, so older
-// entries are requests whose completion was not seen, which the LRU map evicts eventually.
-const staleRequestAge = 10 * time.Minute
-
-// requestSource abstracts the disk_rq_start and disk_bio_start eBPF maps, for testing
-type requestSource interface {
-	requests() ([]ebpf.StatsDiskRqStartT, error)
-}
-
-type ebpfRequests struct {
-	// the block requests in flight, and the bios in flight of the stacked volumes (nil unless they
-	// are measured)
-	starts, bioStarts *ciliumebpf.Map
-}
-
-func (e ebpfRequests) requests() ([]ebpf.StatsDiskRqStartT, error) {
-	requests, err := inFlightEntries(e.starts)
-	if err != nil || e.bioStarts == nil {
-		return requests, err
-	}
-	bios, err := inFlightEntries(e.bioStarts)
-	return append(requests, bios...), err
-}
-
-// inFlightBatchLen is how many entries a batch lookup of the requests in flight reads at once
-const inFlightBatchLen = 1024
-
-// inFlightEntries returns the values of a map of requests or bios in flight, keyed by their
-// address. Requests complete and new ones start while the map is read, so the read must be as
-// short as possible not to count the same reader several times: a batch lookup reads it in a
-// few system calls, where iterating it takes two per entry. Kernels without batch map operations
-// (e.g. RHEL 8) iterate it.
-func inFlightEntries(starts *ciliumebpf.Map) ([]ebpf.StatsDiskRqStartT, error) {
-	if entries, err := batchInFlightEntries(starts); err == nil {
-		return entries, nil
-	}
-	return iterateInFlightEntries(starts.Iterate())
-}
-
-func batchInFlightEntries(starts *ciliumebpf.Map) ([]ebpf.StatsDiskRqStartT, error) {
-	keys := make([]uint64, inFlightBatchLen)
-	values := make([]ebpf.StatsDiskRqStartT, inFlightBatchLen)
-	var entries []ebpf.StatsDiskRqStartT
-	cursor := ciliumebpf.MapBatchCursor{}
-	for {
-		n, err := starts.BatchLookup(&cursor, keys, values, nil)
-		entries = append(entries, values[:n]...)
-		// the kernel reports the end of the map as a missing key
-		if errors.Is(err, ciliumebpf.ErrKeyNotExist) {
-			return entries, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-}
-
-// mapIterator is the part of a map iterator that iterateInFlightEntries uses, for testing
-type mapIterator interface {
-	Next(keyOut, valueOut any) bool
-	Err() error
-}
-
-// iterateInFlightEntries iterates the map. The kernel deletes entries while it is iterated, and
-// the iteration starts over from the first entry when the entry at the cursor is gone, so the
-// entries are deduplicated by key.
-func iterateInFlightEntries(iter mapIterator) ([]ebpf.StatsDiskRqStartT, error) {
-	byAddress := map[uint64]ebpf.StatsDiskRqStartT{}
-	var key uint64
-	var start ebpf.StatsDiskRqStartT
-	for iter.Next(&key, &start) {
-		byAddress[key] = start
-	}
-	return slices.Collect(maps.Values(byAddress)), iter.Err()
-}
 
 type pendingKey struct {
 	device  string
@@ -99,14 +21,13 @@ type pendingKey struct {
 	op      ebpf.DiskOpCode
 }
 
-// pendingReader counts the reads and writes that each device is serving, from the requests in
-// flight that the kernel tracks, or the bios in flight for the stacked volumes. Unlike the accumulation readers, it reports every device that did
-// I/O recently, including those that have no request in flight at the time of the read.
+// pendingReader counts the reads and writes that each device is serving, as the kernel counts
+// them for iostat. Unlike the accumulation readers, it reports every device that did I/O
+// recently, including those that have no request in flight at the time of the read.
 type pendingReader struct {
 	log      *slog.Logger
-	source   requestSource
+	procRoot string
 	devices  *deviceNames
-	nowNs    func() uint64
 	idleRead map[pendingKey]int
 }
 
@@ -119,44 +40,56 @@ func (p *pendingReader) observe(io *ebpf.DiskIO) {
 	p.idleRead[pendingKey{device: io.Device, stacked: io.Stacked, op: io.Op}] = 0
 }
 
-func newPendingReader(source requestSource, devices *deviceNames) *pendingReader {
+func newPendingReader(procRoot string, devices *deviceNames) *pendingReader {
 	return &pendingReader{
-		log:      dtlog().With("map", "disk_rq_start"),
-		source:   source,
+		log:      dtlog().With("source", "diskstats"),
+		procRoot: procRoot,
 		devices:  devices,
-		nowNs:    monotonicNs,
 		idleRead: map[pendingKey]int{},
 	}
 }
 
-// monotonicNs is the time of the clock that bpf_ktime_get_ns reads
-func monotonicNs() uint64 {
-	var ts unix.Timespec
-	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &ts); err != nil {
-		return 0
-	}
-	return uint64(ts.Nano())
-}
-
 func (p *pendingReader) readStats() []*ebpf.Stat {
-	requests, err := p.source.requests()
+	busy, err := devicesInFlight(filepath.Join(p.procRoot, "diskstats"))
 	if err != nil {
 		// a partial read would undercount: skip it, the next read reports the current count
 		p.log.Debug("can't read the requests in flight", "error", err)
 		return nil
 	}
-	now := p.nowNs()
-	pending := map[pendingKey]int64{}
-	for _, request := range requests {
-		op := ebpf.DiskOpCode(request.Op)
-		if !op.IsTransfer() || now-request.IssuedNs > uint64(staleRequestAge) {
+	disks := map[string]*diskInFlight{}
+	for _, numbers := range busy {
+		reads, writes, err := readInflight(filepath.Join(p.devices.sysRoot, "dev", "block", numbers, "inflight"))
+		if err != nil {
+			// removed since
 			continue
 		}
-		pending[pendingKey{
-			device:  p.devices.name(request.Major, request.Minor),
-			stacked: p.devices.stacked(request.Major, request.Minor),
-			op:      op,
-		}]++
+		disk, partition := p.diskOf(numbers)
+		if disk == "" {
+			continue
+		}
+		counts := disks[disk]
+		if counts == nil {
+			counts = &diskInFlight{}
+			disks[disk] = counts
+		}
+		if partition {
+			counts.partitionReads += reads
+			counts.partitionWrites += writes
+		} else {
+			counts.reads, counts.writes = reads, writes
+		}
+	}
+	pending := map[pendingKey]int64{}
+	for numbers, counts := range disks {
+		major, minor := parseDevNumbers(numbers)
+		device := p.devices.name(major, minor)
+		stacked := p.devices.stacked(major, minor)
+		if reads := max(counts.reads, counts.partitionReads); reads > 0 {
+			pending[pendingKey{device: device, stacked: stacked, op: ebpf.CodeDiskOpRead}] = reads
+		}
+		if writes := max(counts.writes, counts.partitionWrites); writes > 0 {
+			pending[pendingKey{device: device, stacked: stacked, op: ebpf.CodeDiskOpWrite}] = writes
+		}
 	}
 
 	for key := range p.idleRead {
@@ -184,4 +117,82 @@ func (p *pendingReader) readStats() []*ebpf.Stat {
 		})
 	}
 	return stats
+}
+
+// diskInFlight is what a disk and its partitions report in flight. Before Linux 5.11, a disk
+// doesn't count the requests of its partitions, which count their own: the larger of the two is
+// what the disk serves, short of the requests on the whole disk while its partitions have some.
+type diskInFlight struct {
+	reads, writes                   int64
+	partitionReads, partitionWrites int64
+}
+
+// diskOf returns the "major:minor" numbers of the disk of a block device, which is itself unless
+// it is a partition, or an empty string if it was removed since
+func (p *pendingReader) diskOf(numbers string) (disk string, partition bool) {
+	dir := filepath.Join(p.devices.sysRoot, "dev", "block", numbers)
+	if !exists(filepath.Join(dir, "partition")) {
+		return numbers, false
+	}
+	// the sysfs directory of a partition is in the one of its disk
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", true
+	}
+	content, err := os.ReadFile(filepath.Join(filepath.Dir(resolved), "dev"))
+	if err != nil {
+		return "", true
+	}
+	return strings.TrimSpace(string(content)), true
+}
+
+// diskstatsInFlightField is the index of the "I/Os currently in progress" field in a line of
+// /proc/diskstats, after the major and minor numbers and the device name
+const diskstatsInFlightField = 11
+
+// devicesInFlight returns the "major:minor" numbers of the block devices and partitions that
+// have requests in flight, from /proc/diskstats
+func devicesInFlight(diskstats string) ([]string, error) {
+	f, err := os.Open(diskstats)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var busy []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) <= diskstatsInFlightField || fields[diskstatsInFlightField] == "0" {
+			continue
+		}
+		busy = append(busy, fields[0]+":"+fields[1])
+	}
+	return busy, scanner.Err()
+}
+
+// readInflight reads the reads and writes in flight of a block device from its sysfs inflight
+// file. The kernel counts flushes and discards as writes.
+func readInflight(path string) (reads, writes int64, err error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	fields := strings.Fields(string(content))
+	if len(fields) != 2 {
+		return 0, 0, fmt.Errorf("unexpected content of %s: %q", path, content)
+	}
+	if reads, err = strconv.ParseInt(fields[0], 10, 64); err != nil {
+		return 0, 0, err
+	}
+	if writes, err = strconv.ParseInt(fields[1], 10, 64); err != nil {
+		return 0, 0, err
+	}
+	return reads, writes, nil
+}
+
+func parseDevNumbers(numbers string) (major, minor uint32) {
+	ma, mi, _ := strings.Cut(numbers, ":")
+	majorN, _ := strconv.ParseUint(ma, 10, 32)
+	minorN, _ := strconv.ParseUint(mi, 10, 32)
+	return uint32(majorN), uint32(minorN)
 }

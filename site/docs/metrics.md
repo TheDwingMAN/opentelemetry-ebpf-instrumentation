@@ -1366,7 +1366,7 @@ Completed block I/O requests, per block device, direction, outcome and workload 
 
 ## `obi.stat.disk.pending_operations`
 
-Number of block read and write requests that a device is serving: issued to the device and not yet completed, per block device and direction.
+Number of block read and write requests that a device is serving, as the kernel counts them for iostat, per block device and direction.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |

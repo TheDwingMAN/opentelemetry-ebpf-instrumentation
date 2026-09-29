@@ -44,14 +44,6 @@ func (m *StatsFetcher) DiskIOAccumMap() *ciliumebpf.Map {
 	return nil
 }
 
-func (m *StatsFetcher) DiskRequestsMap() *ciliumebpf.Map {
-	return nil
-}
-
-func (m *StatsFetcher) DiskBioRequestsMap() *ciliumebpf.Map {
-	return nil
-}
-
 func (m *StatsFetcher) DiskBioAccumMap() *ciliumebpf.Map {
 	return nil
 }

@@ -4,8 +4,11 @@
 package stats
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,15 +16,61 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 )
 
-type fakeRequests []ebpf.StatsDiskRqStartT
-
-func (f *fakeRequests) requests() ([]ebpf.StatsDiskRqStartT, error) {
-	return *f, nil
+// fakeBlockDevices is a /proc and a /sys root with the block devices and the requests in flight
+// that the kernel reports
+type fakeBlockDevices struct {
+	t                 *testing.T
+	procRoot, sysRoot string
+	diskstats         []string
 }
 
-// inFlight is a request in flight on the disk 8:0
-func inFlight(op ebpf.StatsDiskOp, issuedNs uint64) ebpf.StatsDiskRqStartT {
-	return ebpf.StatsDiskRqStartT{Major: 8, Minor: 0, Op: op, IssuedNs: issuedNs}
+func newFakeBlockDevices(t *testing.T) *fakeBlockDevices {
+	root := t.TempDir()
+	f := &fakeBlockDevices{t: t, procRoot: filepath.Join(root, "proc"), sysRoot: filepath.Join(root, "sys")}
+	require.NoError(t, os.MkdirAll(f.procRoot, 0o755))
+	f.write()
+	return f
+}
+
+// disk adds a block device with the requests it reports in flight
+func (f *fakeBlockDevices) disk(numbers, name string, reads, writes int) {
+	f.device(filepath.Join(f.sysRoot, "block", name), numbers, name, reads, writes)
+}
+
+// partition adds a partition of a disk with the requests it reports in flight
+func (f *fakeBlockDevices) partition(disk, numbers, name string, reads, writes int) {
+	dir := filepath.Join(f.sysRoot, "block", disk, name)
+	f.device(dir, numbers, name, reads, writes)
+	require.NoError(f.t, os.WriteFile(filepath.Join(dir, "partition"), []byte("1\n"), 0o644))
+}
+
+// device creates the sysfs directory of a block device, linked from /sys/dev/block as the kernel
+// does, and its line of /proc/diskstats
+func (f *fakeBlockDevices) device(dir, numbers, name string, reads, writes int) {
+	require.NoError(f.t, os.MkdirAll(dir, 0o755))
+	require.NoError(f.t, os.WriteFile(filepath.Join(dir, "dev"), []byte(numbers+"\n"), 0o644))
+	require.NoError(f.t, os.WriteFile(filepath.Join(dir, "uevent"), []byte("DEVNAME="+name+"\n"), 0o644))
+	require.NoError(f.t, os.WriteFile(filepath.Join(dir, "inflight"), fmt.Appendf(nil, "%8d %8d\n", reads, writes), 0o644))
+	byNumbers := filepath.Join(f.sysRoot, "dev", "block")
+	require.NoError(f.t, os.MkdirAll(byNumbers, 0o755))
+	require.NoError(f.t, os.Symlink(dir, filepath.Join(byNumbers, numbers)))
+	major, minor, _ := strings.Cut(numbers, ":")
+	f.diskstats = append(f.diskstats, fmt.Sprintf("%4s %7s %s 10 0 80 5 20 0 160 9 %d 12 14 0 0 0 0 0 0",
+		major, minor, name, reads+writes))
+	f.write()
+}
+
+func (f *fakeBlockDevices) removeAll() {
+	f.diskstats = nil
+	f.write()
+}
+
+func (f *fakeBlockDevices) write() {
+	require.NoError(f.t, os.WriteFile(filepath.Join(f.procRoot, "diskstats"), []byte(strings.Join(f.diskstats, "\n")+"\n"), 0o644))
+}
+
+func (f *fakeBlockDevices) reader() *pendingReader {
+	return newPendingReader(f.procRoot, &deviceNames{sysRoot: f.sysRoot})
 }
 
 func pendingByDevice(stats []*ebpf.Stat) map[string]int64 {
@@ -40,29 +89,22 @@ func directionOf(op ebpf.DiskOpCode) string {
 }
 
 func TestPendingReaderCountsRequestsInFlight(t *testing.T) {
-	const now = uint64(1000 * time.Second)
-	src := &fakeRequests{
-		inFlight(ebpf.StatsDiskOpDiskOpRead, now-1000),
-		inFlight(ebpf.StatsDiskOpDiskOpRead, now-2000),
-		inFlight(ebpf.StatsDiskOpDiskOpWrite, now-3000),
-		inFlight(ebpf.StatsDiskOpDiskOpFlush, now-3000),
-		// issued too long ago: a request whose completion was not seen
-		inFlight(ebpf.StatsDiskOpDiskOpWrite, now-uint64(staleRequestAge)-1),
-	}
-	r := newPendingReader(src, &deviceNames{sysRoot: "/nonexistent"})
-	r.nowNs = func() uint64 { return now }
+	devices := newFakeBlockDevices(t)
+	// since Linux 5.11, a disk counts the requests of its partitions
+	devices.disk("8:0", "sda", 2, 1)
+	devices.partition("sda", "8:1", "sda1", 2, 1)
+	devices.disk("259:0", "nvme0n1", 0, 0)
+	r := devices.reader()
 
-	assert.Equal(t, map[string]int64{"8:0/read": 2, "8:0/write": 1}, pendingByDevice(r.readStats()),
-		"only reads and writes count, and stale requests don't")
+	assert.Equal(t, map[string]int64{"sda/read": 2, "sda/write": 1}, pendingByDevice(r.readStats()))
 
 	// the requests completed: the device is still reported, with nothing in flight
-	*src = nil
-	assert.Equal(t, map[string]int64{"8:0/read": 0, "8:0/write": 0}, pendingByDevice(r.readStats()))
+	devices.removeAll()
+	assert.Equal(t, map[string]int64{"sda/read": 0, "sda/write": 0}, pendingByDevice(r.readStats()))
 }
 
 func TestPendingReaderReportsDevicesThatDidIO(t *testing.T) {
-	r := newPendingReader(&fakeRequests{}, &deviceNames{sysRoot: "/nonexistent"})
-	r.nowNs = func() uint64 { return 20 }
+	r := newFakeBlockDevices(t).reader()
 	// the device completed reads, although no request was in flight at the time of the read
 	r.observe(&ebpf.DiskIO{Device: "nvme0n1", Op: ebpf.CodeDiskOpRead})
 	r.observe(&ebpf.DiskIO{Device: "nvme0n1", Op: ebpf.CodeDiskOpFlush})
@@ -71,49 +113,36 @@ func TestPendingReaderReportsDevicesThatDidIO(t *testing.T) {
 		"flushes are not counted")
 }
 
+func TestPendingReaderCountsPartitionsOnOlderKernels(t *testing.T) {
+	devices := newFakeBlockDevices(t)
+	// before Linux 5.11, a disk only counts the requests on the whole disk
+	devices.disk("8:0", "sda", 0, 1)
+	devices.partition("sda", "8:1", "sda1", 3, 0)
+	devices.partition("sda", "8:2", "sda2", 1, 0)
+
+	assert.Equal(t, map[string]int64{"sda/read": 4, "sda/write": 1}, pendingByDevice(devices.reader().readStats()))
+}
+
 func TestPendingReaderForgetsIdleDevices(t *testing.T) {
-	src := &fakeRequests{inFlight(ebpf.StatsDiskOpDiskOpRead, 10)}
-	r := newPendingReader(src, &deviceNames{sysRoot: "/nonexistent"})
-	r.nowNs = func() uint64 { return 20 }
+	devices := newFakeBlockDevices(t)
+	devices.disk("8:0", "sda", 1, 0)
+	r := devices.reader()
 	require.Len(t, r.readStats(), 1)
 
-	*src = nil
+	devices.removeAll()
 	for range diskIdleReadsBeforeDelete {
 		require.Len(t, r.readStats(), 1, "reported with 0 requests while idle")
 	}
 	assert.Empty(t, r.readStats(), "forgotten after being idle for long")
 }
 
-// restartingIterator yields its entries like a map iteration that starts over from the first
-// entry after some of them were deleted
-type restartingIterator struct {
-	keys   []uint64
-	starts []ebpf.StatsDiskRqStartT
-	next   int
-}
+func TestPendingReaderSkipsUnreadableCounts(t *testing.T) {
+	devices := newFakeBlockDevices(t)
+	devices.disk("8:0", "sda", 1, 0)
+	r := devices.reader()
+	require.NoError(t, os.Remove(filepath.Join(devices.sysRoot, "block", "sda", "inflight")))
+	assert.Empty(t, r.readStats(), "a device removed since /proc/diskstats was read is skipped")
 
-func (it *restartingIterator) Next(keyOut, valueOut any) bool {
-	if it.next >= len(it.keys) {
-		return false
-	}
-	*keyOut.(*uint64) = it.keys[it.next]
-	*valueOut.(*ebpf.StatsDiskRqStartT) = it.starts[it.next]
-	it.next++
-	return true
-}
-
-func (it *restartingIterator) Err() error {
-	return nil
-}
-
-func TestIteratedRequestsAreCountedOnce(t *testing.T) {
-	read := inFlight(ebpf.StatsDiskOpDiskOpRead, 10)
-	iter := &restartingIterator{
-		// the iteration started over after the third entry
-		keys:   []uint64{0xa0, 0xb0, 0xc0, 0xa0, 0xb0, 0xd0},
-		starts: []ebpf.StatsDiskRqStartT{read, read, read, read, read, read},
-	}
-	requests, err := iterateInFlightEntries(iter)
-	require.NoError(t, err)
-	assert.Len(t, requests, 4)
+	require.NoError(t, os.Remove(filepath.Join(devices.procRoot, "diskstats")))
+	assert.Nil(t, r.readStats())
 }

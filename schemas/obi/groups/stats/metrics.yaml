@@ -731,8 +731,8 @@ groups:
     unit: "{operation}"
     stability: development
     brief: >
-      Number of block read and write requests that a device is serving: issued
-      to the device and not yet completed, per block device and direction.
+      Number of block read and write requests that a device is serving, as the
+      kernel counts them for iostat, per block device and direction.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in

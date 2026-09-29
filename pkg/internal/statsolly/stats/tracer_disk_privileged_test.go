@@ -241,16 +241,9 @@ func attachDiskReader(t *testing.T, features export.Features) *accumReader[ebpf.
 // TestDiskPendingRequests keeps requests in flight on a null_blk device that completes them
 // slowly, and checks that they are counted.
 func TestDiskPendingRequests(t *testing.T) {
-	bounds := []float64{0.001}
-	features := export.FeatureStatsDiskPendingOperations
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
-		ebpf.LatencyHistograms{Disk: bounds})
-	require.NoError(t, err)
-	t.Cleanup(func() { fetcher.Close() })
-
 	const inFlight = 4
 	device := slowNullBlockDevice(t, 500*time.Millisecond)
-	pending := newPendingReader(ebpfRequests{starts: fetcher.DiskRequestsMap()}, &deviceNames{sysRoot: "/sys"})
+	pending := newPendingReader("/proc", &deviceNames{sysRoot: "/sys"})
 
 	done := readConcurrently(t, device, inFlight)
 	requestsOf := func() map[ebpf.DiskOpCode]int64 {
@@ -275,19 +268,9 @@ func TestDiskPendingRequests(t *testing.T) {
 // TestDiskPendingStackedVolumes keeps reads in flight on a device mapper volume, like an LVM one,
 // over a device that completes them slowly, and checks that they are counted on the volume too.
 func TestDiskPendingStackedVolumes(t *testing.T) {
-	bounds := []float64{0.001}
-	features := export.FeatureStatsDiskPendingOperations | export.FeatureStatsDiskStackedVolumes
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
-		ebpf.LatencyHistograms{Disk: bounds})
-	require.NoError(t, err)
-	t.Cleanup(func() { fetcher.Close() })
-	require.NotNil(t, fetcher.DiskBioRequestsMap(), "the bio probes must be attached on this kernel")
-
 	const inFlight = 4
 	dmName := linearVolume(t, slowNullBlockDevice(t, 500*time.Millisecond))
-	newBioDevices("/sys", ebpfDeviceSet{set: fetcher.DiskBioDevicesMap()}).refresh()
-	pending := newPendingReader(ebpfRequests{starts: fetcher.DiskRequestsMap(), bioStarts: fetcher.DiskBioRequestsMap()},
-		&deviceNames{sysRoot: "/sys"})
+	pending := newPendingReader("/proc", &deviceNames{sysRoot: "/sys"})
 
 	done := readConcurrently(t, deviceNode(t, dmName), inFlight)
 	requestsOf := func() int64 {

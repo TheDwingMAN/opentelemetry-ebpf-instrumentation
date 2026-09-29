@@ -98,9 +98,8 @@ func (e ebpfCgroupNames) name(cgroupID uint64) (string, bool) {
 type DiskMapTracerConfig struct {
 	// DiskIOAccum and FsSyncAccum are the accumulation maps to read. A nil map is not read.
 	DiskIOAccum, FsSyncAccum *ciliumebpf.Map
-	// DiskRequests holds the block requests in flight, and DiskBioRequests the bios in flight of
-	// the stacked volumes. Nil unless their number is reported.
-	DiskRequests, DiskBioRequests *ciliumebpf.Map
+	// DiskPending reports the requests in flight of each device
+	DiskPending bool
 	// DiskBioAccum and DiskBioDevices are the accumulation map of the bios of the stacked volumes,
 	// and the set of volumes to measure. Nil unless the stacked volumes are measured.
 	DiskBioAccum, DiskBioDevices *ciliumebpf.Map
@@ -149,8 +148,8 @@ func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 		bios = newBioDevices("/sys", ebpfDeviceSet{set: cfg.DiskBioDevices})
 	}
 	var pending *pendingReader
-	if cfg.DiskRequests != nil {
-		pending = newPendingReader(ebpfRequests{starts: cfg.DiskRequests, bioStarts: cfg.DiskBioRequests}, devices)
+	if cfg.DiskPending {
+		pending = newPendingReader("/proc", devices)
 	}
 	if cfg.FsSyncAccum != nil {
 		readers = append(readers, newFsSyncReader(ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: cfg.FsSyncAccum},
