@@ -369,7 +369,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 			continue
 		}
 		fsLinks = append(fsLinks, ls...)
-		if plan.Fs == CodeFsExt4 || plan.Fs == CodeFsXFS || plan.Fs == CodeFsBtrfs {
+		if isLocalFs(plan.Fs) {
 			localFSAttached = true
 		}
 	}
@@ -380,6 +380,13 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	// consult fs_dev_filter, and network filesystems never populate it.
 	if localFSAttached {
 		closables = append(closables, startFsDevFilterRefresher(tlog, objects.FsDevFilter))
+	}
+
+	// A filesystem whose module loads after startup -- nfs, cifs, ceph and
+	// fuse load on the node's first mount of their type -- is attached when
+	// it appears. Skipped when the filesystem programs could not load at all.
+	if features.StorageFS() && fsOK {
+		closables = append(closables, startLateFsAttacher(tlog, cfg, fsPlans, localFSAttached, sharedMaps, &mu, objects.FsDevFilter))
 	}
 
 	// raw tracepoints
@@ -770,6 +777,15 @@ func fsProgNamesFor(fs FsTypeCode) fsProgramNames {
 	default:
 		return fsProgramNames{}
 	}
+}
+
+// all lists every program of the filesystem, whichever family.
+func (n fsProgramNames) all() []string {
+	names := append(n.fentryPrograms(), n.kprobePrograms()...)
+	names = append(names, n.fentryFsyncPrograms()...)
+	names = append(names, n.kprobeFsyncPrograms()...)
+	names = append(names, n.fentrySplicePrograms()...)
+	return append(names, n.kprobeSplicePrograms()...)
 }
 
 func (n fsProgramNames) fentryPrograms() []string {
