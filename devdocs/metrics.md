@@ -152,7 +152,7 @@ Storage metrics have two independent layers: block-layer I/O from the `block_rq_
 
 Block metrics come from the request-queue tracepoints (`block_rq_insert`/`block_rq_issue`/`block_rq_complete`), which see the device and the request but not the process that issued it. They are node-wide: no pod, namespace, or PV/PVC attribute is ever attached, only `system.device` and `disk.io.direction`.
 
-Filesystem metrics come from probes on each filesystem's own `file_operations` read/write/fsync implementation, which runs in the calling process's context, so they carry `k8s.pod.name` and `k8s.namespace.name`, plus `k8s.persistentvolume.name`, `k8s.persistentvolumeclaim.name` and `k8s.storageclass.name` once the filesystem's superblock device resolves to a kubelet volume mount (`statsFsAttributes`, `statsFsKubeAttributes` in [pkg/export/attributes/attr_defs.go](../pkg/export/attributes/attr_defs.go)). All Kubernetes attributes, including the PV/PVC/storage-class ones, are disabled when Kubernetes metadata is off.
+Filesystem metrics come from probes on each filesystem's own `file_operations` read/write/fsync implementation, which runs in the calling process's context, so they carry `k8s.pod.name` and `k8s.namespace.name`, plus `k8s.persistentvolume.name`, `k8s.persistentvolumeclaim.name` and `k8s.storageclass.name` once the mount the file was reached through resolves to a kubelet volume mount. The probes report the superblock device and the inode of the mount's root directory; the root inode tells apart volumes that share a superblock, as every PV carved out of one NFS export does (`scanForMount` in [pkg/internal/statsolly/ebpf/mount_resolver.go](../pkg/internal/statsolly/ebpf/mount_resolver.go)). When it cannot be told, the volume is left unnamed rather than guessed (`statsFsAttributes`, `statsFsKubeAttributes` in [pkg/export/attributes/attr_defs.go](../pkg/export/attributes/attr_defs.go)). All Kubernetes attributes, including the PV/PVC/storage-class ones, are disabled when Kubernetes metadata is off.
 
 Reads a process performs with `splice(2)`, `sendfile(2)` or
 `copy_file_range(2)` take the filesystem's `splice_read` operation rather than
@@ -163,7 +163,9 @@ filesystem on the node shares including container root filesystems, so probing
 it would defeat the point of hooking each filesystem separately; splice reads
 on those three are not recorded. Writes have no equivalent path.
 
-`k8s.container.name` is best-effort and often absent. The pod is resolved from the volume mount, which always works, but the container name is only known when the process that issued the I/O has been tracked, so it is left unset for short-lived processes and for deployments that instrument no services.
+`k8s.pod.name` and `k8s.container.name` are resolved from the issuing process's own cgroup (`/proc/<pid>/cgroup`), which works for any container process, instrumented or not. A process that exited before its events were decorated is resolved through its PID namespace, and failing that the pod falls back to the volume mount's owner when the volume has exactly one; the container is then left unset.
+
+Buffered writes (no `O_SYNC`, `O_DIRECT` or fsync) complete once the data is in the page cache, so their `obi.stat.fs.operation.duration` measures the copy into memory, not the round trip to the NFS server or the disk. The server's or device's latency shows in `fs_operation="fsync"`/`"fdatasync"` and in the block metrics.
 
 Capacity and usage (bytes used/free/total on a volume) are out of scope here on purpose: join kubelet's own `kubelet_volume_stats_*` metrics on `k8s.persistentvolumeclaim.name` for that.
 
@@ -187,16 +189,17 @@ Per filesystem and per symbol, OBI prefers `fentry`/`fexit` over classic `kprobe
 
 #### Runtime requirements
 
-- **tracefs** (`/sys/kernel/tracing`) must be mounted and readable inside the container, not merely present on the node — both the block tracepoints and the kprobe fallback path for filesystem probes need it.
+- **No tracefs mount is needed.** The block probes attach as raw tracepoints decoded through kernel BTF. Only when the kernel's BTF does not say where a request's disk lives does OBI fall back to the classic tracepoints, which need `/sys/kernel/tracing` mounted into the container; the log then says `neither debugfs nor tracefs are mounted`.
 - **`hostPID: true`.** The filesystem probes attribute I/O by host PID, and
   the same setting makes the host init's mount table readable at
-  `/proc/1/mountinfo`. That is where the kubelet's volume mounts are listed,
-  and it is how a device is resolved to a PersistentVolume. Only the paths
-  are parsed, never opened, so no `/var/lib/kubelet` mount is needed. Without
+  `/proc/1/mountinfo` (or, on OpenShift nodes with mount namespace
+  encapsulation, the kubelet's own table). That is where the kubelet's volume
+  mounts are listed, and it is how a device is resolved to a PersistentVolume.
+  No `/var/lib/kubelet` mount is needed. Without
   `hostPID` OBI falls back to its own mount table, and then only volumes
   mounted into its own container can be attributed.
 
-  > no kubelet volume mounts visible; persistent volume attribution needs hostPID so the host mount table can be read
+  > no kubelet volume mounts visible; persistent volume attribution needs hostPID so the host's and the kubelet's mount tables can be read
 
   (`WarnIfNoKubeletVolumeMounts` in [pkg/internal/statsolly/ebpf/mount_resolver.go](../pkg/internal/statsolly/ebpf/mount_resolver.go), called from `buildPipeline` in [pkg/statsolly/agent/pipeline.go](../pkg/statsolly/agent/pipeline.go).)
 - **OpenShift** needs the `privileged` SCC bound to the DaemonSet's ServiceAccount; the official Helm chart does not grant it automatically.
