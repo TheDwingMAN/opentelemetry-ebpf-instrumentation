@@ -81,7 +81,7 @@ func TestFailingFilesystemKeepsBlockAndOtherFilesystems(t *testing.T) {
 
 // ext4, xfs and btrfs attach only while a kubelet volume of their type is
 // mounted, including one mounted after startup, and detach once it has been
-// gone for fsDetachAfter refreshes.
+// gone for fsDetachAfter refreshes, taking their fs_start entries along.
 func TestLocalFilesystemsAttachOnlyWithAVolume(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("needs root to load eBPF programs and mount filesystems")
@@ -115,11 +115,22 @@ func TestLocalFilesystemsAttachOnlyWithAVolume(t *testing.T) {
 		events.waitFs(t, vol.dev, localFilesystems[fs])
 	}
 
+	// Starts that no exit probe will see again, as a kretprobe detached
+	// mid-call leaves: ext4's must go with ext4, nfs's stay.
+	starts := sharedMaps[FsIoMapFsStart]
+	const ext4Start, nfsStart = uint64(0xfffffff0_00000001), uint64(0xfffffff0_00000002)
+	require.NoError(t, starts.Put(ext4Start, FsIoFsStartVal{Ts: 1, Fs: uint8(CodeFsExt4)}))
+	require.NoError(t, starts.Put(nfsStart, FsIoFsStartVal{Ts: 1, Fs: uint8(CodeFsNFS)}))
+	t.Cleanup(func() { _ = starts.Delete(nfsStart) })
+
 	ext4.unmount(t)
 	a.refresh()
 	assertLocalAttached(t, a, want...) // detached only after fsDetachAfter refreshes
 	a.refresh()
 	assertLocalAttached(t, a, want[1:]...)
+	var start FsIoFsStartVal
+	assert.ErrorIs(t, starts.Lookup(ext4Start, &start), ebpf.ErrKeyNotExist, "ext4's start went with ext4")
+	assert.NoError(t, starts.Lookup(nfsStart, &start), "nfs's start stays")
 	var allowed uint8
 	assert.ErrorIs(t, sharedMaps[FsIoMapFsDevFilter].Lookup(ext4.dev, &allowed), ebpf.ErrKeyNotExist,
 		"the unmounted volume left the allowlist")

@@ -6,7 +6,10 @@
 package ebpf
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"sync"
 	"testing"
@@ -172,4 +175,56 @@ func TestFsLoaderCacheForNewModule(t *testing.T) {
 	l := &fsLoader{log: slog.Default(), cache: cache}
 	assert.Same(t, cache, l.cacheFor("ext4"), "no module BTF: shared cache")
 	assert.NotSame(t, cache, l.cacheFor("obi_test_new_module"), "module unknown to the cache: fresh cache")
+}
+
+// On detach every entry probe goes before any exit probe, so no call records
+// a start whose exit probe is gone; then the filesystem's leftover fs_start
+// entries are deleted.
+func TestFsAttachmentCloseOrder(t *testing.T) {
+	plan := fsAttachPlan{Fs: CodeFsExt4, ReadSym: "r", WriteSym: "w", FsyncSym: "f", SpliceReadSym: "s"}
+	var closed []string
+	a := &fsAttachment{
+		coll:        &ebpf.Collection{},
+		probes:      fsPlanProbes(plan),
+		clearStarts: func() error { closed = append(closed, "clear fs_start"); return nil },
+	}
+	for _, p := range a.probes {
+		a.links = append(a.links, closeFunc(func() error { closed = append(closed, p.prog); return nil }))
+	}
+
+	require.NoError(t, a.Close())
+
+	require.Len(t, closed, len(a.probes)+1)
+	names := fsProgNamesFor(CodeFsExt4)
+	entries := []string{names.KprobeRead, names.KprobeWrite, names.KprobeFsync, names.KprobeSpliceRead}
+	exits := []string{names.KretprobeRead, names.KretprobeWrite, names.KretprobeFsync, names.KretprobeSpliceRead}
+	assert.ElementsMatch(t, entries, closed[:4], "entry probes first")
+	assert.ElementsMatch(t, exits, closed[4:8], "exit probes next")
+	assert.Equal(t, "clear fs_start", closed[8], "fs_start cleared last")
+}
+
+// A detached filesystem's fs_start entries are deleted, and no other
+// filesystem's; an entry whose call returned meanwhile is no error.
+func TestClearFsStarts(t *testing.T) {
+	starts := map[uint64]FsIoFsStartVal{
+		1: {Fs: uint8(CodeFsExt4)},
+		2: {Fs: uint8(CodeFsNFS)},
+		3: {Fs: uint8(CodeFsExt4), Depth: 2},
+		4: {Fs: uint8(CodeFsXFS)},
+	}
+	del := func(id uint64) error {
+		if id == 3 {
+			return fmt.Errorf("delete: %w", ebpf.ErrKeyNotExist) // returned meanwhile
+		}
+		delete(starts, id)
+		return nil
+	}
+
+	require.NoError(t, clearFsStarts(maps.All(maps.Clone(starts)), del, CodeFsExt4))
+	assert.Equal(t, map[uint64]FsIoFsStartVal{
+		2: {Fs: uint8(CodeFsNFS)}, 3: {Fs: uint8(CodeFsExt4), Depth: 2}, 4: {Fs: uint8(CodeFsXFS)},
+	}, starts)
+
+	failing := func(uint64) error { return errors.New("EPERM") }
+	assert.Error(t, clearFsStarts(maps.All(starts), failing, CodeFsExt4))
 }
