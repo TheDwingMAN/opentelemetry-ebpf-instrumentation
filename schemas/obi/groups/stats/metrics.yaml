@@ -400,7 +400,11 @@ groups:
       Block-layer service latency per disk read or write request, measured
       from `block_rq_issue` to `block_rq_complete`, broken down by device and
       direction. Flush and discard requests are not included: they have
-      metrics of their own.
+      metrics of their own. The write count matches the writes in
+      `/proc/diskstats`, except that diskstats also counts as a write an empty
+      preflush write (0 bytes, such as a dm-thin metadata commit or a flush
+      passed through a loop device), counted here only as the flush issued for
+      it, and a secure erase, counted here as a discard.
     attributes:
       - ref: system.device
         requirement_level: recommended
@@ -519,7 +523,8 @@ groups:
     stability: development
     brief: >
       Block-layer service time of cache flush requests, measured from
-      `block_rq_issue` to `block_rq_complete`, broken down by device.
+      `block_rq_issue` to `block_rq_complete`, broken down by device. The
+      count matches the flushes in `/proc/diskstats`.
     attributes:
       - ref: system.device
         requirement_level: recommended
@@ -540,6 +545,7 @@ groups:
     brief: >
       Block-layer service time of discard and secure erase requests, measured
       from `block_rq_issue` to `block_rq_complete`, broken down by device.
+      `/proc/diskstats` counts a secure erase as a write instead.
     attributes:
       - ref: system.device
         requirement_level: recommended
@@ -554,8 +560,8 @@ groups:
     unit: "By"
     stability: development
     brief: >
-      Count of bytes released by completed discard and secure erase requests,
-      broken down by device.
+      Count of bytes released by discard and secure erase requests that
+      completed successfully, broken down by device.
     attributes:
       - ref: system.device
         requirement_level: recommended

@@ -272,6 +272,13 @@ int obi_stats_raw_tp_block_rq_insert(struct bpf_raw_tracepoint_args *ctx) {
     return 0;
 }
 
+// The classic tracepoint names a request only by (dev, sector), and a flush
+// has no sector (the tracepoint reports 0), so every flush on a disk has the
+// same key (dev, 0), which a request at sector 0 shares too: while one is in
+// flight, the issue of another replaces its entry and the first completion
+// ends it, so concurrent flushes on one disk are recorded as one, timed from
+// the later issue. The raw tracepoint keys by request and has no such
+// collision.
 SEC("tracepoint/block/block_rq_issue")
 int obi_stats_tp_block_rq_issue(struct trace_event_raw_block_rq *ctx) {
     struct blk_rq_key key = {};

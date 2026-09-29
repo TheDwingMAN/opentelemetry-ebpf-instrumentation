@@ -322,7 +322,7 @@ func newStatsReporter(
 
 		mr.diskDiscardIOBytes = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: attributes.StatDiskDiscardIO.Prom,
-			Help: "count of bytes released by completed block discard and secure erase requests",
+			Help: "count of bytes released by block discard and secure erase requests that completed successfully",
 		}, labelNames(mr.diskDiscardIOBytesAttrs)).MetricVec, timeNow, cfg.Config.TTL)
 		register = append(register, mr.diskDiscardIOBytes)
 	}
@@ -507,6 +507,11 @@ func (r *statMetricsReporter) observeDiskDiscard(stat *ebpf.Stat) {
 	}
 	r.diskDiscardDuration.WithLabelValues(labelValues(stat, r.diskDiscardDurationAttrs)...).
 		Metric.Observe(time.Duration(stat.BlockIo.LatencyNs).Seconds())
+	// A failed discard released nothing, so only successful ones add bytes;
+	// the failure itself is on the duration histogram.
+	if stat.BlockIo.Error != 0 {
+		return
+	}
 	r.diskDiscardIOBytes.WithLabelValues(labelValues(stat, r.diskDiscardIOBytesAttrs)...).
 		Metric.Add(float64(stat.BlockIo.Bytes))
 }

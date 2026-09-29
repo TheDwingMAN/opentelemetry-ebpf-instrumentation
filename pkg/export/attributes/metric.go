@@ -630,7 +630,8 @@ var (
 	// Service time of a cache flush request (REQ_OP_FLUSH), from issue to
 	// completion: what fsync and fdatasync wait for at the device. Flushes
 	// move no data, so they have no direction and are not counted as writes;
-	// a failed flush carries its errno in error.type.
+	// a failed flush carries its errno in error.type. Its count matches the
+	// flushes in /proc/diskstats.
 	StatDiskFlushDuration = metric(Name{
 		Section: "obi.stat.disk.flush.duration",
 		OTEL:    "obi.stat.disk.flush.duration",
@@ -647,7 +648,9 @@ var (
 		Unit:    "s",
 		Type:    InstrumentHistogram,
 	})
-	// Bytes released by completed discard (and secure erase) requests.
+	// Bytes released by discards (and secure erases) that completed
+	// successfully: a failed discard released nothing, although
+	// /proc/diskstats counts its sectors.
 	StatDiskDiscardIO = metric(Name{
 		Section: "obi.stat.disk.discard.io",
 		OTEL:    "obi.stat.disk.discard.io",

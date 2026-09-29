@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,6 +160,73 @@ func testDiskMetricsIOBytesWriteVolume(t *testing.T) {
 	}
 }
 
+// writeCacheWriteBack is what /sys/block/<dev>/queue/write_cache reads for a
+// device with a volatile write cache. Only such a device is sent cache
+// flushes: on a write-through device the kernel completes fdatasync's flush
+// without issuing a request.
+const writeCacheWriteBack = "write back"
+
+// diskHasWriteBackCache reports whether the disk OBI names in system_device
+// has a write-back cache. OBI names the whole disk ("sda"), or gives its
+// major:minor when it cannot resolve a name. The block tracepoints are
+// node-wide and this test runs on the same host, so the host's sysfs
+// describes the same disk.
+func diskHasWriteBackCache(device string) bool {
+	dir := filepath.Join("/sys/block", device)
+	if strings.Contains(device, ":") {
+		dir = filepath.Join("/sys/dev/block", device)
+	}
+	cache, err := os.ReadFile(filepath.Join(dir, "queue", "write_cache"))
+	return err == nil && strings.TrimSpace(string(cache)) == writeCacheWriteBack
+}
+
+// testDiskMetricsFlushDuration asserts that the cache flushes behind the
+// diskload workload's `conv=fdatasync` reach
+// `obi_stat_disk_flush_duration_seconds`, as a series of their own without a
+// direction. A flush reaches the device only when it has a write-back cache,
+// so the count is required to be positive across the written-to disks that
+// have one; when the runner has none, there is no flush to observe and the
+// subtest is skipped.
+func testDiskMetricsFlushDuration(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, path := range diskExportPaths {
+		t.Run(path, func(t *testing.T) {
+			var writeBack []string
+			require.EventuallyWithT(t, func(ct *assert.CollectT) {
+				writes, err := pq.Query(fmt.Sprintf(
+					`obi_stat_disk_operation_duration_seconds_count{exported=%q,disk_io_direction="write"}`, path))
+				require.NoError(ct, err)
+				enoughPromResults(ct, writes)
+
+				writeBack = writeBack[:0]
+				for _, res := range writes {
+					if device := res.Metric["system_device"]; diskHasWriteBackCache(device) {
+						writeBack = append(writeBack, regexp.QuoteMeta(device))
+					}
+				}
+				if len(writeBack) == 0 {
+					return
+				}
+
+				flushes, err := pq.Query(fmt.Sprintf(
+					`obi_stat_disk_flush_duration_seconds_count{exported=%q,system_device=~%q}`,
+					path, strings.Join(writeBack, "|")))
+				require.NoError(ct, err)
+				enoughPromResults(ct, flushes)
+				assert.Positive(ct, totalPromCount(ct, flushes))
+
+				for _, res := range flushes {
+					assert.Empty(ct, res.Metric["disk_io_direction"])
+				}
+			}, testTimeout, 100*time.Millisecond)
+
+			if len(writeBack) == 0 {
+				t.Skip("no written-to disk has a write-back cache, so none is sent flushes")
+			}
+		})
+	}
+}
+
 // testDiskMetricsPromExposition scrapes OBI's own /metrics endpoint and asserts
 // on the raw exposition text rather than on what Prometheus stored.
 //
@@ -181,5 +252,20 @@ func testDiskMetricsPromExposition(t *testing.T) {
 		// native path and are not an artifact of the collector's conversion.
 		assert.Regexp(ct, `obi_stat_disk_io_bytes_total\{[^}]*disk_io_direction="(read|write)"`, exposition)
 		assert.Regexp(ct, `obi_stat_disk_io_bytes_total\{[^}]*system_device="[^"]+"`, exposition)
+
+		// A family is only exposed once it has a series, and which flushes
+		// and discards happen depends on the runner's disk (see
+		// testDiskMetricsFlushDuration, which requires the flush series where
+		// the disk has a write-back cache), so each family's type is checked
+		// whenever its samples are there.
+		for name, metricType := range map[string]string{
+			"obi_stat_disk_flush_duration_seconds":   "histogram",
+			"obi_stat_disk_discard_duration_seconds": "histogram",
+			"obi_stat_disk_discard_io_bytes_total":   "counter",
+		} {
+			if strings.Contains(exposition, "\n"+name) {
+				assert.Contains(ct, exposition, fmt.Sprintf("# TYPE %s %s", name, metricType))
+			}
+		}
 	}, testTimeout, time.Second)
 }

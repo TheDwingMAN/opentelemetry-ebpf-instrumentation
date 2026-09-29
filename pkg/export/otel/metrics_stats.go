@@ -499,7 +499,9 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				h, attrs := me.diskDiscardDuration.ForRecord(v)
 				h.Record(ctx, time.Duration(v.BlockIo.LatencyNs).Seconds(), metric2.WithAttributeSet(attrs))
 			}
-			if me.diskDiscardIOBytes != nil && v.BlockIo.IsDiscard() {
+			// A failed discard released nothing, so only successful ones add
+			// bytes; the failure itself is on the duration histogram.
+			if me.diskDiscardIOBytes != nil && v.BlockIo.IsDiscard() && v.BlockIo.Error == 0 {
 				c, attrs := me.diskDiscardIOBytes.ForRecord(v)
 				c.Add(ctx, int64(v.BlockIo.Bytes), metric2.WithAttributeSet(attrs))
 			}

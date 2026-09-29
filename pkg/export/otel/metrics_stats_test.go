@@ -478,7 +478,6 @@ func TestStatMetricsExporter_DiskFlushAndDiscard(t *testing.T) {
 		}
 		assert.Contains(ct, seen, "obi.stat.disk.flush.duration")
 		assert.Contains(ct, seen, "obi.stat.disk.discard.duration")
-		assert.Contains(ct, seen, "obi.stat.disk.discard.io")
 	}, timeout, 100*time.Millisecond)
 
 	// THEN a successful flush has no error.type at all, not an empty one
@@ -493,11 +492,6 @@ func TestStatMetricsExporter_DiskFlushAndDiscard(t *testing.T) {
 	assert.Equal(t, map[string]string{"system.device": "8:16", "error.type": "EIO"}, discard.Attributes)
 	assert.Equal(t, 1, discard.Count)
 
-	discardBytes := seen["obi.stat.disk.discard.io"]
-	assert.Equal(t, map[string]string{"system.device": "8:16"}, discardBytes.Attributes)
-	assert.Equal(t, "By", discardBytes.Unit)
-	assert.Equal(t, int64(1<<20), discardBytes.IntVal)
-
 	// AND neither reached the read/write metrics
 	for _, name := range []string{
 		"obi.stat.disk.operation.duration",
@@ -507,4 +501,72 @@ func TestStatMetricsExporter_DiskFlushAndDiscard(t *testing.T) {
 	} {
 		assert.NotContains(t, seen, name)
 	}
+}
+
+// A failed discard released nothing: only the successful one adds bytes.
+func TestStatMetricsExporter_FailedDiscardReleasesNoBytes(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	otelExporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: cfg}},
+		&StatMetricsConfig{
+			Metrics:     cfg,
+			SelectorCfg: &attributes.SelectorConfig{},
+			CommonCfg:   &perapp.GlobalMetricsConfig{Features: export.FeatureStorageBlockDiscard},
+		}, stats)(ctx)
+	require.NoError(t, err)
+
+	go otelExporter(ctx)
+
+	discardStat := func(bytes uint64, errno int32) *ebpf.Stat {
+		return &ebpf.Stat{
+			Type: ebpf.StatTypeBlockIo,
+			BlockIo: &ebpf.BlockIo{
+				Dev:       0x800010,
+				Op:        uint8(ebpf.CodeBlockDiscard),
+				LatencyNs: 3_000_000,
+				Bytes:     bytes,
+				Error:     errno,
+			},
+		}
+	}
+	// WHEN it receives a failed 1 MiB discard, then a successful 4 KiB one
+	stats.Send([]*ebpf.Stat{
+		discardStat(1<<20, -int32(unix.EIO)),
+		discardStat(4096, 0),
+	})
+
+	// THEN the bytes counter settles on the successful discard alone: had the
+	// failed one counted, it could never read 4096.
+	latest := map[string]collector.MetricRecord{}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case rec := <-otlp.Records():
+				latest[rec.Name+"/"+rec.Attributes["error.type"]] = rec
+			default:
+				drained = true
+			}
+		}
+		discardBytes, ok := latest["obi.stat.disk.discard.io/"]
+		require.True(ct, ok, "discard bytes not exported yet")
+		assert.Equal(ct, map[string]string{"system.device": "8:16"}, discardBytes.Attributes)
+		assert.Equal(ct, "By", discardBytes.Unit)
+		assert.Equal(ct, int64(4096), discardBytes.IntVal)
+
+		// AND both discards are timed, the failed one with its errno
+		assert.Equal(ct, 1, latest["obi.stat.disk.discard.duration/EIO"].Count)
+		assert.Equal(ct, 1, latest["obi.stat.disk.discard.duration/"].Count)
+	}, timeout, 100*time.Millisecond)
 }
