@@ -66,10 +66,6 @@ spec:
         - name: testoutput
           persistentVolumeClaim:
             claimName: testoutput
-        - name: tracing
-          hostPath:
-            path: /sys/kernel/tracing
-            type: Directory
         # THE PREREQUISITE: without this the PV/PVC join resolves nothing.
       containers:
         - name: obi
@@ -87,8 +83,6 @@ spec:
               name: obi-config
             - mountPath: /testoutput
               name: testoutput
-            - mountPath: /sys/kernel/tracing
-              name: tracing
           env:
             - name: GOCOVERDIR
               value: "/testoutput"

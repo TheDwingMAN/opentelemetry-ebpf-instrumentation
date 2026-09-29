@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/cilium/ebpf/btf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -68,4 +69,46 @@ func TestFentryCapableModuleBTF(t *testing.T) {
 	// No module BTF and a symbol that cannot possibly exist in vmlinux BTF
 	// either: must fall through to false rather than panicking or hanging.
 	assert.False(t, fentryCapable("does-not-exist", "no_such_symbol_ever"))
+}
+
+// The raw tracepoints read the device from the request's gendisk, so they
+// are only usable where BTF shows where that lives: on the queue since 5.15,
+// on the request before. Everything else, including a kernel with no BTF at
+// all, takes the classic tracepoints.
+func TestBlockRawTracepointCapableWith(t *testing.T) {
+	specOf := func(types ...btf.Type) *btf.Spec {
+		b, err := btf.NewBuilder(types, nil)
+		require.NoError(t, err)
+		spec, err := b.Spec()
+		require.NoError(t, err)
+		return spec
+	}
+	gendisk := &btf.Pointer{Target: &btf.Struct{Name: "gendisk"}}
+	queueWith := func(members ...btf.Member) *btf.Struct {
+		return &btf.Struct{Name: "request_queue", Members: members}
+	}
+	// The request points at the one queue in the spec, as the kernel's does.
+	blockStructs := func(queue *btf.Struct, requestMembers ...btf.Member) []btf.Type {
+		request := &btf.Struct{Name: "request", Members: append([]btf.Member{
+			{Name: "q", Type: &btf.Pointer{Target: queue}},
+		}, requestMembers...)}
+		return []btf.Type{queue, request}
+	}
+
+	for _, tc := range []struct {
+		name string
+		spec *btf.Spec
+		want bool
+	}{
+		{"no BTF", nil, false},
+		{"5.15+: gendisk on the queue", specOf(blockStructs(queueWith(btf.Member{Name: "disk", Type: gendisk}))...), true},
+		{"pre-5.15: gendisk on the request", specOf(blockStructs(queueWith(), btf.Member{Name: "rq_disk", Type: gendisk})...), true},
+		{"neither member", specOf(blockStructs(queueWith())...), false},
+		{"member of another type", specOf(blockStructs(queueWith(btf.Member{Name: "disk", Type: &btf.Int{Name: "int", Size: 4}}))...), false},
+		{"no block structs at all", specOf(&btf.Struct{Name: "bio"}), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, blockRawTracepointCapableWith(tc.spec))
+		})
+	}
 }
