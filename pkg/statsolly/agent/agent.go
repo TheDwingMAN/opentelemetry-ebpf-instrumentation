@@ -76,6 +76,9 @@ type Stats struct {
 	// focuses on TCP/UDP stack internals (kprobes/tracepoints)
 	fetcher ebpFetcher
 
+	// what the pipeline built that the decoration of aggregated stats shares
+	aggDeps aggregationDeps
+
 	status Status
 }
 

@@ -136,16 +136,20 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		swarm.WithID("StatsDecorator"))
 
 	dynamicFilteredStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "dynamicFilteredStats")
-	var dynamicSelector selection.PIDSelector
+	// The dynamic PID trackers are built here rather than by their nodes so
+	// that aggregated stats go through the same ones; the nodes run them.
+	s.aggDeps = aggregationDeps{store: pidK8sStore, pvc: pvcLookup}
 	if s.ctxInfo.DynamicPIDSelector != nil {
-		dynamicSelector = s.ctxInfo.DynamicPIDSelector.StatsMetrics()
+		dynamicSelector := s.ctxInfo.DynamicPIDSelector.StatsMetrics()
+		s.aggDeps.dynamicAttrs = selection.NewDynamicFlowAttrs(s.ctxInfo.DynamicPIDSelector, dynamicSelector, pidK8sStore)
+		if dynamicSelector != nil {
+			s.aggDeps.dynamicIPs = selection.NewDynamicAppIPs(dynamicSelector, pidK8sStore)
+		}
 	}
 	dynamicDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "dynamicDecoratedStats")
-	swi.Add(dynamicpid.MetadataDecoratorProvider(s.ctxInfo.DynamicPIDSelector, dynamicSelector,
-		s.ctxInfo.K8sInformer, statAttrs, decoratedStats, dynamicDecoratedStats),
+	swi.Add(dynamicpid.MetadataDecoratorProviderFor(s.aggDeps.dynamicAttrs, statAttrs, decoratedStats, dynamicDecoratedStats),
 		swarm.WithID("DynamicPIDMetadataDecorator"))
-	swi.Add(filter.ByDynamicPID(dynamicSelector, s.ctxInfo.K8sInformer,
-		statAttrs, dynamicDecoratedStats, dynamicFilteredStats),
+	swi.Add(filter.ByDynamicPIDTracker(s.aggDeps.dynamicIPs, statAttrs, dynamicDecoratedStats, dynamicFilteredStats),
 		swarm.WithID("DynamicPIDFilter"))
 
 	filteredStats := s.ctxInfo.OverrideStatsExportQueue

@@ -36,17 +36,41 @@ func ByDynamicPID[T any](
 			}
 		}
 		tracker := selection.NewDynamicAppIPs(selector, store)
-		in := input.Subscribe(msg.SubscriberName("filter.ByDynamicPID"))
-		return func(loopCtx context.Context) {
-			tracker.Run(loopCtx)
-			defer output.Close()
-			swarms.ForEachInput(loopCtx, in, nil, func(items []T) {
-				out := filterByDynamicPID(items, attrs, tracker)
-				if len(out) > 0 {
-					output.SendCtx(loopCtx, out)
-				}
-			})
-		}, nil
+		return dynamicPIDNode(tracker, attrs, input, output), nil
+	}
+}
+
+// ByDynamicPIDTracker is ByDynamicPID with a tracker built by the caller,
+// which can then filter elsewhere too: the node runs it. A nil tracker
+// bypasses the node.
+func ByDynamicPIDTracker[T any](
+	tracker *selection.DynamicAppIPs,
+	attrs func(T) *pipe.CommonAttrs,
+	input, output *msg.Queue[[]T],
+) swarm.InstanceFunc {
+	return func(_ context.Context) (swarm.RunFunc, error) {
+		if tracker == nil {
+			return swarm.Bypass(input, output)
+		}
+		return dynamicPIDNode(tracker, attrs, input, output), nil
+	}
+}
+
+func dynamicPIDNode[T any](
+	tracker *selection.DynamicAppIPs,
+	attrs func(T) *pipe.CommonAttrs,
+	input, output *msg.Queue[[]T],
+) swarm.RunFunc {
+	in := input.Subscribe(msg.SubscriberName("filter.ByDynamicPID"))
+	return func(loopCtx context.Context) {
+		tracker.Run(loopCtx)
+		defer output.Close()
+		swarms.ForEachInput(loopCtx, in, nil, func(items []T) {
+			out := filterByDynamicPID(items, attrs, tracker)
+			if len(out) > 0 {
+				output.SendCtx(loopCtx, out)
+			}
+		})
 	}
 }
 

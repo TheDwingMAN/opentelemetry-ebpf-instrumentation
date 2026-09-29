@@ -39,16 +39,40 @@ func MetadataDecoratorProvider[T any](
 			}
 		}
 		tracker := selection.NewDynamicFlowAttrs(multiSel, signalSel, store)
-		in := input.Subscribe(msg.SubscriberName("dynamicpid.MetadataDecorator"))
-		return func(ctx context.Context) {
-			tracker.Run(ctx)
-			defer output.Close()
-			swarms.ForEachInput(ctx, in, log().Debug, func(items []T) {
-				for _, item := range items {
-					tracker.Apply(getAttrs(item))
-				}
-				output.Send(items)
-			})
-		}, nil
+		return trackerNode(tracker, getAttrs, input, output), nil
+	}
+}
+
+// MetadataDecoratorProviderFor is MetadataDecoratorProvider with a tracker
+// built by the caller, which can then apply it elsewhere too: the node runs
+// it. A nil tracker bypasses the node.
+func MetadataDecoratorProviderFor[T any](
+	tracker *selection.DynamicFlowAttrs,
+	getAttrs func(T) *pipe.CommonAttrs,
+	input, output *msg.Queue[[]T],
+) swarm.InstanceFunc {
+	return func(_ context.Context) (swarm.RunFunc, error) {
+		if tracker == nil {
+			return swarm.Bypass(input, output)
+		}
+		return trackerNode(tracker, getAttrs, input, output), nil
+	}
+}
+
+func trackerNode[T any](
+	tracker *selection.DynamicFlowAttrs,
+	getAttrs func(T) *pipe.CommonAttrs,
+	input, output *msg.Queue[[]T],
+) swarm.RunFunc {
+	in := input.Subscribe(msg.SubscriberName("dynamicpid.MetadataDecorator"))
+	return func(ctx context.Context) {
+		tracker.Run(ctx)
+		defer output.Close()
+		swarms.ForEachInput(ctx, in, log().Debug, func(items []T) {
+			for _, item := range items {
+				tracker.Apply(getAttrs(item))
+			}
+			output.Send(items)
+		})
 	}
 }

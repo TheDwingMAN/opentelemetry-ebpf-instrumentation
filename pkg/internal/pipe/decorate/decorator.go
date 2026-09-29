@@ -38,23 +38,32 @@ import (
 //     names are filled with their respective IP string values.
 func Decorate[T any](agentIP net.IP, attrs func(T) *pipe.CommonAttrs, input, output *msg.Queue[[]T]) swarm.InstanceFunc {
 	return func(_ context.Context) (swarm.RunFunc, error) {
-		ip := agentIP.String()
+		decorate := NewItemDecorator(agentIP, attrs)
 		in := input.Subscribe(msg.SubscriberName("decorate.Decorate"))
 		return func(ctx context.Context) {
 			defer output.Close()
 			swarms.ForEachInput(ctx, in, nil, func(items []T) {
 				for _, item := range items {
-					a := attrs(item)
-					a.OBIIP = ip
-					if a.DstName == "" {
-						a.DstName = a.DstAddr.IP().String()
-					}
-					if a.SrcName == "" {
-						a.SrcName = a.SrcAddr.IP().String()
-					}
+					decorate(item)
 				}
 				output.Send(items)
 			})
 		}, nil
+	}
+}
+
+// NewItemDecorator returns what the Decorate node does to an item: set the
+// agent IP, and name the addresses that have no name yet by their IP.
+func NewItemDecorator[T any](agentIP net.IP, attrs func(T) *pipe.CommonAttrs) func(T) {
+	ip := agentIP.String()
+	return func(item T) {
+		a := attrs(item)
+		a.OBIIP = ip
+		if a.DstName == "" {
+			a.DstName = a.DstAddr.IP().String()
+		}
+		if a.SrcName == "" {
+			a.SrcName = a.SrcAddr.IP().String()
+		}
 	}
 }
