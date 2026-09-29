@@ -100,6 +100,9 @@ const (
 	FsCeph    FsTypeName = "ceph"
 	FsCIFS    FsTypeName = "cifs"
 	FsFUSE    FsTypeName = "fuse"
+	FsExt4    FsTypeName = "ext4"
+	FsXFS     FsTypeName = "xfs"
+	FsBtrfs   FsTypeName = "btrfs"
 )
 
 // FsTypeCode mirrors enum fs_type in bpf/statsolly/types.h.
@@ -111,6 +114,9 @@ const (
 	CodeFsCeph    FsTypeCode = 2
 	CodeFsCIFS    FsTypeCode = 3
 	CodeFsFUSE    FsTypeCode = 4
+	CodeFsExt4    FsTypeCode = 5
+	CodeFsXFS     FsTypeCode = 6
+	CodeFsBtrfs   FsTypeCode = 7
 )
 
 type FsOpType string

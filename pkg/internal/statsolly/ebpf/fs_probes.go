@@ -8,6 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+
+	"github.com/cilium/ebpf/btf"
 )
 
 // Variables rather than constants so tests can point them at fixtures.
@@ -46,6 +49,18 @@ var fsTargets = []fsTarget{
 		ReadSyms:  []string{"fuse_file_read_iter"},
 		WriteSyms: []string{"fuse_file_write_iter"},
 		FsyncSyms: []string{"fuse_fsync"}},
+	{Fs: CodeFsExt4, Module: "ext4",
+		ReadSyms:  []string{"ext4_file_read_iter"},
+		WriteSyms: []string{"ext4_file_write_iter"},
+		FsyncSyms: []string{"ext4_sync_file"}},
+	{Fs: CodeFsXFS, Module: "xfs",
+		ReadSyms:  []string{"xfs_file_read_iter"},
+		WriteSyms: []string{"xfs_file_write_iter"},
+		FsyncSyms: []string{"xfs_file_fsync"}},
+	{Fs: CodeFsBtrfs, Module: "btrfs",
+		ReadSyms:  []string{"btrfs_file_read_iter"},
+		WriteSyms: []string{"btrfs_file_write_iter"},
+		FsyncSyms: []string{"btrfs_sync_file"}},
 }
 
 // moduleBTFExists reports whether the kernel exposes BTF for a module, which is
@@ -54,6 +69,47 @@ var fsTargets = []fsTarget{
 func moduleBTFExists(mod string) bool {
 	_, err := os.Stat(filepath.Join(sysKernelBTFDir, mod))
 	return err == nil
+}
+
+// kernelBTFSpecOnce/kernelBTFSpec cache the parsed kernel BTF across every
+// fentryCapable call: LoadKernelSpec parses the whole vmlinux BTF blob on
+// each invocation, and every built-in filesystem probed here (ext4, xfs,
+// btrfs) shares this one lookup.
+var (
+	kernelBTFSpecOnce sync.Once
+	kernelBTFSpec     *btf.Spec
+)
+
+func kernelBTF() *btf.Spec {
+	kernelBTFSpecOnce.Do(func() {
+		// Absence of kernel BTF (or an unreadable /sys/kernel/btf/vmlinux) is
+		// expected on RHEL8-family kernels; fentryCapable falls back to false
+		// for such symbols, and the caller attaches via kprobe instead.
+		spec, err := btf.LoadKernelSpec()
+		if err == nil {
+			kernelBTFSpec = spec
+		}
+	})
+	return kernelBTFSpec
+}
+
+// fentryCapable reports whether fentry/fexit can attach to sym in module.
+// A built-in filesystem such as ext4, xfs or btrfs has no
+// /sys/kernel/btf/<module> of its own (moduleBTFExists is false), but its
+// symbols still live in the kernel's own BTF (vmlinux) whenever BTF is
+// enabled at all, so fentry is still valid there.
+func fentryCapable(module, sym string) bool {
+	if moduleBTFExists(module) {
+		return true
+	}
+
+	spec := kernelBTF()
+	if spec == nil {
+		return false
+	}
+
+	var fn *btf.Func
+	return spec.TypeByName(sym, &fn) == nil
 }
 
 // kprobeExists reports whether a symbol can be probed. tracefs is authoritative
@@ -125,7 +181,7 @@ type fsAttachPlan struct {
 // fsync programs, keeping read/write attached.
 func planFsAttachWith(
 	targets []fsTarget,
-	moduleBTF func(string) bool,
+	fentryCapable func(module, sym string) bool,
 	resolve func([]string) (string, bool),
 ) []fsAttachPlan {
 	plans := make([]fsAttachPlan, 0, len(targets))
@@ -138,7 +194,7 @@ func planFsAttachWith(
 		fsyncSym, _ := resolve(tgt.FsyncSyms)
 		plans = append(plans, fsAttachPlan{
 			Fs:        tgt.Fs,
-			UseFentry: moduleBTF(tgt.Module),
+			UseFentry: fentryCapable(tgt.Module, readSym),
 			ReadSym:   readSym,
 			WriteSym:  writeSym,
 			FsyncSym:  fsyncSym,
@@ -148,5 +204,5 @@ func planFsAttachWith(
 }
 
 func planFsAttach() []fsAttachPlan {
-	return planFsAttachWith(fsTargets, moduleBTFExists, resolveFsSymbol)
+	return planFsAttachWith(fsTargets, fentryCapable, resolveFsSymbol)
 }
