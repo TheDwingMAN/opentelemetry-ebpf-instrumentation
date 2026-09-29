@@ -97,8 +97,8 @@ func TestFamily_KeysMergeIntoTheExportedSeries(t *testing.T) {
 	ok := blkKey(devA, ebpf.CodeBlockRead, 0)
 	eio := blkKey(devA, ebpf.CodeBlockRead, -5)
 	flush := blkKey(devA, ebpf.CodeBlockFlush, 0)
-	record(tf.m, tf.layout, ok, 0, 4096, 150_000)  // 150us
-	record(tf.m, tf.layout, ok, 1, 4096, 150_000)  // same bucket, other CPU
+	record(tf.m, tf.layout, ok, 0, 4096, 150_000)   // 150us
+	record(tf.m, tf.layout, ok, 1, 4096, 150_000)   // same bucket, other CPU
 	record(tf.m, tf.layout, eio, 1, 512, 3_000_000) // 3ms, failed
 	record(tf.m, tf.layout, flush, 0, 0, 1_000_000)
 

@@ -4,6 +4,8 @@
 package statagg // import "go.opentelemetry.io/obi/pkg/internal/statsolly/statagg"
 
 import (
+	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
@@ -14,6 +16,18 @@ import (
 // exporter emits (an attribute.Set for OTel, label values for Prometheus). It
 // is the same attribute selection the exporter's per-event path applies.
 type Projection[L any] func(stat *ebpf.Stat) (key string, labels L)
+
+// SeriesKey joins the label values of a series into a key that tells apart
+// any two different lists of values, whatever characters they hold.
+func SeriesKey(values []string) string {
+	var sb strings.Builder
+	for _, v := range values {
+		sb.WriteString(strconv.Itoa(len(v)))
+		sb.WriteByte(':')
+		sb.WriteString(v)
+	}
+	return sb.String()
+}
 
 // seriesCore is the cumulative state of one exported series, kept in kernel
 // bucket layout. It is what kernel keys link to and count into.

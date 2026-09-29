@@ -95,12 +95,24 @@ func (ex *Expirer[Record, Metric, ValType]) ForRecord(r Record, extraAttrs ...at
 }
 
 func (ex *Expirer[Record, Metric, ValType]) recordAttributes(m Record, extraAttrs ...attribute.KeyValue) (attribute.Set, []string) {
-	keyVals := make([]attribute.KeyValue, 0, len(ex.attrs)+len(extraAttrs))
-	vals := make([]string, 0, len(ex.attrs)+len(extraAttrs))
+	return recordAttributes(m, ex.attrs, ex.omitEmptyStrings, extraAttrs...)
+}
 
-	for _, attr := range ex.attrs {
+// recordAttributes returns the attribute set of a record's data point and the
+// values that identify its series. omitEmptyStrings leaves out string
+// attributes whose value is "".
+func recordAttributes[Record any](
+	m Record,
+	attrs []attributes.Field[Record, attribute.KeyValue],
+	omitEmptyStrings bool,
+	extraAttrs ...attribute.KeyValue,
+) (attribute.Set, []string) {
+	keyVals := make([]attribute.KeyValue, 0, len(attrs)+len(extraAttrs))
+	vals := make([]string, 0, len(attrs)+len(extraAttrs))
+
+	for _, attr := range attrs {
 		kv := sanitizeKeyValue(attr.Get(m))
-		if ex.omitEmptyStrings && (!kv.Valid() || isEmptyString(kv)) {
+		if omitEmptyStrings && (!kv.Valid() || isEmptyString(kv)) {
 			// The omitted attribute keeps its place in the series key, so
 			// records that omit different attributes never share a series.
 			vals = append(vals, "")
