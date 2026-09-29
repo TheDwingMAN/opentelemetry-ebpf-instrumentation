@@ -223,3 +223,27 @@ func TestTransform_SrcAndDstPods(t *testing.T) {
 	assert.Equal(t, "backend", a.Metadata[attr.ServicePeerName])
 	assert.Equal(t, "api", a.Metadata[attr.ServicePeerNamespace])
 }
+
+// drop_external judges items by their network endpoints. Items without any,
+// such as storage stats, survive it when the caller exempts them.
+func TestDropExternalKeepsExemptItems(t *testing.T) {
+	notifier := &fakeNotifier{}
+	store := kube.NewStore(notifier, kube.ResourceLabels{}, nil, imetrics.NoopReporter{})
+	dec := newTestDecorator(t, store)
+
+	type item struct {
+		attrs   pipe.CommonAttrs
+		storage bool
+	}
+	items := []*item{
+		{attrs: pipe.CommonAttrs{SrcAddr: ipAddr("8.8.8.8"), DstAddr: ipAddr("1.1.1.1")}},
+		{storage: true},
+	}
+	attrsOf := func(i *item) *pipe.CommonAttrs { return &i.attrs }
+
+	assert.Empty(t, dropExternal(items, attrsOf, dec.transform, nil), "nothing matches a pod without the exemption")
+
+	kept := dropExternal(items, attrsOf, dec.transform, func(i *item) bool { return i.storage })
+	require.Len(t, kept, 1)
+	assert.True(t, kept[0].storage)
+}

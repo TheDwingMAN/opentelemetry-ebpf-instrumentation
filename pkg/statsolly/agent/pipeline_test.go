@@ -210,3 +210,20 @@ func fakeIoRecord(srcPort, dstPort uint16, direction uint8, bytes uint32) *ebpf.
 		},
 	}
 }
+
+func TestIsStorageStat(t *testing.T) {
+	assert.True(t, isStorageStat(&ebpf.Stat{Type: ebpf.StatTypeBlockIo}))
+	assert.True(t, isStorageStat(&ebpf.Stat{Type: ebpf.StatTypeFsIo}))
+	assert.False(t, isStorageStat(&ebpf.Stat{Type: ebpf.StatTypeTCPRtt}))
+}
+
+func TestFsIoPIDCarriesTheMount(t *testing.T) {
+	pidNs, hostPID, mount, ok := fsIoPID(&ebpf.Stat{Type: ebpf.StatTypeFsIo, FsIo: &ebpf.FsIo{PidNs: 7, HostPID: 42, SDev: 77, RootIno: 1234}})
+	assert.True(t, ok)
+	assert.Equal(t, uint32(7), pidNs)
+	assert.Equal(t, uint32(42), hostPID)
+	assert.Equal(t, ebpf.MountKey{Dev: 77, RootIno: 1234}, mount)
+
+	_, _, _, ok = fsIoPID(&ebpf.Stat{Type: ebpf.StatTypeBlockIo})
+	assert.False(t, ok)
+}
