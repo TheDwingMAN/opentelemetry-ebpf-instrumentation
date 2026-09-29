@@ -181,10 +181,12 @@ func TestPlanFsAttachSpliceReadResolvedIndependently(t *testing.T) {
 // carry none and no splice program is asked for; NFS's is attached through
 // the chosen family only.
 func TestFsPlanProbesSkipsAbsentSpliceFamilies(t *testing.T) {
-	probes := planFsProbes([]fsAttachPlan{
-		{Fs: CodeFsCeph, UseFentry: true, ReadSym: "ceph_read_iter", WriteSym: "ceph_write_iter"},
-		{Fs: CodeFsNFS, UseFentry: true, ReadSym: "nfs_file_read", WriteSym: "nfs_file_write", SpliceReadSym: "nfs_file_splice_read"},
-	})
+	probes := append(
+		fsPlanProbes(fsAttachPlan{Fs: CodeFsCeph, UseFentry: true, ReadSym: "ceph_read_iter", WriteSym: "ceph_write_iter"}),
+		fsPlanProbes(fsAttachPlan{
+			Fs: CodeFsNFS, UseFentry: true, ReadSym: "nfs_file_read", WriteSym: "nfs_file_write", SpliceReadSym: "nfs_file_splice_read",
+		})...,
+	)
 
 	got := map[string]string{}
 	for _, p := range probes {

@@ -76,10 +76,11 @@ func loadAndVerify(t *testing.T, name string, loadFn func() (*ebpf.CollectionSpe
 		}
 		uprobe.PrepareSpecs(spec)
 
-		// Storage programs are verified the way they would actually load
-		// here: one block tracepoint family, and the filesystem programs,
-		// which carry a placeholder attach target, pointed at this kernel's
-		// symbols or turned into kprobes.
+		// Storage programs: the block tracepoint family this kernel uses,
+		// and both families of every filesystem's programs, which carry a
+		// placeholder attach target: the fentry/fexit ones pointed at the
+		// filesystem's own functions or at vmlinux stand-ins, and the
+		// kprobe/kretprobe fallback.
 		if spec.Programs["obi_stats_tp_block_rq_issue"] != nil || spec.Programs["obi_stats_fentry_nfs_read"] != nil {
 			require.NoError(t, statsolly.PrepareStorageSpec(spec), "failed to prepare storage programs")
 		}

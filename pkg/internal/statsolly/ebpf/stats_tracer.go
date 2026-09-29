@@ -365,11 +365,11 @@ func planStorage(block bool) storagePlan {
 }
 
 // PrepareStorageSpec applies to spec what the stats loaders apply before
-// loading with every storage metric enabled. On the stats spec it stubs out
-// the block tracepoint family this kernel does not use. On the filesystem
-// spec it keeps the programs of every probeable filesystem, pointed at its
-// kernel symbols or left as kprobes, and removes the rest. The loaded
-// collection is then exactly what the real loads on this kernel verify.
+// loading with every storage metric enabled, for the verifier tests. On the
+// stats spec it stubs out the block tracepoint family this kernel does not
+// use. On the filesystem spec it keeps both program families of every
+// filesystem, the kprobe fallback included, whatever this kernel would plan:
+// see verifierFsProbes.
 func PrepareStorageSpec(spec *ebpf.CollectionSpec) error {
 	if spec.Programs[progObiStatsRawTpBlockRqIssue] != nil {
 		if err := fixupSpec(spec, planStorage(true).toDisable); err != nil {
@@ -377,7 +377,7 @@ func PrepareStorageSpec(spec *ebpf.CollectionSpec) error {
 		}
 	}
 	if spec.Programs[progObiStatsFentryNFSRead] != nil {
-		return keepFsPrograms(spec, planFsProbes(planFsAttach()))
+		return keepFsPrograms(spec, verifierFsProbes(planFsAttach(), kernelBTF()))
 	}
 	return nil
 }

@@ -232,3 +232,50 @@ func TestClearFsStarts(t *testing.T) {
 	failing := func(uint64) error { return errors.New("EPERM") }
 	assert.Error(t, clearFsStarts(maps.All(starts), failing, CodeFsExt4))
 }
+
+// The verifier tests load both program families of every filesystem, the
+// kprobe fallback included, whatever this kernel plans; tracing programs
+// point at the filesystem's own function when planned on fentry, at a
+// vmlinux stand-in otherwise.
+func TestVerifierFsProbesCoverEveryProgram(t *testing.T) {
+	all, err := LoadFsIo()
+	require.NoError(t, err)
+
+	// No kernel BTF: no tracing program can load, every kprobe one is kept.
+	spec := all.Copy()
+	require.NoError(t, keepFsPrograms(spec, verifierFsProbes(nil, nil)))
+	for name, prog := range all.Programs {
+		if prog.Type == ebpf.Kprobe {
+			assert.Contains(t, spec.Programs, name)
+		} else {
+			assert.NotContains(t, spec.Programs, name)
+		}
+	}
+
+	kernel, err := btf.LoadKernelSpec()
+	if err != nil {
+		t.Skip("no kernel BTF:", err)
+	}
+	nfs := fsAttachPlan{
+		Fs: CodeFsNFS, UseFentry: true, ReadSym: "nfs_file_read", WriteSym: "nfs_file_write", FsyncSym: "",
+	}
+	spec = all.Copy()
+	require.NoError(t, keepFsPrograms(spec, verifierFsProbes([]fsAttachPlan{nfs}, kernel)))
+	assert.Len(t, spec.Programs, len(all.Programs), "every program of both families")
+
+	names := fsProgNamesFor(CodeFsNFS)
+	assert.Equal(t, "nfs_file_read", spec.Programs[names.FentryRead].AttachTo, "planned on fentry: its own function")
+	assert.Equal(t, "nfs_file_write", spec.Programs[names.FexitWrite].AttachTo)
+	for name, prog := range spec.Programs {
+		if prog.Type != ebpf.Tracing {
+			continue
+		}
+		var fn *btf.Func
+		if prog.AttachTo != "nfs_file_read" && prog.AttachTo != "nfs_file_write" {
+			assert.NoError(t, kernel.TypeByName(prog.AttachTo, &fn), "%s: stand-in %q is not in vmlinux", name, prog.AttachTo)
+		}
+	}
+	assert.Contains(t, fsStandIns.fsync, spec.Programs[names.FentryFsync].AttachTo, "no fsync planned: a stand-in")
+	ext4 := fsProgNamesFor(CodeFsExt4)
+	assert.Equal(t, "generic_file_read_iter", spec.Programs[ext4.FentryRead].AttachTo, "not planned: a stand-in")
+}
