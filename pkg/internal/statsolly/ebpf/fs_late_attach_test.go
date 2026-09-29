@@ -110,6 +110,12 @@ func attachedSet(a *fsAttacher) map[FsTypeCode]bool {
 	return set
 }
 
+func refreshN(a *fsAttacher, n int) {
+	for range n {
+		a.refresh()
+	}
+}
+
 func closeAttacher(t *testing.T, a *fsAttacher) {
 	t.Helper()
 	close(a.stopped) // run() was never started
@@ -202,12 +208,12 @@ func TestFsAttacherAttachesLocalFilesystemsOnDemand(t *testing.T) {
 	n.pvErr = nil
 
 	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
-	a.refresh()
+	refreshN(a, fsDetachAfter)
 	assert.Equal(t, map[FsTypeCode]bool{CodeFsExt4: true}, attachedSet(a))
 	assert.Zero(t, n.open[CodeFsXFS], "the last xfs volume went away: its probes are detached")
 
 	n.pvs = map[FsTypeCode]bool{CodeFsXFS: true}
-	a.refresh()
+	refreshN(a, fsDetachAfter)
 	assert.Equal(t, map[FsTypeCode]bool{CodeFsXFS: true}, attachedSet(a), "xfs comes back, ext4 goes")
 	assert.Equal(t, 1, n.open[CodeFsXFS])
 	assert.Zero(t, n.open[CodeFsExt4])
@@ -253,7 +259,7 @@ func TestFsAttacherFallsBackToKprobes(t *testing.T) {
 
 	// Detached and attached again: straight to kprobes.
 	n.pvs = map[FsTypeCode]bool{}
-	a.refresh()
+	refreshN(a, fsDetachAfter)
 	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
 	a.refresh()
 	assert.Equal(t, attachAttempt{CodeFsExt4, false}, n.attempts[len(n.attempts)-1])
@@ -369,7 +375,7 @@ func TestFsAttacherResetsFailuresOnAttach(t *testing.T) {
 
 	// The volume goes away, comes back, and the filesystem fails again.
 	n.pvs = map[FsTypeCode]bool{}
-	a.refresh()
+	refreshN(a, fsDetachAfter)
 	require.NotContains(t, a.attached, CodeFsExt4)
 	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
 	n.reject[CodeFsExt4] = true
@@ -378,6 +384,42 @@ func TestFsAttacherResetsFailuresOnAttach(t *testing.T) {
 		a.refresh()
 	}
 	assert.Equal(t, fsAttachTries, len(n.attempts)-attempts, "tried fsAttachTries times again")
+
+	closeAttacher(t, a)
+}
+
+// A local filesystem detaches only once fsDetachAfter refreshes in a row
+// have found no volume of it: a volume unmounted and mounted again in
+// between keeps its probes, and a failed scan counts for nothing.
+func TestFsAttacherDetachHysteresis(t *testing.T) {
+	require.Equal(t, 2, fsDetachAfter)
+	n := newFakeNode()
+	n.probeable[CodeFsExt4] = true
+	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
+	a := n.attacher()
+
+	a.refresh()
+	require.Contains(t, a.attached, CodeFsExt4)
+
+	// Gone for one refresh, back on the next: never detached.
+	n.pvs = map[FsTypeCode]bool{}
+	a.refresh()
+	assert.Contains(t, a.attached, CodeFsExt4, "gone for one refresh only")
+	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
+	a.refresh()
+	assert.Contains(t, a.attached, CodeFsExt4)
+
+	// Gone, a failed scan, gone again: the failed scan does not count.
+	n.pvs = map[FsTypeCode]bool{}
+	a.refresh()
+	n.pvErr = errors.New("mountinfo unreadable")
+	a.refresh()
+	assert.Contains(t, a.attached, CodeFsExt4, "a failed scan is not a refresh without the volume")
+	n.pvErr = nil
+	a.refresh()
+	assert.NotContains(t, a.attached, CodeFsExt4, "gone for two refreshes in a row")
+	assert.Zero(t, n.open[CodeFsExt4])
+	assert.Len(t, n.attempts, 1, "attached once, never reloaded")
 
 	closeAttacher(t, a)
 }
