@@ -91,6 +91,10 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		}
 	}
 
+	if s.ctxInfo.K8sInformer.IsKubeEnabled() && s.cfg.Metrics.Features.StorageFS() {
+		ebpf.WarnIfNoKubeletVolumeMounts(alog)
+	}
+
 	pidDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, "pidDecoratedStats")
 	swi.Add(k8s.PIDMetadataDecoratorProvider(ctx, pidK8sStore, statAttrs, fsIoPID,
 		ebpf.CachedPVCLookup(pvcLookup), kubeDecoratedStats, pidDecoratedStats),

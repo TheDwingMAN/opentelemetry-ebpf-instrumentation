@@ -4,6 +4,8 @@
 package ebpf
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,6 +74,29 @@ func TestResolveMountCacheInvalidation(t *testing.T) {
 
 	_, ok = resolveMount(574)
 	assert.False(t, ok, "expected no match after invalidation once the mount is gone")
+}
+
+func TestWarnIfNoKubeletVolumeMounts_NoMatch(t *testing.T) {
+	const unrelatedLine = `50 1 0:20 / /run/user/1000 rw,nosuid,nodev,relatime shared:30 - tmpfs tmpfs rw,size=100k`
+	withMountInfo(t, unrelatedLine)
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+
+	WarnIfNoKubeletVolumeMounts(log)
+
+	assert.Contains(t, buf.String(), "no kubelet volume mounts visible")
+}
+
+func TestWarnIfNoKubeletVolumeMounts_Match(t *testing.T) {
+	withMountInfo(t, nfsFixtureLine)
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+
+	WarnIfNoKubeletVolumeMounts(log)
+
+	assert.Empty(t, buf.String(), "expected no warning when a kubelet volume mount is present")
 }
 
 // withMountInfo points mountInfoPath at a fixture file containing the given
