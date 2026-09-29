@@ -8,6 +8,7 @@ package ebpf
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -15,8 +16,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 type attachAttempt struct {
@@ -33,9 +37,9 @@ type fakeNode struct {
 	pvs       map[FsTypeCode]bool
 	pvErr     error
 	// reject fails every attach of a filesystem; rejectFentry only its
-	// fentry/fexit attaches.
+	// fentry/fexit attaches, with the error given.
 	reject       map[FsTypeCode]bool
-	rejectFentry map[FsTypeCode]bool
+	rejectFentry map[FsTypeCode]error
 
 	// log receives the attacher's logs; slog.Default() when nil.
 	log *slog.Logger
@@ -49,7 +53,7 @@ type fakeNode struct {
 func newFakeNode() *fakeNode {
 	return &fakeNode{
 		loaded: map[string]bool{}, probeable: map[FsTypeCode]bool{}, pvs: map[FsTypeCode]bool{},
-		reject: map[FsTypeCode]bool{}, rejectFentry: map[FsTypeCode]bool{}, open: map[FsTypeCode]int{},
+		reject: map[FsTypeCode]bool{}, rejectFentry: map[FsTypeCode]error{}, open: map[FsTypeCode]int{},
 	}
 }
 
@@ -84,8 +88,11 @@ func (n *fakeNode) plan(targets []fsTarget) []fsAttachPlan {
 
 func (n *fakeNode) attach(plan fsAttachPlan) (io.Closer, error) {
 	n.attempts = append(n.attempts, attachAttempt{plan.Fs, plan.UseFentry})
-	if n.reject[plan.Fs] || (plan.UseFentry && n.rejectFentry[plan.Fs]) {
-		return nil, errors.New("rejected by the verifier")
+	if n.reject[plan.Fs] {
+		return nil, errors.New("rejected")
+	}
+	if err := n.rejectFentry[plan.Fs]; err != nil && plan.UseFentry {
+		return nil, err
 	}
 	n.open[plan.Fs]++
 	return closeFunc(func() error { n.open[plan.Fs]--; n.closed++; return nil }), nil
@@ -139,9 +146,7 @@ func TestFsAttacherAttachesNewFilesystemsOnce(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, nfsAttempts, "nfs is attached once")
-	// Each try is the fentry attempt, then the kprobe one; later tries go
-	// straight to kprobes.
-	assert.Equal(t, fsAttachTries+1, cifsAttempts, "cifs is given up on after fsAttachTries tries")
+	assert.Equal(t, fsAttachTries, cifsAttempts, "cifs is given up on after fsAttachTries tries")
 	assert.Equal(t, map[FsTypeCode]bool{CodeFsNFS: true}, attachedSet(a))
 
 	closeAttacher(t, a)
@@ -231,12 +236,12 @@ func TestFsAttacherIsolatesFailingFilesystem(t *testing.T) {
 	closeAttacher(t, a)
 }
 
-// A filesystem whose fentry/fexit probes fail is tried once with kprobes, and
-// stays on kprobes afterwards.
+// A filesystem whose fentry/fexit probes this kernel cannot run is tried once
+// with kprobes, and stays on kprobes afterwards.
 func TestFsAttacherFallsBackToKprobes(t *testing.T) {
 	n := newFakeNode()
 	n.probeable[CodeFsExt4] = true
-	n.rejectFentry[CodeFsExt4] = true
+	n.rejectFentry[CodeFsExt4] = fmt.Errorf("find target in vmlinux: %w", btf.ErrNotFound)
 	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
 	a := n.attacher()
 
@@ -293,6 +298,86 @@ func TestFsAttacherLogsLateAttaches(t *testing.T) {
 	assert.Equal(t, 1, lateAttaches("cifs"))
 	assert.Equal(t, 1, lateAttaches("ext4"))
 	assert.Equal(t, "filesystem became probeable after startup; probes attached", lateAttachMessage)
+
+	closeAttacher(t, a)
+}
+
+// A failure that does not rule fentry/fexit out, such as memory pressure,
+// leaves the filesystem on fentry/fexit: the next tick tries them again.
+func TestFsAttacherRetriesFentryAfterOtherFailures(t *testing.T) {
+	n := newFakeNode()
+	n.probeable[CodeFsExt4] = true
+	n.rejectFentry[CodeFsExt4] = fmt.Errorf("creating map: %w", unix.ENOMEM)
+	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
+	a := n.attacher()
+
+	a.refresh()
+	assert.Equal(t, []attachAttempt{{CodeFsExt4, true}}, n.attempts, "no kprobe try")
+	assert.Empty(t, a.attached)
+	assert.False(t, a.noFentry[CodeFsExt4])
+
+	delete(n.rejectFentry, CodeFsExt4)
+	a.refresh()
+	assert.Equal(t, []attachAttempt{{CodeFsExt4, true}, {CodeFsExt4, true}}, n.attempts)
+	assert.Equal(t, map[FsTypeCode]bool{CodeFsExt4: true}, attachedSet(a))
+	assert.Zero(t, a.fentryFallbacks)
+
+	closeAttacher(t, a)
+}
+
+func TestFentryUnsupported(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"no BTF for the function", fmt.Errorf("find target in modules: %w", btf.ErrNotFound), true},
+		{"no tracing support", fmt.Errorf("attach: %w", ebpf.ErrNotSupported), true},
+		{"no trampoline (ENOTSUPP)", fmt.Errorf("attach: %w", errnoENOTSUPP), true},
+		{"EOPNOTSUPP", fmt.Errorf("attach: %w", unix.EOPNOTSUPP), true},
+		{"EINVAL from a tracing attach", fmt.Errorf("attaching x to y: %w", unix.EINVAL), true},
+		{"verifier rejection", &ebpf.VerifierError{}, true},
+		{"unparsable module BTF", fmt.Errorf("%w: %w", errFentryUnsupported, errors.New("bad")), true},
+		{"out of memory", fmt.Errorf("creating map: %w", unix.ENOMEM), false},
+		{"busy", unix.EBUSY, false},
+		{"target not found yet", unix.ENOENT, false},
+		{"other", errors.New("program not loaded"), false},
+	} {
+		assert.Equal(t, tc.want, fentryUnsupported(tc.err), tc.name)
+	}
+}
+
+// The tries bound failures in a row: a filesystem that attached starts
+// afresh, so one that detaches and later fails is still tried
+// fsAttachTries times.
+func TestFsAttacherResetsFailuresOnAttach(t *testing.T) {
+	n := newFakeNode()
+	n.probeable[CodeFsExt4] = true
+	n.reject[CodeFsExt4] = true
+	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
+	a := n.attacher()
+
+	for range fsAttachTries - 1 {
+		a.refresh()
+	}
+	assert.Equal(t, fsAttachTries-1, a.failures[CodeFsExt4])
+
+	n.reject[CodeFsExt4] = false
+	a.refresh()
+	require.Contains(t, a.attached, CodeFsExt4)
+	assert.Zero(t, a.failures[CodeFsExt4], "the count is reset on attach")
+
+	// The volume goes away, comes back, and the filesystem fails again.
+	n.pvs = map[FsTypeCode]bool{}
+	a.refresh()
+	require.NotContains(t, a.attached, CodeFsExt4)
+	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
+	n.reject[CodeFsExt4] = true
+	attempts := len(n.attempts)
+	for range fsAttachTries + 1 {
+		a.refresh()
+	}
+	assert.Equal(t, fsAttachTries, len(n.attempts)-attempts, "tried fsAttachTries times again")
 
 	closeAttacher(t, a)
 }
