@@ -280,7 +280,7 @@ func newStatsReporter(
 
 		mr.fsOpDuration = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:                            attributes.StatFsOperationDuration.Prom,
-			Help:                            "measures the filesystem I/O latency as calculated by the kernel in seconds",
+			Help:                            "filesystem read, write and sync latency in seconds, as the application sees it; buffered writes end once the data is in the page cache",
 			Buckets:                         cfg.Config.Buckets.StatFsOperationDurationHistogram,
 			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
 			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,

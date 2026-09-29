@@ -1133,7 +1133,7 @@ Count of bytes transferred through filesystem read and write operations, broken 
 
 ## `obi.stat.fs.operation.duration`
 
-Latency of a single filesystem read or write as the application experiences it, broken down by filesystem type and operation.
+Latency of a single filesystem read, write, fsync or fdatasync as the application experiences it, broken down by filesystem type and operation. Buffered writes (no O_SYNC, O_DIRECT or fsync) end once the data is in the page cache, so their latency is the copy into memory; the server's or device's latency shows in fsync and fdatasync.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
