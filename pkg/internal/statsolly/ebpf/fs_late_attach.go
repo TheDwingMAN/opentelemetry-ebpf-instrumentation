@@ -177,13 +177,13 @@ func isLocalFs(fs FsTypeCode) bool {
 // startLateFsAttacher starts looking for filesystems that become probeable
 // after startup. attached lists the filesystems planned at startup.
 func startLateFsAttacher(
-	log *slog.Logger, cfg *config.EBPFTracer, attached []fsAttachPlan, localFilterRunning bool,
+	log *slog.Logger, cfg *config.EBPFTracer, blockLoad blockLoadPlan, attached []fsAttachPlan, localFilterRunning bool,
 	sharedMaps map[string]*ebpf.Map, mu *sync.Mutex, filterMap *ebpf.Map,
 ) io.Closer {
 	a := &lateFsAttacher{
 		log: log,
 		load: func(toDisable []string, attachTo map[string]string, objects *StatsObjects) error {
-			return loadStatsObjects(cfg, toDisable, attachTo, objects, sharedMaps, mu)
+			return loadStatsObjects(cfg, blockLoad, toDisable, attachTo, objects, sharedMaps, mu)
 		},
 		plan:    planPendingFsAttach,
 		done:    map[FsTypeCode]bool{},

@@ -311,5 +311,6 @@ func TestBPFVerifierWithConstants(t *testing.T) {
 	forEachCombination(t, "statsolly/Stats", statsolly.LoadStats, []constOption{
 		{"g_bpf_debug", []any{true, false}},
 		{"stats_wakeup_data_bytes", []any{uint32(0), uint32(1 << 20)}},
+		{"blk_want_queue_depth", []any{uint8(0), uint8(1)}},
 	})
 }

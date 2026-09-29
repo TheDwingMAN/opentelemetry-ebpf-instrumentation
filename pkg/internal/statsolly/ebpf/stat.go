@@ -270,6 +270,8 @@ type StatsBlockIo struct {
 	Bytes     uint64
 	Error     int32
 	Inflight  uint32
+	PartDev   uint32
+	Pad2      [4]uint8
 }
 
 // StatsFsIo mirrors fs_io_t in bpf/statsolly/types.h.
