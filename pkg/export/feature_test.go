@@ -242,6 +242,13 @@ func TestDeprecatedEnabled(t *testing.T) {
 	assert.Empty(t, mustLoadFeatures(t, "application", "application_span_otel").DeprecatedEnabled())
 }
 
+func TestStorageBlockFeatureParsing(t *testing.T) {
+	var f Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block"]`), &f))
+	assert.True(t, f.StorageBlock())
+	assert.True(t, f.StatMetrics()) // storage rides the stats pipeline
+}
+
 func TestFeatureUndefined(t *testing.T) {
 	t.Run("undefined YAML", func(t *testing.T) {
 		doc := struct {
