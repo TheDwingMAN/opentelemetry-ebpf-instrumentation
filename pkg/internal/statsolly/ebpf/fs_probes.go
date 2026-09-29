@@ -26,21 +26,26 @@ type fsTarget struct {
 	Module    string
 	ReadSyms  []string
 	WriteSyms []string
+	FsyncSyms []string
 }
 
 var fsTargets = []fsTarget{
 	{Fs: CodeFsNFS, Module: "nfs",
 		ReadSyms:  []string{"nfs_file_read"},
-		WriteSyms: []string{"nfs_file_write"}},
+		WriteSyms: []string{"nfs_file_write"},
+		FsyncSyms: []string{"nfs_file_fsync"}},
 	{Fs: CodeFsCeph, Module: "ceph",
 		ReadSyms:  []string{"ceph_read_iter"},
-		WriteSyms: []string{"ceph_write_iter"}},
+		WriteSyms: []string{"ceph_write_iter"},
+		FsyncSyms: []string{"ceph_fsync"}},
 	{Fs: CodeFsCIFS, Module: "cifs",
-		ReadSyms:  []string{"cifs_loose_read_iter", "cifs_strict_readv"},
-		WriteSyms: []string{"cifs_file_write_iter", "cifs_strict_writev"}},
+		ReadSyms:  []string{"cifs_strict_readv", "cifs_loose_read_iter"},
+		WriteSyms: []string{"cifs_strict_writev", "cifs_file_write_iter"},
+		FsyncSyms: []string{"cifs_strict_fsync", "cifs_fsync"}},
 	{Fs: CodeFsFUSE, Module: "fuse",
 		ReadSyms:  []string{"fuse_file_read_iter"},
-		WriteSyms: []string{"fuse_file_write_iter"}},
+		WriteSyms: []string{"fuse_file_write_iter"},
+		FsyncSyms: []string{"fuse_fsync"}},
 }
 
 // moduleBTFExists reports whether the kernel exposes BTF for a module, which is
@@ -109,11 +114,15 @@ type fsAttachPlan struct {
 	UseFentry bool
 	ReadSym   string
 	WriteSym  string
+	FsyncSym  string
 }
 
 // planFsAttachWith decides, per filesystem, whether to attach fentry/fexit or
 // classic kprobes, or to skip the filesystem entirely. Detection is per
 // filesystem rather than global: a node commonly has nfs loaded and ceph not.
+// Fsync is resolved independently of read/write: when none of its candidates
+// are probeable, FsyncSym is left empty and the caller disables only the
+// fsync programs, keeping read/write attached.
 func planFsAttachWith(
 	targets []fsTarget,
 	moduleBTF func(string) bool,
@@ -126,11 +135,13 @@ func planFsAttachWith(
 		if !readOK || !writeOK {
 			continue
 		}
+		fsyncSym, _ := resolve(tgt.FsyncSyms)
 		plans = append(plans, fsAttachPlan{
 			Fs:        tgt.Fs,
 			UseFentry: moduleBTF(tgt.Module),
 			ReadSym:   readSym,
 			WriteSym:  writeSym,
+			FsyncSym:  fsyncSym,
 		})
 	}
 	return plans

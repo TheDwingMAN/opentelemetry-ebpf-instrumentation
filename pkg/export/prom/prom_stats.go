@@ -415,7 +415,7 @@ func (r *statMetricsReporter) observeFsOpDuration(stat *ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observeFsIOBytes(stat *ebpf.Stat) {
-	if r.fsIOBytes == nil || stat.FsIo == nil {
+	if r.fsIOBytes == nil || stat.FsIo == nil || stat.FsIo.Bytes == 0 {
 		return
 	}
 	r.fsIOBytes.WithLabelValues(labelValues(stat, r.fsIOBytesAttrs)...).
