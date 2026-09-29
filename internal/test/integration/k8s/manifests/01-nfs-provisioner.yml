@@ -5,15 +5,9 @@
 # nfs.ko / nfsv4.ko -- which is what OBI instruments -- so this exercises the
 # real code path.
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: storage-test
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: nfs-provisioner
-  namespace: storage-test
 ---
 kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
@@ -47,7 +41,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: nfs-provisioner
-    namespace: storage-test
+    namespace: default
 roleRef:
   kind: ClusterRole
   name: nfs-provisioner-runner
@@ -57,7 +51,6 @@ kind: Service
 apiVersion: v1
 metadata:
   name: nfs-provisioner
-  namespace: storage-test
   labels:
     app: nfs-provisioner
 spec:
@@ -99,7 +92,6 @@ kind: Deployment
 apiVersion: apps/v1
 metadata:
   name: nfs-provisioner
-  namespace: storage-test
 spec:
   selector:
     matchLabels:

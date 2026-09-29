@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: obi-config
+data:
+  obi-config.yml: |
+    log_level: debug
+    prometheus_export:
+      port: 8999
+    attributes:
+      kubernetes:
+        enable: true
+---
+# The base "obi" ClusterRole/Binding from 01-serviceaccount.yml does not carry
+# persistentvolume access: the PV/PVC join is a lazy per-volume get of
+# spec.claimRef, not a watch, and storage metrics carry no PVC/storage-class
+# attribution without it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obi-storage
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obi-storage
+subjects:
+  - kind: ServiceAccount
+    name: obi
+    namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obi-storage
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: obi
+spec:
+  selector:
+    matchLabels:
+      instrumentation: obi
+  template:
+    metadata:
+      labels:
+        instrumentation: obi
+        # this label will trigger a deletion of OBI pods before tearing down
+        # kind, to force OBI writing the coverage data
+        teardown: delete
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/path: '/metrics'
+        prometheus.io/port: '8999'
+    spec:
+      hostPID: true
+      serviceAccountName: obi
+      volumes:
+        - name: obi-config
+          configMap:
+            name: obi-config
+        - name: testoutput
+          persistentVolumeClaim:
+            claimName: testoutput
+        - name: tracing
+          hostPath:
+            path: /sys/kernel/tracing
+            type: Directory
+        # THE PREREQUISITE: without this the PV/PVC join resolves nothing.
+        - name: kubelet-root
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+      containers:
+        - name: obi
+          image: obi:dev
+          imagePullPolicy: Never # loaded into Kind from localhost
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          ports:
+            - containerPort: 8999
+              name: prometheus
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /config
+              name: obi-config
+            - mountPath: /testoutput
+              name: testoutput
+            - mountPath: /sys/kernel/tracing
+              name: tracing
+            - mountPath: /var/lib/kubelet
+              name: kubelet-root
+              readOnly: true
+              mountPropagation: HostToContainer
+          env:
+            - name: GOCOVERDIR
+              value: "/testoutput"
+            - name: OTEL_EBPF_CONFIG_PATH
+              value: /config/obi-config.yml
+            - name: OTEL_EBPF_METRICS_FEATURES
+              value: "storage_block,storage_fs"
+            - name: OTEL_EBPF_METRICS_INTERVAL
+              value: "1s"
+            - name: OTEL_EBPF_BPF_BATCH_TIMEOUT
+              value: "10ms"

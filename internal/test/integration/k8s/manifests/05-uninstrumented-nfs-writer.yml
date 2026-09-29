@@ -1,0 +1,56 @@
+# NFS-backed PVC and a busybox writer that exercises all three fs.operation
+# values (write, fsync, read) on every loop iteration.
+#
+# hostPath/local-path volumes on a kind node are overlayfs, which the
+# filesystem probes do not cover, so unlike the manual test environment this
+# only exercises the NFS-backed PVC -- the local-filesystem allowlist stays
+# unit-tested.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nfs-data
+spec:
+  storageClassName: obi-nfs
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nfs-writer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nfs-writer
+  template:
+    metadata:
+      labels:
+        app: nfs-writer
+    spec:
+      containers:
+        - name: io
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "nfs-writer starting against /data"
+              i=0
+              # Read with dd, not cat: busybox cat copies through
+              # splice/sendfile, which the filesystem probes do not see --
+              # they hook read_iter, not splice_read.
+              while true; do
+                dd if=/dev/urandom of=/data/w-$((i % 4)).bin bs=64k count=16 conv=fsync 2>/dev/null
+                dd if=/data/w-$((i % 4)).bin of=/dev/null bs=64k 2>/dev/null
+                i=$((i+1))
+                sleep 1
+              done
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nfs-data
