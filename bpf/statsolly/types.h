@@ -76,6 +76,7 @@ enum fs_op : u8 {
     fs_op_read = 0,
     fs_op_write = 1,
     fs_op_fsync = 2,
+    fs_op_fdatasync = 3, // fdatasync(2): flush data without metadata
 };
 
 typedef struct fs_io {
