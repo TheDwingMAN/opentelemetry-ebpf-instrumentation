@@ -16,16 +16,16 @@ typedef struct disk_rq_start {
     u64 queued_ns;
     // size of the request when it was issued
     u32 bytes;
-    // whole disk and operation, for userspace to count the requests in flight
+    // whole disk and operation
     u32 major;
     u32 minor;
     enum disk_op op;
     u8 _pad[3];
 } disk_rq_start_t;
 
-// Each in-flight block request, keyed by the struct request address. Userspace also iterates it
-// to count the requests in flight. LRU so that requests whose completion is never seen can't leak
-// entries.
+// Each in-flight block request of the queues whose requests the kernel doesn't time (see
+// disk_timed_queues), keyed by the struct request address. LRU so that requests whose completion
+// is never seen can't leak entries.
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1 << 14);

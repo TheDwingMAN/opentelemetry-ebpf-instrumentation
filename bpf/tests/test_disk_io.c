@@ -111,6 +111,16 @@ static void test_queue_ns(void) {
                 "an allocation time after the issue is not trusted");
 }
 
+static void test_rq_bytes(void) {
+    assert_true(disk_rq_bytes(4096, 8) == 4096, "a request completed at once");
+    assert_true(disk_rq_bytes(4096, 16) == 8192,
+                "a request completed in parts: the last part is smaller than the request");
+    assert_true(disk_rq_bytes(0, 0) == 0, "a flush has no data");
+    assert_true(
+        disk_rq_bytes(64 << 20, (u16)((64 << 20) >> 9)) == 64 << 20,
+        "the sectors of a 64 MiB discard wrap on 16 bits: the completed bytes are the size");
+}
+
 static void test_fs_sync_status(void) {
     assert_true(fs_sync_status(0) == 0, "a successful sync has no status");
     assert_true(fs_sync_status(-5) == 5, "-EIO becomes errno 5");
@@ -133,6 +143,7 @@ int main(void) {
     test_op_from_req_op();
     test_bio_op();
     test_queue_ns();
+    test_rq_bytes();
     test_fs_sync_status();
 
     if (failed_assertions) {

@@ -12,6 +12,7 @@
 #include <statsolly/types.h>
 #include <statsolly/maps/disk_io_accum.h>
 #include <statsolly/maps/disk_rq_start.h>
+#include <statsolly/maps/disk_timed_queues.h>
 
 // Set when block_rq_complete reports a blk_status_t (Linux 5.16+) instead of a negative errno.
 volatile const bool disk_status_is_blk_status;
@@ -74,7 +75,28 @@ static __always_inline void request_partition(struct request *rq, u32 *part_dev,
     *part_dev = BPF_CORE_READ(rq, part, bd_dev);
 }
 
+// request_queue_key is the key of the queue of a request in disk_timed_queues
+static __always_inline u64 request_queue_key(struct request *rq) {
+    return (u64)(uintptr_t)BPF_CORE_READ(rq, q);
+}
+
+// kernel_times_requests tells whether the kernel records the issue time and the size of the
+// requests (rq->io_start_time_ns and rq->stats_sectors): when the queue collects I/O statistics,
+// which writeback throttling turns on by default. The kernel only decides after block_rq_issue,
+// so this relies on what the completions of the queue found (see disk_timed_queues).
+static __always_inline bool kernel_times_requests(struct request *rq) {
+    // before Linux 5.5 (including RHEL 8), the kernel doesn't record the size
+    if (!bpf_core_field_exists(rq->stats_sectors)) {
+        return false;
+    }
+    const u64 queue = request_queue_key(rq);
+    return bpf_map_lookup_elem(&disk_timed_queues, &queue) != 0;
+}
+
 static __always_inline void record_issue(struct request *rq) {
+    if (kernel_times_requests(rq)) {
+        return;
+    }
     const enum disk_op op = request_op(rq);
     if (op == disk_op_unknown) {
         return;
@@ -108,6 +130,53 @@ int obi_stats_raw_tp_block_rq_issue_legacy(struct bpf_raw_tracepoint_args *ctx) 
     return 0;
 }
 
+// kernel_timed_start fills start from what the kernel recorded at the issue of a request that it
+// timed, and adds its queue to disk_timed_queues so that the next requests of the queue are not
+// recorded at their issue
+static __always_inline bool
+kernel_timed_start(struct request *rq, const u32 completed_bytes, disk_rq_start_t *start) {
+    if (!bpf_core_field_exists(rq->stats_sectors)) {
+        return false;
+    }
+    // the kernel zeroes it when it allocates or reinitializes a request
+    const u64 issued_ns = BPF_CORE_READ(rq, io_start_time_ns);
+    if (issued_ns == 0) {
+        return false;
+    }
+    const u64 queue = request_queue_key(rq);
+    if (!bpf_map_lookup_elem(&disk_timed_queues, &queue)) {
+        const u8 timed = 1;
+        bpf_map_update_elem(&disk_timed_queues, &queue, &timed, BPF_ANY);
+    }
+    struct gendisk *disk = request_disk(rq);
+    start->issued_ns = issued_ns;
+    start->queued_ns = disk_queue_ns(BPF_CORE_READ(rq, start_time_ns), issued_ns);
+    start->bytes = disk_rq_bytes(completed_bytes, BPF_CORE_READ(rq, stats_sectors));
+    start->major = BPF_CORE_READ(disk, major);
+    start->minor = BPF_CORE_READ(disk, first_minor);
+    start->op = request_op(rq);
+    return true;
+}
+
+// recorded_start moves what record_issue recorded of a request into start. A request that was
+// not recorded was issued before the probes were attached or, if the kernel timed its queue,
+// after the kernel stopped timing it: the queue is removed from disk_timed_queues so that its
+// next requests are recorded.
+static __always_inline bool recorded_start(struct request *rq, disk_rq_start_t *start) {
+    const u64 rq_key = (u64)(uintptr_t)rq;
+    const disk_rq_start_t *recorded = bpf_map_lookup_elem(&disk_rq_start, &rq_key);
+    if (!recorded) {
+        if (bpf_core_field_exists(rq->stats_sectors)) {
+            const u64 queue = request_queue_key(rq);
+            bpf_map_delete_elem(&disk_timed_queues, &queue);
+        }
+        return false;
+    }
+    *start = *recorded;
+    bpf_map_delete_elem(&disk_rq_start, &rq_key);
+    return true;
+}
+
 SEC("raw_tracepoint/block_rq_complete")
 int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     struct request *rq = (struct request *)ctx->args[0];
@@ -118,23 +187,25 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         return 0;
     }
 
-    const u64 rq_key = (u64)(uintptr_t)rq;
-    const disk_rq_start_t *start = bpf_map_lookup_elem(&disk_rq_start, &rq_key);
-    if (!start) {
+    disk_rq_start_t start = {};
+    if (!kernel_timed_start(rq, nr_bytes, &start) && !recorded_start(rq, &start)) {
         return 0;
     }
-    const u64 latency_ns = bpf_ktime_get_ns() - start->issued_ns;
-    const u64 queued_ns = start->queued_ns;
-    const u32 bytes = start->bytes;
+    if (start.op == disk_op_unknown) {
+        return 0;
+    }
+    const u64 now_ns = bpf_ktime_get_ns();
+    const u64 latency_ns = now_ns > start.issued_ns ? now_ns - start.issued_ns : 0;
+    const u64 queued_ns = start.queued_ns;
+    const u32 bytes = start.bytes;
     struct cgroup *cgrp = request_cgroup(rq);
     disk_io_key_t key = {
         .cgroup_id = cgroup_id_of(cgrp),
-        .major = start->major,
-        .minor = start->minor,
-        .op = start->op,
+        .major = start.major,
+        .minor = start.minor,
+        .op = start.op,
         .status = status,
     };
-    bpf_map_delete_elem(&disk_rq_start, &rq_key);
     request_partition(rq, &key.part_dev, &key.partno);
 
     disk_io_accum_t *accum = lookup_or_init_accum(&disk_io_accum, &key);

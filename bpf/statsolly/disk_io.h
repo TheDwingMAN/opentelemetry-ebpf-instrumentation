@@ -87,6 +87,18 @@ disk_rq_final_completion(const u32 nr_bytes, const u32 remaining_bytes, const u8
     return status != 0 || nr_bytes >= remaining_bytes;
 }
 
+enum { k_sector_shift = 9 };
+
+// disk_rq_bytes is the size of a request that the kernel timed, at its final completion. The
+// kernel records the size at the issue in 512-byte sectors on 16 bits (rq->stats_sectors), which
+// wraps above 32 MiB, while the final completion reports the bytes it completes: all of them
+// unless the request completed in several parts. The larger of the two is the size, except for
+// requests both larger than 32 MiB and completed in parts.
+static __always_inline u32 disk_rq_bytes(const u32 completed_bytes, const u16 stats_sectors) {
+    const u32 issued_bytes = (u32)stats_sectors << k_sector_shift;
+    return completed_bytes > issued_bytes ? completed_bytes : issued_bytes;
+}
+
 // The status of errnos that don't fit in a u8, such as the kernel-internal ERESTARTSYS (512),
 // which userspace reports as _OTHER
 enum { k_status_other = 0xff };
