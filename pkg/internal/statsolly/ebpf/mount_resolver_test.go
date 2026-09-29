@@ -169,3 +169,42 @@ func resetMountCache() {
 	mountOrder = nil
 	mountMu.Unlock()
 }
+
+// The kubelet's mounts live in the host mount namespace, which hostPID makes
+// readable through the host init's mountinfo. Reading it from there is what
+// removes the need to bind-mount /var/lib/kubelet into the container.
+func TestScanMountsReadsHostInitTable(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "1"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "1", "mountinfo"),
+		[]byte("36 35 0:32 / /var/lib/kubelet/pods/"+"55293f39-c745-4578-accb-f3e5cfc7b303"+
+			"/volumes/kubernetes.io~nfs/pvc-host rw,relatime shared:1 - nfs 10.0.0.1:/export rw\n"), 0o644))
+
+	old := mountInfoPath
+	mountInfoPath = filepath.Join(dir, "1", "mountinfo")
+	t.Cleanup(func() { mountInfoPath = old })
+
+	mounts, err := scanMounts()
+
+	require.NoError(t, err)
+	require.Len(t, mounts, 1)
+	info, ok := parseKubeletMount(mounts[0].MountPoint, mounts[0].Source)
+	require.True(t, ok)
+	assert.Equal(t, "pvc-host", info.PVName)
+}
+
+// Without hostPID there is no host init to read. Rather than losing every
+// volume label, fall back to this process's own mount table.
+func TestScanMountsFallsBackToSelf(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "self"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "self", "mountinfo"), []byte(""), 0o644))
+
+	old := mountInfoPath
+	mountInfoPath = filepath.Join(dir, "self", "mountinfo")
+	t.Cleanup(func() { mountInfoPath = old })
+
+	_, err := scanMounts()
+
+	assert.NoError(t, err, "a self-addressed path must still be readable")
+}

@@ -4,9 +4,11 @@
 package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,9 +17,22 @@ import (
 )
 
 // mountInfoPath is the mountinfo file to scan, in the format documented by
-// proc(5). It defaults to this process's real view of the mount namespace;
-// tests point it at a fixture.
-var mountInfoPath = "/proc/self/mountinfo"
+// proc(5). It defaults to the host's init process rather than this one.
+//
+// The kubelet's volume mounts live in the host mount namespace. Reading them
+// from this process would require bind-mounting /var/lib/kubelet into the
+// container with mountPropagation: HostToContainer, which is intrusive for a
+// DaemonSet to ask for. With hostPID -- already required for attributing I/O
+// to a pod -- the host's init is visible, and its mount table lists those
+// mounts. Only the paths are parsed, never opened, so visibility is enough.
+//
+// Tests point this at a fixture.
+var mountInfoPath = hostMountInfoPath
+
+const (
+	hostMountInfoPath = "/proc/1/mountinfo"
+	selfMountInfoPath = "/proc/self/mountinfo"
+)
 
 // kubeletVolumeRe extracts the pod UID, volume plugin, and volume name from a
 // kubelet volume mount point, e.g.
@@ -128,14 +143,43 @@ func scanForMount(sDev uint32) (MountInfo, bool) {
 // reads "<root>/self/mountinfo", so the FS root is mountInfoPath with those
 // last two path elements stripped back off.
 func scanMounts() ([]*procfs.MountInfo, error) {
-	root := filepath.Dir(filepath.Dir(mountInfoPath))
+	mounts, err := mountsFrom(mountInfoPath)
+	if err == nil || mountInfoPath != hostMountInfoPath {
+		return mounts, err
+	}
+
+	// Without hostPID there is no host init to read, so fall back to this
+	// process's own table. Attribution then only covers volumes actually
+	// mounted into this container.
+	return mountsFrom(selfMountInfoPath)
+}
+
+// mountsFrom parses a mountinfo file addressed as <root>/<pid|self>/mountinfo,
+// which is the shape both the real procfs and the test fixtures take.
+func mountsFrom(path string) ([]*procfs.MountInfo, error) {
+	root := filepath.Dir(filepath.Dir(path))
 
 	fs, err := procfs.NewFS(root)
 	if err != nil {
 		return nil, err
 	}
 
-	return fs.GetMounts()
+	owner := filepath.Base(filepath.Dir(path))
+	if owner == "self" {
+		return fs.GetMounts()
+	}
+
+	pid, err := strconv.Atoi(owner)
+	if err != nil {
+		return nil, fmt.Errorf("unexpected mountinfo path %q: %w", path, err)
+	}
+
+	proc, err := fs.Proc(pid)
+	if err != nil {
+		return nil, err
+	}
+
+	return proc.MountInfo()
 }
 
 // parseKubeletMount extracts Kubernetes volume identity from a mount point
@@ -166,7 +210,7 @@ func mountServer(source string) string {
 // WarnIfNoKubeletVolumeMounts scans the current mount table once and warns if
 // no mount point looks like a kubelet volume mount. This is the operator-facing
 // signal for the most common storage-metrics misconfiguration: the container
-// not having /var/lib/kubelet mounted with mountPropagation: HostToContainer,
+// not running with hostPID, so the host's mount table cannot be read,
 // which silently prevents persistent volume attribution from ever working.
 func WarnIfNoKubeletVolumeMounts(log *slog.Logger) {
 	mounts, err := scanMounts()
@@ -181,5 +225,5 @@ func WarnIfNoKubeletVolumeMounts(log *slog.Logger) {
 		}
 	}
 
-	log.Warn("no kubelet volume mounts visible; persistent volume attribution needs /var/lib/kubelet mounted with mountPropagation: HostToContainer")
+	log.Warn("no kubelet volume mounts visible; persistent volume attribution needs hostPID so the host mount table can be read")
 }

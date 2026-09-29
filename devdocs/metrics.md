@@ -186,9 +186,15 @@ Per filesystem and per symbol, OBI prefers `fentry`/`fexit` over classic `kprobe
 #### Runtime requirements
 
 - **tracefs** (`/sys/kernel/tracing`) must be mounted and readable inside the container, not merely present on the node — both the block tracepoints and the kprobe fallback path for filesystem probes need it.
-- **`/var/lib/kubelet` mounted with `mountPropagation: HostToContainer`** into the OBI container. Without it, `procfs.GetMounts()` only sees the agent's own mount namespace, no kubelet volume mount is ever visible, and filesystem metrics carry no pod/PV/PVC/storage-class attribution. When Kubernetes metadata and `storage_fs` are both enabled, OBI checks this once at pipeline startup and logs a warning if no kubelet volume mount is visible:
+- **`hostPID: true`.** The filesystem probes attribute I/O by host PID, and
+  the same setting makes the host init's mount table readable at
+  `/proc/1/mountinfo`. That is where the kubelet's volume mounts are listed,
+  and it is how a device is resolved to a PersistentVolume. Only the paths
+  are parsed, never opened, so no `/var/lib/kubelet` mount is needed. Without
+  `hostPID` OBI falls back to its own mount table, and then only volumes
+  mounted into its own container can be attributed.
 
-  > no kubelet volume mounts visible; persistent volume attribution needs /var/lib/kubelet mounted with mountPropagation: HostToContainer
+  > no kubelet volume mounts visible; persistent volume attribution needs hostPID so the host mount table can be read
 
   (`WarnIfNoKubeletVolumeMounts` in [pkg/internal/statsolly/ebpf/mount_resolver.go](../pkg/internal/statsolly/ebpf/mount_resolver.go), called from `buildPipeline` in [pkg/statsolly/agent/pipeline.go](../pkg/statsolly/agent/pipeline.go).)
 - **OpenShift** needs the `privileged` SCC bound to the DaemonSet's ServiceAccount; the official Helm chart does not grant it automatically.
