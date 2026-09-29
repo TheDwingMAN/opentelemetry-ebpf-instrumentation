@@ -159,9 +159,11 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	fsToDisable, fsAttachTo := planFsToDisable(fsPlans)
 	toDisable = append(toDisable, fsToDisable...)
 
+	sharedMaps := map[string]*ebpf.Map{}
+	var mu sync.Mutex
 	load := func(toDisable []string) error {
 		objects = StatsObjects{}
-		return loadStatsObjects(cfg, toDisable, fsAttachTo, &objects)
+		return loadStatsObjects(cfg, toDisable, fsAttachTo, &objects, sharedMaps, &mu)
 	}
 	storageBlock, err = loadWithStorageFallback(load, toDisable, storageBlock, tlog)
 	if err != nil {
@@ -363,7 +365,12 @@ func (m *StatsFetcher) DebugEventsMap() *ebpf.Map {
 	return m.objects.DebugEvents
 }
 
-func loadStatsObjects(cfg *config.EBPFTracer, toDisable []string, fsAttachTo map[string]string, objects *StatsObjects) error {
+// loadStatsObjects loads the stats eBPF spec into objects. sharedMaps and mu
+// are threaded in from the caller (rather than created fresh here) so that a
+// retry via loadWithStorageFallback reuses the PinInternal maps a prior,
+// failed attempt already created instead of orphaning them and creating a
+// second set.
+func loadStatsObjects(cfg *config.EBPFTracer, toDisable []string, fsAttachTo map[string]string, objects *StatsObjects, sharedMaps map[string]*ebpf.Map, mu *sync.Mutex) error {
 	spec, err := LoadStats()
 	if err != nil {
 		return fmt.Errorf("loading BPF data: %w", err)
@@ -379,12 +386,10 @@ func loadStatsObjects(cfg *config.EBPFTracer, toDisable []string, fsAttachTo map
 
 	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
 
-	sharedMaps := map[string]*ebpf.Map{}
-	var mu sync.Mutex
 	if err := ebpfconvenience.LoadSpec(spec, objects, map[string]any{
 		"g_bpf_debug":             cfg.BpfDebug,
 		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
-	}, sharedMaps, &mu, "", nil); err != nil {
+	}, sharedMaps, mu, "", nil); err != nil {
 		return fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
 	return nil

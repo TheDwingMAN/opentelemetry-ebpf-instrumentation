@@ -5,6 +5,7 @@ package agent // import "go.opentelemetry.io/obi/pkg/statsolly/agent"
 
 import (
 	"context"
+	"fmt"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/otel"
@@ -20,12 +21,28 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/pipe/transform/k8s"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/export"
+	"go.opentelemetry.io/obi/pkg/kube"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
 	"go.opentelemetry.io/obi/pkg/selection"
 )
 
 func statAttrs(s *ebpf.Stat) *pipe.CommonAttrs { return &s.CommonAttrs }
+
+// fsIoPID extracts the PID namespace, host PID, and filesystem superblock
+// device number from a filesystem I/O stat, for Kubernetes pod and
+// persistent volume attribution. Stats that don't carry FsIo are left alone.
+func fsIoPID(s *ebpf.Stat) (pidNs, hostPID, sDev uint32, ok bool) {
+	if s.FsIo == nil {
+		return 0, 0, 0, false
+	}
+	return s.FsIo.PidNs, s.FsIo.HostPID, s.FsIo.SDev, true
+}
+
+// noPVCLookup reports every volume as unbound. Used when Kubernetes is
+// disabled or no API client is reachable, so the decorator still attributes the
+// persistent volume name from the mount path without a claim name.
+func noPVCLookup(context.Context, string) (string, string, bool) { return "", "", false }
 
 // mockable functions for testing
 var newRingBufTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
@@ -56,8 +73,31 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	swi.Add(k8s.MetadataDecoratorProvider(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
 		statAttrs, ebpfStats, kubeDecoratedStats), swarm.WithID("K8sMetadataDecorator"))
 
+	var pidK8sStore *kube.Store
+	if s.ctxInfo.K8sInformer.IsKubeEnabled() {
+		var err error
+		pidK8sStore, err = s.ctxInfo.K8sInformer.Get(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("initializing PIDMetadataDecorator: %w", err)
+		}
+	}
+	pvcLookup := ebpf.PVCLookup(noPVCLookup)
+	if pidK8sStore != nil {
+		if kubeClient, err := s.ctxInfo.K8sInformer.KubeClient(); err == nil {
+			pvcLookup = ebpf.K8sPVCLookup(kubeClient)
+		} else {
+			alog.Warn("no Kubernetes client for PV to PVC resolution;"+
+				" filesystem metrics will carry the volume name without a claim name", "error", err)
+		}
+	}
+
+	pidDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, "pidDecoratedStats")
+	swi.Add(k8s.PIDMetadataDecoratorProvider(ctx, pidK8sStore, statAttrs, fsIoPID,
+		ebpf.CachedPVCLookup(pvcLookup), kubeDecoratedStats, pidDecoratedStats),
+		swarm.WithID("PIDMetadataDecorator"))
+
 	dnsDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, "dnsDecoratedStats")
-	swi.Add(rdns.ReverseDNSProvider(&s.cfg.Stats.ReverseDNS, statAttrs, &s.cfg.EBPF, kubeDecoratedStats, dnsDecoratedStats),
+	swi.Add(rdns.ReverseDNSProvider(&s.cfg.Stats.ReverseDNS, statAttrs, &s.cfg.EBPF, pidDecoratedStats, dnsDecoratedStats),
 		swarm.WithID("ReverseDNS"))
 
 	geoIPDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, "geoIPDecoratedStats")

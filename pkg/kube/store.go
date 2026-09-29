@@ -102,6 +102,8 @@ type Store struct {
 
 	// container ID to pod matcher
 	podsByContainer map[string]*kube.CachedObjMeta
+	// pod UID to pod matcher
+	podsByUID map[string]*kube.CachedObjMeta
 	// first key: pod owner ID, second key: container ID
 	containersByOwner maps.Map2[string, string, *informer.ContainerInfo]
 
@@ -140,6 +142,7 @@ func NewStore(
 		containerIDs:        maps.Map2[string, app.PID, *container.Info]{},
 		namespaces:          maps.Map2[uint32, app.PID, *container.Info]{},
 		podsByContainer:     map[string]*kube.CachedObjMeta{},
+		podsByUID:           map[string]*kube.CachedObjMeta{},
 		containerByPID:      map[app.PID]*container.Info{},
 		objectMetaByIP:      map[string]*kube.CachedObjMeta{},
 		objectMetaByQName:   map[qualifiedName]*kube.CachedObjMeta{},
@@ -318,6 +321,9 @@ func (s *Store) unlockedAddObjectMeta(meta *informer.ObjectMeta) {
 		oID := fetchOwnerID(meta)
 		s.log.Debug("adding pod to store",
 			"ips", meta.Ips, "pod", meta.Name, "namespace", meta.Namespace, "containers", meta.Pod.Containers)
+		if meta.Pod.Uid != "" {
+			s.podsByUID[meta.Pod.Uid] = cmeta
+		}
 		for _, c := range meta.Pod.Containers {
 			s.podsByContainer[c.Id] = cmeta
 			// TODO: make sure we can handle when the containerIDs is set after this function is triggered
@@ -358,6 +364,9 @@ func (s *Store) unlockedDeleteObjectMeta(meta *informer.ObjectMeta) {
 		oID := fetchOwnerID(meta)
 		s.log.Debug("deleting pod from store",
 			"ips", meta.Ips, "pod", meta.Name, "namespace", meta.Namespace, "containers", meta.Pod.Containers)
+		if meta.Pod.Uid != "" {
+			delete(s.podsByUID, meta.Pod.Uid)
+		}
 		for _, c := range meta.Pod.Containers {
 			infos, ok := s.containerIDs[c.Id]
 			if ok {
@@ -387,6 +396,12 @@ func (s *Store) PodByContainerID(cid string) *kube.CachedObjMeta {
 	s.access.RLock()
 	defer s.access.RUnlock()
 	return s.podsByContainer[cid]
+}
+
+func (s *Store) PodByUID(uid string) *kube.CachedObjMeta {
+	s.access.RLock()
+	defer s.access.RUnlock()
+	return s.podsByUID[uid]
 }
 
 // PodContainerByPIDNs returns the pod metadata and container name for the

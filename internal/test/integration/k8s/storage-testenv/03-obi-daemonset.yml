@@ -22,6 +22,12 @@ rules:
   - apiGroups: ["apps"]
     resources: ["replicasets"]
     verbs: ["list", "watch"]
+  # Read-only, get-only: PV to PVC resolution is a lazy per-volume lookup of
+  # spec.claimRef, not a watch. Storage metrics carry the volume name without a
+  # claim name if this is withheld.
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
