@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -158,6 +159,85 @@ func withMountInfo(t *testing.T, lines ...string) {
 		mountInfoPath = old
 		resetMountCache()
 	})
+	withProcRoot(t, t.TempDir())
+}
+
+// withProcRoot points the kubelet lookup at root and forgets any kubelet
+// found before, so no test sees the machine's real /proc.
+func withProcRoot(t *testing.T, root string) {
+	t.Helper()
+
+	reset := func() {
+		kubeletMu.Lock()
+		kubeletMountInfo = ""
+		kubeletSearchedAt = time.Time{}
+		kubeletMu.Unlock()
+	}
+	old := procRoot
+	procRoot = root
+	reset()
+	t.Cleanup(func() {
+		procRoot = old
+		reset()
+	})
+}
+
+// fakeProc writes a process under root: its comm, its mount namespace link
+// and its mountinfo.
+func fakeProc(t *testing.T, root, pid, comm, mntNS string, mountinfo ...string) {
+	t.Helper()
+
+	dir := filepath.Join(root, pid)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "ns"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "comm"), []byte(comm+"\n"), 0o644))
+	require.NoError(t, os.Symlink(mntNS, filepath.Join(dir, "ns", "mnt")))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mountinfo"), []byte(strings.Join(mountinfo, "\n")+"\n"), 0o644))
+}
+
+const kubeletNFSLine = "36 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-kubens rw,relatime shared:1 - nfs 10.0.0.1:/export rw"
+
+// With OpenShift's mount namespace encapsulation the kubelet's volume mounts
+// are missing from init's table; they are read from the kubelet's own.
+func TestScanMountsReadsKubeletNamespace(t *testing.T) {
+	root := t.TempDir()
+	fakeProc(t, root, "1", "systemd", "mnt:[4026531841]", "22 1 253:0 / / rw,relatime shared:1 - xfs /dev/vda1 rw")
+	fakeProc(t, root, "812", "crio", "mnt:[4026532500]", "22 1 253:0 / / rw,relatime shared:1 - xfs /dev/vda1 rw")
+	fakeProc(t, root, "901", "kubelet", "mnt:[4026532500]", kubeletNFSLine)
+	withProcRoot(t, root)
+	old := mountInfoPath
+	mountInfoPath = filepath.Join(root, "1", "mountinfo")
+	t.Cleanup(func() { mountInfoPath = old })
+
+	mounts, err := scanMounts()
+
+	require.NoError(t, err)
+	require.True(t, hasKubeletVolumeMount(mounts))
+	info, ok := scanForMount(32)
+	require.True(t, ok)
+	assert.Equal(t, "pvc-kubens", info.PVName)
+}
+
+// A kubelet sharing init's mount namespace has nothing init's table lacks.
+func TestFindKubeletMountInfoIgnoresInitNamespace(t *testing.T) {
+	root := t.TempDir()
+	fakeProc(t, root, "1", "systemd", "mnt:[4026531841]")
+	fakeProc(t, root, "901", "kubelet", "mnt:[4026531841]")
+
+	_, ok := findKubeletMountInfo(root)
+
+	assert.False(t, ok)
+}
+
+func TestFindKubeletMountInfo(t *testing.T) {
+	root := t.TempDir()
+	fakeProc(t, root, "1", "systemd", "mnt:[4026531841]")
+	fakeProc(t, root, "77", "kubelet-helper", "mnt:[4026532500]")
+	fakeProc(t, root, "901", "kubelet", "mnt:[4026532500]")
+
+	path, ok := findKubeletMountInfo(root)
+
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join(root, "901", "mountinfo"), path)
 }
 
 // resetMountCache clears the mount cache. Nothing in production needs this
@@ -203,6 +283,7 @@ func TestScanMountsFallsBackToSelf(t *testing.T) {
 	old := mountInfoPath
 	mountInfoPath = filepath.Join(dir, "self", "mountinfo")
 	t.Cleanup(func() { mountInfoPath = old })
+	withProcRoot(t, t.TempDir())
 
 	_, err := scanMounts()
 

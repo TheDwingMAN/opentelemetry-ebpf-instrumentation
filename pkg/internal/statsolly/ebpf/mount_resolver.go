@@ -6,6 +6,7 @@ package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -178,14 +179,115 @@ func scanForMount(sDev uint32) (MountInfo, bool) {
 // last two path elements stripped back off.
 func scanMounts() ([]*procfs.MountInfo, error) {
 	mounts, err := mountsFrom(mountInfoPath)
-	if err == nil || mountInfoPath != hostMountInfoPath {
-		return mounts, err
+	if err != nil {
+		if mountInfoPath != hostMountInfoPath {
+			return nil, err
+		}
+		// Without hostPID there is no host init to read, so fall back to this
+		// process's own table. Attribution then only covers volumes actually
+		// mounted into this container.
+		return mountsFrom(selfMountInfoPath)
 	}
 
-	// Without hostPID there is no host init to read, so fall back to this
-	// process's own table. Attribution then only covers volumes actually
-	// mounted into this container.
-	return mountsFrom(selfMountInfoPath)
+	if hasKubeletVolumeMount(mounts) {
+		return mounts, nil
+	}
+
+	// OpenShift's mount namespace encapsulation (kubens.service) runs the
+	// kubelet and CRI-O in a mount namespace of their own, so their volume
+	// mounts never appear in init's table. The kubelet's own table has them.
+	if kubeletTable, ok := kubeletNamespaceMounts(); ok {
+		return kubeletTable, nil
+	}
+	return mounts, nil
+}
+
+func hasKubeletVolumeMount(mounts []*procfs.MountInfo) bool {
+	for _, m := range mounts {
+		if kubeletVolumeRe.MatchString(m.MountPoint) {
+			return true
+		}
+	}
+	return false
+}
+
+// procRoot is where the kubelet process is looked up. Tests point it at a
+// fixture.
+var procRoot = "/proc"
+
+// kubeletSearchInterval bounds how often /proc is walked for a kubelet in a
+// mount namespace other than init's. On most nodes there is none, and the
+// mount table is rescanned on every cache miss.
+const kubeletSearchInterval = 30 * time.Second
+
+var (
+	kubeletMu         sync.Mutex
+	kubeletMountInfo  string // "<procRoot>/<pid>/mountinfo" of a kubelet outside init's mount namespace
+	kubeletSearchedAt time.Time
+	kubeletWatchOnce  sync.Once
+)
+
+// kubeletNamespaceMounts returns the kubelet's mount table when the kubelet
+// runs in a mount namespace other than init's.
+func kubeletNamespaceMounts() ([]*procfs.MountInfo, bool) {
+	kubeletMu.Lock()
+	defer kubeletMu.Unlock()
+
+	if kubeletMountInfo != "" {
+		if mounts, err := mountsFrom(kubeletMountInfo); err == nil {
+			return mounts, true
+		}
+		// The kubelet restarted under a new PID.
+		kubeletMountInfo = ""
+	}
+
+	if time.Since(kubeletSearchedAt) < kubeletSearchInterval {
+		return nil, false
+	}
+	kubeletSearchedAt = time.Now()
+
+	path, ok := findKubeletMountInfo(procRoot)
+	if !ok {
+		return nil, false
+	}
+	mounts, err := mountsFrom(path)
+	if err != nil {
+		return nil, false
+	}
+	kubeletMountInfo = path
+	// The watch on init's table does not see this namespace change. The
+	// namespace outlives any one kubelet process, so one watch is enough.
+	kubeletWatchOnce.Do(func() { watchMountTable(invalidateMountCache, path) })
+	return mounts, true
+}
+
+// findKubeletMountInfo returns the mountinfo path of a process named
+// "kubelet" whose mount namespace differs from init's.
+func findKubeletMountInfo(root string) (string, bool) {
+	initNS, err := os.Readlink(filepath.Join(root, "1", "ns", "mnt"))
+	if err != nil {
+		return "", false
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err != nil {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		comm, err := os.ReadFile(filepath.Join(dir, "comm"))
+		if err != nil || strings.TrimSpace(string(comm)) != "kubelet" {
+			continue
+		}
+		ns, err := os.Readlink(filepath.Join(dir, "ns", "mnt"))
+		if err != nil || ns == initNS {
+			continue
+		}
+		return filepath.Join(dir, "mountinfo"), true
+	}
+	return "", false
 }
 
 // mountsFrom parses a mountinfo file addressed as <root>/<pid|self>/mountinfo,
@@ -244,8 +346,9 @@ func mountServer(source string) string {
 // WarnIfNoKubeletVolumeMounts scans the current mount table once and warns if
 // no mount point looks like a kubelet volume mount. This is the operator-facing
 // signal for the most common storage-metrics misconfiguration: the container
-// not running with hostPID, so the host's mount table cannot be read,
-// which silently prevents persistent volume attribution from ever working.
+// not running with hostPID, so neither the host's nor the kubelet's mount
+// table can be read, which silently prevents persistent volume attribution
+// from ever working.
 func WarnIfNoKubeletVolumeMounts(log *slog.Logger) {
 	mounts, err := scanMounts()
 	if err != nil {
@@ -253,11 +356,9 @@ func WarnIfNoKubeletVolumeMounts(log *slog.Logger) {
 		return
 	}
 
-	for _, m := range mounts {
-		if kubeletVolumeRe.MatchString(m.MountPoint) {
-			return
-		}
+	if hasKubeletVolumeMount(mounts) {
+		return
 	}
 
-	log.Warn("no kubelet volume mounts visible; persistent volume attribution needs hostPID so the host mount table can be read")
+	log.Warn("no kubelet volume mounts visible; persistent volume attribution needs hostPID so the host's and the kubelet's mount tables can be read")
 }
