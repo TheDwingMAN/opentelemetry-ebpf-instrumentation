@@ -208,6 +208,8 @@ func newTestFamilyLayout(t testing.TB, cpus int, l *Layout, mod func(*Config)) *
 	require.NoError(t, err)
 	reg, err := NewRegistry(f)
 	require.NoError(t, err)
+	// Tests collect right away, and attach exporters when they need them.
+	f.start()
 	return &testFamily{m: m, layout: l, family: f, clock: clock, reg: reg}
 }
 

@@ -151,8 +151,11 @@ type Family struct {
 	reader *Reader
 	log    *slog.Logger
 
-	mu       sync.Mutex
-	sinks    []sink
+	mu    sync.Mutex
+	sinks []sink
+	// started is set by Run: until then exporters collect without reading
+	// the map, so every exporter attached before Run sees every delta.
+	started  bool
 	lastPoll time.Time
 	pollErr  bool
 }
@@ -193,8 +196,11 @@ func NewFamily(cfg Config) (*Family, error) {
 	}, nil
 }
 
-// Run polls the kernel map every TickInterval until ctx is done.
+// Run starts reading the kernel map, every TickInterval and whenever an
+// exporter collects, until ctx is done. Attach every exporter
+// before: one attached later misses what the map counted until then.
 func (f *Family) Run(ctx context.Context) {
+	f.start()
 	ticker := time.NewTicker(f.cfg.TickInterval)
 	defer ticker.Stop()
 	for {
@@ -209,6 +215,12 @@ func (f *Family) Run(ctx context.Context) {
 	}
 }
 
+func (f *Family) start() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.started = true
+}
+
 // attach adds an exporter's sink. Keys are linked to the new sink the next
 // time they count something; what they counted before is not in it.
 func (f *Family) attach(s sink) {
@@ -218,12 +230,13 @@ func (f *Family) attach(s sink) {
 }
 
 // collect runs export with the family locked, after reading the kernel map
-// unless an exporter read it less than MinPollInterval ago.
+// unless the family is not running yet or an exporter read it less than
+// MinPollInterval ago.
 func (f *Family) collect(export func(now time.Time)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := f.cfg.Clock()
-	if now.Sub(f.lastPoll) >= f.cfg.MinPollInterval {
+	if f.started && now.Sub(f.lastPoll) >= f.cfg.MinPollInterval {
 		f.poll(now)
 	}
 	export(now)
