@@ -606,14 +606,13 @@ func TestStorageExpirerOmitsEmptyStrings(t *testing.T) {
 	assert.Equal(t, 0, none.Len())
 }
 
-// The stats resource names the host by host.name next to host.id; it is left
-// out when the hostname could not be read.
-func TestStatsResourceHostName(t *testing.T) {
-	attrs := getFilteredStatsResourceAttrs("host-id-1", "node-1.example", attributes.Selection{})
+// The stats resource names the host by host.id only. It is shared with the
+// TCP stat metrics, so an attribute added to it would change their series
+// wherever a collector turns resource attributes into labels; host.name from
+// the container's hostname would also be the OBI pod's name, not the node's.
+func TestStatsResourceHasNoHostName(t *testing.T) {
+	attrs := getFilteredStatsResourceAttrs("host-id-1", attributes.Selection{})
 	assert.Contains(t, attrs, semconv.HostID("host-id-1"))
-	assert.Contains(t, attrs, semconv.HostName("node-1.example"))
-
-	attrs = getFilteredStatsResourceAttrs("host-id-1", "", attributes.Selection{})
 	for _, kv := range attrs {
 		assert.NotEqual(t, semconv.HostNameKey, kv.Key)
 	}

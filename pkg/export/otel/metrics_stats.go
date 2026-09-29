@@ -36,8 +36,6 @@ type StatMetricsConfig struct {
 	Metrics     *otelcfg.MetricsConfig
 	CommonCfg   *perapp.GlobalMetricsConfig
 	SelectorCfg *attributes.SelectorConfig
-	// HostName is host.name on the resource; omitted when empty.
-	HostName string
 }
 
 func (mc *StatMetricsConfig) Enabled() bool {
@@ -66,7 +64,7 @@ func newStorageExpirer[M removableMetric[V], V any](
 
 // getFilteredStatsResourceAttrs returns resource attributes that can be filtered based on the attribute selector
 // for statistical metrics.
-func getFilteredStatsResourceAttrs(hostID, hostName string, attrSelector attributes.Selection) []attribute.KeyValue {
+func getFilteredStatsResourceAttrs(hostID string, attrSelector attributes.Selection) []attribute.KeyValue {
 	baseAttrs := []attribute.KeyValue{
 		attribute.String(attr.VendorPrefix+string(attr.VendorVersionSuffix), buildinfo.Version),
 		attribute.String(attr.VendorPrefix+string(attr.VendorRevisionSuffix), buildinfo.Revision),
@@ -77,15 +75,12 @@ func getFilteredStatsResourceAttrs(hostID, hostName string, attrSelector attribu
 	extraAttrs := []attribute.KeyValue{
 		semconv.HostID(hostID),
 	}
-	if hostName != "" {
-		extraAttrs = append(extraAttrs, semconv.HostName(hostName))
-	}
 
 	return otelcfg.GetFilteredAttributesByPrefix(baseAttrs, attrSelector, extraAttrs, []string{"stats.", attr.VendorPrefix + ".stats"})
 }
 
-func createFilteredStatsResource(hostID, hostName string, attrSelector attributes.Selection) *resource.Resource {
-	attrs := getFilteredStatsResourceAttrs(hostID, hostName, attrSelector)
+func createFilteredStatsResource(hostID string, attrSelector attributes.Selection) *resource.Resource {
+	attrs := getFilteredStatsResourceAttrs(hostID, attrSelector)
 	return resource.NewWithAttributes(attr.OBISchemaURL, attrs...)
 }
 
@@ -188,7 +183,7 @@ func newStatMetricsExporter(
 	}
 	exporter = instrumentMetricsExporter(ctxInfo.Metrics, exporter)
 
-	resource := createFilteredStatsResource(ctxInfo.NodeMeta.HostID, cfg.HostName, cfg.SelectorCfg.SelectionCfg)
+	resource := createFilteredStatsResource(ctxInfo.NodeMeta.HostID, cfg.SelectorCfg.SelectionCfg)
 	provider := newStatMeterProvider(resource, &exporter, cfg.Metrics.Interval, cfg.Metrics)
 
 	attrProv, err := attributes.NewAttrSelector(ctxInfo.MetricAttributeGroups, cfg.SelectorCfg)
