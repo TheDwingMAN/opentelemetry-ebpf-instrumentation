@@ -16,6 +16,9 @@ import (
 )
 
 func TestLoadWithStorageFallback(t *testing.T) {
+	// The fallback's WARN is not logged: in a CI log it reads as a real load
+	// of the block programs failing.
+	quietLog := slog.New(slog.DiscardHandler)
 	loadErr := errors.New("bad CO-RE relocation: invalid func unknown#195896080")
 	baseDisable := []string{progObiStatsKprobeTCPCloseSrtt}
 
@@ -25,7 +28,7 @@ func TestLoadWithStorageFallback(t *testing.T) {
 			calls = append(calls, slices.Clone(toDisable))
 			return nil
 		}
-		blockOK, err := loadWithStorageFallback(load, baseDisable, true, slog.Default())
+		blockOK, err := loadWithStorageFallback(load, baseDisable, true, quietLog)
 		require.NoError(t, err)
 		assert.True(t, blockOK)
 		require.Len(t, calls, 1)
@@ -35,7 +38,7 @@ func TestLoadWithStorageFallback(t *testing.T) {
 	t.Run("load fails with storage block disabled: nothing left to degrade", func(t *testing.T) {
 		calls := 0
 		load := func([]string) error { calls++; return loadErr }
-		blockOK, err := loadWithStorageFallback(load, baseDisable, false, slog.Default())
+		blockOK, err := loadWithStorageFallback(load, baseDisable, false, quietLog)
 		require.ErrorIs(t, err, loadErr)
 		assert.False(t, blockOK)
 		assert.Equal(t, 1, calls)
@@ -50,7 +53,7 @@ func TestLoadWithStorageFallback(t *testing.T) {
 			}
 			return nil
 		}
-		blockOK, err := loadWithStorageFallback(load, baseDisable, true, slog.Default())
+		blockOK, err := loadWithStorageFallback(load, baseDisable, true, quietLog)
 		require.NoError(t, err)
 		assert.False(t, blockOK, "storage block must be reported disabled after fallback")
 		require.Len(t, calls, 2)
@@ -64,7 +67,7 @@ func TestLoadWithStorageFallback(t *testing.T) {
 	t.Run("both loads fail: error surfaces", func(t *testing.T) {
 		var calls int
 		load := func([]string) error { calls++; return loadErr }
-		_, err := loadWithStorageFallback(load, baseDisable, true, slog.Default())
+		_, err := loadWithStorageFallback(load, baseDisable, true, quietLog)
 		require.ErrorIs(t, err, loadErr)
 		assert.Equal(t, 2, calls)
 	})
