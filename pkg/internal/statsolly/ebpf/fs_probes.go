@@ -9,7 +9,9 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cilium/ebpf/btf"
@@ -98,29 +100,139 @@ func moduleBTFExists(mod string) bool {
 	return err == nil
 }
 
-// kernelBTFCache holds the parsed kernel BTF for every stats collection load
-// and every probe plan of this process. Parsing vmlinux BTF costs tens of
-// milliseconds and megabytes of memory, and without a shared cache cilium
-// parses it, and every module's BTF, again for each collection it loads.
-var kernelBTFCache = btf.NewCache()
+// kernelBTFCache holds the parsed kernel BTF of the current load burst:
+// the startup loads, or one attacher refresh that loads a filesystem.
+// Parsing vmlinux BTF costs tens of milliseconds and megabytes of memory,
+// and every module's BTF as much again, and without a shared cache cilium
+// parses them all again for each collection it loads. Kept for the life of
+// the process, the parsed BTF of vmlinux and of every module would hold
+// some 16 MiB for loads that happen at startup and on a few mounts.
+var kernelBTFCache = &btfBurst{}
+
+// btfBurst is the kernel BTF cache of a load burst, dropped when the burst
+// ends and started again by the next load. It is safe for concurrent use.
+type btfBurst struct {
+	mu    sync.Mutex
+	cache *btf.Cache
+	// parsed is set once parse has run on cache.
+	parsed bool
+	// broken names the loaded modules whose BTF cannot be parsed, as parse
+	// found them.
+	broken []string
+	// parses counts the runs of parse; onRelease is called for each cache
+	// release drops. For tests.
+	parses    int
+	onRelease func()
+}
+
+// Cache returns the burst's cache, starting a burst if none is under way.
+func (b *btfBurst) Cache() *btf.Cache {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.current()
+}
+
+func (b *btfBurst) current() *btf.Cache {
+	if b.cache == nil {
+		b.cache = btf.NewCache()
+	}
+	return b.cache
+}
+
+// Renew replaces the burst's cache with an empty one, for a load that must
+// see a module loaded since the cache listed them. The replaced cache is
+// not retained.
+func (b *btfBurst) Renew() *btf.Cache {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.reset()
+	return b.current()
+}
+
+// Release ends the burst: its cache, and every BTF parsed into it, is
+// dropped, and the next load parses what it needs again.
+func (b *btfBurst) Release() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.cache == nil {
+		return
+	}
+	b.reset()
+	if b.onRelease != nil {
+		b.onRelease()
+	}
+}
+
+func (b *btfBurst) reset() {
+	b.cache, b.parsed, b.broken = nil, false, nil
+}
+
+// btfParseTimes is how long parsing the kernel BTF took, and the BTF of
+// its loaded modules.
+type btfParseTimes struct {
+	kernel, modules time.Duration
+	moduleCount     int
+}
+
+// Parse parses the kernel BTF and the BTF of every loaded module into the
+// burst's cache, and returns how long that took. The first CO-RE load of a
+// burst parses all of them anyway, as cilium relocates against every loaded
+// module; parsing them here times it, and finds the modules whose BTF cannot
+// be parsed once per burst. ok is false when the cache was parsed already.
+func (b *btfBurst) Parse() (times btfParseTimes, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cache := b.current()
+	if b.parsed {
+		return btfParseTimes{}, false
+	}
+	b.parsed = true
+	b.parses++
+
+	start := time.Now()
+	_, err := cache.Kernel()
+	times.kernel = time.Since(start)
+	if err != nil {
+		return times, true
+	}
+	modules, err := cache.Modules()
+	if err != nil {
+		return times, true
+	}
+	start = time.Now()
+	for _, module := range modules {
+		// cilium keeps no failed parse: remember it for the burst.
+		if _, err := cache.Module(module); err != nil {
+			b.broken = append(b.broken, module)
+		}
+	}
+	times.modules = time.Since(start)
+	times.moduleCount = len(modules)
+	return times, true
+}
+
+// ModuleBTFBroken reports whether the BTF of module, or of any loaded module
+// when module is empty, cannot be parsed. The modules are parsed once per
+// burst.
+func (b *btfBurst) ModuleBTFBroken(module string) bool {
+	b.Parse()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if module == "" {
+		return len(b.broken) > 0
+	}
+	return slices.Contains(b.broken, module)
+}
 
 // kernelBTF returns the kernel's BTF, or nil when it has none: expected on
 // RHEL8-family kernels, where fentryCapable is then false for every symbol
 // and the filesystems attach through kprobes instead.
 func kernelBTF() *btf.Spec {
-	spec, err := kernelBTFCache.Kernel()
+	spec, err := kernelBTFCache.Cache().Kernel()
 	if err != nil {
 		return nil
 	}
 	return spec
-}
-
-// timeKernelBTFParse parses the kernel BTF into kernelBTFCache, if nothing has
-// yet, and returns how long that took.
-func timeKernelBTFParse() time.Duration {
-	start := time.Now()
-	kernelBTF()
-	return time.Since(start)
 }
 
 // blockRawTracepointCapable reports whether the block raw tracepoints can
