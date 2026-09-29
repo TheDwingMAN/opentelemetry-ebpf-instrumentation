@@ -96,7 +96,7 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	}
 
 	pidDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, "pidDecoratedStats")
-	swi.Add(k8s.PIDMetadataDecoratorProvider(ctx, pidK8sStore, statAttrs, fsIoPID,
+	swi.Add(k8s.PIDMetadataDecoratorProvider(pidK8sStore, statAttrs, fsIoPID,
 		ebpf.CachedPVCLookup(pvcLookup), kubeDecoratedStats, pidDecoratedStats),
 		swarm.WithID("PIDMetadataDecorator"))
 

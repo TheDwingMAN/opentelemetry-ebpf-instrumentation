@@ -34,11 +34,10 @@ var diskExportPaths = []string{"otel", "prometheus"}
 // waitForDiskMetricsPipeline blocks until both export paths are actually
 // carrying disk metrics.
 //
-// The collector only starts once weaver reports healthy, so OBI spends the
-// first ~60s of the suite unable to push OTLP at all ("connection refused").
-// There is no instrumented HTTP service here to smoke-test the way
-// waitForTestComponents does for the other suites, so we gate on the metrics
-// themselves appearing on each path.
+// OBI and the collector start together, so OBI's first OTLP pushes are refused
+// until the collector is listening. There is no instrumented HTTP service here
+// to smoke-test the way waitForTestComponents does for the other suites, so we
+// gate on the metrics themselves appearing on each path.
 //
 // Without this gate the first subtest spends its entire 60s testTimeout waiting
 // on a pipeline that is still coming up and then fails on an empty result --

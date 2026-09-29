@@ -152,6 +152,58 @@ func TestFixupSpec(t *testing.T) {
 	}
 }
 
+// A disabled fentry/fexit program must not keep its tracing type: the kernel
+// demands an attach btf_id for tracing programs, which it takes from AttachTo,
+// and a disabled program has no symbol to point at. Keeping the type made the
+// kernel reject the entire collection with "Tracing programs must provide
+// btf_id", which disabled all stats metrics on any node not running all seven
+// supported filesystems.
+func TestFixupSpecStubsTracingProgramsAsKprobes(t *testing.T) {
+	spec := &ebpf.CollectionSpec{
+		Programs: map[string]*ebpf.ProgramSpec{
+			progObiStatsFentryBtrfsFsync: {Name: "real_fentry", Type: ebpf.Tracing, AttachTo: "obi_dummy_fs_fsync"},
+			progObiStatsFexitBtrfsFsync:  {Name: "real_fexit", Type: ebpf.Tracing, AttachTo: "obi_dummy_fs_fsync"},
+			progObiStatsKprobeBtrfsFsync: {Name: "real_kprobe", Type: ebpf.Kprobe},
+		},
+	}
+
+	toDisable := []string{progObiStatsFentryBtrfsFsync, progObiStatsFexitBtrfsFsync, progObiStatsKprobeBtrfsFsync}
+	if err := fixupSpec(spec, toDisable); err != nil {
+		t.Fatalf("fixupSpec: %v", err)
+	}
+
+	for _, name := range toDisable {
+		prog := spec.Programs[name]
+		if prog.Type != ebpf.Kprobe {
+			t.Errorf("program %s: got type %v, want %v", name, prog.Type, ebpf.Kprobe)
+		}
+		if prog.AttachTo != "" {
+			t.Errorf("program %s: stub kept AttachTo %q, want empty", name, prog.AttachTo)
+		}
+	}
+}
+
+// Every filesystem program must be stubbable: allFsProgramNames feeds the
+// loader's last-resort retry, and a name the spec does not know makes
+// fixupSpec fail and takes the whole stats pipeline down with it.
+func TestAllFsProgramNamesAreStubbable(t *testing.T) {
+	names := allFsProgramNames()
+	programs := map[string]*ebpf.ProgramSpec{}
+	for _, n := range names {
+		programs[n] = &ebpf.ProgramSpec{Name: n, Type: ebpf.Tracing, AttachTo: "obi_dummy_fs_read"}
+	}
+
+	spec := &ebpf.CollectionSpec{Programs: programs}
+	if err := fixupSpec(spec, names); err != nil {
+		t.Fatalf("fixupSpec over allFsProgramNames: %v", err)
+	}
+	for _, n := range names {
+		if spec.Programs[n].Type != ebpf.Kprobe {
+			t.Errorf("program %s was not stubbed as a kprobe", n)
+		}
+	}
+}
+
 func TestFixupSpecUnknownProgram(t *testing.T) {
 	spec := &ebpf.CollectionSpec{
 		Programs: map[string]*ebpf.ProgramSpec{
@@ -185,6 +237,18 @@ func TestFsFsyncProgramsForRoutesByFilesystem(t *testing.T) {
 	objects.ObiStatsFexitFuseFsync = &ebpf.Program{}
 	objects.ObiStatsKprobeFuseFsync = &ebpf.Program{}
 	objects.ObiStatsKretprobeFuseFsync = &ebpf.Program{}
+	objects.ObiStatsFentryExt4Fsync = &ebpf.Program{}
+	objects.ObiStatsFexitExt4Fsync = &ebpf.Program{}
+	objects.ObiStatsKprobeExt4Fsync = &ebpf.Program{}
+	objects.ObiStatsKretprobeExt4Fsync = &ebpf.Program{}
+	objects.ObiStatsFentryXfsFsync = &ebpf.Program{}
+	objects.ObiStatsFexitXfsFsync = &ebpf.Program{}
+	objects.ObiStatsKprobeXfsFsync = &ebpf.Program{}
+	objects.ObiStatsKretprobeXfsFsync = &ebpf.Program{}
+	objects.ObiStatsFentryBtrfsFsync = &ebpf.Program{}
+	objects.ObiStatsFexitBtrfsFsync = &ebpf.Program{}
+	objects.ObiStatsKprobeBtrfsFsync = &ebpf.Program{}
+	objects.ObiStatsKretprobeBtrfsFsync = &ebpf.Program{}
 
 	for _, tc := range []struct {
 		fs                                               FsTypeCode
@@ -194,6 +258,9 @@ func TestFsFsyncProgramsForRoutesByFilesystem(t *testing.T) {
 		{CodeFsCeph, objects.ObiStatsFentryCephFsync, objects.ObiStatsFexitCephFsync, objects.ObiStatsKprobeCephFsync, objects.ObiStatsKretprobeCephFsync},
 		{CodeFsCIFS, objects.ObiStatsFentryCifsFsync, objects.ObiStatsFexitCifsFsync, objects.ObiStatsKprobeCifsFsync, objects.ObiStatsKretprobeCifsFsync},
 		{CodeFsFUSE, objects.ObiStatsFentryFuseFsync, objects.ObiStatsFexitFuseFsync, objects.ObiStatsKprobeFuseFsync, objects.ObiStatsKretprobeFuseFsync},
+		{CodeFsExt4, objects.ObiStatsFentryExt4Fsync, objects.ObiStatsFexitExt4Fsync, objects.ObiStatsKprobeExt4Fsync, objects.ObiStatsKretprobeExt4Fsync},
+		{CodeFsXFS, objects.ObiStatsFentryXfsFsync, objects.ObiStatsFexitXfsFsync, objects.ObiStatsKprobeXfsFsync, objects.ObiStatsKretprobeXfsFsync},
+		{CodeFsBtrfs, objects.ObiStatsFentryBtrfsFsync, objects.ObiStatsFexitBtrfsFsync, objects.ObiStatsKprobeBtrfsFsync, objects.ObiStatsKretprobeBtrfsFsync},
 	} {
 		fentry, fexit, kprobe, kretprobe := fsFsyncProgramsFor(tc.fs, objects)
 		if fentry != tc.wantFentry || fexit != tc.wantFexit || kprobe != tc.wantKprobe || kretprobe != tc.wantKretprobe {

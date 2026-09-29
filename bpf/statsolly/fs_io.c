@@ -34,19 +34,33 @@ fs_probe_entry_file(const struct file *const file, const enum fs_type fs, const 
         return;
     }
 
+    const u64 id = bpf_get_current_pid_tgid();
+
+    // O_SYNC/O_DSYNC writes call the filesystem's fsync file_operation on the
+    // same thread as the write (ext4_file_write_iter -> generic_write_sync ->
+    // ext4_sync_file; same for xfs, nfs, ceph, fuse). Without this check, the
+    // nested fsync's entry would overwrite the outer write's fs_start entry
+    // and its exit would delete it, so the write would emit nothing. Track
+    // nesting depth instead and let only the outermost exit emit.
+    struct fs_start_val *const existing = bpf_map_lookup_elem(&fs_start, &id);
+    if (existing) {
+        existing->depth++;
+        return;
+    }
+
     struct fs_start_val val = {};
 
     val.ts = bpf_ktime_get_ns();
     val.s_dev = s_dev;
     val.fs = fs;
     val.op = op;
+    val.depth = 0;
 
     pid_info pid = {};
     task_pid(&pid);
     val.host_pid = pid.host_pid;
     val.pid_ns = pid.ns;
 
-    const u64 id = bpf_get_current_pid_tgid();
     bpf_map_update_elem(&fs_start, &id, &val, BPF_ANY);
 }
 
@@ -58,8 +72,15 @@ fs_probe_entry(const struct kiocb *const iocb, const enum fs_type fs, const enum
 
 static __always_inline void fs_probe_exit(const long ret) {
     const u64 id = bpf_get_current_pid_tgid();
-    const struct fs_start_val *const start = bpf_map_lookup_elem(&fs_start, &id);
+    struct fs_start_val *const start = bpf_map_lookup_elem(&fs_start, &id);
     if (!start) {
+        return;
+    }
+
+    // This exit belongs to a nested operation (see fs_probe_entry_file);
+    // only the outermost exit reads and emits the entry.
+    if (start->depth > 0) {
+        start->depth--;
         return;
     }
 

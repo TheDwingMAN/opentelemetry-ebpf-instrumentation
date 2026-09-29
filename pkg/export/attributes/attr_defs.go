@@ -270,11 +270,23 @@ func getDefinitions(
 		},
 	}
 
-	// network filesystem I/O stat metrics attributes. Pod/namespace/container
-	// attribution is shared with appKubeAttributes since both are keyed by the
-	// same k8s.pod.name/k8s.namespace.name/k8s.container.name attributes.
+	// pod/namespace/container attribution for filesystem I/O stat metrics,
+	// only relevant when kubernetes metadata is enabled. A local group
+	// rather than appKubeAttributes: the pid decorator only ever sets these
+	// three fields for filesystem events, not the full application metadata
+	// set (deployment, replica set, node, ...).
+	statsFsPodAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sPodName:       true,
+			attr.K8sNamespaceName: true,
+			attr.K8sContainerName: true,
+		},
+	}
+
+	// filesystem I/O stat metrics attributes.
 	statsFsAttributes := AttrReportGroup{
-		SubGroups: []*AttrReportGroup{&appKubeAttributes, &statsFsKubeAttributes},
+		SubGroups: []*AttrReportGroup{&statsFsPodAttributes, &statsFsKubeAttributes},
 		Attributes: map[attr.Name]Default{
 			attr.FsType:      true,
 			attr.FsOperation: true,

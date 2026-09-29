@@ -45,8 +45,11 @@ struct {
     __uint(pinning, OBI_PIN_INTERNAL);
 } blk_insert SEC(".maps");
 
+// Discards ('D') and secure erases ('N') are dropped in
+// obi_stats_tp_block_rq_complete before reaching this function.
+enum { k_rwbs_discard = 'D', k_rwbs_none = 'N' };
+
 // rwbs[0] == 'W' (write) or 'F' (flush) means write; anything else is a read.
-// Other op codes (e.g. discard 'D') intentionally fold into read for this skeleton (read|write only).
 static __always_inline enum blk_io_op blk_op_from_rwbs0(const char rwbs0) {
     return (rwbs0 == 'W' || rwbs0 == 'F') ? blk_op_write : blk_op_read;
 }
@@ -108,8 +111,16 @@ int obi_stats_tp_block_rq_issue(struct trace_event_raw_block_rq *ctx) {
     key.sector = BPF_CORE_READ(ctx, sector);
 
     const u64 now = bpf_ktime_get_ns();
-    bpf_map_update_elem(&blk_start, &key, &now, BPF_ANY);
-    blk_dev_state_on_issue(key.dev);
+
+    // A re-issue (requeued request already in blk_start) must not increment
+    // inflight again -- it was already counted on the first issue -- so only
+    // refresh its timestamp. Pairs with the unconditional decrement in
+    // obi_stats_tp_block_rq_complete.
+    if (bpf_map_update_elem(&blk_start, &key, &now, BPF_NOEXIST) == 0) {
+        blk_dev_state_on_issue(key.dev);
+    } else {
+        bpf_map_update_elem(&blk_start, &key, &now, BPF_ANY);
+    }
     return 0;
 }
 
@@ -138,6 +149,13 @@ int obi_stats_tp_block_rq_complete(void *ctx) {
 
     const u64 now = bpf_ktime_get_ns();
 
+    // Every completion decrements inflight, matched or not: an unmatched
+    // completion (blk_start entry evicted or the request predates this
+    // program attaching) still corresponds to a request that was counted at
+    // issue. The clamp-at-zero in blk_dev_state_on_complete protects the
+    // latter case.
+    const u64 inflight = blk_dev_state_on_complete(key.dev);
+
     const u64 *issue_ns = bpf_map_lookup_elem(&blk_start, &key);
     if (!issue_ns) {
         return 0;
@@ -152,7 +170,11 @@ int obi_stats_tp_block_rq_complete(void *ctx) {
     }
     bpf_map_delete_elem(&blk_start, &key);
 
-    const u64 inflight = blk_dev_state_on_complete(key.dev);
+    // Discards and secure erases are not read/write throughput; drop them
+    // rather than folding them into the read counters.
+    if (rwbs0 == k_rwbs_discard || rwbs0 == k_rwbs_none) {
+        return 0;
+    }
 
     block_io_t *const se = bpf_ringbuf_reserve(&stats_events, sizeof(*se), 0);
     if (!se) {

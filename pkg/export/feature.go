@@ -60,17 +60,17 @@ const (
 )
 
 // FeatureStorageBlock enables all block-layer storage metrics.
-// Note: all four metrics are derived from the same block_rq_issue/block_rq_complete
-// tracepoint pair (FeatureStorageBlockQueue additionally attaches block_rq_insert),
-// so disabling one of duration/io does not reduce kernel-side overhead — the probe
-// still fires and the event is still delivered. Splitting them is about series
-// cardinality, letting a user take the latency distribution without the byte
-// counter or vice versa.
+// Note: all three block tracepoints (block_rq_insert, block_rq_issue,
+// block_rq_complete) attach together whenever any storage_block* bit is set,
+// so disabling one of duration/io/queue does not reduce kernel-side overhead —
+// the probes still fire and the event is still delivered. Splitting them is
+// about series cardinality, letting a user take the latency distribution
+// without the byte counter or vice versa.
 const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo | FeatureStorageBlockQueue | FeatureStorageBlockErrors
 
-// FeatureStorageFS enables all network-filesystem metrics. All three derive
-// from the same probe pair, so disabling one does not reduce kernel-side
-// overhead — splitting them controls series cardinality only.
+// FeatureStorageFS enables all filesystem metrics. All three derive from the
+// same probe pair, so disabling one does not reduce kernel-side overhead —
+// splitting them controls series cardinality only.
 const FeatureStorageFS = FeatureStorageFSDuration | FeatureStorageFSIo | FeatureStorageFSErrors
 
 // FeatureStats enables all stat metrics, including TCP IO.
@@ -385,7 +385,7 @@ func (f Features) StorageBlockErrors() bool {
 	return f.any(FeatureStorageBlockErrors)
 }
 
-// StorageFS reports whether any network-filesystem metric is enabled. It gates
+// StorageFS reports whether any filesystem metric is enabled. It gates
 // the shared setup (eBPF probes, ring buffer) that both metrics need.
 func (f Features) StorageFS() bool {
 	return f.any(FeatureStorageFS)
