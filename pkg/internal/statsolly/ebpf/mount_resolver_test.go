@@ -169,7 +169,7 @@ func withProcRoot(t *testing.T, root string) {
 
 	reset := func() {
 		kubeletMu.Lock()
-		kubeletMountInfo = ""
+		kubeletNS, kubeletPID = "", ""
 		kubeletSearchedAt = time.Time{}
 		kubeletMu.Unlock()
 	}
@@ -182,62 +182,93 @@ func withProcRoot(t *testing.T, root string) {
 	})
 }
 
-// fakeProc writes a process under root: its comm, its mount namespace link
-// and its mountinfo.
-func fakeProc(t *testing.T, root, pid, comm, mntNS string, mountinfo ...string) {
+// fakeProc writes a process under root: its comm, its mount and PID
+// namespace links and its mountinfo.
+func fakeProc(t *testing.T, root, pid, comm, mntNS, pidNS string, mountinfo ...string) {
 	t.Helper()
 
 	dir := filepath.Join(root, pid)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "ns"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "comm"), []byte(comm+"\n"), 0o644))
 	require.NoError(t, os.Symlink(mntNS, filepath.Join(dir, "ns", "mnt")))
+	require.NoError(t, os.Symlink(pidNS, filepath.Join(dir, "ns", "pid")))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "mountinfo"), []byte(strings.Join(mountinfo, "\n")+"\n"), 0o644))
 }
 
-const kubeletNFSLine = "36 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-kubens rw,relatime shared:1 - nfs 10.0.0.1:/export rw"
+const (
+	kubeletNFSLine = "36 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-kubens rw,relatime shared:1 - nfs 10.0.0.1:/export rw"
+	rootLine       = "22 1 253:0 / / rw,relatime shared:1 - xfs /dev/vda1 rw"
+	hostMnt        = "mnt:[4026531841]"
+	kubensMnt      = "mnt:[4026532500]"
+	hostPidNS      = "pid:[4026531836]"
+)
 
-// With OpenShift's mount namespace encapsulation the kubelet's volume mounts
-// are missing from init's table; they are read from the kubelet's own.
-func TestScanMountsReadsKubeletNamespace(t *testing.T) {
+// kubensNode writes a node with mount namespace encapsulation: init in the
+// host namespace, CRI-O and the kubelet in kubens's, and returns its root.
+func kubensNode(t *testing.T) string {
+	t.Helper()
+
 	root := t.TempDir()
-	fakeProc(t, root, "1", "systemd", "mnt:[4026531841]", "22 1 253:0 / / rw,relatime shared:1 - xfs /dev/vda1 rw")
-	fakeProc(t, root, "812", "crio", "mnt:[4026532500]", "22 1 253:0 / / rw,relatime shared:1 - xfs /dev/vda1 rw")
-	fakeProc(t, root, "901", "kubelet", "mnt:[4026532500]", kubeletNFSLine)
+	fakeProc(t, root, "1", "systemd", hostMnt, hostPidNS, rootLine)
+	fakeProc(t, root, "812", "crio", kubensMnt, hostPidNS, kubeletNFSLine)
+	fakeProc(t, root, "901", "kubelet", kubensMnt, hostPidNS, kubeletNFSLine)
 	withProcRoot(t, root)
 	old := mountInfoPath
 	mountInfoPath = filepath.Join(root, "1", "mountinfo")
 	t.Cleanup(func() { mountInfoPath = old })
+	return root
+}
 
-	mounts, err := scanMounts()
+// With OpenShift's mount namespace encapsulation the kubelet's volume mounts
+// are missing from init's table; they are read from the kubelet's own.
+func TestScanMountsReadsKubeletNamespace(t *testing.T) {
+	kubensNode(t)
 
-	require.NoError(t, err)
-	require.True(t, hasKubeletVolumeMount(mounts))
 	info, ok := scanForMount(32)
+
 	require.True(t, ok)
 	assert.Equal(t, "pvc-kubens", info.PVName)
 }
 
-// A kubelet sharing init's mount namespace has nothing init's table lacks.
-func TestFindKubeletMountInfoIgnoresInitNamespace(t *testing.T) {
-	root := t.TempDir()
-	fakeProc(t, root, "1", "systemd", "mnt:[4026531841]")
-	fakeProc(t, root, "901", "kubelet", "mnt:[4026531841]")
+// While the kubelet restarts its volume mounts stay in the namespace, and
+// CRI-O is still there to read them from: attribution must not lapse.
+func TestScanMountsFollowsNamespaceAcrossKubeletRestart(t *testing.T) {
+	root := kubensNode(t)
+	_, ok := scanForMount(32)
+	require.True(t, ok)
 
-	_, ok := findKubeletMountInfo(root)
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "901")))
+
+	info, ok := scanForMount(32)
+	require.True(t, ok, "the namespace is still readable through CRI-O")
+	assert.Equal(t, "pvc-kubens", info.PVName)
+}
+
+// A kubelet sharing init's mount namespace has nothing init's table lacks.
+func TestFindKubeletIgnoresInitMountNamespace(t *testing.T) {
+	root := t.TempDir()
+	fakeProc(t, root, "1", "systemd", hostMnt, hostPidNS)
+	fakeProc(t, root, "901", "kubelet", hostMnt, hostPidNS)
+
+	_, _, ok := findKubelet(root)
 
 	assert.False(t, ok)
 }
 
-func TestFindKubeletMountInfo(t *testing.T) {
+// A kubelet inside a container (kind, a nested cluster in a CI pod) runs in
+// a PID namespace of its own, and must not be taken for the node's.
+func TestFindKubeletSkipsContainerizedKubelet(t *testing.T) {
 	root := t.TempDir()
-	fakeProc(t, root, "1", "systemd", "mnt:[4026531841]")
-	fakeProc(t, root, "77", "kubelet-helper", "mnt:[4026532500]")
-	fakeProc(t, root, "901", "kubelet", "mnt:[4026532500]")
+	fakeProc(t, root, "1", "systemd", hostMnt, hostPidNS)
+	fakeProc(t, root, "10234", "kubelet", "mnt:[4026533000]", "pid:[4026533001]")
+	fakeProc(t, root, "4312", "kubelet", kubensMnt, hostPidNS)
+	fakeProc(t, root, "77", "kubelet-helper", kubensMnt, hostPidNS)
 
-	path, ok := findKubeletMountInfo(root)
+	pid, ns, ok := findKubelet(root)
 
 	require.True(t, ok)
-	assert.Equal(t, filepath.Join(root, "901", "mountinfo"), path)
+	assert.Equal(t, "4312", pid)
+	assert.Equal(t, kubensMnt, ns)
 }
 
 // resetMountCache clears the mount cache. Nothing in production needs this
