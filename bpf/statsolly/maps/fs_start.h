@@ -10,6 +10,7 @@
 
 struct fs_start_val {
     u64 ts;
+    u64 root_ino;
     u32 s_dev;
     u32 host_pid;
     u32 pid_ns;

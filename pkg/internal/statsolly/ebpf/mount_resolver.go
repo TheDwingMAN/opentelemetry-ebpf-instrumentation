@@ -56,6 +56,15 @@ type MountInfo struct {
 	Shared bool
 }
 
+// MountKey identifies the mount a filesystem operation went through: the
+// device of its superblock, and the inode of the mount's root directory.
+// Several volumes can share a superblock (NFS subdirectories of one export);
+// each is mounted at its own root, which tells them apart.
+type MountKey struct {
+	Dev     uint32
+	RootIno uint64
+}
+
 // maxCachedMounts bounds mountCache so a node churning through many transient
 // NFS/CSI mounts cannot grow it without limit.
 const maxCachedMounts = 4096
@@ -83,8 +92,8 @@ type mountCacheEntry struct {
 
 var (
 	mountMu    sync.RWMutex
-	mountCache = map[uint32]mountCacheEntry{}
-	mountOrder []uint32 // insertion order, oldest first, for FIFO eviction
+	mountCache = map[MountKey]mountCacheEntry{}
+	mountOrder []MountKey // insertion order, oldest first, for FIFO eviction
 
 	mountWatchOnce sync.Once
 )
@@ -96,11 +105,13 @@ func invalidateMountCache() {
 	defer mountMu.Unlock()
 	clear(mountCache)
 	mountOrder = nil
+	forgetRootInodes()
 }
 
-// resolveMount maps a filesystem superblock device number (s_dev, as reported
-// by eBPF) to the Kubernetes volume it belongs to.
-func resolveMount(sDev uint32) (MountInfo, bool) {
+// resolveMount maps the mount a filesystem operation went through (its
+// superblock device and mount root inode, as reported by eBPF) to the
+// Kubernetes volume it belongs to.
+func resolveMount(key MountKey) (MountInfo, bool) {
 	// Shared decides whether a mount may name a pod, and a second pod can
 	// mount the volume at any moment. The TTLs alone would let a cached
 	// single-owner entry name the wrong pod for up to a minute after that, so
@@ -108,7 +119,7 @@ func resolveMount(sDev uint32) (MountInfo, bool) {
 	mountWatchOnce.Do(func() { watchMountTable(invalidateMountCache, mountInfoPath, selfMountInfoPath) })
 
 	mountMu.RLock()
-	entry, ok := mountCache[sDev]
+	entry, ok := mountCache[key]
 	mountMu.RUnlock()
 	if ok {
 		ttl := mountCacheTTL
@@ -120,10 +131,10 @@ func resolveMount(sDev uint32) (MountInfo, bool) {
 		}
 	}
 
-	info, found := scanForMount(sDev)
+	info, found := scanForMount(key)
 
 	mountMu.Lock()
-	if _, exists := mountCache[sDev]; !exists {
+	if _, exists := mountCache[key]; !exists {
 		if len(mountCache) >= maxCachedMounts {
 			// Evict the oldest entry rather than the whole cache, so filling
 			// the cache doesn't force every other cached device to be
@@ -132,89 +143,124 @@ func resolveMount(sDev uint32) (MountInfo, bool) {
 			mountOrder = mountOrder[1:]
 			delete(mountCache, oldest)
 		}
-		mountOrder = append(mountOrder, sDev)
+		mountOrder = append(mountOrder, key)
 	}
-	mountCache[sDev] = mountCacheEntry{info: info, found: found, resolvedAt: time.Now()}
+	mountCache[key] = mountCacheEntry{info: info, found: found, resolvedAt: time.Now()}
 	mountMu.Unlock()
 
 	return info, found
 }
 
-// scanForMount reads mountInfoPath looking for the mount whose superblock
-// device number is sDev, and parses it as a kubelet volume mount.
-func scanForMount(sDev uint32) (MountInfo, bool) {
-	mounts, err := scanMounts()
+// scanForMount reads the mount table looking for the kubelet volume mounts
+// whose superblock device is key.Dev, and picks the volume key belongs to.
+func scanForMount(key MountKey) (MountInfo, bool) {
+	mounts, root, err := scanMountTable()
 	if err != nil {
 		return MountInfo{}, false
 	}
 
-	target := fmtDev(sDev)
+	target := fmtDev(key.Dev)
 
-	// Every pod mounting a shared volume has its own kubelet mount of the
-	// same superblock, so keep scanning after the first hit: the volume is
-	// the same for all of them, but the pod is only known if there is one.
-	//
-	// Different volumes can share a superblock too: NFS shares one per
-	// server export, so every PV a subdirectory provisioner (csi-driver-nfs,
-	// nfs-subdir-external-provisioner) carves out of an export has the same
-	// device. The device then cannot say which volume the I/O went to, and
-	// naming the first would label it with another claim.
-	var found MountInfo
-	var ok bool
-	ambiguousPV := false
+	type candidate struct {
+		info       MountInfo
+		mountPoint string
+	}
+	var cands []candidate
 	for _, m := range mounts {
 		if m.MajorMinorVer != target {
 			continue
 		}
-
-		info, parsed := parseKubeletMount(m.MountPoint, m.Source)
-		if !parsed {
-			continue
-		}
-		if !ok {
-			found, ok = info, true
-			continue
-		}
-		if info.PodUID != found.PodUID {
-			found.Shared = true
-		}
-		if info.PVName != found.PVName {
-			ambiguousPV = true
+		if info, parsed := parseKubeletMount(m.MountPoint, m.Source); parsed {
+			cands = append(cands, candidate{info: info, mountPoint: m.MountPoint})
 		}
 	}
-
-	if ambiguousPV {
-		found.PVName = ""
+	if len(cands) == 0 {
+		return MountInfo{}, false
 	}
-	return found, ok
+
+	// merge folds the candidates of one volume into one answer. Every pod
+	// mounting a shared volume has its own kubelet mount of it, so the
+	// volume is the same for all of them, but the pod is only known if
+	// there is one.
+	merge := func(cs []candidate) MountInfo {
+		found := cs[0].info
+		for _, c := range cs[1:] {
+			if c.info.PodUID != found.PodUID {
+				found.Shared = true
+			}
+			if c.info.PVName != found.PVName {
+				found.PVName = ""
+			}
+		}
+		return found
+	}
+
+	found := merge(cands)
+	if found.PVName != "" {
+		return found, true
+	}
+
+	// Different volumes share a superblock too: NFS shares one per server
+	// export, so every PV a subdirectory provisioner (csi-driver-nfs,
+	// nfs-subdir-external-provisioner) or a set of static PVs carves out of
+	// one export has the same device. Each is mounted at its own directory,
+	// so the root of the mount the I/O went through names the volume. When
+	// that cannot be told, the volume is left unnamed rather than guessed.
+	var matched []candidate
+	for _, c := range cands {
+		if ino, ok := mountRootInode(filepath.Join(root, c.mountPoint)); ok && ino == key.RootIno {
+			matched = append(matched, c)
+		}
+	}
+	if len(matched) > 0 {
+		if byRoot := merge(matched); byRoot.PVName != "" {
+			return byRoot, true
+		}
+	}
+	return found, true
 }
 
 // scanMounts parses mountInfoPath via procfs. procfs.FS.GetMounts always
 // reads "<root>/self/mountinfo", so the FS root is mountInfoPath with those
 // last two path elements stripped back off.
 func scanMounts() ([]*procfs.MountInfo, error) {
+	mounts, _, err := scanMountTable()
+	return mounts, err
+}
+
+// scanMountTable is scanMounts, also returning the root directory the
+// table's mount points are relative to: "<proc>/<pid>/root" of the process
+// whose table it is.
+func scanMountTable() ([]*procfs.MountInfo, string, error) {
 	mounts, err := mountsFrom(mountInfoPath)
 	if err != nil {
 		if mountInfoPath != hostMountInfoPath {
-			return nil, err
+			return nil, "", err
 		}
 		// Without hostPID there is no host init to read, so fall back to this
 		// process's own table. Attribution then only covers volumes actually
 		// mounted into this container.
-		return mountsFrom(selfMountInfoPath)
+		mounts, err = mountsFrom(selfMountInfoPath)
+		return mounts, rootOf(selfMountInfoPath), err
 	}
 
 	if hasKubeletVolumeMount(mounts) {
-		return mounts, nil
+		return mounts, rootOf(mountInfoPath), nil
 	}
 
 	// OpenShift's mount namespace encapsulation (kubens.service) runs the
 	// kubelet and CRI-O in a mount namespace of their own, so their volume
 	// mounts never appear in init's table. The kubelet's own table has them.
-	if kubeletTable, ok := kubeletNamespaceMounts(); ok {
-		return kubeletTable, nil
+	if kubeletTable, path, ok := kubeletNamespaceMounts(); ok {
+		return kubeletTable, rootOf(path), nil
 	}
-	return mounts, nil
+	return mounts, rootOf(mountInfoPath), nil
+}
+
+// rootOf returns "<proc>/<pid>/root" for "<proc>/<pid>/mountinfo": the
+// directory through which that process's mount points can be reached.
+func rootOf(mountInfo string) string {
+	return filepath.Join(filepath.Dir(mountInfo), "root")
 }
 
 func hasKubeletVolumeMount(mounts []*procfs.MountInfo) bool {
@@ -247,7 +293,7 @@ var (
 
 // kubeletNamespaceMounts returns the kubelet's mount table when the kubelet
 // runs in a mount namespace other than init's.
-func kubeletNamespaceMounts() ([]*procfs.MountInfo, bool) {
+func kubeletNamespaceMounts() ([]*procfs.MountInfo, string, bool) {
 	kubeletMu.Lock()
 	defer kubeletMu.Unlock()
 
@@ -260,23 +306,23 @@ func kubeletNamespaceMounts() ([]*procfs.MountInfo, bool) {
 		}
 		if kubeletPID != "" {
 			if mounts, err := mountsFrom(mountInfoOf(kubeletPID)); err == nil {
-				return mounts, true
+				return mounts, mountInfoOf(kubeletPID), true
 			}
 		}
 		kubeletNS, kubeletPID = "", ""
 	}
 
 	if time.Since(kubeletSearchedAt) < kubeletSearchInterval {
-		return nil, false
+		return nil, "", false
 	}
 	kubeletSearchedAt = time.Now()
 
 	pid, ns, ok := findKubelet(procRoot)
 	if !ok {
-		return nil, false
+		return nil, "", false
 	}
 	if mounts, err := mountsFrom(mountInfoOf(pid)); err != nil || !hasKubeletVolumeMount(mounts) {
-		return nil, false
+		return nil, "", false
 	}
 	// The watch on init's table does not see this namespace. An open
 	// mountinfo holds its namespace, so one watch outlives any kubelet. It
@@ -284,10 +330,10 @@ func kubeletNamespaceMounts() ([]*procfs.MountInfo, bool) {
 	kubeletWatchOnce.Do(func() { watchMountTable(invalidateMountCache, mountInfoOf(pid)) })
 	mounts, err := mountsFrom(mountInfoOf(pid))
 	if err != nil {
-		return nil, false
+		return nil, "", false
 	}
 	kubeletNS, kubeletPID = ns, pid
-	return mounts, true
+	return mounts, mountInfoOf(pid), true
 }
 
 func mountInfoOf(pid string) string { return filepath.Join(procRoot, pid, "mountinfo") }

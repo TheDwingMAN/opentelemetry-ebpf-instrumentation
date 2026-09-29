@@ -58,6 +58,7 @@ fs_probe_entry_file(const struct file *const file, const enum fs_type fs, const 
     struct fs_start_val val = {};
 
     val.ts = now;
+    val.root_ino = BPF_CORE_READ(file, f_path.mnt, mnt_root, d_inode, i_ino);
     val.s_dev = s_dev;
     val.fs = fs;
     val.op = op;
@@ -93,6 +94,7 @@ static __always_inline void fs_probe_exit(const long ret) {
 
     const u64 latency = bpf_ktime_get_ns() - start->ts;
     const u32 s_dev = start->s_dev;
+    const u64 root_ino = start->root_ino;
     const u32 host_pid = start->host_pid;
     const u32 pid_ns = start->pid_ns;
     const u8 fs = start->fs;
@@ -127,6 +129,7 @@ static __always_inline void fs_probe_exit(const long ret) {
     se->_pad2[1] = 0;
     se->_pad2[2] = 0;
     se->_pad2[3] = 0;
+    se->root_ino = root_ino;
 
     bpf_ringbuf_submit(se, stats_events_flags());
 }

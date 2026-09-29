@@ -102,8 +102,8 @@ func (c *pvcCache) get(ctx context.Context, pvName string) (string, string, stri
 // ResolveMount exposes resolveMount to packages outside ebpf, such as the
 // PID-based Kubernetes decorator that attributes filesystem I/O to pods and
 // the persistent volumes they mount.
-func ResolveMount(sDev uint32) (MountInfo, bool) {
-	return resolveMount(sDev)
+func ResolveMount(key MountKey) (MountInfo, bool) {
+	return resolveMount(key)
 }
 
 // pvcForbiddenWarnOnce ensures the RBAC warning below logs at most once per
