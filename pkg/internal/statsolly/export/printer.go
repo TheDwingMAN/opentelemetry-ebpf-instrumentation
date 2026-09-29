@@ -53,6 +53,14 @@ func printStat(s *ebpf.Stat) {
 		sb.WriteString("=")
 		sb.WriteString(v)
 	}
+	if s.FsIo != nil && s.FsIo.Mount != nil {
+		sb.WriteString(" k8s.persistentvolume.name=")
+		sb.WriteString(s.FsIo.Mount.PVName)
+		sb.WriteString(" k8s.persistentvolumeclaim.name=")
+		sb.WriteString(s.FsIo.Mount.PVCName)
+		sb.WriteString(" k8s.storageclass.name=")
+		sb.WriteString(s.FsIo.Mount.StorageClass)
+	}
 	if s.Type == ebpf.StatTypeTCPRtt {
 		sb.WriteString(" srtt=")
 		sb.WriteString(strconv.FormatFloat(float64(s.TCPRtt.SrttUs), 'f', -1, 64))

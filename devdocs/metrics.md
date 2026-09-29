@@ -183,6 +183,16 @@ Buffered writes (no `O_SYNC`, `O_DIRECT` or fsync) complete once the data is in 
 
 Capacity and usage (bytes used/free/total on a volume) are out of scope here on purpose: join kubelet's own `kubelet_volume_stats_*` metrics on `k8s.persistentvolumeclaim.name` for that.
 
+#### Attributes that do not apply, and error names
+
+Storage metrics set an attribute only when it applies. Over OTLP, a string attribute whose value is empty is left out of the data point rather than sent as `""`: `k8s.pod.name`, `k8s.namespace.name` and `k8s.container.name` on I/O from a process in no pod, the PV, PVC and storage class on I/O that did not go through a kubelet volume, and `system.filesystem.type` or `fs.operation` for a code this build has no name for (never `unknown` or `read`). `newStorageExpirer` in [pkg/export/otel/metrics_stats.go](../pkg/export/otel/metrics_stats.go) does this for every storage metric; the TCP stat metrics are unchanged. Prometheus label sets are fixed per metric, so OBI's Prometheus endpoint keeps these labels with an empty value, which Prometheus stores as no label.
+
+`error.type` is the errno name (`EIO`, `EACCES`), else the name of a kernel-internal errno (512 to 531, such as `EJUKEBOX` when an NFSv3 server asks the client to retry later, or `ENOTSUPP`), else the name of an NFSv4 status the NFS client passes up unmapped (10001 to 10096, such as `NFS4ERR_DELAY` and `NFS4ERR_GRACE`), else the decimal value ([pkg/internal/statsolly/ebpf/errno.go](../pkg/internal/statsolly/ebpf/errno.go)). Kernel-internal errnos and NFSv4 statuses used to be decimal (`528`, `10008`).
+
+The PV, PVC and storage class of a filesystem stat depend only on the mount the I/O went through, so the PID decorator resolves them once per mount, looking the claim up once per mount resolution, and the stat carries a pointer to the result (`FsIo.Mount`); the getters read its fields. Telling apart the volumes that share a superblock needs the inode of each candidate mount point's root. That lookup runs in the background and never holds up the pipeline: until it returns, the first events of such a mount carry no volume attributes, and the mount is resolved again once the inode is known. It used to wait for the lookup, up to 1 s per mount point. A change to the mount table drops only the resolutions of the devices whose mounts it added or removed, and the root inodes of those mount points, rather than every resolution on the node.
+
+The OTLP stats resource carries `host.name` next to `host.id`, resolved as for the application metrics (`OTEL_EBPF_HOSTNAME`, `OTEL_EBPF_HOSTNAME_DNS_RESOLUTION`).
+
 #### Device-mapper coverage
 
 Block metrics attach to the request-queue tracepoints, which see the underlying physical device, not any layer stacked on top of it. For LVM, LVM-S, or dm-crypt-backed volumes, `obi.stat.disk.*` reports against the physical device (`sda`, `nvme0n1`, …), never the `dm-N` device on top of it. Those volumes are still observed per pod/PVC, but only at the filesystem layer — ext4/xfs/btrfs mounted on the logical volume, through the PV-mount allowlist described next.

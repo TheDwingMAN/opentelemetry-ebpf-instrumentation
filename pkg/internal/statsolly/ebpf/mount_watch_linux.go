@@ -12,21 +12,25 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// watchMountTable calls onChange each time the mount namespace behind the
-// first of paths that can be opened gains or loses a mount. The kernel
-// reports that as POLLPRI on the namespace's mountinfo, so the watch costs
-// nothing while the table is stable. Returns false when no path opened.
-func watchMountTable(onChange func(), paths ...string) bool {
+// watchMountTable calls onChange with the first of paths that can be opened,
+// once when the watch starts and then each time the mount namespace behind it
+// gains or loses a mount. The kernel reports that as POLLPRI on the
+// namespace's mountinfo, so the watch costs nothing while the table is
+// stable. The first call comes after the file is open, so a table read in it
+// misses no change. Returns false when no path opened.
+func watchMountTable(onChange func(path string), paths ...string) bool {
 	var f *os.File
+	var path string
 	for _, p := range paths {
 		if opened, err := os.Open(p); err == nil {
-			f = opened
+			f, path = opened, p
 			break
 		}
 	}
 	if f == nil {
 		return false
 	}
+	onChange(path)
 
 	go func() {
 		defer f.Close()
@@ -46,7 +50,7 @@ func watchMountTable(onChange func(), paths ...string) bool {
 			if fds[0].Revents&(unix.POLLNVAL|unix.POLLHUP) != 0 {
 				return
 			}
-			onChange()
+			onChange(path)
 		}
 	}()
 	return true

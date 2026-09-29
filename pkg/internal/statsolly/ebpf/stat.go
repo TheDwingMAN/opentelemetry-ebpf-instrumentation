@@ -114,14 +114,13 @@ const (
 type FsTypeName string
 
 const (
-	FsUnknown FsTypeName = "unknown"
-	FsNFS     FsTypeName = "nfs"
-	FsCeph    FsTypeName = "ceph"
-	FsCIFS    FsTypeName = "cifs"
-	FsFUSE    FsTypeName = "fuse"
-	FsExt4    FsTypeName = "ext4"
-	FsXFS     FsTypeName = "xfs"
-	FsBtrfs   FsTypeName = "btrfs"
+	FsNFS   FsTypeName = "nfs"
+	FsCeph  FsTypeName = "ceph"
+	FsCIFS  FsTypeName = "cifs"
+	FsFUSE  FsTypeName = "fuse"
+	FsExt4  FsTypeName = "ext4"
+	FsXFS   FsTypeName = "xfs"
+	FsBtrfs FsTypeName = "btrfs"
 )
 
 // FsTypeCode mirrors enum fs_type in bpf/statsolly/types.h.
@@ -235,6 +234,22 @@ type FsIo struct {
 	// RootIno is the inode of the root of the mount the file was reached
 	// through, which tells apart volumes that share SDev.
 	RootIno uint64 `json:"root_ino"`
+	// Mount holds the attributes of the mount the file was reached through,
+	// or nil when it is no Kubernetes volume. The PID decorator sets it.
+	Mount *MountAttrs `json:"-"`
+}
+
+// MountAttrs are the attributes of a filesystem stat that depend only on the
+// mount the I/O went through. They are resolved once per mount and shared by
+// every stat of that mount, so the value is never modified once set: a new
+// resolution makes a new MountAttrs.
+type MountAttrs struct {
+	PVName       string
+	PVCName      string
+	StorageClass string
+	// PVCNamespace names the pod namespace of I/O whose process is in no
+	// known pod.
+	PVCNamespace string
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/otel"
 	"go.opentelemetry.io/obi/pkg/export/prom"
@@ -21,6 +22,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/pipe/transform/k8s"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/export"
+	"go.opentelemetry.io/obi/pkg/internal/traces/hostname"
 	"go.opentelemetry.io/obi/pkg/kube"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
@@ -45,6 +47,14 @@ func fsIoPID(s *ebpf.Stat) (pidNs, hostPID uint32, mount ebpf.MountKey, ok bool)
 		return 0, 0, ebpf.MountKey{}, false
 	}
 	return s.FsIo.PidNs, s.FsIo.HostPID, ebpf.MountKey{Dev: s.FsIo.SDev, RootIno: s.FsIo.RootIno}, true
+}
+
+// fsIoSetMount stores, on a filesystem I/O stat, the attributes of the volume
+// its mount belongs to.
+func fsIoSetMount(s *ebpf.Stat, mount *ebpf.MountAttrs) {
+	if s.FsIo != nil {
+		s.FsIo.Mount = mount
+	}
 }
 
 // noPVCLookup reports every volume as unbound. Used when Kubernetes is
@@ -88,6 +98,13 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		if err != nil {
 			return nil, fmt.Errorf("initializing PIDMetadataDecorator: %w", err)
 		}
+		// k8s.node.name is the same for every stat: the exporters' getters
+		// read it once, when they are built below.
+		if nodeName, err := s.ctxInfo.K8sInformer.CurrentNodeName(ctx); err == nil {
+			ebpf.SetNodeName(nodeName)
+		} else {
+			alog.Debug("can't get the Kubernetes node name", "error", err)
+		}
 	}
 	pvcLookup := ebpf.PVCLookup(noPVCLookup)
 	if pidK8sStore != nil {
@@ -104,7 +121,7 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	}
 
 	pidDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "pidDecoratedStats")
-	swi.Add(k8s.PIDMetadataDecoratorProvider(pidK8sStore, statAttrs, fsIoPID,
+	swi.Add(k8s.PIDMetadataDecoratorProvider(pidK8sStore, statAttrs, fsIoPID, fsIoSetMount,
 		ebpf.CachedPVCLookup(pvcLookup), kubeDecoratedStats, pidDecoratedStats),
 		swarm.WithID("PIDMetadataDecorator"))
 
@@ -151,6 +168,7 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		Metrics:     &s.cfg.OTELMetrics,
 		SelectorCfg: selectorCfg,
 		CommonCfg:   &s.cfg.Metrics,
+		HostName:    statsHostName(&s.cfg.Attributes.InstanceID),
 	}, filteredStats), swarm.WithID("OTelExporter"))
 
 	swi.Add(prom.StatsPrometheusEndpoint(s.ctxInfo, &prom.StatsPrometheusConfig{
@@ -163,4 +181,15 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		swarm.WithID("StatPrinter"))
 
 	return swi.Instance(ctx)
+}
+
+// statsHostName is host.name for the stats resource, resolved as for the
+// application metrics; "" when it cannot be.
+func statsHostName(cfg *config.InstanceIDConfig) string {
+	name, err := hostname.CreateResolver(cfg.OverrideHostname, cfg.HostnameDNSResolution).Query()
+	if err != nil {
+		alog().Warn("can't read the hostname; stats will have no host.name", "error", err)
+		return ""
+	}
+	return name
 }

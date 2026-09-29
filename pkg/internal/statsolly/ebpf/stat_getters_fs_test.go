@@ -31,12 +31,56 @@ func TestFsIoGetters_Fsync(t *testing.T) {
 	assert.Equal(t, "fsync", opGetter(s).Value.Emit())
 }
 
-func TestFsIoGetters_NilFsIo(t *testing.T) {
-	s := &Stat{}
-
+// A code with no name gives "", which omits the attribute: never a made-up
+// "unknown" filesystem, and never a read for an operation this build does not
+// know.
+func TestFsIoGetters_UnnamedCodes(t *testing.T) {
 	fsGetter, ok := StatGetters(attr.FsType)
 	assert.True(t, ok)
-	assert.Equal(t, "unknown", fsGetter(s).Value.Emit())
+	opGetter, ok := StatGetters(attr.FsOperation)
+	assert.True(t, ok)
+
+	assert.Empty(t, fsGetter(&Stat{}).Value.AsString())
+	assert.Empty(t, opGetter(&Stat{}).Value.AsString())
+
+	unknown := &Stat{Type: StatTypeFsIo, FsIo: &FsIo{Fs: uint8(CodeFsUnknown), Op: 200}}
+	assert.Empty(t, fsGetter(unknown).Value.AsString())
+	assert.Empty(t, opGetter(unknown).Value.AsString())
+}
+
+// The volume attributes come from the mount the PID decorator resolved, one
+// value shared by every stat of that mount.
+func TestFsIoGetters_MountAttrs(t *testing.T) {
+	mount := &MountAttrs{PVName: "pvc-1", PVCName: "data", StorageClass: "fast", PVCNamespace: "ns"}
+	onVolume := &Stat{Type: StatTypeFsIo, FsIo: &FsIo{Mount: mount}}
+	noVolume := &Stat{Type: StatTypeFsIo, FsIo: &FsIo{}}
+
+	for name, want := range map[attr.Name]string{
+		attr.K8sPersistentVolumeName:      "pvc-1",
+		attr.K8sPersistentVolumeClaimName: "data",
+		attr.K8sStorageClassName:          "fast",
+	} {
+		getter, ok := StatGetters(name)
+		assert.True(t, ok)
+		assert.Equal(t, want, getter(onVolume).Value.AsString(), name)
+		assert.Empty(t, getter(noVolume).Value.AsString(), name)
+		assert.Empty(t, getter(&Stat{}).Value.AsString(), name)
+	}
+}
+
+// k8s.node.name is the agent's node, set once and read by every stat.
+func TestNodeNameGetter(t *testing.T) {
+	t.Cleanup(func() { nodeName.Store(nil) })
+
+	SetNodeName("worker-1")
+	getter, ok := StatGetters(attr.K8sNodeName)
+	assert.True(t, ok)
+	assert.Equal(t, "worker-1", getter(&Stat{}).Value.AsString())
+	assert.Equal(t, "worker-1", getter(&Stat{Type: StatTypeBlockIo, BlockIo: &BlockIo{}}).Value.AsString())
+
+	nodeName.Store(nil)
+	getter, _ = StatGetters(attr.K8sNodeName)
+	assert.Empty(t, getter(&Stat{}).Value.AsString())
 }
 
 // TestFsIoErrorTypeGetter covers the platform-independent paths: no error,

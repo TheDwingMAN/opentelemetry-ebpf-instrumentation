@@ -11,15 +11,20 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 
 	"go.opentelemetry.io/obi/internal/test/collector"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	otelmetric "go.opentelemetry.io/obi/pkg/export/otel/metric"
+	metric2 "go.opentelemetry.io/obi/pkg/export/otel/metric/api/metric"
 	"go.opentelemetry.io/obi/pkg/export/otel/otelcfg"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
+	"go.opentelemetry.io/obi/pkg/internal/pipe"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/pipe/global"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
@@ -569,4 +574,47 @@ func TestStatMetricsExporter_FailedDiscardReleasesNoBytes(t *testing.T) {
 		assert.Equal(ct, 1, latest["obi.stat.disk.discard.duration/EIO"].Count)
 		assert.Equal(ct, 1, latest["obi.stat.disk.discard.duration/"].Count)
 	}, timeout, 100*time.Millisecond)
+}
+
+// The storage Expirers leave out attributes whose value is "", and a record
+// that omits one attribute never shares a series with one that omits
+// another: an omitted attribute keeps its place in the series key.
+func TestStorageExpirerOmitsEmptyStrings(t *testing.T) {
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(otelmetric.NewManualReader()))
+	counter, err := provider.Meter(statScopeName).Int64Counter("test")
+	require.NoError(t, err)
+
+	getter := func(name attr.Name, value func(*ebpf.Stat) string) attributes.Field[*ebpf.Stat, attribute.KeyValue] {
+		return attributes.Field[*ebpf.Stat, attribute.KeyValue]{
+			ExposedName: string(name),
+			Get:         func(s *ebpf.Stat) attribute.KeyValue { return attribute.String(string(name), value(s)) },
+		}
+	}
+	getters := []attributes.Field[*ebpf.Stat, attribute.KeyValue]{
+		getter(attr.K8sPodName, func(s *ebpf.Stat) string { return s.CommonAttrs.Metadata[attr.K8sPodName] }),
+		getter(attr.K8sNamespaceName, func(s *ebpf.Stat) string { return s.CommonAttrs.Metadata[attr.K8sNamespaceName] }),
+	}
+	ex := newStorageExpirer[metric2.Int64Counter, int64](t.Context(), counter, getters, timeNow, time.Hour)
+
+	withMeta := func(m map[attr.Name]string) *ebpf.Stat { return &ebpf.Stat{CommonAttrs: pipe.CommonAttrs{Metadata: m}} }
+	_, podOnly := ex.ForRecord(withMeta(map[attr.Name]string{attr.K8sPodName: "x"}))
+	_, nsOnly := ex.ForRecord(withMeta(map[attr.Name]string{attr.K8sNamespaceName: "x"}))
+	_, none := ex.ForRecord(withMeta(nil))
+
+	assert.Equal(t, attribute.NewSet(attribute.String("k8s.pod.name", "x")), podOnly)
+	assert.Equal(t, attribute.NewSet(attribute.String("k8s.namespace.name", "x")), nsOnly)
+	assert.Equal(t, 0, none.Len())
+}
+
+// The stats resource names the host by host.name next to host.id; it is left
+// out when the hostname could not be read.
+func TestStatsResourceHostName(t *testing.T) {
+	attrs := getFilteredStatsResourceAttrs("host-id-1", "node-1.example", attributes.Selection{})
+	assert.Contains(t, attrs, semconv.HostID("host-id-1"))
+	assert.Contains(t, attrs, semconv.HostName("node-1.example"))
+
+	attrs = getFilteredStatsResourceAttrs("host-id-1", "", attributes.Selection{})
+	for _, kv := range attrs {
+		assert.NotEqual(t, semconv.HostNameKey, kv.Key)
+	}
 }

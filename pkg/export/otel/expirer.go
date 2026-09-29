@@ -42,6 +42,10 @@ type Expirer[Record any, Metric removableMetric[ValType], ValType any] struct {
 	clock          expire.Clock
 	lastExpiration time.Time
 	ttl            time.Duration
+
+	// omitEmptyStrings leaves out string attributes whose value is "", as
+	// if their getter had omitted them.
+	omitEmptyStrings bool
 }
 
 // NewExpirer creates an expirer that wraps data points of a given type. Its labeled instances are dropped
@@ -96,6 +100,12 @@ func (ex *Expirer[Record, Metric, ValType]) recordAttributes(m Record, extraAttr
 
 	for _, attr := range ex.attrs {
 		kv := sanitizeKeyValue(attr.Get(m))
+		if ex.omitEmptyStrings && (!kv.Valid() || isEmptyString(kv)) {
+			// The omitted attribute keeps its place in the series key, so
+			// records that omit different attributes never share a series.
+			vals = append(vals, "")
+			continue
+		}
 		if !kv.Valid() {
 			continue
 		}
@@ -109,6 +119,10 @@ func (ex *Expirer[Record, Metric, ValType]) recordAttributes(m Record, extraAttr
 	}
 
 	return attribute.NewSet(keyVals...), vals
+}
+
+func isEmptyString(kv attribute.KeyValue) bool {
+	return kv.Value.Type() == attribute.STRING && kv.Value.AsString() == ""
 }
 
 func sanitizeKeyValue(kv attribute.KeyValue) attribute.KeyValue {

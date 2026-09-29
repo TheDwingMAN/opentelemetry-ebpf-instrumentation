@@ -13,6 +13,7 @@ import (
 
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	"go.opentelemetry.io/obi/pkg/export/connector"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
@@ -196,4 +197,54 @@ func TestStatsReporterFsFeatureGating(t *testing.T) {
 			assert.Equal(t, tc.wantErrors, opErrors != nil, "errors counter presence")
 		})
 	}
+}
+
+// With Kubernetes metadata on, the fs metrics carry the pod and volume labels.
+// The volume ones come from the mount the stat went through. An attribute
+// that does not apply is the empty label value, which Prometheus stores as no
+// label; the OTLP exporter leaves it out instead.
+func TestStatsReporterFsKubeLabels(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter, err := newStatsReporter(
+		&global.ContextInfo{Prometheus: &connector.PrometheusManager{}, MetricAttributeGroups: attributes.GroupKubernetes},
+		&StatsPrometheusConfig{
+			Config:      &PrometheusConfig{Registry: registry, TTL: time.Minute},
+			SelectorCfg: &attributes.SelectorConfig{},
+			CommonCfg:   &perapp.GlobalMetricsConfig{Features: export.FeatureStorageFS},
+		},
+		msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(1)),
+	)
+	require.NoError(t, err)
+
+	onVolume := fsIoStat()
+	onVolume.CommonAttrs.Metadata = map[attr.Name]string{
+		attr.K8sPodName: "writer", attr.K8sNamespaceName: "ns", attr.K8sContainerName: "io",
+	}
+	onVolume.FsIo.Mount = &ebpf.MountAttrs{PVName: "pvc-1", PVCName: "data", StorageClass: "fast", PVCNamespace: "ns"}
+	reporter.observeFsOpDuration(onVolume)
+
+	noVolume := fsIoStat()
+	noVolume.FsIo.Fs = uint8(ebpf.CodeFsUnknown)
+	reporter.observeFsOpDuration(noVolume)
+
+	assert.NotNil(t, gatheredMetric(t, registry, "obi_stat_fs_operation_duration_seconds", map[string]string{
+		"system_filesystem_type":         "nfs",
+		"fs_operation":                   "write",
+		"k8s_pod_name":                   "writer",
+		"k8s_namespace_name":             "ns",
+		"k8s_container_name":             "io",
+		"k8s_persistentvolume_name":      "pvc-1",
+		"k8s_persistentvolumeclaim_name": "data",
+		"k8s_storageclass_name":          "fast",
+	}))
+	assert.NotNil(t, gatheredMetric(t, registry, "obi_stat_fs_operation_duration_seconds", map[string]string{
+		"system_filesystem_type":         "",
+		"fs_operation":                   "write",
+		"k8s_pod_name":                   "",
+		"k8s_namespace_name":             "",
+		"k8s_container_name":             "",
+		"k8s_persistentvolume_name":      "",
+		"k8s_persistentvolumeclaim_name": "",
+		"k8s_storageclass_name":          "",
+	}), "an unknown filesystem has no type label, not \"unknown\"")
 }

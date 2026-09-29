@@ -85,8 +85,11 @@ const mountCacheTTL = time.Minute
 const mountCacheNegativeTTL = 15 * time.Second
 
 type mountCacheEntry struct {
-	info       MountInfo
-	found      bool
+	info  MountInfo
+	found bool
+	// pending is set when the volume could not be named yet because the
+	// root inode of a mount was still being looked up.
+	pending    bool
 	resolvedAt time.Time
 }
 
@@ -96,16 +99,38 @@ var (
 	mountOrder []MountKey // insertion order, oldest first, for FIFO eviction
 
 	mountWatchOnce sync.Once
+	mountWatch     = mountTableWatch{known: map[string]mountSet{}}
 )
 
 // invalidateMountCache drops every cached resolution, so the next lookup of
 // each device rescans the mount table.
 func invalidateMountCache() {
 	mountMu.Lock()
-	defer mountMu.Unlock()
 	clear(mountCache)
 	mountOrder = nil
-	forgetRootInodes()
+	mountMu.Unlock()
+	forgetRootInodes(nil)
+}
+
+// dropMountsWhere drops the cached resolutions drop selects.
+func dropMountsWhere(drop func(MountKey, mountCacheEntry) bool) {
+	mountMu.Lock()
+	defer mountMu.Unlock()
+
+	kept := mountOrder[:0]
+	for _, key := range mountOrder {
+		if drop(key, mountCache[key]) {
+			delete(mountCache, key)
+			continue
+		}
+		kept = append(kept, key)
+	}
+	mountOrder = kept
+}
+
+// dropPendingMounts drops the resolutions that were waiting for a root inode.
+func dropPendingMounts() {
+	dropMountsWhere(func(_ MountKey, e mountCacheEntry) bool { return e.pending })
 }
 
 // resolveMount maps the mount a filesystem operation went through (its
@@ -115,8 +140,9 @@ func resolveMount(key MountKey) (MountInfo, bool) {
 	// Shared decides whether a mount may name a pod, and a second pod can
 	// mount the volume at any moment. The TTLs alone would let a cached
 	// single-owner entry name the wrong pod for up to a minute after that, so
-	// any change to the mount table drops the cache instead.
-	mountWatchOnce.Do(func() { watchMountTable(invalidateMountCache, mountInfoPath, selfMountInfoPath) })
+	// a change to the mount table drops the resolutions of the devices whose
+	// mounts it touched.
+	mountWatchOnce.Do(func() { watchMountTable(mountWatch.changed, mountInfoPath, selfMountInfoPath) })
 
 	mountMu.RLock()
 	entry, ok := mountCache[key]
@@ -131,7 +157,8 @@ func resolveMount(key MountKey) (MountInfo, bool) {
 		}
 	}
 
-	info, found := scanForMount(key)
+	learned := rootInodesLearned.Load()
+	info, found, pending := scanForMount(key)
 
 	mountMu.Lock()
 	if _, exists := mountCache[key]; !exists {
@@ -145,18 +172,26 @@ func resolveMount(key MountKey) (MountInfo, bool) {
 		}
 		mountOrder = append(mountOrder, key)
 	}
-	mountCache[key] = mountCacheEntry{info: info, found: found, resolvedAt: time.Now()}
+	mountCache[key] = mountCacheEntry{info: info, found: found, pending: pending, resolvedAt: time.Now()}
 	mountMu.Unlock()
+
+	// A lookup that finished during the scan dropped the pending entries
+	// before this one was stored.
+	if pending && rootInodesLearned.Load() != learned {
+		dropPendingMounts()
+	}
 
 	return info, found
 }
 
 // scanForMount reads the mount table looking for the kubelet volume mounts
 // whose superblock device is key.Dev, and picks the volume key belongs to.
-func scanForMount(key MountKey) (MountInfo, bool) {
+// pending reports that the volume could not be named yet because the root
+// inode of one of the candidate mounts is still being looked up.
+func scanForMount(key MountKey) (info MountInfo, found, pending bool) {
 	mounts, root, err := scanMountTable()
 	if err != nil {
-		return MountInfo{}, false
+		return MountInfo{}, false, false
 	}
 
 	target := fmtDev(key.Dev)
@@ -175,7 +210,7 @@ func scanForMount(key MountKey) (MountInfo, bool) {
 		}
 	}
 	if len(cands) == 0 {
-		return MountInfo{}, false
+		return MountInfo{}, false, false
 	}
 
 	// merge folds the candidates of one volume into one answer. Every pod
@@ -195,9 +230,10 @@ func scanForMount(key MountKey) (MountInfo, bool) {
 		return found
 	}
 
-	found := merge(cands)
-	if found.PVName != "" {
-		return found, true
+	byDev := merge(cands)
+	// A root inode of 0 is no inode: the probe could not read it.
+	if byDev.PVName != "" || key.RootIno == 0 {
+		return byDev, true, false
 	}
 
 	// Different volumes share a superblock too: NFS shares one per server
@@ -208,16 +244,110 @@ func scanForMount(key MountKey) (MountInfo, bool) {
 	// that cannot be told, the volume is left unnamed rather than guessed.
 	var matched []candidate
 	for _, c := range cands {
-		if ino, ok := mountRootInode(filepath.Join(root, c.mountPoint)); ok && ino == key.RootIno {
+		ino, ok, lookingUp := mountRootInode(filepath.Join(root, c.mountPoint))
+		pending = pending || lookingUp
+		if ok && ino == key.RootIno {
 			matched = append(matched, c)
 		}
 	}
 	if len(matched) > 0 {
 		if byRoot := merge(matched); byRoot.PVName != "" {
-			return byRoot, true
+			return byRoot, true, false
 		}
 	}
-	return found, true
+	return byDev, true, pending
+}
+
+// mountSet is a mount table as a set, for comparing two reads of it.
+type mountSet map[mountIdentity]struct{}
+
+// mountIdentity is what tells one mount from another in a mount table.
+type mountIdentity struct {
+	id         int
+	majMin     string
+	root       string
+	mountPoint string
+	source     string
+}
+
+// mountTableWatch remembers each watched mount table as last read, so that a
+// change drops only the resolutions of the devices whose mounts it added or
+// removed. A node starting and stopping pods changes its mount table all the
+// time (every pod mounts its secrets and service account token), and
+// dropping every resolution on each change would have every mount of every
+// pod rescan the table on its next event.
+type mountTableWatch struct {
+	mu sync.Mutex
+	// known holds the last read of each table. A nil set means the last read
+	// failed, so the next change cannot be told apart and drops everything.
+	known map[string]mountSet
+}
+
+// changed reads the table at path again and drops the resolutions its change
+// affected. The first read of a table, when its watch starts, only records it.
+func (w *mountTableWatch) changed(path string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	var now mountSet
+	if mounts, err := mountsFrom(path); err == nil {
+		now = mountSetOf(mounts)
+	}
+	before, seen := w.known[path]
+	w.known[path] = now
+	if !seen {
+		return
+	}
+	if before == nil || now == nil {
+		invalidateMountCache()
+		return
+	}
+
+	devs := map[uint32]struct{}{}
+	var points []string
+	for _, diff := range [2][2]mountSet{{before, now}, {now, before}} {
+		for m := range diff[0] {
+			if _, ok := diff[1][m]; ok {
+				continue
+			}
+			if dev, ok := parseDev(m.majMin); ok {
+				devs[dev] = struct{}{}
+			}
+			points = append(points, filepath.Join(rootOf(path), m.mountPoint))
+		}
+	}
+	if len(points) == 0 {
+		return
+	}
+	dropMountsWhere(func(key MountKey, _ mountCacheEntry) bool {
+		_, changed := devs[key.Dev]
+		return changed
+	})
+	forgetRootInodes(points)
+}
+
+func mountSetOf(mounts []*procfs.MountInfo) mountSet {
+	set := make(mountSet, len(mounts))
+	for _, m := range mounts {
+		set[mountIdentity{
+			id: m.MountID, majMin: m.MajorMinorVer, root: m.Root, mountPoint: m.MountPoint, source: m.Source,
+		}] = struct{}{}
+	}
+	return set
+}
+
+// parseDev parses a "<major>:<minor>" device number, the inverse of fmtDev.
+func parseDev(majMin string) (uint32, bool) {
+	majStr, minStr, ok := strings.Cut(majMin, ":")
+	if !ok {
+		return 0, false
+	}
+	major, err1 := strconv.ParseUint(majStr, 10, 32)
+	minor, err2 := strconv.ParseUint(minStr, 10, 32)
+	if err1 != nil || err2 != nil || major >= 1<<(32-devMinorBits) || minor > devMinorMask {
+		return 0, false
+	}
+	return uint32(major<<devMinorBits | minor), true
 }
 
 // scanMounts parses mountInfoPath via procfs. procfs.FS.GetMounts always
@@ -327,7 +457,7 @@ func kubeletNamespaceMounts() ([]*procfs.MountInfo, string, bool) {
 	// The watch on init's table does not see this namespace. An open
 	// mountinfo holds its namespace, so one watch outlives any kubelet. It
 	// only reports changes after it opens, so the table is read after it.
-	kubeletWatchOnce.Do(func() { watchMountTable(invalidateMountCache, mountInfoOf(pid)) })
+	kubeletWatchOnce.Do(func() { watchMountTable(mountWatch.changed, mountInfoOf(pid)) })
 	mounts, err := mountsFrom(mountInfoOf(pid))
 	if err != nil {
 		return nil, "", false
