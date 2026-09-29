@@ -20,6 +20,12 @@
 // without OBI observing that completion.
 enum { k_eiocbqueued = 529 };
 
+// An fs_start entry older than this is an orphan, not an outer operation: its
+// exit probe never ran (a kretprobe missed for lack of instances, or a probe
+// attached mid-call). Left alone, it would count every later call on that
+// thread as nested and silence the thread for good.
+#define k_fs_start_stale_ns (30ULL * 1000000000ULL)
+
 static __always_inline void
 fs_probe_entry_file(const struct file *const file, const enum fs_type fs, const enum fs_op op) {
     const u32 s_dev = BPF_CORE_READ(file, f_inode, i_sb, s_dev);
@@ -42,15 +48,16 @@ fs_probe_entry_file(const struct file *const file, const enum fs_type fs, const 
     // nested fsync's entry would overwrite the outer write's fs_start entry
     // and its exit would delete it, so the write would emit nothing. Track
     // nesting depth instead and let only the outermost exit emit.
+    const u64 now = bpf_ktime_get_ns();
     struct fs_start_val *const existing = bpf_map_lookup_elem(&fs_start, &id);
-    if (existing) {
+    if (existing && now - existing->ts < k_fs_start_stale_ns) {
         existing->depth++;
         return;
     }
 
     struct fs_start_val val = {};
 
-    val.ts = bpf_ktime_get_ns();
+    val.ts = now;
     val.s_dev = s_dev;
     val.fs = fs;
     val.op = op;
