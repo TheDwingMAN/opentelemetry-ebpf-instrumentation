@@ -482,6 +482,14 @@ var (
 		Unit:    "By",
 		Type:    InstrumentCounter,
 	})
+	// Count of filesystem read/write operations that failed, broken down by
+	// errno via the upstream error.type attribute.
+	StatFsOperationErrors = metric(Name{
+		Section: "obi.stat.fs.operation.errors",
+		OTEL:    "obi.stat.fs.operation.errors",
+		Unit:    "{error}",
+		Type:    InstrumentCounter,
+	})
 )
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.

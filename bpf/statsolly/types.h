@@ -84,6 +84,8 @@ typedef struct fs_io {
     u32 pid_ns;
     u64 latency_ns;
     u64 bytes;
+    s32 error; // 0 on success, or -errno from the read/write implementation
+    unsigned char _pad2[4];
 } fs_io_t;
 
 // Force struct into the ELF for automatic creation of Golang struct

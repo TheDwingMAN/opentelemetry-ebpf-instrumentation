@@ -24,6 +24,7 @@ func TestReadFsIoIntoStat(t *testing.T) {
 		PidNs:     4026531836,
 		LatencyNs: 1_500_000,
 		Bytes:     65536,
+		Error:     -116, // -ESTALE
 	}
 	raw := (*[unsafe.Sizeof(ev)]byte)(unsafe.Pointer(&ev))[:]
 
@@ -38,4 +39,5 @@ func TestReadFsIoIntoStat(t *testing.T) {
 	assert.Equal(t, uint32(4026531836), stat.FsIo.PidNs)
 	assert.Equal(t, uint64(1_500_000), stat.FsIo.LatencyNs)
 	assert.Equal(t, uint64(65536), stat.FsIo.Bytes)
+	assert.Equal(t, int32(-116), stat.FsIo.Error)
 }

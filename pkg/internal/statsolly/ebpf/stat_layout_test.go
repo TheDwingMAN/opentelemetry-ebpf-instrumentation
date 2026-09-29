@@ -28,7 +28,7 @@ func TestStatsBlockIoLayout(t *testing.T) {
 
 func TestStatsFsIoLayout(t *testing.T) {
 	var s StatsFsIo
-	assert.Equal(t, uintptr(32), unsafe.Sizeof(s), "sizeof fs_io_t")
+	assert.Equal(t, uintptr(40), unsafe.Sizeof(s), "sizeof fs_io_t")
 	assert.Equal(t, uintptr(0), unsafe.Offsetof(s.Flags))
 	assert.Equal(t, uintptr(1), unsafe.Offsetof(s.Fs))
 	assert.Equal(t, uintptr(2), unsafe.Offsetof(s.Op))
@@ -37,6 +37,7 @@ func TestStatsFsIoLayout(t *testing.T) {
 	assert.Equal(t, uintptr(12), unsafe.Offsetof(s.PidNs))
 	assert.Equal(t, uintptr(16), unsafe.Offsetof(s.LatencyNs))
 	assert.Equal(t, uintptr(24), unsafe.Offsetof(s.Bytes))
+	assert.Equal(t, uintptr(32), unsafe.Offsetof(s.Error))
 }
 
 // The C discriminator values in bpf/statsolly/types.h must match these iota

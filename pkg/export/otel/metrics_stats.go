@@ -102,6 +102,7 @@ type statMetricsExporter struct {
 	diskOpErrors         *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	fsOpDuration         *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
 	fsIOBytes            *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	fsOpErrors           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	expireTTL            time.Duration
 	in                   <-chan []*ebpf.Stat
 }
@@ -332,6 +333,22 @@ func newStatMetricsExporter(
 		nme.fsIOBytes = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, fsIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StorageFSErrors() {
+		log := log.With("metricFamily", "StorageFSErrors")
+
+		fsOpErrors, err := ebpfEvents.Int64Counter(attributes.StatFsOperationErrors.OTEL, metric2.WithUnit(attributes.StatFsOperationErrors.Unit))
+		if err != nil {
+			log.Error("creating fs operation errors counter", "error", err)
+			return nil, err
+		}
+
+		attrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatFsOperationErrors))
+
+		nme.fsOpErrors = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, fsOpErrors, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -382,6 +399,10 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if me.fsIOBytes != nil && v.FsIo != nil {
 				c, attrs := me.fsIOBytes.ForRecord(v)
 				c.Add(ctx, int64(v.FsIo.Bytes), metric2.WithAttributeSet(attrs))
+			}
+			if me.fsOpErrors != nil && v.FsIo != nil && v.FsIo.Error != 0 {
+				fsOpErrors, attrs := me.fsOpErrors.ForRecord(v)
+				fsOpErrors.Add(ctx, 1, metric2.WithAttributeSet(attrs))
 			}
 		}
 	}

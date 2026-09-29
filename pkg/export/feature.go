@@ -55,6 +55,7 @@ const (
 	FeatureStorageBlockErrors
 	FeatureStorageFSDuration
 	FeatureStorageFSIo
+	FeatureStorageFSErrors
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
@@ -67,10 +68,10 @@ const (
 // counter or vice versa.
 const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo | FeatureStorageBlockQueue | FeatureStorageBlockErrors
 
-// FeatureStorageFS enables all network-filesystem metrics. Both derive from the
-// same probe pair, so disabling one does not reduce kernel-side overhead —
-// splitting them controls series cardinality only.
-const FeatureStorageFS = FeatureStorageFSDuration | FeatureStorageFSIo
+// FeatureStorageFS enables all network-filesystem metrics. All three derive
+// from the same probe pair, so disabling one does not reduce kernel-side
+// overhead — splitting them controls series cardinality only.
+const FeatureStorageFS = FeatureStorageFSDuration | FeatureStorageFSIo | FeatureStorageFSErrors
 
 // FeatureStats enables all stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -94,6 +95,7 @@ var FeatureMapper = map[string]Features{
 	"storage_fs":                   FeatureStorageFS,
 	"storage_fs_duration":          FeatureStorageFSDuration,
 	"storage_fs_io":                FeatureStorageFSIo,
+	"storage_fs_errors":            FeatureStorageFSErrors,
 	"network":                      FeatureNetwork,
 	"network_inter_zone":           FeatureNetworkInterZone,
 	"network_flow_packets":         FeatureNetworkFlowPackets,
@@ -395,6 +397,10 @@ func (f Features) StorageFSDuration() bool {
 
 func (f Features) StorageFSIo() bool {
 	return f.any(FeatureStorageFSIo)
+}
+
+func (f Features) StorageFSErrors() bool {
+	return f.any(FeatureStorageFSErrors)
 }
 
 func (f Features) NetworkInterZone() bool {
