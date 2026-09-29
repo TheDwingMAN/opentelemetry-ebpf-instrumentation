@@ -152,11 +152,14 @@ Block metrics come from the request-queue tracepoints (`block_rq_insert`/`block_
 
 Filesystem metrics come from probes on each filesystem's own `file_operations` read/write/fsync implementation, which runs in the calling process's context, so they carry `k8s.pod.name` and `k8s.namespace.name`, plus `k8s.persistentvolume.name`, `k8s.persistentvolumeclaim.name` and `k8s.storageclass.name` once the filesystem's superblock device resolves to a kubelet volume mount (`statsFsAttributes`, `statsFsKubeAttributes` in [pkg/export/attributes/attr_defs.go](../pkg/export/attributes/attr_defs.go)). All Kubernetes attributes, including the PV/PVC/storage-class ones, are disabled when Kubernetes metadata is off.
 
-Reads and writes that a process performs with `splice(2)`, `sendfile(2)` or
-`copy_file_range(2)` are not recorded. The probes hook each filesystem's
-`read_iter` and `write_iter` operations, and those paths use `splice_read`
-instead, so a file server built on `sendfile` shows its network I/O but not
-its filesystem I/O.
+Reads a process performs with `splice(2)`, `sendfile(2)` or
+`copy_file_range(2)` take the filesystem's `splice_read` operation rather than
+`read_iter`, so they need their own probe. They are recorded as
+`fs.operation=read` on nfs, ext4, btrfs and fuse, which have a dedicated
+symbol. Ceph, CIFS and XFS use the generic `filemap_splice_read`, which every
+filesystem on the node shares including container root filesystems, so probing
+it would defeat the point of hooking each filesystem separately; splice reads
+on those three are not recorded. Writes have no equivalent path.
 
 `k8s.container.name` is best-effort and often absent. The pod is resolved from the volume mount, which always works, but the container name is only known when the process that issued the I/O has been tracked, so it is left unset for short-lived processes and for deployments that instrument no services.
 

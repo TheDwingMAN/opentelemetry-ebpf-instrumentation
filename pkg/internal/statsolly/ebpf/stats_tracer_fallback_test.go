@@ -107,7 +107,20 @@ func TestLoadWithStorageFallback(t *testing.T) {
 
 func TestAllFsProgramNames(t *testing.T) {
 	names := allFsProgramNames()
-	assert.Len(t, names, len(fsTargets)*12, "twelve programs (fentry/fexit/kprobe/kretprobe x read/write/fsync) per filesystem")
+
+	// Twelve programs per filesystem for read, write and fsync, plus four
+	// more for the filesystems that have their own splice_read symbol. The
+	// list feeds the loader's last-resort retry, so a name it misses is a
+	// program that cannot be stubbed, and a name it invents fails the load.
+	withSplice := 0
+	for _, tgt := range fsTargets {
+		if len(tgt.SpliceReadSyms) > 0 {
+			withSplice++
+		}
+	}
+	assert.Len(t, names, len(fsTargets)*12+withSplice*4)
 	assert.Contains(t, names, progObiStatsFentryExt4Read)
 	assert.Contains(t, names, progObiStatsKretprobeNFSFsync)
+	assert.Contains(t, names, progObiStatsFentrySpliceNFS)
+	assert.NotContains(t, names, "", "an empty name would fail fixupSpec")
 }

@@ -880,3 +880,170 @@ int BPF_KRETPROBE(obi_stats_kretprobe_btrfs_fsync, long ret) {
     fs_probe_exit(ret);
     return 0;
 }
+
+// splice(2), sendfile(2) and copy_file_range(2) do not go through read_iter:
+// they call the filesystem's splice_read operation instead, so a file server
+// built on sendfile would otherwise report no filesystem I/O at all. Only the
+// filesystems with their own symbol are probed; ceph, cifs and xfs use the
+// generic filemap_splice_read, which every filesystem on the node shares.
+// These are recorded as reads, which is what they are to the application.
+
+SEC("fentry/obi_dummy_fs_splice_read")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fentry_nfs_splice_read, struct file *in) {
+    (void)ctx;
+    fs_probe_entry_file(in, fs_type_nfs, fs_op_read);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_splice_read")
+int BPF_PROG(obi_stats_fexit_nfs_splice_read,
+             struct file *in,
+             loff_t *ppos,
+             struct pipe_inode_info *pipe,
+             size_t len,
+             unsigned int flags,
+             long ret) {
+    (void)ctx;
+    (void)in;
+    (void)ppos;
+    (void)pipe;
+    (void)len;
+    (void)flags;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_splice_read")
+int BPF_KPROBE(obi_stats_kprobe_nfs_splice_read, struct file *in) {
+    (void)ctx;
+    fs_probe_entry_file(in, fs_type_nfs, fs_op_read);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_splice_read")
+int BPF_KRETPROBE(obi_stats_kretprobe_nfs_splice_read, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("fentry/obi_dummy_fs_splice_read")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fentry_fuse_splice_read, struct file *in) {
+    (void)ctx;
+    fs_probe_entry_file(in, fs_type_fuse, fs_op_read);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_splice_read")
+int BPF_PROG(obi_stats_fexit_fuse_splice_read,
+             struct file *in,
+             loff_t *ppos,
+             struct pipe_inode_info *pipe,
+             size_t len,
+             unsigned int flags,
+             long ret) {
+    (void)ctx;
+    (void)in;
+    (void)ppos;
+    (void)pipe;
+    (void)len;
+    (void)flags;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_splice_read")
+int BPF_KPROBE(obi_stats_kprobe_fuse_splice_read, struct file *in) {
+    (void)ctx;
+    fs_probe_entry_file(in, fs_type_fuse, fs_op_read);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_splice_read")
+int BPF_KRETPROBE(obi_stats_kretprobe_fuse_splice_read, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("fentry/obi_dummy_fs_splice_read")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fentry_ext4_splice_read, struct file *in) {
+    (void)ctx;
+    fs_probe_entry_file(in, fs_type_ext4, fs_op_read);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_splice_read")
+int BPF_PROG(obi_stats_fexit_ext4_splice_read,
+             struct file *in,
+             loff_t *ppos,
+             struct pipe_inode_info *pipe,
+             size_t len,
+             unsigned int flags,
+             long ret) {
+    (void)ctx;
+    (void)in;
+    (void)ppos;
+    (void)pipe;
+    (void)len;
+    (void)flags;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_splice_read")
+int BPF_KPROBE(obi_stats_kprobe_ext4_splice_read, struct file *in) {
+    (void)ctx;
+    fs_probe_entry_file(in, fs_type_ext4, fs_op_read);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_splice_read")
+int BPF_KRETPROBE(obi_stats_kretprobe_ext4_splice_read, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("fentry/obi_dummy_fs_splice_read")
+// NOLINTNEXTLINE(readability-non-const-parameter)
+int BPF_PROG(obi_stats_fentry_btrfs_splice_read, struct file *in) {
+    (void)ctx;
+    fs_probe_entry_file(in, fs_type_btrfs, fs_op_read);
+    return 0;
+}
+
+SEC("fexit/obi_dummy_fs_splice_read")
+int BPF_PROG(obi_stats_fexit_btrfs_splice_read,
+             struct file *in,
+             loff_t *ppos,
+             struct pipe_inode_info *pipe,
+             size_t len,
+             unsigned int flags,
+             long ret) {
+    (void)ctx;
+    (void)in;
+    (void)ppos;
+    (void)pipe;
+    (void)len;
+    (void)flags;
+    fs_probe_exit(ret);
+    return 0;
+}
+
+SEC("kprobe/obi_dummy_fs_splice_read")
+int BPF_KPROBE(obi_stats_kprobe_btrfs_splice_read, struct file *in) {
+    (void)ctx;
+    fs_probe_entry_file(in, fs_type_btrfs, fs_op_read);
+    return 0;
+}
+
+SEC("kretprobe/obi_dummy_fs_splice_read")
+int BPF_KRETPROBE(obi_stats_kretprobe_btrfs_splice_read, long ret) {
+    (void)ctx;
+    fs_probe_exit(ret);
+    return 0;
+}
