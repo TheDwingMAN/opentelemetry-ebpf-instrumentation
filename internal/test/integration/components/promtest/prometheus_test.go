@@ -6,6 +6,7 @@ package promtest
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,4 +43,25 @@ promhttp_metric_handler_errors_total{cause="gathering"} 3
 		{Name: "promhttp_metric_handler_errors_total", Value: 2, Labels: map[string]string{"cause": "encoding"}},
 		{Name: "promhttp_metric_handler_errors_total", Value: 3, Labels: map[string]string{"cause": "gathering"}},
 	}, scrapedMetrics)
+}
+
+// A PromQL regex commonly contains "+", and so does arithmetic. Escaping the
+// query as a URL path leaves "+" alone, and the server then reads it as a
+// space, so the query silently matches nothing instead of failing.
+func TestQueryEscapesPlus(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	defer srv.Close()
+
+	c := Client{HostPort: strings.TrimPrefix(srv.URL, "http://")}
+	const promQL = `some_metric{pod=~"writer-.+"}`
+
+	_, err := c.Query(promQL)
+
+	require.NoError(t, err)
+	assert.Equal(t, promQL, gotQuery, "the server must receive the query verbatim")
 }
