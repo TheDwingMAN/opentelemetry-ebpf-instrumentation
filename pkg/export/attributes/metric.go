@@ -431,12 +431,27 @@ var (
 	//
 	// The unit is deliberately absent from the name: semantic conventions state
 	// that metrics carrying their unit in OTEL metadata SHOULD NOT repeat it in
-	// the metric name. `By` therefore replaces the earlier `{bytes}`
-	// annotation, which only existed to stop the derived Prometheus name from
-	// double-suffixing a name that itself ended in "bytes".
+	// the metric name.
 	StatDiskIO = metric(Name{
 		Section: "obi.stat.disk.io",
 		OTEL:    "obi.stat.disk.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
+	// Latency of a single filesystem read or write as the application
+	// experiences it. NOTE: buffered writes return once data is in the page
+	// cache, so this is app-perceived latency, not server round-trip time.
+	StatFsOperationDuration = metric(Name{
+		Section: "obi.stat.fs.operation.duration",
+		OTEL:    "obi.stat.fs.operation.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	// Published under obi.* rather than system.filesystem.* to avoid
+	// double-counting against the Collector's hostmetrics receiver.
+	StatFsIO = metric(Name{
+		Section: "obi.stat.fs.io",
+		OTEL:    "obi.stat.fs.io",
 		Unit:    "By",
 		Type:    InstrumentCounter,
 	})

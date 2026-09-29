@@ -135,6 +135,14 @@ func getDefinitions(
 		},
 	}
 
+	// network filesystem I/O stat metrics attributes
+	statsFsAttributes := AttrReportGroup{
+		Attributes: map[attr.Name]Default{
+			attr.FsType:      true,
+			attr.FsOperation: true,
+		},
+	}
+
 	// attributes to be reported exclusively for network metrics when
 	// kubernetes metadata is enabled
 	networkKubeAttributes := NewAttrReportGroup(
@@ -573,6 +581,14 @@ func getDefinitions(
 		},
 		StatDiskIO.Section: {
 			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatFsOperationDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&statsFsAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatFsIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsFsAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
 

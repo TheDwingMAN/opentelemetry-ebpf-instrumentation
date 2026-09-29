@@ -51,6 +51,8 @@ const (
 	FeatureEBPF
 	FeatureStorageBlockDuration
 	FeatureStorageBlockIo
+	FeatureStorageFSDuration
+	FeatureStorageFSIo
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
@@ -61,6 +63,11 @@ const (
 // series cardinality, letting a user take the latency distribution without the
 // byte counter or vice versa.
 const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo
+
+// FeatureStorageFS enables all network-filesystem metrics. Both derive from the
+// same probe pair, so disabling one does not reduce kernel-side overhead —
+// splitting them controls series cardinality only.
+const FeatureStorageFS = FeatureStorageFSDuration | FeatureStorageFSIo
 
 // FeatureStats enables all stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -76,10 +83,12 @@ var FeatureMapper = map[string]Features{
 	"stats_tcp_failed_connections": FeatureStatsTCPFailedConnections,
 	"stats_tcp_retransmits":        FeatureStatsTCPRetransmits,
 	"stats_tcp_io":                 FeatureStatsTCPIo,
-	"storage":                      FeatureStorageBlock,
 	"storage_block":                FeatureStorageBlock,
 	"storage_block_duration":       FeatureStorageBlockDuration,
 	"storage_block_io":             FeatureStorageBlockIo,
+	"storage_fs":                   FeatureStorageFS,
+	"storage_fs_duration":          FeatureStorageFSDuration,
+	"storage_fs_io":                FeatureStorageFSIo,
 	"network":                      FeatureNetwork,
 	"network_inter_zone":           FeatureNetworkInterZone,
 	"network_flow_packets":         FeatureNetworkFlowPackets,
@@ -328,7 +337,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStorageBlock)
+	return f.any(FeatureStats | FeatureStorageBlock | FeatureStorageFS)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -359,6 +368,20 @@ func (f Features) StorageBlockDuration() bool {
 
 func (f Features) StorageBlockIo() bool {
 	return f.any(FeatureStorageBlockIo)
+}
+
+// StorageFS reports whether any network-filesystem metric is enabled. It gates
+// the shared setup (eBPF probes, ring buffer) that both metrics need.
+func (f Features) StorageFS() bool {
+	return f.any(FeatureStorageFS)
+}
+
+func (f Features) StorageFSDuration() bool {
+	return f.any(FeatureStorageFSDuration)
+}
+
+func (f Features) StorageFSIo() bool {
+	return f.any(FeatureStorageFSIo)
 }
 
 func (f Features) NetworkInterZone() bool {

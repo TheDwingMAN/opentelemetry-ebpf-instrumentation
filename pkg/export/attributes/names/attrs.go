@@ -318,4 +318,6 @@ const (
 	NetworkIoDirection        = Name(semconv.NetworkIODirectionKey)
 	DiskDevice                = Name("system.device")
 	DiskIODirection           = Name("disk.io.direction")
+	FsType                    = Name("fs.type")
+	FsOperation               = Name("fs.operation")
 )

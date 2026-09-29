@@ -77,6 +77,7 @@ func newStatMeterProvider(res *resource.Resource, exporter *sdkmetric.Exporter, 
 		metric.WithReader(metric.NewPeriodicReader(*exporter, metric.WithInterval(interval))),
 		metric.WithView(statHistogramView(attributes.StatTCPRtt.OTEL, cfg.Buckets.StatTCPRttHistogram, isExponential, cfg.ExponentialHistogram)),
 		metric.WithView(statHistogramView(attributes.StatDiskOperationDuration.OTEL, cfg.Buckets.StatDiskOperationDurationHistogram, isExponential, cfg.ExponentialHistogram)),
+		metric.WithView(statHistogramView(attributes.StatFsOperationDuration.OTEL, cfg.Buckets.StatFsOperationDurationHistogram, isExponential, cfg.ExponentialHistogram)),
 	)
 }
 
@@ -91,6 +92,8 @@ type statMetricsExporter struct {
 	tcpIo                *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskOpDuration       *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
 	diskIOBytes          *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	fsOpDuration         *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
+	fsIOBytes            *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	expireTTL            time.Duration
 	in                   <-chan []*ebpf.Stat
 }
@@ -245,6 +248,38 @@ func newStatMetricsExporter(
 		nme.diskIOBytes = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, diskIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StorageFSDuration() {
+		log := log.With("metricFamily", "StorageFSDuration")
+
+		h, err := ebpfEvents.Float64Histogram(attributes.StatFsOperationDuration.OTEL, metric2.WithUnit("s"))
+		if err != nil {
+			log.Error("creating fs operation duration histogram", "error", err)
+			return nil, err
+		}
+
+		attrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatFsOperationDuration))
+
+		nme.fsOpDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if cfg.CommonCfg.Features.StorageFSIo() {
+		log := log.With("metricFamily", "StorageFSIo")
+
+		fsIOBytes, err := ebpfEvents.Int64Counter(attributes.StatFsIO.OTEL, metric2.WithUnit("By"))
+		if err != nil {
+			log.Error("creating fs io bytes counter", "error", err)
+			return nil, err
+		}
+
+		bytesAttrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatFsIO))
+
+		nme.fsIOBytes = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, fsIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -270,11 +305,19 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			}
 			if me.diskOpDuration != nil && v.BlockIo != nil {
 				h, attrs := me.diskOpDuration.ForRecord(v)
-				h.Record(ctx, float64(v.BlockIo.LatencyNs)/1_000_000_000.0, metric2.WithAttributeSet(attrs))
+				h.Record(ctx, time.Duration(v.BlockIo.LatencyNs).Seconds(), metric2.WithAttributeSet(attrs))
 			}
 			if me.diskIOBytes != nil && v.BlockIo != nil {
 				diskIOBytes, attrs := me.diskIOBytes.ForRecord(v)
 				diskIOBytes.Add(ctx, int64(v.BlockIo.Bytes), metric2.WithAttributeSet(attrs))
+			}
+			if me.fsOpDuration != nil && v.FsIo != nil {
+				h, attrs := me.fsOpDuration.ForRecord(v)
+				h.Record(ctx, time.Duration(v.FsIo.LatencyNs).Seconds(), metric2.WithAttributeSet(attrs))
+			}
+			if me.fsIOBytes != nil && v.FsIo != nil {
+				c, attrs := me.fsIOBytes.ForRecord(v)
+				c.Add(ctx, int64(v.FsIo.Bytes), metric2.WithAttributeSet(attrs))
 			}
 		}
 	}

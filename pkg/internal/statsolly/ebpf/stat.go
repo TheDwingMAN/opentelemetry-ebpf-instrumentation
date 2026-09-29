@@ -17,6 +17,7 @@ const (
 	StatTypeTCPRetransmit
 	StatTypeTCPIo
 	StatTypeBlockIo
+	StatTypeFsIo
 )
 
 type TCPFailReasonType string
@@ -76,6 +77,57 @@ const (
 	CodeDirectionTransmit NetworkIoDirectionCode = 2
 )
 
+type DiskIoDirectionType string
+
+const (
+	DirectionRead  DiskIoDirectionType = "read"
+	DirectionWrite DiskIoDirectionType = "write"
+)
+
+// DiskIoDirectionCode mirrors enum blk_io_op in bpf/statsolly/types.h.
+type DiskIoDirectionCode uint8
+
+const (
+	CodeDirectionRead  DiskIoDirectionCode = 0
+	CodeDirectionWrite DiskIoDirectionCode = 1
+)
+
+type FsTypeName string
+
+const (
+	FsUnknown FsTypeName = "unknown"
+	FsNFS     FsTypeName = "nfs"
+	FsCeph    FsTypeName = "ceph"
+	FsCIFS    FsTypeName = "cifs"
+	FsFUSE    FsTypeName = "fuse"
+)
+
+// FsTypeCode mirrors enum fs_type in bpf/statsolly/types.h.
+type FsTypeCode uint8
+
+const (
+	CodeFsUnknown FsTypeCode = 0
+	CodeFsNFS     FsTypeCode = 1
+	CodeFsCeph    FsTypeCode = 2
+	CodeFsCIFS    FsTypeCode = 3
+	CodeFsFUSE    FsTypeCode = 4
+)
+
+type FsOpType string
+
+const (
+	FsOpRead  FsOpType = "read"
+	FsOpWrite FsOpType = "write"
+)
+
+// FsOpCode mirrors enum fs_op in bpf/statsolly/types.h.
+type FsOpCode uint8
+
+const (
+	CodeFsOpRead  FsOpCode = 0
+	CodeFsOpWrite FsOpCode = 1
+)
+
 // Stat contains accumulated metrics from a stat, with extra metadata
 // that is added from the user space
 // REMINDER: any attribute here must be also added to the functions StatGetters
@@ -88,6 +140,7 @@ type Stat struct {
 	TCPRetransmit       bool                 `json:"-"`
 	TCPIo               *TCPIo               `json:"-"`
 	BlockIo             *BlockIo             `json:"-"`
+	FsIo                *FsIo                `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -111,6 +164,16 @@ type TCPIo struct {
 type BlockIo struct {
 	Dev       uint32 `json:"dev"`
 	Op        uint8  `json:"op"`
+	LatencyNs uint64 `json:"latency_ns"`
+	Bytes     uint64 `json:"bytes"`
+}
+
+type FsIo struct {
+	Fs        uint8  `json:"fs"`
+	Op        uint8  `json:"op"`
+	SDev      uint32 `json:"s_dev"`
+	HostPID   uint32 `json:"host_pid"`
+	PidNs     uint32 `json:"pid_ns"`
 	LatencyNs uint64 `json:"latency_ns"`
 	Bytes     uint64 `json:"bytes"`
 }
@@ -170,11 +233,19 @@ type StatsBlockIo struct {
 	Bytes     uint64
 }
 
-// BlockIo operation codes (mirror blk_op_from_rwbs in bpf/statsolly/blk_io.c).
-const (
-	BlockOpRead  uint8 = 0
-	BlockOpWrite uint8 = 1
-)
+// StatsFsIo mirrors fs_io_t in bpf/statsolly/types.h.
+type StatsFsIo struct {
+	_         structs.HostLayout
+	Flags     uint8
+	Fs        uint8
+	Op        uint8
+	Pad       [1]uint8
+	SDev      uint32
+	HostPID   uint32
+	PidNs     uint32
+	LatencyNs uint64
+	Bytes     uint64
+}
 
 // TCPIoBatchSize mirrors k_tcp_io_batch_size in bpf/statsolly/types.h.
 const TCPIoBatchSize = 10

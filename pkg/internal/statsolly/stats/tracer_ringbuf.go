@@ -72,6 +72,8 @@ func handleStatEvent(record *ringbuf.Record) (ebpf.Stat, error) {
 		return readTCPIoIntoStat(record)
 	case ebpf.StatTypeBlockIo:
 		return readBlockIoIntoStat(record)
+	case ebpf.StatTypeFsIo:
+		return readFsIoIntoStat(record)
 	default:
 		return ebpf.Stat{}, fmt.Errorf("unknown stats event [type %d]", uint8(eventType))
 	}
@@ -160,6 +162,25 @@ func readBlockIoIntoStat(record *ringbuf.Record) (ebpf.Stat, error) {
 		BlockIo: &ebpf.BlockIo{
 			Dev:       event.Dev,
 			Op:        event.Op,
+			LatencyNs: event.LatencyNs,
+			Bytes:     event.Bytes,
+		},
+	}, nil
+}
+
+func readFsIoIntoStat(record *ringbuf.Record) (ebpf.Stat, error) {
+	event, err := ebpfcommon.ReinterpretCast[ebpf.StatsFsIo](record.RawSample)
+	if err != nil {
+		return ebpf.Stat{}, err
+	}
+	return ebpf.Stat{
+		Type: ebpf.StatTypeFsIo,
+		FsIo: &ebpf.FsIo{
+			Fs:        event.Fs,
+			Op:        event.Op,
+			SDev:      event.SDev,
+			HostPID:   event.HostPID,
+			PidNs:     event.PidNs,
 			LatencyNs: event.LatencyNs,
 			Bytes:     event.Bytes,
 		},

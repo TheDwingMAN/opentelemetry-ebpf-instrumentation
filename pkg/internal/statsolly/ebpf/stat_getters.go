@@ -4,8 +4,6 @@
 package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
-	"fmt"
-
 	"go.opentelemetry.io/otel/attribute"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
@@ -81,13 +79,28 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		}
 	case attr.DiskIODirection:
 		getter = func(s *Stat) attribute.KeyValue {
-			op := "read"
-			if s.BlockIo != nil && s.BlockIo.Op == BlockOpWrite {
-				op = "write"
+			var op uint8
+			if s.BlockIo != nil {
+				op = s.BlockIo.Op
 			}
-			return attribute.String(string(attr.DiskIODirection), op)
+			return attribute.String(string(attr.DiskIODirection), diskIoDirectionStr(DiskIoDirectionCode(op)))
 		}
-
+	case attr.FsType:
+		getter = func(s *Stat) attribute.KeyValue {
+			var fs uint8
+			if s.FsIo != nil {
+				fs = s.FsIo.Fs
+			}
+			return attribute.String(string(attr.FsType), fsTypeStr(FsTypeCode(fs)))
+		}
+	case attr.FsOperation:
+		getter = func(s *Stat) attribute.KeyValue {
+			var op uint8
+			if s.FsIo != nil {
+				op = s.FsIo.Op
+			}
+			return attribute.String(string(attr.FsOperation), fsOpStr(FsOpCode(op)))
+		}
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
 	}
@@ -141,8 +154,36 @@ func networkIoDirectionStr(d NetworkIoDirectionCode) string {
 	return ""
 }
 
-// fmtDev formats a Linux dev_t value as "<major>:<minor>", mirroring the
-// kernel's MAJOR()/MINOR() macros.
-func fmtDev(dev uint32) string {
-	return fmt.Sprintf("%d:%d", dev>>20, dev&0xFFFFF)
+func diskIoDirectionStr(d DiskIoDirectionCode) string {
+	switch d {
+	case CodeDirectionRead:
+		return string(DirectionRead)
+	case CodeDirectionWrite:
+		return string(DirectionWrite)
+	}
+	return ""
+}
+
+func fsTypeStr(f FsTypeCode) string {
+	switch f {
+	case CodeFsNFS:
+		return string(FsNFS)
+	case CodeFsCeph:
+		return string(FsCeph)
+	case CodeFsCIFS:
+		return string(FsCIFS)
+	case CodeFsFUSE:
+		return string(FsFUSE)
+	default:
+		return string(FsUnknown)
+	}
+}
+
+func fsOpStr(o FsOpCode) string {
+	switch o {
+	case CodeFsOpWrite:
+		return string(FsOpWrite)
+	default:
+		return string(FsOpRead)
+	}
 }

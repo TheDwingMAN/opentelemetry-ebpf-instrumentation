@@ -64,6 +64,8 @@ func TestPrometheusNames(t *testing.T) {
 		{StatTCPFailedConnections, "obi_stat_tcp_failed_connections_total"},
 		{StatTCPRetransmits, "obi_stat_tcp_retransmits_total"},
 		{StatTCPIo, "obi_stat_tcp_io_bytes_total"},
+		{StatFsOperationDuration, "obi_stat_fs_operation_duration_seconds"},
+		{StatFsIO, "obi_stat_fs_io_bytes_total"},
 	}
 
 	for _, test := range tests {

@@ -1,0 +1,120 @@
+# OBI DaemonSet for storage-metric development.
+#
+# Differs from internal/test/integration/k8s/manifests/06-obi-daemonset.yml in
+# one load-bearing way: it mounts the kubelet root with HostToContainer mount
+# propagation. Without that, procfs.GetMounts() sees only the agent's own mount
+# namespace and the PV/PVC attribution path resolves nothing. This is a
+# deployment prerequisite of the storage feature, not an optional extra.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: obi
+  namespace: storage-test
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obi
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "nodes"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obi
+subjects:
+  - kind: ServiceAccount
+    name: obi
+    namespace: storage-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: obi-config
+  namespace: storage-test
+data:
+  obi-config.yml: |
+    log_level: debug
+    attributes:
+      kubernetes:
+        enable: true
+      select:
+        "*":
+          include: ["*"]
+    prometheus_export:
+      port: 8999
+      path: /metrics
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: obi
+  namespace: storage-test
+spec:
+  selector:
+    matchLabels:
+      instrumentation: obi
+  template:
+    metadata:
+      labels:
+        instrumentation: obi
+    spec:
+      hostPID: true
+      serviceAccountName: obi
+      containers:
+        - name: obi
+          image: obi:dev
+          imagePullPolicy: Never
+          args: ["--config=/config/obi-config.yml"]
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          ports:
+            - containerPort: 8999
+              hostPort: 8999
+              name: prometheus
+          env:
+            - name: OTEL_EBPF_METRICS_FEATURES
+              value: "storage_block"
+            - name: OTEL_EBPF_METRICS_INTERVAL
+              value: "5s"
+            - name: OTEL_EBPF_BPF_DEBUG
+              value: "true"
+          volumeMounts:
+            - name: obi-config
+              mountPath: /config
+            - name: tracing
+              mountPath: /sys/kernel/tracing
+            - name: bpffs
+              mountPath: /sys/fs/bpf
+              mountPropagation: Bidirectional
+            # THE PREREQUISITE: without this the PV/PVC join resolves nothing.
+            - name: kubelet-root
+              mountPath: /var/lib/kubelet
+              readOnly: true
+              mountPropagation: HostToContainer
+      volumes:
+        - name: obi-config
+          configMap:
+            name: obi-config
+        - name: tracing
+          hostPath:
+            path: /sys/kernel/tracing
+            type: Directory
+        - name: bpffs
+          hostPath:
+            path: /sys/fs/bpf
+            type: DirectoryOrCreate
+        - name: kubelet-root
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory

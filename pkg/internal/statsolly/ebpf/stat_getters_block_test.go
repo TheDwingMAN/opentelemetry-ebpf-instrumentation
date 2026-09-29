@@ -16,7 +16,7 @@ func TestBlockIoGetters(t *testing.T) {
 	// falls back to the "<major>:<minor>" form regardless of the host's disks.
 	withSysBlockDir(t, t.TempDir())
 
-	s := &Stat{Type: StatTypeBlockIo, BlockIo: &BlockIo{Dev: 0x800010, Op: BlockOpWrite}}
+	s := &Stat{Type: StatTypeBlockIo, BlockIo: &BlockIo{Dev: 0x800010, Op: uint8(CodeDirectionWrite)}}
 
 	devGetter, ok := StatGetters(attr.DiskDevice)
 	assert.True(t, ok)
