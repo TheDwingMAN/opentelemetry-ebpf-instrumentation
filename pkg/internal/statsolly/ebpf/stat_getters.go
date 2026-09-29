@@ -104,8 +104,15 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			return attribute.String(string(attr.FsOperation), fsOpStr(FsOpCode(op)))
 		}
 	case attr.ErrorType:
+		// Omitted when the operation succeeded, as semconv asks: the metrics
+		// that record successes too (the flush and discard durations) carry
+		// no error.type then.
 		getter = func(s *Stat) attribute.KeyValue {
-			return attribute.String(string(attr.ErrorType), errorTypeStr(s))
+			errType := errorTypeStr(s)
+			if errType == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.ErrorType), errType)
 		}
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
@@ -115,7 +122,15 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 
 func StatStringGetters(name attr.Name) (attributes.Getter[*Stat, string], bool) {
 	if g, ok := StatGetters(name); ok {
-		return func(s *Stat) string { return g(s).Value.Emit() }, true
+		return func(s *Stat) string {
+			// An invalid (zero) KeyValue means "omit this attribute".
+			// Prometheus label sets are fixed, so omission is the empty
+			// value rather than Value.Emit()'s "unknown" placeholder.
+			if kv := g(s); kv.Valid() {
+				return kv.Value.Emit()
+			}
+			return ""
+		}, true
 	}
 	return nil, false
 }

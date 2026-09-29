@@ -43,14 +43,18 @@ enum network_io_direction : u8 {
     direction_transmit = 2,
 };
 
+// What a block request was. Flushes and discards move no data to or from the
+// media, so they have metrics of their own rather than a direction.
 enum blk_io_op : u8 {
     blk_op_read = 0,
     blk_op_write = 1,
+    blk_op_flush = 2,
+    blk_op_discard = 3,
 };
 
 typedef struct block_io {
     u8 flags; // Must be first, we use it to tell what kind of event we have on the ring buffer
-    enum blk_io_op op; // derived from rwbs[0]
+    enum blk_io_op op; // the request's kind, classified at block_rq_issue
     unsigned char _pad[2];
     u32 dev;        // kernel dev_t (major<<20 | minor)
     u64 latency_ns; // issue -> complete (service time)

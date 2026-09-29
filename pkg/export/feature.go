@@ -69,6 +69,8 @@ const (
 	//
 	// Deprecated: the metric will be removed.
 	FeatureStorageBlockQueueDepth
+	FeatureStorageBlockFlush
+	FeatureStorageBlockDiscard
 	// FeatureAll is what "all" and "*" select: every feature except the deprecated
 	// FeatureStorageBlockQueueDepth, which is in no umbrella and is only enabled
 	// when listed by name.
@@ -76,13 +78,15 @@ const (
 )
 
 // FeatureStorageBlock enables all block-layer storage metrics.
-// Note: all three block tracepoints (block_rq_insert, block_rq_issue,
+// Note: the block tracepoints (block_rq_insert, block_rq_issue,
 // block_rq_complete) attach together whenever any storage_block* bit is set,
-// so disabling one of duration/io/queue does not reduce kernel-side overhead —
-// the probes still fire and the event is still delivered. Splitting them is
-// about series cardinality, letting a user take the latency distribution
-// without the byte counter or vice versa.
-const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo | FeatureStorageBlockQueue | FeatureStorageBlockErrors
+// and every request pays for them. Disabling duration/io/queue/errors only
+// reduces series cardinality: their read and write events are delivered as
+// long as one of them is on. Flushes and discards are the exception: without
+// storage_block_flush or storage_block_discard their completions end in the
+// kernel, without a ring buffer event.
+const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo | FeatureStorageBlockQueue | FeatureStorageBlockErrors |
+	FeatureStorageBlockFlush | FeatureStorageBlockDiscard
 
 // FeatureStorageFS enables all filesystem metrics. All three derive from the
 // same probe pair, so disabling one does not reduce kernel-side overhead —
@@ -109,6 +113,8 @@ var FeatureMapper = map[string]Features{
 	"storage_block_io":                 FeatureStorageBlockIo,
 	"storage_block_queue":              FeatureStorageBlockQueue,
 	"storage_block_errors":             FeatureStorageBlockErrors,
+	"storage_block_flush":              FeatureStorageBlockFlush,
+	"storage_block_discard":            FeatureStorageBlockDiscard,
 	"storage_block_queue_depth":        FeatureStorageBlockQueueDepth,
 	"storage_fs":                       FeatureStorageFS,
 	"storage_fs_duration":              FeatureStorageFSDuration,
@@ -464,6 +470,21 @@ func (f Features) StorageBlockErrors() bool {
 
 func (f Features) StorageBlockQueueDepth() bool {
 	return f.any(FeatureStorageBlockQueueDepth)
+}
+
+// StorageBlockReadWrite reports whether any metric of block reads and writes is
+// enabled, the ones that carry a disk.io.direction.
+func (f Features) StorageBlockReadWrite() bool {
+	return f.any(FeatureStorageBlockDuration | FeatureStorageBlockIo | FeatureStorageBlockQueue |
+		FeatureStorageBlockErrors | FeatureStorageBlockQueueDepth)
+}
+
+func (f Features) StorageBlockFlush() bool {
+	return f.any(FeatureStorageBlockFlush)
+}
+
+func (f Features) StorageBlockDiscard() bool {
+	return f.any(FeatureStorageBlockDiscard)
 }
 
 // StorageFS reports whether any filesystem metric is enabled. It gates

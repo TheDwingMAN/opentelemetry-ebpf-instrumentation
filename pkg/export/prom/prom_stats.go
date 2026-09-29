@@ -47,6 +47,9 @@ type statMetricsReporter struct {
 	diskQueueDuration        *Expirer[prometheus.Histogram]
 	diskQueueDepth           *Expirer[prometheus.Histogram]
 	diskOpErrors             *Expirer[prometheus.Counter]
+	diskFlushDuration        *Expirer[prometheus.Histogram]
+	diskDiscardDuration      *Expirer[prometheus.Histogram]
+	diskDiscardIOBytes       *Expirer[prometheus.Counter]
 	fsOpDuration             *Expirer[prometheus.Histogram]
 	fsIOBytes                *Expirer[prometheus.Counter]
 	fsOpErrors               *Expirer[prometheus.Counter]
@@ -63,6 +66,9 @@ type statMetricsReporter struct {
 	diskQueueDurationAttrs        []attributes.Field[*ebpf.Stat, string]
 	diskQueueDepthAttrs           []attributes.Field[*ebpf.Stat, string]
 	diskOpErrorsAttrs             []attributes.Field[*ebpf.Stat, string]
+	diskFlushDurationAttrs        []attributes.Field[*ebpf.Stat, string]
+	diskDiscardDurationAttrs      []attributes.Field[*ebpf.Stat, string]
+	diskDiscardIOBytesAttrs       []attributes.Field[*ebpf.Stat, string]
 	fsOpDurationAttrs             []attributes.Field[*ebpf.Stat, string]
 	fsIOBytesAttrs                []attributes.Field[*ebpf.Stat, string]
 	fsOpErrorsAttrs               []attributes.Field[*ebpf.Stat, string]
@@ -275,6 +281,52 @@ func newStatsReporter(
 		register = append(register, mr.diskOpErrors)
 	}
 
+	if cfg.CommonCfg.Features.StorageBlockFlush() {
+		log.Debug("registering stat disk flush duration metric")
+
+		mr.diskFlushDurationAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskFlushDuration))
+
+		mr.diskFlushDuration = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:                            attributes.StatDiskFlushDuration.Prom,
+			Help:                            "measures the service time of block cache flush requests, from issue to completion, in seconds",
+			Buckets:                         cfg.Config.Buckets.StatDiskOperationDurationHistogram,
+			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
+			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
+			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
+		}, labelNames(mr.diskFlushDurationAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskFlushDuration)
+	}
+
+	if cfg.CommonCfg.Features.StorageBlockDiscard() {
+		log.Debug("registering stat disk discard metrics")
+
+		mr.diskDiscardDurationAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskDiscardDuration))
+
+		mr.diskDiscardDuration = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:                            attributes.StatDiskDiscardDuration.Prom,
+			Help:                            "measures the service time of block discard and secure erase requests, from issue to completion, in seconds",
+			Buckets:                         cfg.Config.Buckets.StatDiskOperationDurationHistogram,
+			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
+			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
+			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
+		}, labelNames(mr.diskDiscardDurationAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskDiscardDuration)
+
+		mr.diskDiscardIOBytesAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskDiscardIO))
+
+		mr.diskDiscardIOBytes = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskDiscardIO.Prom,
+			Help: "count of bytes released by completed block discard and secure erase requests",
+		}, labelNames(mr.diskDiscardIOBytesAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskDiscardIOBytes)
+	}
+
 	if cfg.CommonCfg.Features.StorageFSDuration() {
 		log.Debug("registering stat fs operation duration metric")
 
@@ -349,6 +401,8 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeDiskQueueDuration(stat)
 			r.observeDiskQueueDepth(stat)
 			r.observeDiskOpErrors(stat)
+			r.observeDiskFlushDuration(stat)
+			r.observeDiskDiscard(stat)
 			r.observeFsOpDuration(stat)
 			r.observeFsIOBytes(stat)
 			r.observeFsOpErrors(stat)
@@ -397,7 +451,7 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observeDiskOpDuration(stat *ebpf.Stat) {
-	if r.diskOpDuration == nil || stat.BlockIo == nil {
+	if r.diskOpDuration == nil || !stat.BlockIo.IsReadWrite() {
 		return
 	}
 	r.diskOpDuration.WithLabelValues(labelValues(stat, r.diskOpDurationAttrs)...).
@@ -405,7 +459,7 @@ func (r *statMetricsReporter) observeDiskOpDuration(stat *ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observeDiskIOBytes(stat *ebpf.Stat) {
-	if r.diskIOBytes == nil || stat.BlockIo == nil {
+	if r.diskIOBytes == nil || !stat.BlockIo.IsReadWrite() {
 		return
 	}
 	r.diskIOBytes.WithLabelValues(labelValues(stat, r.diskIOBytesAttrs)...).
@@ -416,7 +470,7 @@ func (r *statMetricsReporter) observeDiskQueueDuration(stat *ebpf.Stat) {
 	// QueueNs == 0 means no block_rq_insert record matched this request (e.g.
 	// blk-mq issued it directly): there is no queue wait to observe, and a
 	// genuine 0ns queue wait is not observable in practice.
-	if r.diskQueueDuration == nil || stat.BlockIo == nil || stat.BlockIo.QueueNs == 0 {
+	if r.diskQueueDuration == nil || !stat.BlockIo.IsReadWrite() || stat.BlockIo.QueueNs == 0 {
 		return
 	}
 	r.diskQueueDuration.WithLabelValues(labelValues(stat, r.diskQueueDurationAttrs)...).
@@ -424,7 +478,7 @@ func (r *statMetricsReporter) observeDiskQueueDuration(stat *ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observeDiskQueueDepth(stat *ebpf.Stat) {
-	if r.diskQueueDepth == nil || stat.BlockIo == nil {
+	if r.diskQueueDepth == nil || !stat.BlockIo.IsReadWrite() {
 		return
 	}
 	r.diskQueueDepth.WithLabelValues(labelValues(stat, r.diskQueueDepthAttrs)...).
@@ -432,11 +486,29 @@ func (r *statMetricsReporter) observeDiskQueueDepth(stat *ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observeDiskOpErrors(stat *ebpf.Stat) {
-	if r.diskOpErrors == nil || stat.BlockIo == nil || stat.BlockIo.Error == 0 {
+	if r.diskOpErrors == nil || !stat.BlockIo.IsReadWrite() || stat.BlockIo.Error == 0 {
 		return
 	}
 	r.diskOpErrors.WithLabelValues(labelValues(stat, r.diskOpErrorsAttrs)...).
 		Metric.Add(1)
+}
+
+func (r *statMetricsReporter) observeDiskFlushDuration(stat *ebpf.Stat) {
+	if r.diskFlushDuration == nil || !stat.BlockIo.IsFlush() {
+		return
+	}
+	r.diskFlushDuration.WithLabelValues(labelValues(stat, r.diskFlushDurationAttrs)...).
+		Metric.Observe(time.Duration(stat.BlockIo.LatencyNs).Seconds())
+}
+
+func (r *statMetricsReporter) observeDiskDiscard(stat *ebpf.Stat) {
+	if r.diskDiscardDuration == nil || !stat.BlockIo.IsDiscard() {
+		return
+	}
+	r.diskDiscardDuration.WithLabelValues(labelValues(stat, r.diskDiscardDurationAttrs)...).
+		Metric.Observe(time.Duration(stat.BlockIo.LatencyNs).Seconds())
+	r.diskDiscardIOBytes.WithLabelValues(labelValues(stat, r.diskDiscardIOBytesAttrs)...).
+		Metric.Add(float64(stat.BlockIo.Bytes))
 }
 
 func (r *statMetricsReporter) observeFsOpDuration(stat *ebpf.Stat) {

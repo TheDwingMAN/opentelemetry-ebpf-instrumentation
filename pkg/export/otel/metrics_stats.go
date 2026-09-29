@@ -15,6 +15,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 
 	"go.opentelemetry.io/obi/pkg/buildinfo"
+	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	"go.opentelemetry.io/obi/pkg/export/otel/metric"
@@ -74,18 +75,35 @@ func newStatMeterProvider(res *resource.Resource, exporter *sdkmetric.Exporter, 
 			string(otelcfg.HistogramAggregationExponential)+", "+string(otelcfg.HistogramAggregationExplicit)+" (default). Using default",
 			"value", cfg.HistogramAggregation)
 	}
-	return metric.NewMeterProvider(
+	opts := []metric.Option{
 		metric.WithResource(res),
 		metric.WithReader(metric.NewPeriodicReader(*exporter, metric.WithInterval(interval))),
-		metric.WithView(statHistogramView(attributes.StatTCPRtt.OTEL, cfg.Buckets.StatTCPRttHistogram, isExponential, cfg.ExponentialHistogram)),
-		metric.WithView(statHistogramView(attributes.StatDiskOperationDuration.OTEL, cfg.Buckets.StatDiskOperationDurationHistogram, isExponential, cfg.ExponentialHistogram)),
-		// Shares StatDiskOperationDurationHistogram buckets: both are block I/O
-		// latency histograms in seconds, just measuring different intervals of
-		// the same request (queue wait vs. service time).
-		metric.WithView(statHistogramView(attributes.StatDiskQueueDuration.OTEL, cfg.Buckets.StatDiskOperationDurationHistogram, isExponential, cfg.ExponentialHistogram)),
-		metric.WithView(statHistogramView(attributes.StatDiskQueueDepth.OTEL, cfg.Buckets.StatDiskQueueDepthHistogram, isExponential, cfg.ExponentialHistogram)),
-		metric.WithView(statHistogramView(attributes.StatFsOperationDuration.OTEL, cfg.Buckets.StatFsOperationDurationHistogram, isExponential, cfg.ExponentialHistogram)),
-	)
+	}
+	for _, h := range statHistograms(&cfg.Buckets) {
+		opts = append(opts, metric.WithView(statHistogramView(h.name.OTEL, h.buckets, isExponential, cfg.ExponentialHistogram)))
+	}
+	return metric.NewMeterProvider(opts...)
+}
+
+type statHistogram struct {
+	name    attributes.Name
+	buckets []float64
+}
+
+// statHistograms is every stat histogram with the buckets of its View.
+func statHistograms(buckets *export.Buckets) []statHistogram {
+	return []statHistogram{
+		{attributes.StatTCPRtt, buckets.StatTCPRttHistogram},
+		{attributes.StatDiskOperationDuration, buckets.StatDiskOperationDurationHistogram},
+		// The queue wait, flush and discard histograms share the
+		// StatDiskOperationDurationHistogram buckets: all are block request
+		// times in seconds.
+		{attributes.StatDiskQueueDuration, buckets.StatDiskOperationDurationHistogram},
+		{attributes.StatDiskFlushDuration, buckets.StatDiskOperationDurationHistogram},
+		{attributes.StatDiskDiscardDuration, buckets.StatDiskOperationDurationHistogram},
+		{attributes.StatDiskQueueDepth, buckets.StatDiskQueueDepthHistogram},
+		{attributes.StatFsOperationDuration, buckets.StatFsOperationDurationHistogram},
+	}
 }
 
 func statHistogramView(metricName string, buckets []float64, isExponential bool, expCfg otelcfg.ExponentialHistogramConfig) metric.View {
@@ -103,6 +121,9 @@ type statMetricsExporter struct {
 	diskQueueDuration        *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
 	diskQueueDepth           *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
 	diskOpErrors             *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	diskFlushDuration        *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
+	diskDiscardDuration      *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
+	diskDiscardIOBytes       *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	fsOpDuration             *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
 	fsIOBytes                *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	fsOpErrors               *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
@@ -324,6 +345,50 @@ func newStatMetricsExporter(
 		nme.diskOpErrors = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, diskOpErrors, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StorageBlockFlush() {
+		log := log.With("metricFamily", "StorageBlockFlush")
+
+		h, err := ebpfEvents.Float64Histogram(attributes.StatDiskFlushDuration.OTEL, metric2.WithUnit(attributes.StatDiskFlushDuration.Unit))
+		if err != nil {
+			log.Error("creating disk flush duration histogram", "error", err)
+			return nil, err
+		}
+
+		attrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatDiskFlushDuration))
+
+		nme.diskFlushDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if cfg.CommonCfg.Features.StorageBlockDiscard() {
+		log := log.With("metricFamily", "StorageBlockDiscard")
+
+		h, err := ebpfEvents.Float64Histogram(attributes.StatDiskDiscardDuration.OTEL, metric2.WithUnit(attributes.StatDiskDiscardDuration.Unit))
+		if err != nil {
+			log.Error("creating disk discard duration histogram", "error", err)
+			return nil, err
+		}
+
+		attrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatDiskDiscardDuration))
+
+		nme.diskDiscardDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+
+		discardIOBytes, err := ebpfEvents.Int64Counter(attributes.StatDiskDiscardIO.OTEL, metric2.WithUnit(attributes.StatDiskDiscardIO.Unit))
+		if err != nil {
+			log.Error("creating disk discard io bytes counter", "error", err)
+			return nil, err
+		}
+
+		bytesAttrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatDiskDiscardIO))
+
+		nme.diskDiscardIOBytes = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, discardIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	if cfg.CommonCfg.Features.StorageFSDuration() {
 		log := log.With("metricFamily", "StorageFSDuration")
 
@@ -400,11 +465,13 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				tcpIo, attrs := me.tcpIo.ForRecord(v)
 				tcpIo.Add(ctx, int64(v.TCPIo.Bytes), metric2.WithAttributeSet(attrs))
 			}
-			if me.diskOpDuration != nil && v.BlockIo != nil {
+			// The read/write metrics see only reads and writes: flushes and
+			// discards move no data and have a disk.io.direction of neither.
+			if me.diskOpDuration != nil && v.BlockIo.IsReadWrite() {
 				h, attrs := me.diskOpDuration.ForRecord(v)
 				h.Record(ctx, time.Duration(v.BlockIo.LatencyNs).Seconds(), metric2.WithAttributeSet(attrs))
 			}
-			if me.diskIOBytes != nil && v.BlockIo != nil {
+			if me.diskIOBytes != nil && v.BlockIo.IsReadWrite() {
 				diskIOBytes, attrs := me.diskIOBytes.ForRecord(v)
 				diskIOBytes.Add(ctx, int64(v.BlockIo.Bytes), metric2.WithAttributeSet(attrs))
 			}
@@ -412,17 +479,29 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			// request (e.g. blk-mq issued it directly): there is no queue
 			// wait to observe, and a genuine 0ns queue wait is not
 			// observable in practice.
-			if me.diskQueueDuration != nil && v.BlockIo != nil && v.BlockIo.QueueNs != 0 {
+			if me.diskQueueDuration != nil && v.BlockIo.IsReadWrite() && v.BlockIo.QueueNs != 0 {
 				h, attrs := me.diskQueueDuration.ForRecord(v)
 				h.Record(ctx, time.Duration(v.BlockIo.QueueNs).Seconds(), metric2.WithAttributeSet(attrs))
 			}
-			if me.diskQueueDepth != nil && v.BlockIo != nil {
+			if me.diskQueueDepth != nil && v.BlockIo.IsReadWrite() {
 				h, attrs := me.diskQueueDepth.ForRecord(v)
 				h.Record(ctx, float64(v.BlockIo.Inflight), metric2.WithAttributeSet(attrs))
 			}
-			if me.diskOpErrors != nil && v.BlockIo != nil && v.BlockIo.Error != 0 {
+			if me.diskOpErrors != nil && v.BlockIo.IsReadWrite() && v.BlockIo.Error != 0 {
 				diskOpErrors, attrs := me.diskOpErrors.ForRecord(v)
 				diskOpErrors.Add(ctx, 1, metric2.WithAttributeSet(attrs))
+			}
+			if me.diskFlushDuration != nil && v.BlockIo.IsFlush() {
+				h, attrs := me.diskFlushDuration.ForRecord(v)
+				h.Record(ctx, time.Duration(v.BlockIo.LatencyNs).Seconds(), metric2.WithAttributeSet(attrs))
+			}
+			if me.diskDiscardDuration != nil && v.BlockIo.IsDiscard() {
+				h, attrs := me.diskDiscardDuration.ForRecord(v)
+				h.Record(ctx, time.Duration(v.BlockIo.LatencyNs).Seconds(), metric2.WithAttributeSet(attrs))
+			}
+			if me.diskDiscardIOBytes != nil && v.BlockIo.IsDiscard() {
+				c, attrs := me.diskDiscardIOBytes.ForRecord(v)
+				c.Add(ctx, int64(v.BlockIo.Bytes), metric2.WithAttributeSet(attrs))
 			}
 			if me.fsOpDuration != nil && v.FsIo != nil {
 				h, attrs := me.fsOpDuration.ForRecord(v)

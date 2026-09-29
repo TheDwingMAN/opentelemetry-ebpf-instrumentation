@@ -312,6 +312,42 @@ func TestStorageBlockFeatureParsing(t *testing.T) {
 	assert.False(t, e.StorageBlockQueue())
 }
 
+// Flushes and discards have metrics of their own, in the storage_block umbrella
+// and the wildcard. Asked for alone, they need the block probes but none of the
+// read and write metrics.
+func TestStorageBlockFlushDiscardFeatureParsing(t *testing.T) {
+	umbrella := mustLoadFeatures(t, "storage_block")
+	assert.True(t, umbrella.StorageBlockFlush())
+	assert.True(t, umbrella.StorageBlockDiscard())
+	assert.True(t, umbrella.StorageBlockReadWrite())
+
+	for _, wildcard := range []string{"*", "all"} {
+		f := mustLoadFeatures(t, wildcard)
+		assert.True(t, f.StorageBlockFlush(), wildcard)
+		assert.True(t, f.StorageBlockDiscard(), wildcard)
+	}
+
+	flush := mustLoadFeatures(t, "storage_block_flush")
+	assert.True(t, flush.StorageBlockFlush())
+	assert.False(t, flush.StorageBlockDiscard())
+	assert.True(t, flush.StorageBlock(), "flushes need the block probes")
+	assert.True(t, flush.StatMetrics(), "flushes ride the stats pipeline")
+	assert.False(t, flush.StorageBlockReadWrite())
+
+	discard := mustLoadFeatures(t, "storage_block_discard")
+	assert.True(t, discard.StorageBlockDiscard())
+	assert.False(t, discard.StorageBlockFlush())
+	assert.True(t, discard.StorageBlock(), "discards need the block probes")
+	assert.False(t, discard.StorageBlockReadWrite())
+
+	for _, name := range []string{"storage_block_duration", "storage_block_io", "storage_block_queue", "storage_block_errors", "storage_block_queue_depth"} {
+		f := mustLoadFeatures(t, name)
+		assert.True(t, f.StorageBlockReadWrite(), name)
+		assert.False(t, f.StorageBlockFlush(), name)
+		assert.False(t, f.StorageBlockDiscard(), name)
+	}
+}
+
 // The deprecated queue depth is outside the storage_block umbrella: it costs a
 // counter shared by every CPU on the block path, so it is only paid for when
 // asked for by name. Asked for alone, it still needs the block probes.
