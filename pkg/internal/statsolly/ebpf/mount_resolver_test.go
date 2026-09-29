@@ -613,7 +613,7 @@ func TestMountTableWatchDropsOnlyChangedDevices(t *testing.T) {
 	withRootDir(t, mpX)
 	withRootDir(t, mpY)
 
-	w := mountTableWatch{known: map[string]mountSet{}}
+	w := newMountTableWatch()
 	table := openTable(t, mountInfoPath)
 	w.changed(mountInfoPath, table)
 	_, ok := resolveMount(MountKey{Dev: 32})
@@ -645,7 +645,7 @@ func TestMountTableWatchUnreadableTableDropsAll(t *testing.T) {
 	const mpX = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-x"
 	withMountInfo(t, "36 35 0:32 / "+mpX+" rw - nfs4 10.0.0.1:/x rw")
 
-	w := mountTableWatch{known: map[string]mountSet{}}
+	w := newMountTableWatch()
 	_, ok := resolveMount(MountKey{Dev: 32})
 	require.True(t, ok)
 	w.changed(mountInfoPath, openTable(t, mountInfoPath))
@@ -705,7 +705,7 @@ func TestMountTableWatchNeverReadsThePathAgain(t *testing.T) {
 	lineX := "36 35 0:32 / " + mpX + " rw - nfs4 10.0.0.1:/x rw"
 	withMountInfo(t, rootLine, lineX)
 
-	w := mountTableWatch{known: map[string]mountSet{}}
+	w := newMountTableWatch()
 	table := openTable(t, mountInfoPath)
 	w.changed(mountInfoPath, table)
 	_, ok := resolveMount(MountKey{Dev: 32})
@@ -736,7 +736,7 @@ func TestKubeletNamespaceWatchSurvivesPIDReuse(t *testing.T) {
 	require.Equal(t, "pvc-kubens", info.PVName)
 	require.False(t, info.Shared)
 
-	w := mountTableWatch{known: map[string]mountSet{}}
+	w := newMountTableWatch()
 	kubeletTable := filepath.Join(root, "901", "mountinfo")
 	table := openTable(t, kubeletTable)
 	w.changed(kubeletTable, table)
@@ -766,7 +766,7 @@ func TestResolveMountDoesNotStoreAcrossTableChange(t *testing.T) {
 	const first = "36 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw"
 	const second = "37 35 0:32 / /var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw"
 	withMountInfo(t, first)
-	w := mountTableWatch{known: map[string]mountSet{}}
+	w := newMountTableWatch()
 	table := openTable(t, mountInfoPath)
 	w.changed(mountInfoPath, table)
 
@@ -803,4 +803,139 @@ func TestReadMountSetRejectsMalformedTable(t *testing.T) {
 		source:     "10.96.84.126:/export/pvc-b3befffd",
 	})
 	assert.Len(t, set, 2)
+}
+
+// withMountNamespace gives the fixture table's process a mount namespace, so
+// the watch can tell it is still the process the table was read from.
+func withMountNamespace(t *testing.T) {
+	t.Helper()
+	nsDir := filepath.Join(filepath.Dir(mountInfoPath), "ns")
+	require.NoError(t, os.MkdirAll(nsDir, 0o755))
+	require.NoError(t, os.Symlink(hostMnt, filepath.Join(nsDir, "mnt")))
+}
+
+// withRootInodesByMountPoint has root inode lookups answer inodes[mountPoint],
+// and waits for every lookup to return before the test ends.
+func withRootInodesByMountPoint(t *testing.T, inodes map[string]uint64) {
+	t.Helper()
+	withRootInodeStat(t, func(path string) (uint64, error) {
+		for mp, ino := range inodes {
+			if strings.HasSuffix(path, mp) {
+				return ino, nil
+			}
+		}
+		return 0, os.ErrNotExist
+	})
+	t.Cleanup(func() {
+		require.Eventually(t, func() bool { return rootInodeLookupsRunning() == 0 }, 5*time.Second, time.Millisecond)
+	})
+}
+
+// rootInodeKnownOrLooking reports whether the root inode of mountPoint is
+// cached or being looked up.
+func rootInodeKnownOrLooking(mountPoint string) bool {
+	rootInodeMu.Lock()
+	defer rootInodeMu.Unlock()
+	_, known := rootInodes[mountPoint]
+	return known || rootInodeBusy[mountPoint] != nil
+}
+
+// A second PV carved out of an NFS export another PV on the node already
+// uses shares its superblock, so only its mount root names it. The watch
+// starts looking that root up as soon as it sees the mount, not on the pod's
+// first I/O, which would otherwise be exported without the volume.
+func TestMountTableWatchPrewarmsSecondVolumeOnSuperblock(t *testing.T) {
+	const (
+		mpA        = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-aaaa"
+		mpB        = "/var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~csi/pvc-bbbb/mount"
+		mpC        = "/var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-cccc"
+		inoA, inoB = uint64(1001), uint64(1002)
+	)
+	lineA := "36 35 0:77 /export/a " + mpA + " rw - nfs4 10.0.0.1:/export/a rw"
+	lineB := "37 35 0:77 /export/b " + mpB + " rw - nfs4 10.0.0.1:/export/b rw"
+	lineC := "38 35 0:32 / " + mpC + " rw - nfs4 10.0.0.2:/export rw"
+	withMountInfo(t, lineA)
+	withMountNamespace(t)
+	withRootInodesByMountPoint(t, map[string]uint64{mpA: inoA, mpB: inoB, mpC: 3})
+
+	w := newMountTableWatch()
+	table := openTable(t, mountInfoPath)
+	w.changed(mountInfoPath, table)
+	info, _ := resolveMount(MountKey{Dev: 77, RootIno: inoA})
+	require.Equal(t, "pvc-aaaa", info.PVName, "the device alone names a volume it does not share")
+	assert.False(t, rootInodeKnownOrLooking(mpA), "no root is needed while the superblock holds one volume")
+
+	require.NoError(t, os.WriteFile(mountInfoPath, []byte(lineA+"\n"+lineB+"\n"+lineC+"\n"), 0o644))
+	w.changed(mountInfoPath, table)
+
+	assert.True(t, rootInodeKnownOrLooking(mpB), "the new volume's root is looked up with the change")
+	assert.True(t, rootInodeKnownOrLooking(mpA), "the volume that now shares its superblock needs its root too")
+	assert.False(t, rootInodeKnownOrLooking(mpC), "a superblock with one volume needs no root")
+
+	require.Eventually(t, func() bool { return rootInodeCached(mpA) && rootInodeCached(mpB) }, 5*time.Second, time.Millisecond)
+	info, ok := resolveMount(MountKey{Dev: 77, RootIno: inoB})
+	require.True(t, ok)
+	assert.Equal(t, "pvc-bbbb", info.PVName, "the first event of the new volume is named")
+}
+
+// When the watch starts, the mounts already on a superblock holding several
+// volumes have their roots looked up. A superblock with one volume, even if
+// several pods mount it, needs none.
+func TestMountTableWatchPrewarmsSharedSuperblocksAtStart(t *testing.T) {
+	const (
+		mpA   = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-aaaa"
+		mpB   = "/var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-bbbb"
+		mpC   = "/var/lib/kubelet/pods/0ae4568c-d532-43ff-88c2-d16d7512e97b/volumes/kubernetes.io~nfs/pvc-cccc"
+		mpRW1 = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-rwx"
+		mpRW2 = "/var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-rwx"
+	)
+	withMountInfo(t,
+		rootLine,
+		"36 35 0:77 /a "+mpA+" rw - nfs4 10.0.0.1:/export/a rw",
+		"37 35 0:77 /b "+mpB+" rw - nfs4 10.0.0.1:/export/b rw",
+		"38 35 0:32 / "+mpC+" rw - nfs4 10.0.0.2:/export rw",
+		"39 35 0:41 / "+mpRW1+" rw - nfs4 10.0.0.3:/rwx rw",
+		"40 35 0:41 / "+mpRW2+" rw - nfs4 10.0.0.3:/rwx rw",
+	)
+	withMountNamespace(t)
+	withRootInodesByMountPoint(t, map[string]uint64{mpA: 1, mpB: 2, mpC: 3, mpRW1: 4, mpRW2: 4})
+
+	w := newMountTableWatch()
+	w.changed(mountInfoPath, openTable(t, mountInfoPath))
+
+	assert.True(t, rootInodeKnownOrLooking(mpA))
+	assert.True(t, rootInodeKnownOrLooking(mpB))
+	assert.False(t, rootInodeKnownOrLooking(mpC))
+	assert.False(t, rootInodeKnownOrLooking(mpRW1))
+	assert.False(t, rootInodeKnownOrLooking(mpRW2))
+}
+
+// The kubelet's table is watched through the kubelet's mountinfo, and roots
+// are looked up through its "<proc>/<pid>/root". Once the kubelet exits and
+// its PID goes to a process in another mount namespace, that root shows other
+// mounts, so the watch looks nothing up through it.
+func TestMountTableWatchPrewarmsOnlyThroughTheTablesNamespace(t *testing.T) {
+	const (
+		mp2 = "/var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-second"
+		mp3 = "/var/lib/kubelet/pods/0ae4568c-d532-43ff-88c2-d16d7512e97b/volumes/kubernetes.io~nfs/pvc-third"
+	)
+	line2 := "37 35 0:32 /second " + mp2 + " rw,relatime shared:1 - nfs 10.0.0.1:/export/second rw"
+	line3 := "38 35 0:32 /third " + mp3 + " rw,relatime shared:1 - nfs 10.0.0.1:/export/third rw"
+	root := kubensNode(t)
+	withRootInodesByMountPoint(t, map[string]uint64{mp2: 2, mp3: 3})
+
+	w := newMountTableWatch()
+	kubeletTable := filepath.Join(root, "901", "mountinfo")
+	table := openTable(t, kubeletTable)
+	w.changed(kubeletTable, table)
+
+	require.NoError(t, os.WriteFile(kubeletTable, []byte(kubeletNFSLine+"\n"+line2+"\n"), 0o644))
+	w.changed(kubeletTable, table)
+	require.True(t, rootInodeKnownOrLooking(mp2), "the kubelet is still there to look roots up through")
+
+	require.NoError(t, os.WriteFile(kubeletTable, []byte(kubeletNFSLine+"\n"+line2+"\n"+line3+"\n"), 0o644))
+	require.NoError(t, os.Remove(filepath.Join(root, "901", "ns", "mnt")))
+	require.NoError(t, os.Symlink("mnt:[4026533999]", filepath.Join(root, "901", "ns", "mnt")))
+	w.changed(kubeletTable, table)
+	assert.False(t, rootInodeKnownOrLooking(mp3), "the PID is another namespace's now")
 }
