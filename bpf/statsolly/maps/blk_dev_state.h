@@ -16,9 +16,10 @@ struct blk_dev_state {
 // for the deprecated obi.stat.disk.queue.depth metric. Only maintained when
 // that metric is enabled (blk_want_queue_depth); userspace sizes the map to
 // one entry otherwise. Keyed by kernel dev_t. Plain HASH, not LRU: losing a
-// device's counter mid-flight would corrupt its count. The count goes up only
-// when a request gets an in-flight entry and down only when that entry is
-// deleted, so every decrement pairs with an increment.
+// device's counter mid-flight would corrupt its count. The count goes up when
+// a request gets an in-flight entry and down when that entry is deleted; an
+// entry moved to another device by a reused request struct moves its count
+// along, so every decrement on a device pairs with an increment there.
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1 << 10);

@@ -106,7 +106,11 @@ static __always_inline u32 blk_queue_depth_dec(const u32 dev) {
         return 0;
     }
     __sync_fetch_and_add(&st->inflight, -1);
-    return (u32)st->inflight;
+    // Decrements pair with increments, but the counter is shared and a pairing
+    // this program cannot see (a completion racing an issue on another CPU)
+    // must not turn an idle device into 2^32-1 in the histogram.
+    const s64 inflight = (s64)st->inflight;
+    return inflight > 0 ? (u32)inflight : 0;
 }
 
 static __always_inline void blk_on_insert(const u32 dev, const u64 sector) {
@@ -151,10 +155,19 @@ static __always_inline void blk_on_issue(void *const inflight_map,
     }
 
     // Issued again while its entry is still present: not a new request in
-    // flight, so the queue depth does not change.
+    // flight, so the queue depth does not change, unless a request struct
+    // reused after a missed completion moved the entry to another disk of the
+    // same tag set. Its count then moves too, so the stale issue does not hold
+    // the old disk up forever and the final completion does not take the new
+    // one below zero.
     struct blk_rq_inflight *const cur = bpf_map_lookup_elem(inflight_map, key);
-    if (cur) {
-        blk_rq_reissue(cur, &issued);
+    if (!cur) {
+        return;
+    }
+    const u32 prev_dev = blk_rq_reissue(cur, &issued);
+    if (prev_dev != dev) {
+        blk_queue_depth_dec(prev_dev);
+        blk_queue_depth_inc(dev);
     }
 }
 

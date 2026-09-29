@@ -129,11 +129,18 @@ struct blk_rq_inflight {
 // so a stale entry cannot lend its device or kind to an unrelated request.
 // Only the bytes of earlier partial completions survive, and only for the same
 // device and kind: SCSI requeues the rest of a partially completed request.
-static __always_inline void blk_rq_reissue(struct blk_rq_inflight *const cur,
-                                           const struct blk_rq_inflight *const issued) {
-    const bool same_request = cur->dev == issued->dev && cur->kind == issued->kind;
+//
+// Returns the device the entry was counted on until now. Request structs come
+// from a tag set, which every namespace of an NVMe controller and every LUN of
+// a SCSI host share, so a reused struct can move the entry to another disk,
+// and the caller has to move its in-flight count along with it.
+static __always_inline u32 blk_rq_reissue(struct blk_rq_inflight *const cur,
+                                          const struct blk_rq_inflight *const issued) {
+    const u32 prev_dev = cur->dev;
+    const bool same_request = prev_dev == issued->dev && cur->kind == issued->kind;
     const u64 bytes_done = same_request ? cur->bytes_done : 0;
 
     *cur = *issued;
     cur->bytes_done = bytes_done;
+    return prev_dev;
 }
