@@ -82,11 +82,28 @@ var (
 	mountMu    sync.RWMutex
 	mountCache = map[uint32]mountCacheEntry{}
 	mountOrder []uint32 // insertion order, oldest first, for FIFO eviction
+
+	mountWatchOnce sync.Once
 )
+
+// invalidateMountCache drops every cached resolution, so the next lookup of
+// each device rescans the mount table.
+func invalidateMountCache() {
+	mountMu.Lock()
+	defer mountMu.Unlock()
+	clear(mountCache)
+	mountOrder = nil
+}
 
 // resolveMount maps a filesystem superblock device number (s_dev, as reported
 // by eBPF) to the Kubernetes volume it belongs to.
 func resolveMount(sDev uint32) (MountInfo, bool) {
+	// Shared decides whether a mount may name a pod, and a second pod can
+	// mount the volume at any moment. The TTLs alone would let a cached
+	// single-owner entry name the wrong pod for up to a minute after that, so
+	// any change to the mount table drops the cache instead.
+	mountWatchOnce.Do(func() { watchMountTable(invalidateMountCache, mountInfoPath, selfMountInfoPath) })
+
 	mountMu.RLock()
 	entry, ok := mountCache[sDev]
 	mountMu.RUnlock()
