@@ -129,8 +129,8 @@ func TestLocalFilesystemsAttachOnlyWithAVolume(t *testing.T) {
 	a.refresh()
 	assertLocalAttached(t, a, want[1:]...)
 	var start FsIoFsStartVal
-	assert.ErrorIs(t, starts.Lookup(ext4Start, &start), ebpf.ErrKeyNotExist, "ext4's start went with ext4")
-	assert.NoError(t, starts.Lookup(nfsStart, &start), "nfs's start stays")
+	require.ErrorIs(t, starts.Lookup(ext4Start, &start), ebpf.ErrKeyNotExist, "ext4's start went with ext4")
+	require.NoError(t, starts.Lookup(nfsStart, &start), "nfs's start stays")
 	var allowed uint8
 	assert.ErrorIs(t, sharedMaps[FsIoMapFsDevFilter].Lookup(ext4.dev, &allowed), ebpf.ErrKeyNotExist,
 		"the unmounted volume left the allowlist")

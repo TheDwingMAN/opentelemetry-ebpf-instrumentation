@@ -93,6 +93,9 @@ func fakeFsLoader(t *testing.T, consts map[string]any) (*fsLoader, *[]ebpf.Colle
 	}
 	l, err := newFsLoader(slog.Default(), &config.EBPFTracer{}, consts, sharedMaps, &sync.Mutex{})
 	require.NoError(t, err)
+	// A load parses the kernel BTF into the process's burst: end it, as the
+	// attacher does, or a later test's startup finds it parsed already.
+	t.Cleanup(l.btf.Release)
 
 	var opts []ebpf.CollectionOptions
 	var specs []*ebpf.CollectionSpec
@@ -272,7 +275,7 @@ func TestVerifierFsProbesCoverEveryProgram(t *testing.T) {
 		}
 		var fn *btf.Func
 		if prog.AttachTo != "nfs_file_read" && prog.AttachTo != "nfs_file_write" {
-			assert.NoError(t, kernel.TypeByName(prog.AttachTo, &fn), "%s: stand-in %q is not in vmlinux", name, prog.AttachTo)
+			require.NoError(t, kernel.TypeByName(prog.AttachTo, &fn), "%s: stand-in %q is not in vmlinux", name, prog.AttachTo)
 		}
 	}
 	assert.Contains(t, fsStandIns.fsync, spec.Programs[names.FentryFsync].AttachTo, "no fsync planned: a stand-in")
