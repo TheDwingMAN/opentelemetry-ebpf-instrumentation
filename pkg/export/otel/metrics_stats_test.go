@@ -147,9 +147,10 @@ func TestStatMetricsExporter_DiskMetrics(t *testing.T) {
 
 // TestStatMetricsExporter_DiskQueueAndErrorMetrics covers the three metrics
 // added on top of the base duration/io pair: queue wait, queue depth and
-// operation errors. Only storage_block_queue and storage_block_errors are
-// enabled (not duration/io), which doubles as a gating test: the base disk
-// metrics must not appear when their own feature bit is off.
+// operation errors. Only storage_block_queue, storage_block_queue_depth and
+// storage_block_errors are enabled (not duration/io), which doubles as a
+// gating test: the base disk metrics must not appear when their own feature
+// bit is off.
 func TestStatMetricsExporter_DiskQueueAndErrorMetrics(t *testing.T) {
 	defer otelcfg.RestoreEnvAfterExecution()()
 	ctx := t.Context()
@@ -181,7 +182,7 @@ func TestStatMetricsExporter_DiskQueueAndErrorMetrics(t *testing.T) {
 					},
 				},
 			},
-			CommonCfg: &perapp.GlobalMetricsConfig{Features: export.FeatureStorageBlockQueue | export.FeatureStorageBlockErrors},
+			CommonCfg: &perapp.GlobalMetricsConfig{Features: export.FeatureStorageBlockQueue | export.FeatureStorageBlockQueueDepth | export.FeatureStorageBlockErrors},
 		}, stats)(ctx)
 	require.NoError(t, err)
 
@@ -322,6 +323,9 @@ func TestStatMetricsExporter_DiskQueueDurationSkipsZeroQueueNs(t *testing.T) {
 
 	// AND the queue duration histogram never does.
 	assert.NotContains(t, seen, "obi.stat.disk.queue.duration", "queue duration must not be observed for QueueNs == 0")
+
+	// AND storage_block_queue no longer brings the deprecated queue depth.
+	assert.NotContains(t, seen, "obi.stat.disk.queue.depth", "queue depth needs storage_block_queue_depth")
 }
 
 // A healthy completion must not create an error series: the errors counter is

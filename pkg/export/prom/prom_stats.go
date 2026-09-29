@@ -226,7 +226,7 @@ func newStatsReporter(
 	}
 
 	if cfg.CommonCfg.Features.StorageBlockQueue() {
-		log.Debug("registering stat disk queue duration and depth metrics")
+		log.Debug("registering stat disk queue duration metric")
 
 		mr.diskQueueDurationAttrs = attributes.PrometheusGetters(
 			ebpf.StatStringGetters,
@@ -241,6 +241,10 @@ func newStatsReporter(
 			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
 		}, labelNames(mr.diskQueueDurationAttrs)).MetricVec, timeNow, cfg.Config.TTL)
 		register = append(register, mr.diskQueueDuration)
+	}
+
+	if cfg.CommonCfg.Features.StorageBlockQueueDepth() {
+		log.Debug("registering stat disk queue depth metric")
 
 		mr.diskQueueDepthAttrs = attributes.PrometheusGetters(
 			ebpf.StatStringGetters,

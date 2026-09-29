@@ -1095,6 +1095,8 @@ Count of block I/O requests that completed with a non-zero error, broken down by
 
 ## `obi.stat.disk.queue.depth`
 
+> **obsoleted** — The `storage_block_queue_depth` metrics feature that emits this histogram is deprecated with no replacement.
+
 Number of block I/O requests still in flight on the device immediately after this request completed, observed per completion and broken down by device.
 
 | Instrument | Unit | Stability |

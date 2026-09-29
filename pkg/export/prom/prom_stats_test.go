@@ -197,7 +197,7 @@ func TestStatsReporterSkipsDiskMetricsWithoutFeature(t *testing.T) {
 // base disk metrics.
 func TestStatsReporterRecordsDiskQueueMetrics(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	reporter := newStatsReporterWithFeatures(t, registry, export.FeatureStorageBlockQueue)
+	reporter := newStatsReporterWithFeatures(t, registry, export.FeatureStorageBlockQueue|export.FeatureStorageBlockQueueDepth)
 
 	reporter.observeDiskQueueDuration(blockIoStat())
 	reporter.observeDiskQueueDepth(blockIoStat())
@@ -287,17 +287,20 @@ func TestStatsReporterDiskQueueAndErrorsFeatureGating(t *testing.T) {
 		name       string
 		features   export.Features
 		wantQueue  bool
+		wantDepth  bool
 		wantErrors bool
 	}{
-		{"umbrella enables both", export.FeatureStorageBlock, true, true},
-		{"queue only", export.FeatureStorageBlockQueue, true, false},
-		{"errors only", export.FeatureStorageBlockErrors, false, true},
+		{"umbrella enables queue and errors, not the deprecated depth", export.FeatureStorageBlock, true, false, true},
+		{"queue only", export.FeatureStorageBlockQueue, true, false, false},
+		{"depth only", export.FeatureStorageBlockQueueDepth, false, true, false},
+		{"errors only", export.FeatureStorageBlockErrors, false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registry := prometheus.NewRegistry()
 			reporter := newStatsReporterWithFeatures(t, registry, tc.features)
 
 			reporter.observeDiskQueueDuration(blockIoStat())
+			reporter.observeDiskQueueDepth(blockIoStat())
 			reporter.observeDiskOpErrors(blockIoErrorStat())
 
 			queueDuration := gatheredMetric(t, registry, "obi_stat_disk_queue_duration_seconds", map[string]string{
@@ -310,7 +313,12 @@ func TestStatsReporterDiskQueueAndErrorsFeatureGating(t *testing.T) {
 				"error_type":        "ENOSPC",
 			})
 
+			queueDepth := gatheredMetric(t, registry, "obi_stat_disk_queue_depth", map[string]string{
+				"system_device": "8:16",
+			})
+
 			assert.Equal(t, tc.wantQueue, queueDuration != nil, "queue duration histogram presence")
+			assert.Equal(t, tc.wantDepth, queueDepth != nil, "queue depth histogram presence")
 			assert.Equal(t, tc.wantErrors, opErrors != nil, "errors counter presence")
 		})
 	}

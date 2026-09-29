@@ -611,7 +611,7 @@ var (
 	// Count of requests still in flight on the device immediately after this
 	// one completed. Observed per completion rather than time-averaged, so it
 	// approximates instantaneous saturation rather than a true utilization
-	// integral.
+	// integral. Deprecated, behind its own storage_block_queue_depth feature.
 	StatDiskQueueDepth = metric(Name{
 		Section: "obi.stat.disk.queue.depth",
 		OTEL:    "obi.stat.disk.queue.depth",
