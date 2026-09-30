@@ -205,6 +205,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 	toDisable = append(toDisable, diskProgramsToDisable(diskEnabled, blockLayout)...)
 	bioAttached := diskAttached && features.StatsDiskStackedVolumes() && !blockLayout.bioUnknown
 	diskReads := diskAttributeReads(features, attrSel)
+	fsSyncReads := fsSyncAttributeReads(features, attrSel)
 	toDisable = append(toDisable, bioProgramsToDisable(bioAttached, blockLayout)...)
 	if !features.StatsFsSyncDuration() {
 		toDisable = append(toDisable, progObiStatsKprobeVfsFsyncRange, progObiStatsKretprobeVfsFsyncRange,
@@ -238,6 +239,8 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 		"disk_read_partition":        diskReads.partition,
 		"fs_sync_latency_bounds_ns":  fsSyncLatencyBoundsNs,
 		"fs_sync_latency_bounds_len": uint32(len(histograms.FsSyncDuration)),
+		"fs_sync_read_cgroup":        fsSyncReads.cgroup,
+		"fs_sync_read_filesystem":    fsSyncReads.filesystem,
 		"nfs_latency_bounds_ns":      nfsLatencyBoundsNs,
 		"nfs_latency_bounds_len":     uint32(len(histograms.NFS)),
 	}, sharedMaps, &mu, "", nil); err != nil {
@@ -689,7 +692,6 @@ func diskLatencyBoundsToNs(bounds []float64) ([maxDiskLatencyBounds]uint64, erro
 	return boundsNs, nil
 }
 
-// diskProgramsToDisable returns the disk programs that must not be loaded
 // diskReads tells which attributes of the block I/O the disk probes read: the cgroup the I/O is
 // charged to, for the container and Kubernetes attributes, and the partition that it targets
 type diskReads struct {
@@ -720,7 +722,7 @@ func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelec
 			switch {
 			case name == attr.DiskPartition:
 				reads.partition = true
-			case name == attr.ContainerID || strings.HasPrefix(string(name), "k8s."):
+			case reportsWorkload(name):
 				reads.cgroup = true
 			}
 		}
@@ -728,6 +730,37 @@ func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelec
 	return reads
 }
 
+// fsSyncReads tells which attributes of the file syncs the file sync probes read: the cgroup the
+// sync is charged to, for the container and Kubernetes attributes, and the filesystem of the
+// synced file
+type fsSyncReads struct {
+	cgroup, filesystem bool
+}
+
+// fsSyncAttributeReads returns the attributes of the file syncs that the file sync metric reports
+func fsSyncAttributeReads(features *export.Features, attrSel *attributes.AttrSelector) fsSyncReads {
+	var reads fsSyncReads
+	if !features.StatsFsSyncDuration() {
+		return reads
+	}
+	for _, name := range attrSel.For(attributes.StatFsSyncDuration) {
+		switch {
+		case name == attr.FilesystemMountpoint || name == attr.FilesystemType:
+			reads.filesystem = true
+		case reportsWorkload(name):
+			reads.cgroup = true
+		}
+	}
+	return reads
+}
+
+// reportsWorkload tells whether an attribute describes the workload that the kernel charges an
+// operation to, which the probes find from its cgroup
+func reportsWorkload(name attr.Name) bool {
+	return name == attr.ContainerID || strings.HasPrefix(string(name), "k8s.")
+}
+
+// diskProgramsToDisable returns the disk programs that must not be loaded
 func diskProgramsToDisable(enabled bool, layout blockTracepointLayout) []string {
 	switch {
 	case !enabled || layout.unknown:

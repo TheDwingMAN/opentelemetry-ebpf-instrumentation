@@ -329,3 +329,30 @@ func TestDiskAttributeReads(t *testing.T) {
 		reads(export.FeatureStatsDiskIO, attributes.UndefinedGroup, selecting("obi.stat.disk.operations", "container.id", "obi.disk.partition")),
 		"the attributes of disabled metrics don't count")
 }
+
+func TestFsSyncAttributeReads(t *testing.T) {
+	selecting := func(include ...string) *attributes.SelectorConfig {
+		return &attributes.SelectorConfig{SelectionCfg: attributes.Selection{
+			"obi.stat.fs.sync.duration": attributes.InclusionLists{Include: include},
+		}}
+	}
+	reads := func(features export.Features, groups attributes.AttrGroups, selection *attributes.SelectorConfig) fsSyncReads {
+		attrSel, err := attributes.NewAttrSelector(groups, selection)
+		require.NoError(t, err)
+		return fsSyncAttributeReads(&features, attrSel)
+	}
+
+	assert.Equal(t, fsSyncReads{}, reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, &attributes.SelectorConfig{}),
+		"no default attribute of the file sync metric needs the cgroup or the filesystem outside Kubernetes")
+	assert.Equal(t, fsSyncReads{cgroup: true}, reads(export.FeatureStatsFsSyncDuration, attributes.GroupKubernetes, &attributes.SelectorConfig{}),
+		"the Kubernetes attributes of the workload are reported by default")
+	assert.Equal(t, fsSyncReads{cgroup: true},
+		reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, selecting("container.id")))
+	assert.Equal(t, fsSyncReads{filesystem: true},
+		reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, selecting("system.filesystem.mountpoint")))
+	assert.Equal(t, fsSyncReads{filesystem: true},
+		reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, selecting("system.filesystem.type")))
+	assert.Equal(t, fsSyncReads{},
+		reads(export.FeatureStatsDisk, attributes.UndefinedGroup, selecting("container.id", "system.filesystem.mountpoint")),
+		"the attributes of a disabled metric don't count")
+}

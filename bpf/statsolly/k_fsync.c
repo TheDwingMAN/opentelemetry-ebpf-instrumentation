@@ -20,6 +20,12 @@
 volatile const u64 fs_sync_latency_bounds_ns[k_disk_latency_max_bounds];
 volatile const u32 fs_sync_latency_bounds_len;
 
+// Set by userspace when the file sync metric reports an attribute that needs the cgroup the sync is
+// charged to (the container and Kubernetes attributes), or the filesystem of the synced file.
+// Otherwise the probes don't read them, which saves a few kernel reads per sync.
+volatile const bool fs_sync_read_cgroup;
+volatile const bool fs_sync_read_filesystem;
+
 SCRATCH_MEM_TYPED(fs_sync_accum_init, fs_sync_accum_t)
 
 // Force structs into the ELF for automatic creation of Golang struct
@@ -79,25 +85,35 @@ static __always_inline void syscall_sync_started(const enum fs_sync_type type, c
     bpf_map_update_elem(&fs_sync_start, &pid_tgid, &start, BPF_ANY);
 }
 
+// Starts measuring a sync system call of the current thread that gets a file descriptor as its
+// first argument
+static __always_inline void fd_syscall_sync_started(struct pt_regs *ctx,
+                                                    const enum fs_sync_type type) {
+    const u32 s_dev = fs_sync_read_filesystem ? file_s_dev(current_file(syscall_fd(ctx))) : 0;
+    syscall_sync_started(type, s_dev);
+}
+
 // A sync system call in progress for longer is considered stale: its kretprobe was missed, and it
 // must not keep the syncs of its thread outside of system calls from being measured.
 enum { k_fs_sync_syscall_stale_ns = 10ULL * 60 * 1000 * 1000 * 1000 };
+
+// Whether a sync system call of the current thread is being measured: the kernel functions it
+// calls leave it alone
+static __always_inline bool in_measured_syscall(const u64 pid_tgid, const u64 now) {
+    const fs_sync_start_t *current = bpf_map_lookup_elem(&fs_sync_start, &pid_tgid);
+    return current && current->from_syscall &&
+           now - current->started_ns < k_fs_sync_syscall_stale_ns;
+}
 
 // Starts measuring a file sync that a kernel function does outside of the sync system calls:
 // O_SYNC and O_DSYNC writes, msync(2), io_uring, the NFS server... File syncs nest when a
 // stacked filesystem, like overlayfs, syncs the file below: the innermost call is measured,
 // once, and a thread whose kretprobe was missed recovers on its next sync.
-static __always_inline void function_sync_started(const int datasync, struct file *file) {
-    const u64 pid_tgid = bpf_get_current_pid_tgid();
-    const u64 now = bpf_ktime_get_ns();
-    const fs_sync_start_t *current = bpf_map_lookup_elem(&fs_sync_start, &pid_tgid);
-    if (current && current->from_syscall &&
-        now - current->started_ns < k_fs_sync_syscall_stale_ns) {
-        return;
-    }
+static __always_inline void
+function_sync_started(const u64 pid_tgid, const u64 now, const int datasync, const u32 s_dev) {
     const fs_sync_start_t start = {
         .started_ns = now,
-        .s_dev = file ? file_s_dev(file) : 0,
+        .s_dev = s_dev,
         .type = datasync ? fs_sync_type_fdatasync : fs_sync_type_fsync,
     };
     bpf_map_update_elem(&fs_sync_start, &pid_tgid, &start, BPF_ANY);
@@ -110,7 +126,7 @@ static __always_inline void fs_sync_returned(const s32 ret, const bool from_sysc
         return;
     }
     const u64 latency_ns = bpf_ktime_get_ns() - start->started_ns;
-    struct cgroup *cgrp = current_io_cgroup();
+    struct cgroup *cgrp = fs_sync_read_cgroup ? current_io_cgroup() : 0;
     const fs_sync_key_t key = {
         .cgroup_id = cgroup_id_of(cgrp),
         .s_dev = start->s_dev,
@@ -143,25 +159,25 @@ static __always_inline void fs_sync_returned(const s32 ret, const bool from_sysc
 // calls vfs_fsync_range on some 5.x kernels, and no system call does on Linux 7.2.
 SEC("kprobe/sys_fsync")
 int BPF_KPROBE(obi_stats_kprobe_sys_fsync) {
-    syscall_sync_started(fs_sync_type_fsync, file_s_dev(current_file(syscall_fd(ctx))));
+    fd_syscall_sync_started(ctx, fs_sync_type_fsync);
     return 0;
 }
 
 SEC("kprobe/sys_fdatasync")
 int BPF_KPROBE(obi_stats_kprobe_sys_fdatasync) {
-    syscall_sync_started(fs_sync_type_fdatasync, file_s_dev(current_file(syscall_fd(ctx))));
+    fd_syscall_sync_started(ctx, fs_sync_type_fdatasync);
     return 0;
 }
 
 SEC("kprobe/sys_syncfs")
 int BPF_KPROBE(obi_stats_kprobe_sys_syncfs) {
-    syscall_sync_started(fs_sync_type_syncfs, file_s_dev(current_file(syscall_fd(ctx))));
+    fd_syscall_sync_started(ctx, fs_sync_type_syncfs);
     return 0;
 }
 
 SEC("kprobe/sys_sync_file_range")
 int BPF_KPROBE(obi_stats_kprobe_sys_sync_file_range) {
-    syscall_sync_started(fs_sync_type_sync_file_range, file_s_dev(current_file(syscall_fd(ctx))));
+    fd_syscall_sync_started(ctx, fs_sync_type_sync_file_range);
     return 0;
 }
 
@@ -188,7 +204,13 @@ int BPF_KPROBE(
     (void)ctx;
     (void)start;
     (void)end;
-    function_sync_started(datasync, file);
+    const u64 pid_tgid = bpf_get_current_pid_tgid();
+    const u64 now = bpf_ktime_get_ns();
+    if (in_measured_syscall(pid_tgid, now)) {
+        return 0;
+    }
+    const u32 s_dev = fs_sync_read_filesystem && file ? file_s_dev(file) : 0;
+    function_sync_started(pid_tgid, now, datasync, s_dev);
     return 0;
 }
 
@@ -204,7 +226,14 @@ int BPF_KRETPROBE(obi_stats_kretprobe_vfs_fsync_range, int ret) {
 SEC("kprobe/do_fsync")
 int BPF_KPROBE(obi_stats_kprobe_do_fsync, unsigned int fd, int datasync) {
     (void)ctx;
-    function_sync_started(datasync, current_file(fd));
+    const u64 pid_tgid = bpf_get_current_pid_tgid();
+    const u64 now = bpf_ktime_get_ns();
+    // checked before the file is looked up: do_fsync mostly runs inside fsync(2) and fdatasync(2)
+    if (in_measured_syscall(pid_tgid, now)) {
+        return 0;
+    }
+    const u32 s_dev = fs_sync_read_filesystem ? file_s_dev(current_file(fd)) : 0;
+    function_sync_started(pid_tgid, now, datasync, s_dev);
     return 0;
 }
 

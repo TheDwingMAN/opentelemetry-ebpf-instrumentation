@@ -494,7 +494,43 @@ func TestFsSyncIsChargedPerCgroup(t *testing.T) {
 	assert.Equal(t, map[string]uint64{"": fileSyncs, "EINVAL": failedSyncs}, syncs)
 }
 
-// TestFsSyncProcess is not a test: TestFsSyncIsChargedPerCgroup runs it as a child process that
+// When no attribute of the metric needs them, the probes read neither the cgroup nor the
+// filesystem of the syncs, and still measure them.
+func TestFsSyncWithoutCgroupsOrFilesystems(t *testing.T) {
+	if _, err := os.Stat("/sys/bus/event_source/devices/kprobe/type"); err != nil {
+		t.Skip("the kernel doesn't support kprobes")
+	}
+	cgroupRoot := ioCgroupRoot(t)
+	features := export.FeatureStatsFsSyncDuration
+	bounds := []float64{0.001}
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup,
+		&attributes.SelectorConfig{}, ebpf.LatencyHistograms{FsSyncDuration: bounds})
+	require.NoError(t, err)
+	t.Cleanup(func() { fetcher.Close() })
+
+	reader := newFsSyncReader(ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: fetcher.FsSyncAccumMap()},
+		bounds, newCgroupContainers(ebpfCgroupNames{names: fetcher.DiskCgroupNamesMap()}), newFilesystems())
+	reader.readStats() // forget the syncs that happened before this test
+
+	runInCgroup(t, filepath.Join(cgroupRoot, "docker-"+strings.Repeat("c4", 32)+".scope"), "TestFsSyncProcess",
+		envSyncerFile+"="+filepath.Join(t.TempDir(), "synced"))
+
+	var fsyncs uint64
+	for _, stat := range reader.readStats() {
+		assert.Empty(t, stat.FsSync.ContainerID, "the probes don't read the cgroup")
+		assert.Empty(t, stat.FsSync.Mountpoint, "the probes don't read the filesystem")
+		if stat.FsSync.Type != ebpf.CodeFsSyncFsync || stat.FsSync.ErrorType != "" {
+			continue
+		}
+		for _, latency := range stat.FsSync.Latency {
+			fsyncs += latency.Count
+		}
+	}
+	assert.GreaterOrEqual(t, fsyncs, uint64(fileSyncs), "other processes may sync files too")
+}
+
+// TestFsSyncProcess is not a test: TestFsSyncIsChargedPerCgroup and
+// TestFsSyncWithoutCgroupsOrFilesystems run it as a child process that
 // syncs a file and a pipe once its parent has moved it to a cgroup and tells it to start.
 func TestFsSyncProcess(t *testing.T) {
 	path := os.Getenv(envSyncerFile)
