@@ -7,6 +7,7 @@
 #include <bpfcore/bpf_core_read.h>
 
 #include <statsolly/cgroup_names.h>
+#include <statsolly/disk_attrs.h>
 #include <statsolly/disk_accum.h>
 #include <statsolly/disk_io.h>
 #include <statsolly/types.h>
@@ -198,7 +199,7 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     const u64 latency_ns = now_ns > start.issued_ns ? now_ns - start.issued_ns : 0;
     const u64 queued_ns = start.queued_ns;
     const u32 bytes = start.bytes;
-    struct cgroup *cgrp = request_cgroup(rq);
+    struct cgroup *cgrp = disk_read_cgroup ? request_cgroup(rq) : 0;
     disk_io_key_t key = {
         .cgroup_id = cgroup_id_of(cgrp),
         .major = start.major,
@@ -206,7 +207,9 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         .op = start.op,
         .status = status,
     };
-    request_partition(rq, &key.part_dev, &key.partno);
+    if (disk_read_partition) {
+        request_partition(rq, &key.part_dev, &key.partno);
+    }
 
     disk_io_accum_t *accum = lookup_or_init_accum(&disk_io_accum, &key);
     if (!accum) {

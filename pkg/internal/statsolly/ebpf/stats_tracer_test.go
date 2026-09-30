@@ -13,6 +13,9 @@ import (
 	"github.com/cilium/ebpf/btf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.opentelemetry.io/obi/pkg/export"
+	"go.opentelemetry.io/obi/pkg/export/attributes"
 )
 
 func TestFixupSpec(t *testing.T) {
@@ -300,4 +303,29 @@ func TestBioProgramsToDisable(t *testing.T) {
 	assert.Equal(t, []string{progObiStatsRawTpBlockBioQueueLegacy}, bioProgramsToDisable(true, blockTracepointLayout{}))
 	assert.Equal(t, []string{progObiStatsRawTpBlockBioQueue},
 		bioProgramsToDisable(true, blockTracepointLayout{bioQueueHasQueueArg: true}))
+}
+
+func TestDiskAttributeReads(t *testing.T) {
+	selecting := func(metric string, include ...string) *attributes.SelectorConfig {
+		return &attributes.SelectorConfig{SelectionCfg: attributes.Selection{
+			attributes.Section(metric): attributes.InclusionLists{Include: include},
+		}}
+	}
+	reads := func(features export.Features, groups attributes.AttrGroups, selection *attributes.SelectorConfig) diskReads {
+		attrSel, err := attributes.NewAttrSelector(groups, selection)
+		require.NoError(t, err)
+		return diskAttributeReads(&features, attrSel)
+	}
+
+	assert.Equal(t, diskReads{}, reads(export.FeatureStatsDisk, attributes.UndefinedGroup, &attributes.SelectorConfig{}),
+		"no default attribute of the disk metrics needs the cgroup or the partition outside Kubernetes")
+	assert.Equal(t, diskReads{cgroup: true}, reads(export.FeatureStatsDisk, attributes.GroupKubernetes, &attributes.SelectorConfig{}),
+		"the Kubernetes attributes of the workload are reported by default")
+	assert.Equal(t, diskReads{cgroup: true},
+		reads(export.FeatureStatsDiskOperations, attributes.UndefinedGroup, selecting("obi.stat.disk.operations", "container.id")))
+	assert.Equal(t, diskReads{partition: true},
+		reads(export.FeatureStatsDiskIO, attributes.UndefinedGroup, selecting("obi.stat.disk.io", "obi.disk.partition")))
+	assert.Equal(t, diskReads{},
+		reads(export.FeatureStatsDiskIO, attributes.UndefinedGroup, selecting("obi.stat.disk.operations", "container.id", "obi.disk.partition")),
+		"the attributes of disabled metrics don't count")
 }

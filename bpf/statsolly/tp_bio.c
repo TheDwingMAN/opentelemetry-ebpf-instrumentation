@@ -7,6 +7,7 @@
 #include <bpfcore/bpf_core_read.h>
 
 #include <statsolly/cgroup_names.h>
+#include <statsolly/disk_attrs.h>
 #include <statsolly/disk_accum.h>
 #include <statsolly/disk_io.h>
 #include <statsolly/types.h>
@@ -87,7 +88,7 @@ int obi_stats_raw_tp_block_bio_complete(struct bpf_raw_tracepoint_args *ctx) {
     }
     const u64 latency_ns = bpf_ktime_get_ns() - start->issued_ns;
     const u32 bytes = start->bytes;
-    struct cgroup *cgrp = bio_cgroup(bio);
+    struct cgroup *cgrp = disk_read_cgroup ? bio_cgroup(bio) : 0;
     const disk_io_key_t key = {
         .cgroup_id = cgroup_id_of(cgrp),
         .major = start->major,

@@ -123,7 +123,7 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	}
 	features := probedFeatures(alog, cfg.Metrics.Features, ctxInfo.DynamicPIDSelector != nil)
 
-	statsFetcher, err = newFetcher(&cfg.EBPF, &features, selectorCfg, latencyHistograms(cfg))
+	statsFetcher, err = newFetcher(&cfg.EBPF, &features, ctxInfo.MetricAttributeGroups, selectorCfg, latencyHistograms(cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -143,8 +143,10 @@ func probedFeatures(log *slog.Logger, features export.Features, dynamicSelection
 	return features &^ storage
 }
 
-func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, histograms ebpf.LatencyHistograms) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, histograms)
+func newFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups attributes.AttrGroups,
+	selectorCfg *attributes.SelectorConfig, histograms ebpf.LatencyHistograms,
+) (ebpFetcher, error) {
+	return ebpf.NewStatsFetcher(cfg, features, attrGroups, selectorCfg, histograms)
 }
 
 // latencyHistograms returns the boundaries the kernel buckets latencies with: the union of the

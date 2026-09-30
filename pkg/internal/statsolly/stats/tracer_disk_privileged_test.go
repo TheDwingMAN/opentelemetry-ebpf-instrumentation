@@ -44,13 +44,19 @@ const (
 	failedSyncs = 3
 )
 
+// allAttributes selects every attribute of every metric, so that the disk probes read the cgroup
+// and the partition of the I/O
+var allAttributes = &attributes.SelectorConfig{
+	SelectionCfg: attributes.Selection{"*": attributes.InclusionLists{Include: []string{"*"}}},
+}
+
 // TestDiskLatencyIsAccumulatedPerDevice drives a known I/O pattern on a loop device and checks
 // that the kernel accumulates exactly one latency sample per completed request. The I/O is
 // O_DIRECT and sequential at queue depth 1, so the block layer neither caches nor merges it.
 func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	bounds := []float64{0.001, 0.01, 0.1}
 	features := export.FeatureStatsDiskOperationDuration
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
 		ebpf.LatencyHistograms{Disk: bounds})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
@@ -182,7 +188,7 @@ func TestDiskFlushesAndDiscards(t *testing.T) {
 func TestDiskStackedVolumes(t *testing.T) {
 	features := export.FeatureStatsDiskOperations | export.FeatureStatsDiskIO | export.FeatureStatsDiskStackedVolumes
 	bounds := []float64{0.001}
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
 		ebpf.LatencyHistograms{Disk: bounds})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
@@ -225,7 +231,7 @@ func TestDiskStackedVolumes(t *testing.T) {
 func attachDiskReader(t *testing.T, features export.Features) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
 	t.Helper()
 	bounds := []float64{0.001, 0.01, 0.1}
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
 		ebpf.LatencyHistograms{Disk: bounds})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
@@ -343,7 +349,7 @@ func TestDiskIOIsChargedPerCgroup(t *testing.T) {
 	// a counter alone must load the disk probes, without the histogram
 	features := export.FeatureStatsDiskOperations
 	bounds := []float64{0.001}
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
 		ebpf.LatencyHistograms{Disk: bounds})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
@@ -408,7 +414,7 @@ func TestFsSyncTypesAndFilesystems(t *testing.T) {
 
 	features := export.FeatureStatsFsSyncDuration
 	bounds := []float64{0.001}
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
 		ebpf.LatencyHistograms{FsSyncDuration: bounds})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
@@ -463,7 +469,7 @@ func TestFsSyncIsChargedPerCgroup(t *testing.T) {
 	cgroupRoot := ioCgroupRoot(t)
 	features := export.FeatureStatsFsSyncDuration
 	bounds := []float64{0.001}
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
 		ebpf.LatencyHistograms{FsSyncDuration: bounds})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
@@ -704,7 +710,7 @@ func alignedBuffer(t *testing.T, size int) []byte {
 // loading, whether or not the kernel has the NFS client and its BTF
 func TestNFSStatsAreOptional(t *testing.T) {
 	features := export.FeatureStatsNFS | export.FeatureStatsDiskOperations
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
 		ebpf.LatencyHistograms{Disk: testBounds, NFS: testBounds})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })

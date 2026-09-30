@@ -134,7 +134,9 @@ func tlog() *slog.Logger {
 }
 
 // NewStatsFetcher loads and attaches the stat probes of the enabled features
-func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, histograms LatencyHistograms) (*StatsFetcher, error) {
+func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups attributes.AttrGroups,
+	selectorCfg *attributes.SelectorConfig, histograms LatencyHistograms,
+) (*StatsFetcher, error) {
 	tlog := tlog()
 	// the kernel buckets each group of histograms with the union of their boundaries in the
 	// enabled exporters
@@ -162,9 +164,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		return nil, fmt.Errorf("loading BPF data: %w", err)
 	}
 
-	// UndefinedGroup is intentional: we only need to check NetworkTCPHandshakeRole,
-	// which is a direct metric attribute.
-	attrSel, err := attributes.NewAttrSelector(attributes.UndefinedGroup, selectorCfg)
+	attrSel, err := attributes.NewAttrSelector(attrGroups, selectorCfg)
 	if err != nil {
 		return nil, fmt.Errorf("creating attr selector: %w", err)
 	}
@@ -204,6 +204,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	diskAttached := diskEnabled && !blockLayout.unknown
 	toDisable = append(toDisable, diskProgramsToDisable(diskEnabled, blockLayout)...)
 	bioAttached := diskAttached && features.StatsDiskStackedVolumes() && !blockLayout.bioUnknown
+	diskReads := diskAttributeReads(features, attrSel)
 	toDisable = append(toDisable, bioProgramsToDisable(bioAttached, blockLayout)...)
 	if !features.StatsFsSyncDuration() {
 		toDisable = append(toDisable, progObiStatsKprobeVfsFsyncRange, progObiStatsKretprobeVfsFsyncRange,
@@ -233,6 +234,8 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		"disk_latency_bounds_ns":     diskLatencyBoundsNs,
 		"disk_latency_bounds_len":    uint32(len(histograms.Disk)),
 		"disk_status_is_blk_status":  blockLayout.completeReportsBlkStatus,
+		"disk_read_cgroup":           diskReads.cgroup,
+		"disk_read_partition":        diskReads.partition,
 		"fs_sync_latency_bounds_ns":  fsSyncLatencyBoundsNs,
 		"fs_sync_latency_bounds_len": uint32(len(histograms.FsSyncDuration)),
 		"nfs_latency_bounds_ns":      nfsLatencyBoundsNs,
@@ -687,6 +690,44 @@ func diskLatencyBoundsToNs(bounds []float64) ([maxDiskLatencyBounds]uint64, erro
 }
 
 // diskProgramsToDisable returns the disk programs that must not be loaded
+// diskReads tells which attributes of the block I/O the disk probes read: the cgroup the I/O is
+// charged to, for the container and Kubernetes attributes, and the partition that it targets
+type diskReads struct {
+	cgroup, partition bool
+}
+
+// diskAttributeReads returns the attributes of the block I/O that the enabled disk metrics report
+func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelector) diskReads {
+	metrics := []struct {
+		enabled bool
+		name    attributes.Name
+	}{
+		{enabled: features.StatsDiskOperationDuration(), name: attributes.StatDiskOperationDuration},
+		{enabled: features.StatsDiskIO(), name: attributes.StatDiskIO},
+		{enabled: features.StatsDiskOperations(), name: attributes.StatDiskOperations},
+		{enabled: features.StatsDiskOperationTime(), name: attributes.StatDiskOperationTime},
+		{enabled: features.StatsDiskQueueDuration(), name: attributes.StatDiskQueueDuration},
+		{enabled: features.StatsDiskFlush(), name: attributes.StatDiskFlushDuration},
+		{enabled: features.StatsDiskDiscard(), name: attributes.StatDiskDiscardDuration},
+		{enabled: features.StatsDiskDiscard(), name: attributes.StatDiskDiscardIO},
+	}
+	var reads diskReads
+	for _, metric := range metrics {
+		if !metric.enabled {
+			continue
+		}
+		for _, name := range attrSel.For(metric.name) {
+			switch {
+			case name == attr.DiskPartition:
+				reads.partition = true
+			case name == attr.ContainerID || strings.HasPrefix(string(name), "k8s."):
+				reads.cgroup = true
+			}
+		}
+	}
+	return reads
+}
+
 func diskProgramsToDisable(enabled bool, layout blockTracepointLayout) []string {
 	switch {
 	case !enabled || layout.unknown:
