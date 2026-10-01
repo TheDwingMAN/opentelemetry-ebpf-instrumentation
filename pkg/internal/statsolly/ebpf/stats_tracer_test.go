@@ -356,3 +356,38 @@ func TestFsSyncAttributeReads(t *testing.T) {
 		reads(export.FeatureStatsDisk, attributes.UndefinedGroup, selecting("container.id", "system.filesystem.mountpoint")),
 		"the attributes of a disabled metric don't count")
 }
+
+func TestSizeInFlightMaps(t *testing.T) {
+	newSpec := func() *ebpf.CollectionSpec {
+		return &ebpf.CollectionSpec{Maps: map[string]*ebpf.MapSpec{
+			"disk_rq_start":   {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
+			"disk_bio_start":  {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
+			"fs_sync_start":   {Type: ebpf.LRUHash, MaxEntries: 1 << 15},
+			"nfs_task_cgroup": {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
+			"disk_io_accum":   {Type: ebpf.Hash, MaxEntries: 1 << 12},
+		}}
+	}
+
+	// up to 64 CPUs, the maps keep their size
+	spec := newSpec()
+	sizeInFlightMaps(spec, 64)
+	for name, want := range map[string]uint32{
+		"disk_rq_start": 1 << 14, "disk_bio_start": 1 << 14, "fs_sync_start": 1 << 15, "nfs_task_cgroup": 1 << 14,
+	} {
+		assert.Equal(t, want, spec.Maps[name].MaxEntries, name)
+	}
+
+	// beyond, they get twice the free entries that the CPUs can keep for themselves
+	spec = newSpec()
+	sizeInFlightMaps(spec, 192)
+	for _, name := range []string{"disk_rq_start", "disk_bio_start", "fs_sync_start", "nfs_task_cgroup"} {
+		assert.Equal(t, uint32(2*128*192), spec.Maps[name].MaxEntries, name)
+	}
+	assert.Equal(t, uint32(1<<12), spec.Maps["disk_io_accum"].MaxEntries, "not an in-flight map")
+
+	// a map already scaled beyond it is left alone
+	spec = newSpec()
+	spec.Maps["disk_rq_start"].MaxEntries = 1 << 17
+	sizeInFlightMaps(spec, 192)
+	assert.Equal(t, uint32(1<<17), spec.Maps["disk_rq_start"].MaxEntries)
+}

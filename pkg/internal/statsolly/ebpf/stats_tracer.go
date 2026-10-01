@@ -47,6 +47,14 @@ type probe struct {
 // missed.
 const fsSyncRetprobeMaxActive = 4096
 
+// lruLocalFreeTarget is how many free entries each CPU keeps for itself in an LRU map
+// (LOCAL_FREE_TARGET in kernel/bpf/bpf_lru_list.c)
+const lruLocalFreeTarget = 128
+
+// inFlightMaps hold an entry from the start of each block request, bio, file sync or NFS task until
+// it completes, in LRU maps
+var inFlightMaps = []string{"disk_rq_start", "disk_bio_start", "fs_sync_start", "nfs_task_cgroup"}
+
 // Program names
 const (
 	progObiStatsKprobeTCPCloseSrtt                        = "obi_stats_kprobe_tcp_close_srtt"
@@ -227,6 +235,11 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 	}
 
 	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
+	if cpus, err := ebpf.PossibleCPU(); err == nil {
+		sizeInFlightMaps(spec, cpus)
+	} else {
+		tlog.Debug("can't size the in-flight maps to the CPUs", "error", err)
+	}
 
 	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
@@ -491,6 +504,19 @@ func attachKretprobe(log *slog.Logger, symbol string, program *ebpf.Program, max
 		log.Debug("attaching the kretprobe with the default number of instances", "function", symbol, "error", err)
 	}
 	return kprobe.Attach(symbol, program, true)
+}
+
+// sizeInFlightMaps gives the in-flight maps room for twice the free entries that the CPUs can keep
+// for themselves. Before Linux 6.16, once those hold most of an LRU map, a CPU that needs an entry
+// evicts one in flight instead of taking a free one from another CPU, and that request is never
+// counted. It only grows the maps of hosts with more than 64 CPUs.
+func sizeInFlightMaps(spec *ebpf.CollectionSpec, cpus int) {
+	minEntries := uint32(2 * lruLocalFreeTarget * cpus)
+	for _, name := range inFlightMaps {
+		if m, ok := spec.Maps[name]; ok && m.MaxEntries < minEntries {
+			m.MaxEntries = minEntries
+		}
+	}
 }
 
 func closeAll(closables []io.Closer) {
