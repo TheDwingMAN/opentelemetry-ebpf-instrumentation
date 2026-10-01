@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/logger"
+	"go.opentelemetry.io/obi/pkg/internal/ebpf/tracefs"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	stats "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 	"go.opentelemetry.io/obi/pkg/netip"
@@ -121,7 +122,7 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		SelectionCfg:            cfg.Attributes.Select,
 		ExtraGroupAttributesCfg: cfg.Attributes.ExtraGroupAttributes,
 	}
-	features := probedFeatures(alog, cfg.Metrics.Features, ctxInfo.DynamicPIDSelector != nil)
+	features := probedFeatures(alog, cfg.Metrics.Features, ctxInfo.DynamicSelector != nil)
 
 	statsFetcher, err = newFetcher(&cfg.EBPF, &features, ctxInfo.MetricAttributeGroups, selectorCfg, latencyHistograms(cfg))
 	if err != nil {
@@ -259,7 +260,7 @@ func (s *Stats) Run(ctx context.Context) error {
 
 	s.graph = graph
 
-	s.graph.Start(ctx, swarm.WithCancelTimeout(s.cfg.ShutdownTimeout))
+	s.graph.Start(ctx, swarm.WithCancelTimeout(tracefs.EffectiveShutdownTimeout(s.cfg.ShutdownTimeout)))
 	s.status = StatusStarted
 
 	alog.Info("Stats agent successfully started")
@@ -298,7 +299,7 @@ func (s *Stats) stop() error {
 	}()
 
 	select {
-	case <-time.After(s.cfg.ShutdownTimeout):
+	case <-time.After(tracefs.EffectiveShutdownTimeout(s.cfg.ShutdownTimeout)):
 		return errShutdownTimeout
 	case err := <-stopped:
 		// err might be nil

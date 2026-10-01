@@ -27,6 +27,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	ebpfconvenience "go.opentelemetry.io/obi/pkg/internal/ebpf/convenience"
+	"go.opentelemetry.io/obi/pkg/internal/ebpf/kprobe"
 )
 
 type probe struct {
@@ -324,7 +325,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 			continue
 		}
 
-		l, err := link.Kprobe(k.name, k.program, nil)
+		l, err := kprobe.Attach(k.name, k.program, false)
 		if err != nil && k.optional {
 			tlog.Debug("skipping optional kprobe", "function", k.name, "error", err)
 			continue
@@ -468,7 +469,7 @@ func attachSyncSyscalls(log *slog.Logger, objects *StatsObjects) []io.Closer {
 			log.Debug("skipping sync system call", "syscall", syscall.name, "error", err)
 			continue
 		}
-		entry, err := link.Kprobe(syscall.name, syscall.entry, nil)
+		entry, err := kprobe.Attach(syscall.name, syscall.entry, false)
 		if err != nil {
 			ret.Close()
 			log.Debug("skipping sync system call", "syscall", syscall.name, "error", err)
@@ -481,7 +482,7 @@ func attachSyncSyscalls(log *slog.Logger, objects *StatsObjects) []io.Closer {
 
 // attachKretprobe attaches a return probe that tracks up to maxActive calls at once. That needs
 // tracefs: without it, the kernel default is used.
-func attachKretprobe(log *slog.Logger, symbol string, program *ebpf.Program, maxActive int) (link.Link, error) {
+func attachKretprobe(log *slog.Logger, symbol string, program *ebpf.Program, maxActive int) (io.Closer, error) {
 	if maxActive > 0 {
 		l, err := link.Kretprobe(symbol, program, &link.KprobeOptions{RetprobeMaxActive: maxActive})
 		if err == nil {
@@ -489,7 +490,7 @@ func attachKretprobe(log *slog.Logger, symbol string, program *ebpf.Program, max
 		}
 		log.Debug("attaching the kretprobe with the default number of instances", "function", symbol, "error", err)
 	}
-	return link.Kretprobe(symbol, program, nil)
+	return kprobe.Attach(symbol, program, true)
 }
 
 func closeAll(closables []io.Closer) {

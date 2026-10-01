@@ -1063,6 +1063,7 @@ func TestSuite_PythonMCP(t *testing.T) {
 	t.Run("Python MCP client span", testPythonMCPClient)
 	t.Run("Python MCP client resource span", testPythonMCPClientResource)
 	t.Run("Python MCP operation metrics", testPythonMCPMetrics)
+	t.Run("Python MCP session metrics", testPythonMCPSessionMetrics)
 	runWeaverValidation(t)
 	require.NoError(t, compose.Close())
 }
@@ -1337,6 +1338,9 @@ func logEnricherGoGRPCSuite(t *testing.T, configSuffix string) {
 		})
 		t.Run("Log Enricher plain text", func(t *testing.T) {
 			testLogEnricherPlainText(t, logEnricherGoGRPCConstants)
+		})
+		t.Run("Log Enricher short write", func(t *testing.T) {
+			testLogEnricherShortWrite(t, logEnricherGoGRPCConstants)
 		})
 		t.Run("Log Enricher nested spans", func(t *testing.T) {
 			testLogEnricherNestedSpans(t, logEnricherGoGRPCConstants)

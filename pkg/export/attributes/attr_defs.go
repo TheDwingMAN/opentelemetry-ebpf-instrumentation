@@ -521,6 +521,7 @@ func getDefinitions(
 			attr.HTTPURLScheme:          true,
 			attr.HTTPResponseStatusCode: true,
 			attr.HTTPUrlPath:            false,
+			attr.ErrorType:              true,
 		},
 		extraGroupAttributes[GroupHTTPCommon],
 	)
@@ -840,6 +841,22 @@ func getDefinitions(
 				attr.MCPResourceURI:        false,
 			},
 		},
+		MCPClientSessionDuration.Section: {
+			SubGroups: []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType:          true,
+				attr.MCPProtocolVersion: true,
+				attr.ServerAddr:         true,
+				attr.ServerPort:         true,
+			},
+		},
+		MCPServerSessionDuration.Section: {
+			SubGroups: []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType:          true,
+				attr.MCPProtocolVersion: true,
+			},
+		},
 		GoRuntimeMemoryGCGoal.Section: {
 			SubGroups:  []*AttrReportGroup{&appAttributes},
 			Attributes: map[attr.Name]Default{},
@@ -883,6 +900,34 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{},
 		},
 		DotnetAssemblyCount.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		DotnetGCHeapTotalAllocated.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		DotnetGCPauseTime.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		DotnetJITCompiledILSize.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		DotnetJITCompiledMethods.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		DotnetJITCompilationTime.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		DotnetThreadPoolWorkItemCount.Section: {
+			SubGroups:  []*AttrReportGroup{&appAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		DotnetMonitorLockContentions.Section: {
 			SubGroups:  []*AttrReportGroup{&appAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
