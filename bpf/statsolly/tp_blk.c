@@ -17,6 +17,9 @@
 
 // Set when block_rq_complete reports a blk_status_t (Linux 5.16+) instead of a negative errno.
 volatile const bool disk_status_is_blk_status;
+// The RQF_FLUSH_SEQ flag of struct request, which userspace finds in the kernel BTF: its bit
+// depends on the kernel version, and some kernels number it in an anonymous enum.
+volatile const u32 disk_rqf_flush_seq;
 
 // Force structs into the ELF for automatic creation of Golang struct
 const disk_io_key_t *unused_disk_io_key __attribute__((unused));
@@ -79,6 +82,23 @@ static __always_inline void request_partition(struct request *rq, u32 *part_dev,
 // request_queue_key is the key of the queue of a request in disk_timed_queues
 static __always_inline u64 request_queue_key(struct request *rq) {
     return (u64)(uintptr_t)BPF_CORE_READ(rq, q);
+}
+
+// in_flush_sequence tells whether a request is a step of a flush sequence: the flush that the
+// sequence issues, or a write with a cache flush before or after it, which the kernel completes
+// once for its data and again at the end of the sequence
+static __always_inline bool in_flush_sequence(struct request *rq) {
+    return (BPF_CORE_READ(rq, rq_flags) & disk_rqf_flush_seq) != 0;
+}
+
+// never_issued tells whether a request completes without having been issued to the device, as
+// the empty flush of an fsync does when the flush machinery completes it after the flush it
+// waited for
+static __always_inline bool never_issued(struct request *rq) {
+    if (!bpf_core_field_exists(rq->state)) {
+        return false;
+    }
+    return BPF_CORE_READ(rq, state) == bpf_core_enum_value(enum mq_rq_state, MQ_RQ_IDLE);
 }
 
 // kernel_times_requests tells whether the kernel records the issue time and the size of the
@@ -166,6 +186,13 @@ kernel_timed_start(struct request *rq, const u32 completed_bytes, disk_rq_start_
 static __always_inline bool recorded_start(struct request *rq, disk_rq_start_t *start) {
     const u64 rq_key = (u64)(uintptr_t)rq;
     const disk_rq_start_t *recorded = bpf_map_lookup_elem(&disk_rq_start, &rq_key);
+    // what was recorded before the allocation of the request belongs to an earlier request at
+    // the same address, which the kernel timed
+    const u64 allocated_ns = BPF_CORE_READ(rq, start_time_ns);
+    if (recorded && recorded->issued_ns < allocated_ns) {
+        bpf_map_delete_elem(&disk_rq_start, &rq_key);
+        recorded = 0;
+    }
     if (!recorded) {
         if (bpf_core_field_exists(rq->stats_sectors)) {
             const u64 queue = request_queue_key(rq);
@@ -175,6 +202,25 @@ static __always_inline bool recorded_start(struct request *rq, disk_rq_start_t *
     }
     *start = *recorded;
     bpf_map_delete_elem(&disk_rq_start, &rq_key);
+    return true;
+}
+
+// never_issued_start fills start for a request that was never issued: from its allocation, which
+// the kernel also times it from in /proc/diskstats. The kernel doesn't count requests that it
+// doesn't time.
+static __always_inline bool
+never_issued_start(struct request *rq, const u32 completed_bytes, disk_rq_start_t *start) {
+    const u64 allocated_ns = BPF_CORE_READ(rq, start_time_ns);
+    if (allocated_ns == 0) {
+        return false;
+    }
+    struct gendisk *disk = request_disk(rq);
+    start->issued_ns = allocated_ns;
+    start->queued_ns = k_disk_queue_unknown;
+    start->bytes = completed_bytes;
+    start->major = BPF_CORE_READ(disk, major);
+    start->minor = BPF_CORE_READ(disk, first_minor);
+    start->op = request_op(rq);
     return true;
 }
 
@@ -188,8 +234,18 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         return 0;
     }
 
+    // the kernel completes a write with a cache flush before or after it again at the end of its
+    // flush sequence, and only counts it then
+    if (in_flush_sequence(rq) && request_op(rq) != disk_op_flush) {
+        return 0;
+    }
+
     disk_rq_start_t start = {};
-    if (!kernel_timed_start(rq, nr_bytes, &start) && !recorded_start(rq, &start)) {
+    if (never_issued(rq)) {
+        if (!never_issued_start(rq, nr_bytes, &start)) {
+            return 0;
+        }
+    } else if (!kernel_timed_start(rq, nr_bytes, &start) && !recorded_start(rq, &start)) {
         return 0;
     }
     if (start.op == disk_op_unknown) {

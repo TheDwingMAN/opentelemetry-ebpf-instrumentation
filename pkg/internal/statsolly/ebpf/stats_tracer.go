@@ -249,6 +249,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 		"disk_latency_bounds_ns":     diskLatencyBoundsNs,
 		"disk_latency_bounds_len":    uint32(len(histograms.Disk)),
 		"disk_status_is_blk_status":  blockLayout.completeReportsBlkStatus,
+		"disk_rqf_flush_seq":         blockLayout.flushSeqFlag,
 		"disk_read_cgroup":           diskReads.cgroup,
 		"disk_read_partition":        diskReads.partition,
 		"fs_sync_latency_bounds_ns":  fsSyncLatencyBoundsNs,
@@ -613,6 +614,8 @@ type blockTracepointLayout struct {
 	bioQueueHasQueueArg bool
 	// the layout of the bio tracepoints could not be told, so the bio probes can't be loaded
 	bioUnknown bool
+	// flushSeqFlag is the RQF_FLUSH_SEQ flag of the block requests
+	flushSeqFlag uint32
 }
 
 // kernelBlockTracepointLayout reads the block tracepoint prototypes from the kernel BTF. The kernel
@@ -622,6 +625,7 @@ func kernelBlockTracepointLayout(log *slog.Logger) blockTracepointLayout {
 	if err == nil {
 		var layout blockTracepointLayout
 		if layout, err = blockTracepointLayoutFrom(tracepointProto(spec)); err == nil {
+			layout.flushSeqFlag = requestFlushSeqFlag(enumerator(spec))
 			return layout
 		}
 	}
@@ -642,6 +646,40 @@ func tracepointProto(spec *btf.Spec) func(string) (*btf.FuncProto, error) {
 			}
 		}
 		return nil, fmt.Errorf("%s is not a function pointer", name)
+	}
+}
+
+// rqfFlushSeqBitBeforeEnum is the bit of RQF_FLUSH_SEQ when the request flags were macros
+const rqfFlushSeqBitBeforeEnum = 4
+
+// requestFlushSeqFlag is the RQF_FLUSH_SEQ flag of the block requests. Newer kernels number the
+// request flags with an enum, which is anonymous in some versions (e.g. 6.12): the BPF programs
+// can't relocate its enumerators, so they get the flag from userspace.
+func requestFlushSeqFlag(enumerator func(string) (uint64, bool)) uint32 {
+	if bit, ok := enumerator("__RQF_FLUSH_SEQ"); ok {
+		return 1 << bit
+	}
+	return 1 << rqfFlushSeqBitBeforeEnum
+}
+
+// enumerator looks up the value of an enumerator in the enums of a BTF spec, named or anonymous
+func enumerator(spec *btf.Spec) func(string) (uint64, bool) {
+	return func(name string) (uint64, bool) {
+		for typ, err := range spec.All() {
+			if err != nil {
+				return 0, false
+			}
+			enum, ok := typ.(*btf.Enum)
+			if !ok {
+				continue
+			}
+			for _, value := range enum.Values {
+				if value.Name == name {
+					return value.Value, true
+				}
+			}
+		}
+		return 0, false
 	}
 }
 

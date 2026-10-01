@@ -6,6 +6,7 @@
 package ebpf
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -295,6 +296,34 @@ func TestBlockTracepointLayoutFromBTF(t *testing.T) {
 	_, err = blockTracepointLayoutFrom(protos(
 		[]btf.FuncParam{voidPtr}, []btf.FuncParam{voidPtr, rq, errnoArg, nrBytes}, nil))
 	require.Error(t, err, "an unexpected prototype is an error, not a guess")
+}
+
+// The request flags were macros, then numbered by an enum that some kernels leave anonymous
+func TestRequestFlushSeqFlag(t *testing.T) {
+	flags := func(name string) *btf.Enum {
+		return &btf.Enum{Name: name, Size: 4, Values: []btf.EnumValue{
+			{Name: "__RQF_STARTED", Value: 0}, {Name: "__RQF_FLUSH_SEQ", Value: 1},
+		}}
+	}
+	for _, tc := range []struct {
+		name string
+		typ  btf.Type
+		want uint32
+	}{
+		{"macros", &btf.Int{Name: "int", Size: 4}, 1 << 4},
+		{"anonymous enum", flags(""), 1 << 1},
+		{"named enum", flags("rqf_flags"), 1 << 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, err := btf.NewBuilder([]btf.Type{tc.typ}, nil)
+			require.NoError(t, err)
+			raw, err := builder.Marshal(nil, nil)
+			require.NoError(t, err)
+			spec, err := btf.LoadSpecFromReader(bytes.NewReader(raw))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, requestFlushSeqFlag(enumerator(spec)))
+		})
+	}
 }
 
 func TestBioProgramsToDisable(t *testing.T) {

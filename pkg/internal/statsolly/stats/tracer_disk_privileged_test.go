@@ -183,6 +183,107 @@ func TestDiskFlushesAndDiscards(t *testing.T) {
 	assert.Equal(t, uint64(discarded), discardedBytes, "the discarded bytes add up to the discarded range")
 }
 
+// TestDiskFileSyncsAreCountedLikeTheKernel syncs the files of an ext4 filesystem. The kernel
+// completes the journal writes that have a cache flush before or after them twice, and completes
+// the empty flushes of files that didn't change without issuing them: writes, bytes and flushes
+// must be counted as in /proc/diskstats.
+func TestDiskFileSyncsAreCountedLikeTheKernel(t *testing.T) {
+	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+		t.Skip("needs mkfs.ext4")
+	}
+	loopDev := attachLoopDevice(t)
+	device := filepath.Base(loopDev)
+	out, err := exec.Command("mkfs.ext4", "-q", "-F", "-E", "lazy_itable_init=0,lazy_journal_init=0", loopDev).CombinedOutput()
+	require.NoError(t, err, "mkfs.ext4: %s", out)
+	mountPoint := t.TempDir()
+	require.NoError(t, unix.Mount(loopDev, mountPoint, "ext4", 0, ""))
+	t.Cleanup(func() { _ = unix.Unmount(mountPoint, 0) })
+	unchanged := filepath.Join(mountPoint, "unchanged")
+	syncFile(t, unchanged, []byte("data"))
+
+	reader := attachDiskReader(t, export.FeatureStatsDisk)
+	before := readKernelDiskStats(t, device)
+	for range fileSyncs {
+		syncFile(t, unchanged, nil)
+		syncFile(t, filepath.Join(mountPoint, "changed"), []byte("data"))
+	}
+	after := readKernelDiskStats(t, device)
+
+	var writes, written, flushes uint64
+	var writeTime float64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != device {
+			continue
+		}
+		switch stat.DiskIO.Op {
+		case ebpf.CodeDiskOpWrite:
+			writes += stat.DiskIO.Operations
+			written += stat.DiskIO.Bytes
+			writeTime += stat.DiskIO.Time
+		case ebpf.CodeDiskOpFlush:
+			flushes += stat.DiskIO.Operations
+		}
+	}
+	assert.Equal(t, after.writes-before.writes, writes)
+	assert.Equal(t, (after.sectorsWritten-before.sectorsWritten)*kernelSectorSize, written)
+	if after.hasFlushes {
+		assert.Equal(t, after.flushes-before.flushes, flushes)
+	}
+	assert.Less(t, writeTime, float64(writes), "each write took less than a second on average")
+}
+
+const kernelSectorSize = 512
+
+type kernelDiskStats struct {
+	writes, sectorsWritten, flushes uint64
+	// the kernel reports flushes since Linux 5.5
+	hasFlushes bool
+}
+
+// readKernelDiskStats reads the completed writes, written sectors and flushes of a device in
+// /proc/diskstats
+func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
+	t.Helper()
+	const (
+		writesField  = 7
+		sectorsField = 9
+		flushesField = 18
+	)
+	content, err := os.ReadFile("/proc/diskstats")
+	require.NoError(t, err)
+	for line := range strings.Lines(string(content)) {
+		fields := strings.Fields(line)
+		if len(fields) <= sectorsField || fields[2] != device {
+			continue
+		}
+		field := func(i int) uint64 {
+			value, err := strconv.ParseUint(fields[i], 10, 64)
+			require.NoError(t, err)
+			return value
+		}
+		stats := kernelDiskStats{writes: field(writesField), sectorsWritten: field(sectorsField)}
+		if len(fields) > flushesField {
+			stats.flushes, stats.hasFlushes = field(flushesField), true
+		}
+		return stats
+	}
+	require.Failf(t, "device not found", "%s is not in /proc/diskstats", device)
+	return kernelDiskStats{}
+}
+
+// syncFile writes data to a file, if any, and syncs it
+func syncFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o600)
+	require.NoError(t, err)
+	defer f.Close()
+	if data != nil {
+		_, err = f.Write(data)
+		require.NoError(t, err)
+	}
+	require.NoError(t, f.Sync())
+}
+
 // TestDiskStackedVolumes writes to a device mapper volume, like an LVM one, and checks that its
 // I/O is reported on the volume, as stacked, besides the device below it
 func TestDiskStackedVolumes(t *testing.T) {
