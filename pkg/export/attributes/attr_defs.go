@@ -127,6 +127,154 @@ func getDefinitions(
 		extraGroupAttributes[GroupStats],
 	)
 
+	// block I/O stat metrics attributes. Unlike the other stat metrics, they
+	// are not reported per connection, so they don't include statsAttributes
+	statsDiskAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:           false,
+			attr.SystemDevice:    true,
+			attr.DiskStacked:     true,
+			attr.DiskPartition:   false,
+			attr.DiskIODirection: true,
+			attr.ContainerID:     false,
+		},
+		nil,
+	)
+
+	// attributes of the block operations that neither read nor write, such as flushes and
+	// discards, which therefore have no direction
+	statsDiskOpAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:         false,
+			attr.SystemDevice:  true,
+			attr.DiskStacked:   true,
+			attr.DiskPartition: false,
+			attr.ContainerID:   false,
+		},
+		nil,
+	)
+
+	// attributes of the number of requests a device is serving, which is not charged to
+	// workloads
+	statsDiskPendingAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:           false,
+			attr.SystemDevice:    true,
+			attr.DiskStacked:     true,
+			attr.DiskIODirection: true,
+		},
+		nil,
+	)
+
+	// file sync metrics attributes: syncs are file operations, so they have neither device
+	// nor direction
+	statsFsSyncAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:                false,
+			attr.ContainerID:          false,
+			attr.FsSyncType:           true,
+			attr.FilesystemMountpoint: false,
+			attr.FilesystemType:       false,
+		},
+		nil,
+	)
+
+	// NFS client RPC metrics attributes
+	statsNFSProcedureAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:               false,
+			attr.ContainerID:         false,
+			attr.ServerAddr:          true,
+			attr.OncRPCProcedureName: true,
+			attr.OncRPCVersion:       true,
+		},
+		nil,
+	)
+
+	// NFS client transferred bytes attributes
+	statsNFSIOAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:              false,
+			attr.ContainerID:        false,
+			attr.ServerAddr:         true,
+			attr.NetworkIoDirection: true,
+		},
+		nil,
+	)
+
+	// the volumes that pods mount from PersistentVolumeClaims, and the disks they are on
+	statsPodVolumeAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:                        false,
+			attr.K8sVolumeName:                true,
+			attr.K8sVolumeType:                true,
+			attr.K8sPersistentVolumeClaimName: true,
+			attr.K8sPersistentVolumeName:      true,
+			attr.DiskVolumeDevice:             true,
+			attr.SystemDevice:                 true,
+		},
+		nil,
+	)
+
+	// the pods of the volumes: the metric only exists with kubernetes metadata
+	statsPodVolumeKubeAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sNamespaceName: true,
+			attr.K8sPodName:       true,
+			attr.K8sOwnerName:     true,
+			attr.K8sClusterName:   true,
+			attr.K8sKind:          false,
+		},
+		nil,
+	)
+
+	// workload that block I/O is charged to, when kubernetes metadata is enabled
+	statsDiskKubeAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sNamespaceName: true,
+			attr.K8sOwnerName:     true,
+			attr.K8sClusterName:   true,
+			attr.K8sKind:          false,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
+		},
+		nil,
+	)
+
+	// the same workload attributes, all opt-in, for the block I/O histograms, whose
+	// series count is multiplied by the number of buckets
+	statsDiskKubeOptInAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sNamespaceName: false,
+			attr.K8sOwnerName:     false,
+			attr.K8sClusterName:   false,
+			attr.K8sKind:          false,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
+		},
+		nil,
+	)
+
 	// attributes to be reported exclusively for network metrics when
 	// kubernetes metadata is enabled
 	networkKubeAttributes := NewAttrReportGroup(
@@ -905,6 +1053,70 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{
 				attr.NetworkTCPHandshakeRole: false,
 			},
+		},
+		StatDiskOperationDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeOptInAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskOperations.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskOperationTime.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatFsSyncDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatNFSClientProcedureDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatNFSClientIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsNFSIOAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatK8sPodVolumeDevice.Section: {
+			SubGroups:  []*AttrReportGroup{&statsPodVolumeAttributes, &statsPodVolumeKubeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskQueueDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeOptInAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskFlushDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskOpAttributes, &statsDiskKubeOptInAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskDiscardDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskOpAttributes, &statsDiskKubeOptInAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskDiscardIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskOpAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskPendingOperations.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskPendingAttributes},
+			Attributes: map[attr.Name]Default{},
 		},
 
 		// span and service graph metrics don't yet implement attribute selection,

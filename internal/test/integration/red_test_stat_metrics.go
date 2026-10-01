@@ -4,6 +4,9 @@
 package integration // import "go.opentelemetry.io/obi/internal/test/integration"
 
 import (
+	"math"
+	"regexp"
+	"slices"
 	"testing"
 	"time"
 
@@ -11,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/obi/internal/test/integration/components/promtest"
+	"go.opentelemetry.io/obi/pkg/export"
 )
 
 func testStatMetricsTCPRtt(t *testing.T, port string) {
@@ -92,4 +96,213 @@ func testStatMetricsTCPIoGo(t *testing.T) {
 			}, testTimeout, 100*time.Millisecond)
 		})
 	}
+}
+
+// diskStatLabels are the Prometheus labels of all the attributes that the disk and file sync stat
+// metrics can have
+var diskStatLabels = []string{
+	"system_device", "obi_disk_partition", "obi_disk_stacked", "disk_io_direction", "error_type", "container_id", "obi_ip",
+	"k8s_cluster_name", "k8s_namespace_name", "k8s_owner_name", "k8s_kind", "k8s_pod_name", "k8s_container_name",
+	"obi_fs_sync_type", "system_filesystem_mountpoint", "system_filesystem_type",
+}
+
+var (
+	blockDevicePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	// the partition is only there when the I/O targets one, which depends on the disk layout of the host
+	optionalPartitionPattern = regexp.MustCompile(`^([a-z][a-z0-9-]*)?$`)
+	ipPattern                = regexp.MustCompile(`^[0-9a-fA-F.:]+$`)
+	// the host may keep the docker volumes on an LVM volume, reported with its disk
+	stackedPattern    = regexp.MustCompile(`^(true|false)$`)
+	mountpointPattern = regexp.MustCompile(`^/`)
+	fsTypePattern     = regexp.MustCompile(`^[a-z0-9._]+$`)
+)
+
+// assertDiskStatLabels checks that a series of a disk or file sync stat metric has exactly the
+// expected attributes, given as patterns of their values, and none of the others
+func assertDiskStatLabels(t assert.TestingT, series map[string]string, expected map[string]*regexp.Regexp) {
+	assert.Empty(t, promtest.LabelMismatches(series, diskStatLabels, expected), series)
+}
+
+// workloadLabels are the expected attributes of the successful I/O of a container: all the
+// attributes are selected, and kubernetes metadata is disabled
+func workloadLabels(containerID string) map[string]*regexp.Regexp {
+	return map[string]*regexp.Regexp{
+		"container_id": regexp.MustCompile("^" + containerID + "$"),
+		"obi_ip":       ipPattern,
+	}
+}
+
+// fsSyncLabels are the expected attributes of the successful fsync(2) calls of a container, which
+// also have the filesystem of the synced file
+func fsSyncLabels(containerID string) map[string]*regexp.Regexp {
+	labels := workloadLabels(containerID)
+	labels["obi_fs_sync_type"] = regexp.MustCompile(`^fsync$`)
+	labels["system_filesystem_mountpoint"] = mountpointPattern
+	labels["system_filesystem_type"] = fsTypePattern
+	return labels
+}
+
+// diskIOLabels are the expected attributes of the successful block I/O of a container, which
+// also has the device and direction of the I/O
+func diskIOLabels(containerID, direction string) map[string]*regexp.Regexp {
+	labels := workloadLabels(containerID)
+	labels["system_device"] = blockDevicePattern
+	labels["obi_disk_partition"] = optionalPartitionPattern
+	labels["obi_disk_stacked"] = stackedPattern
+	labels["disk_io_direction"] = regexp.MustCompile("^" + direction + "$")
+	return labels
+}
+
+// pendingLabels are the expected attributes of the requests in flight of a device, which are not
+// charged to workloads
+func pendingLabels(direction string) map[string]*regexp.Regexp {
+	return map[string]*regexp.Regexp{
+		"system_device":     blockDevicePattern,
+		"obi_disk_stacked":  stackedPattern,
+		"disk_io_direction": regexp.MustCompile("^" + direction + "$"),
+		"obi_ip":            ipPattern,
+	}
+}
+
+// assertHistogramBounds checks that the histograms of the given _bucket series have the given
+// bucket boundaries
+func assertHistogramBounds(t require.TestingT, buckets []promtest.Result, bounds []float64) {
+	histograms, err := promtest.BucketBounds(buckets)
+	require.NoError(t, err)
+	require.NotEmpty(t, histograms)
+	for histogram, les := range histograms {
+		assert.Equal(t, append(slices.Clone(bounds), math.Inf(1)), les, histogram)
+	}
+}
+
+// testStatMetricsDiskOperationDuration checks the latency histogram of the O_DIRECT I/O of the
+// disk-io container: its attributes, its buckets, and that it counts every request
+func testStatMetricsDiskOperationDuration(t *testing.T, containerID string) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		selector := `{container_id="` + containerID + `",disk_io_direction="` + direction + `"}`
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			counts, err := pq.Query(`obi_stat_disk_operation_duration_seconds_count` + selector + ` > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, counts)
+			for _, res := range counts {
+				assertDiskStatLabels(ct, res.Metric, diskIOLabels(containerID, direction))
+			}
+
+			sums, err := pq.Query(`obi_stat_disk_operation_duration_seconds_sum` + selector + ` > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, sums)
+
+			buckets, err := pq.Query(`obi_stat_disk_operation_duration_seconds_bucket` + selector)
+			require.NoError(ct, err)
+			assertHistogramBounds(ct, buckets, export.DefaultBuckets.StatDiskOperationDurationHistogram)
+
+			// both are reported from the same requests, so they are equal in every scrape
+			mismatches, err := pq.Query(`obi_stat_disk_operation_duration_seconds_count` + selector +
+				` != obi_stat_disk_operations_total` + selector)
+			require.NoError(ct, err)
+			assert.Empty(ct, mismatches, "the histogram must count the same requests as the operations counter")
+		}, testTimeout, 100*time.Millisecond)
+	}
+}
+
+// testStatMetricsDiskCounters checks that the I/O of the disk-io container is charged to it
+func testStatMetricsDiskCounters(t *testing.T, containerID string) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, metric := range []string{
+		"obi_stat_disk_io_bytes_total",
+		"obi_stat_disk_operations_total",
+		"obi_stat_disk_operation_time_seconds_total",
+	} {
+		for _, direction := range []string{"read", "write"} {
+			require.EventuallyWithT(t, func(ct *assert.CollectT) {
+				results, err := pq.Query(metric + `{container_id="` + containerID + `",disk_io_direction="` + direction + `"} > 0`)
+				require.NoError(ct, err)
+				enoughPromResults(ct, results)
+				for _, res := range results {
+					assertDiskStatLabels(ct, res.Metric, diskIOLabels(containerID, direction))
+				}
+			}, testTimeout, 100*time.Millisecond)
+		}
+	}
+}
+
+// testStatMetricsFsSyncDuration checks the latency histogram of the file syncs of the disk-io
+// container, which have neither device nor direction
+func testStatMetricsFsSyncDuration(t *testing.T, containerID string) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	selector := `{container_id="` + containerID + `"}`
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		counts, err := pq.Query(`obi_stat_fs_sync_duration_seconds_count` + selector + ` > 0`)
+		require.NoError(ct, err)
+		enoughPromResults(ct, counts)
+		for _, res := range counts {
+			assertDiskStatLabels(ct, res.Metric, fsSyncLabels(containerID))
+		}
+
+		sums, err := pq.Query(`obi_stat_fs_sync_duration_seconds_sum` + selector + ` > 0`)
+		require.NoError(ct, err)
+		enoughPromResults(ct, sums)
+
+		buckets, err := pq.Query(`obi_stat_fs_sync_duration_seconds_bucket` + selector)
+		require.NoError(ct, err)
+		assertHistogramBounds(ct, buckets, export.DefaultBuckets.StatFsSyncDurationHistogram)
+	}, testTimeout, 100*time.Millisecond)
+}
+
+// testStatMetricsDiskQueueDuration checks the histogram of the time the requests of the disk-io
+// container wait before their issue: the kernel knows it for every request of the host disks,
+// which keep I/O statistics
+func testStatMetricsDiskQueueDuration(t *testing.T, containerID string) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		selector := `{container_id="` + containerID + `",disk_io_direction="` + direction + `"}`
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			counts, err := pq.Query(`obi_stat_disk_queue_duration_seconds_count` + selector + ` > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, counts)
+			for _, res := range counts {
+				assertDiskStatLabels(ct, res.Metric, diskIOLabels(containerID, direction))
+			}
+
+			buckets, err := pq.Query(`obi_stat_disk_queue_duration_seconds_bucket` + selector)
+			require.NoError(ct, err)
+			assertHistogramBounds(ct, buckets, export.DefaultBuckets.StatDiskQueueDurationHistogram)
+
+			// the wait is measured for some or all of the requests, never more
+			excess, err := pq.Query(`obi_stat_disk_queue_duration_seconds_count` + selector +
+				` > obi_stat_disk_operation_duration_seconds_count` + selector)
+			require.NoError(ct, err)
+			assert.Empty(ct, excess, "the wait can't be measured for more requests than completed")
+		}, testTimeout, 100*time.Millisecond)
+	}
+}
+
+// testStatMetricsDiskPendingOperations checks that the devices that the disk-io container reads
+// and writes report their requests in flight
+func testStatMetricsDiskPendingOperations(t *testing.T, containerID string) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			devices, err := pq.Query(`group by (system_device) (obi_stat_disk_operations_total{container_id="` + containerID +
+				`",disk_io_direction="` + direction + `"})`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, devices)
+			for _, device := range devices {
+				pending, err := pq.Query(`obi_stat_disk_pending_operations{system_device="` + device.Metric["system_device"] +
+					`",disk_io_direction="` + direction + `"} >= 0`)
+				require.NoError(ct, err)
+				require.Len(ct, pending, 1, "one series per device and direction")
+				assertDiskStatLabels(ct, pending[0].Metric, pendingLabels(direction))
+			}
+		}, testTimeout, 100*time.Millisecond)
+	}
+}
+
+// testStatMetricsNoDiskStats checks that the stats aggregate feature doesn't enable the disk stats
+func testStatMetricsNoDiskStats(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	results, err := pq.Query(`{__name__=~"obi_stat_disk_.*"}`)
+	require.NoError(t, err)
+	assert.Empty(t, results)
 }

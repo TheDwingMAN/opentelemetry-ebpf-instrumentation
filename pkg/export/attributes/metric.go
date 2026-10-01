@@ -666,6 +666,84 @@ var (
 		OTEL:    "obi.stat.tcp.successful.connections",
 		Type:    InstrumentCounter,
 	})
+	StatDiskOperationDuration = metric(Name{
+		Section: "obi.stat.disk.operation.duration",
+		OTEL:    "obi.stat.disk.operation.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatDiskIO = metric(Name{
+		Section: "obi.stat.disk.io",
+		OTEL:    "obi.stat.disk.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
+	StatDiskOperations = metric(Name{
+		Section: "obi.stat.disk.operations",
+		OTEL:    "obi.stat.disk.operations",
+		Unit:    "{operation}",
+		Type:    InstrumentCounter,
+	})
+	StatDiskOperationTime = metric(Name{
+		Section: "obi.stat.disk.operation.time",
+		OTEL:    "obi.stat.disk.operation.time",
+		Unit:    "s",
+		Type:    InstrumentCounter,
+	})
+	StatFsSyncDuration = metric(Name{
+		Section: "obi.stat.fs.sync.duration",
+		OTEL:    "obi.stat.fs.sync.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatDiskQueueDuration = metric(Name{
+		Section: "obi.stat.disk.queue.duration",
+		OTEL:    "obi.stat.disk.queue.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatDiskFlushDuration = metric(Name{
+		Section: "obi.stat.disk.flush.duration",
+		OTEL:    "obi.stat.disk.flush.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatDiskDiscardDuration = metric(Name{
+		Section: "obi.stat.disk.discard.duration",
+		OTEL:    "obi.stat.disk.discard.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatDiskDiscardIO = metric(Name{
+		Section: "obi.stat.disk.discard.io",
+		OTEL:    "obi.stat.disk.discard.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
+	StatDiskPendingOperations = metric(Name{
+		Section: "obi.stat.disk.pending_operations",
+		OTEL:    "obi.stat.disk.pending_operations",
+		Unit:    "{operation}",
+		Type:    InstrumentUpDownCounter,
+	})
+	StatNFSClientProcedureDuration = metric(Name{
+		Section: "obi.stat.nfs.client.procedure.duration",
+		OTEL:    "obi.stat.nfs.client.procedure.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatNFSClientIO = metric(Name{
+		Section: "obi.stat.nfs.client.io",
+		OTEL:    "obi.stat.nfs.client.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
+	StatK8sPodVolumeDevice = metric(Name{
+		Section: "obi.stat.k8s.pod.volume.device",
+		OTEL:    "obi.stat.k8s.pod.volume.device",
+		Unit:    "{volume}",
+		Type:    InstrumentUpDownCounter,
+	})
 )
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"slices"
 	"time"
 
 	ciliumebpf "github.com/cilium/ebpf"
@@ -62,6 +63,10 @@ func (s Status) String() string {
 
 var errShutdownTimeout = errors.New("graceful shutdown has timed out while waiting for eBPF statsolly to finish")
 
+// defaultDiskReadInterval is how often the disk accumulation map is read when ebpf.batch_timeout
+// doesn't set a period
+const defaultDiskReadInterval = time.Second
+
 // Stats reporting agent
 type Stats struct {
 	cfg     *obi.Config
@@ -73,6 +78,8 @@ type Stats struct {
 
 	// stat metrics
 	rbTracer *stats.RingBufTracer
+	// nil unless block I/O stat metrics are enabled and their probes attached
+	diskTracer *stats.DiskMapTracer
 
 	// focuses on TCP/UDP stack internals (kprobes/tracepoints)
 	fetcher ebpFetcher
@@ -84,6 +91,14 @@ type ebpFetcher interface {
 	io.Closer
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
+	DiskIOAccumMap() *ciliumebpf.Map
+	DiskBioAccumMap() *ciliumebpf.Map
+	DiskBioDevicesMap() *ciliumebpf.Map
+	FsSyncAccumMap() *ciliumebpf.Map
+	NFSProcedureAccumMap() *ciliumebpf.Map
+	NFSIOAccumMap() *ciliumebpf.Map
+	DiskCgroupNamesMap() *ciliumebpf.Map
+	DiskStatusIsBlkStatus() bool
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -107,7 +122,9 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		SelectionCfg:            cfg.Attributes.Select,
 		ExtraGroupAttributesCfg: cfg.Attributes.ExtraGroupAttributes,
 	}
-	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg)
+	features := probedFeatures(alog, cfg.Metrics.Features, ctxInfo.DynamicSelector != nil)
+
+	statsFetcher, err = newFetcher(&cfg.EBPF, &features, ctxInfo.MetricAttributeGroups, selectorCfg, latencyHistograms(cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -115,8 +132,66 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
 }
 
-func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg)
+// probedFeatures returns the stat features whose eBPF probes must be loaded. Block I/O, file sync
+// and NFS stats can't be matched to dynamically selected applications yet, so they are left out
+// under dynamic selection.
+func probedFeatures(log *slog.Logger, features export.Features, dynamicSelection bool) export.Features {
+	storage := export.FeatureStatsDisk | export.FeatureStatsFsSyncDuration | export.FeatureStatsNFS
+	if !dynamicSelection || features&storage == 0 {
+		return features
+	}
+	log.Warn("disk, file sync and NFS stat metrics are disabled: they are not supported with dynamic application selection")
+	return features &^ storage
+}
+
+func newFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups attributes.AttrGroups,
+	selectorCfg *attributes.SelectorConfig, histograms ebpf.LatencyHistograms,
+) (ebpFetcher, error) {
+	return ebpf.NewStatsFetcher(cfg, features, attrGroups, selectorCfg, histograms)
+}
+
+// latencyHistograms returns the boundaries the kernel buckets latencies with: the union of the
+// boundaries of the enabled histograms in the enabled exporters, so that the kernel buckets refine
+// all of them. The kernel buckets all the block request latencies with the same boundaries.
+func latencyHistograms(cfg *obi.Config) ebpf.LatencyHistograms {
+	var exporters []export.Buckets
+	if cfg.Prometheus.EndpointEnabled() {
+		exporters = append(exporters, cfg.Prometheus.Buckets)
+	}
+	if cfg.OTELMetrics.EndpointEnabled() {
+		exporters = append(exporters, cfg.OTELMetrics.Buckets)
+	}
+	features := cfg.Metrics.Features
+	var histograms ebpf.LatencyHistograms
+	for _, buckets := range exporters {
+		if features.StatsDiskOperationDuration() {
+			histograms.Disk = append(histograms.Disk, buckets.StatDiskOperationDurationHistogram...)
+		}
+		if features.StatsDiskQueueDuration() {
+			histograms.Disk = append(histograms.Disk, buckets.StatDiskQueueDurationHistogram...)
+		}
+		if features.StatsDiskFlush() {
+			histograms.Disk = append(histograms.Disk, buckets.StatDiskFlushDurationHistogram...)
+		}
+		if features.StatsDiskDiscard() {
+			histograms.Disk = append(histograms.Disk, buckets.StatDiskDiscardDurationHistogram...)
+		}
+		if features.StatsFsSyncDuration() {
+			histograms.FsSyncDuration = append(histograms.FsSyncDuration, buckets.StatFsSyncDurationHistogram...)
+		}
+		if features.StatsNFSClientProcedureDuration() {
+			histograms.NFS = append(histograms.NFS, buckets.StatNFSClientProcedureDurationHistogram...)
+		}
+	}
+	histograms.Disk = sortedUnique(histograms.Disk)
+	histograms.FsSyncDuration = sortedUnique(histograms.FsSyncDuration)
+	histograms.NFS = sortedUnique(histograms.NFS)
+	return histograms
+}
+
+func sortedUnique(bounds []float64) []float64 {
+	slices.Sort(bounds)
+	return slices.Compact(bounds)
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests
@@ -128,12 +203,38 @@ func statsAgent(
 ) (*Stats, error) {
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
+	var diskTracer *stats.DiskMapTracer
+	if statsFetcher.DiskIOAccumMap() != nil || statsFetcher.FsSyncAccumMap() != nil ||
+		statsFetcher.NFSProcedureAccumMap() != nil || statsFetcher.NFSIOAccumMap() != nil {
+		interval := cfg.EBPF.BatchTimeout
+		if interval <= 0 {
+			interval = defaultDiskReadInterval
+		}
+		histograms := latencyHistograms(cfg)
+		diskTracer = stats.NewDiskMapTracer(&stats.DiskMapTracerConfig{
+			DiskIOAccum:           statsFetcher.DiskIOAccumMap(),
+			DiskPending:           cfg.Metrics.Features.StatsDiskPendingOperations(),
+			DiskBioAccum:          statsFetcher.DiskBioAccumMap(),
+			DiskBioDevices:        statsFetcher.DiskBioDevicesMap(),
+			FsSyncAccum:           statsFetcher.FsSyncAccumMap(),
+			NFSProcedureAccum:     statsFetcher.NFSProcedureAccumMap(),
+			NFSIOAccum:            statsFetcher.NFSIOAccumMap(),
+			CgroupNames:           statsFetcher.DiskCgroupNamesMap(),
+			DiskLatencyBounds:     histograms.Disk,
+			FsSyncLatencyBounds:   histograms.FsSyncDuration,
+			NFSLatencyBounds:      histograms.NFS,
+			DiskStatusIsBlkStatus: statsFetcher.DiskStatusIsBlkStatus(),
+			Interval:              interval,
+		})
+	}
+
 	return &Stats{
-		ctxInfo:  ctxInfo,
-		cfg:      cfg,
-		rbTracer: rbTracer,
-		agentIP:  agentIP,
-		fetcher:  statsFetcher,
+		ctxInfo:    ctxInfo,
+		cfg:        cfg,
+		rbTracer:   rbTracer,
+		diskTracer: diskTracer,
+		agentIP:    agentIP,
+		fetcher:    statsFetcher,
 	}, nil
 }
 

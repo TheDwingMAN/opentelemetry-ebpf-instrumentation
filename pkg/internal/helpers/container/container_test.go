@@ -141,3 +141,33 @@ func TestContainerID(t *testing.T) {
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrContainerNotFound)
 }
+
+func TestIDFromCgroupName(t *testing.T) {
+	for _, name := range []string{
+		"cri-containerd-" + fixtureContainerID + ".scope",
+		"crio-" + fixtureContainerID + ".scope",
+		"docker-" + fixtureContainerID + ".scope",
+		"libpod-" + fixtureContainerID + ".scope",
+		// cgroupfs driver, e.g. /docker/<id> or /kubepods/burstable/pod<uid>/<id>
+		fixtureContainerID,
+	} {
+		t.Run(name, func(t *testing.T) {
+			id, ok := IDFromCgroupName(name)
+			require.True(t, ok)
+			assert.Equal(t, fixtureContainerID, id)
+		})
+	}
+	for _, name := range []string{
+		"",
+		"system.slice",
+		"kubepods-besteffort-pod7260904b_bd08_e72e_4dff_95d9fccd2ee8.slice",
+		"session-3.scope",
+		fixtureContainerID[1:],
+		"docker-" + fixtureContainerID + ".scope.old",
+	} {
+		t.Run("not a container: "+name, func(t *testing.T) {
+			_, ok := IDFromCgroupName(name)
+			assert.False(t, ok)
+		})
+	}
+}

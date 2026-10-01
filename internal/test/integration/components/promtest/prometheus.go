@@ -10,8 +10,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -63,6 +66,43 @@ func (c *Client) Query(promQL string) ([]Result, error) {
 		"status", qr.Status,
 		"resultType", qr.Data.ResultType)
 	return qr.Data.Result, nil
+}
+
+// LabelMismatches describes how the labels of a series differ from the expected ones, among the
+// given labels: each expected label must match its pattern, and the other labels must be missing
+func LabelMismatches(series map[string]string, labels []string, expected map[string]*regexp.Regexp) []string {
+	var mismatches []string
+	for _, label := range labels {
+		value, present := series[label]
+		pattern, isExpected := expected[label]
+		switch {
+		case !isExpected && present:
+			mismatches = append(mismatches, fmt.Sprintf("unexpected label %s=%q", label, value))
+		case isExpected && !pattern.MatchString(value):
+			mismatches = append(mismatches, fmt.Sprintf("label %s=%q doesn't match %s", label, value, pattern))
+		}
+	}
+	return mismatches
+}
+
+// BucketBounds returns the sorted upper bounds of the buckets of each histogram in the results of
+// a query for its _bucket series, keyed by the labels of the histogram
+func BucketBounds(buckets []Result) (map[string][]float64, error) {
+	bounds := map[string][]float64{}
+	for _, bucket := range buckets {
+		le, err := strconv.ParseFloat(bucket.Metric["le"], 64)
+		if err != nil {
+			return nil, fmt.Errorf("parsing bucket bound of %v: %w", bucket.Metric, err)
+		}
+		histogram := maps.Clone(bucket.Metric)
+		delete(histogram, "le")
+		key := fmt.Sprint(histogram)
+		bounds[key] = append(bounds[key], le)
+	}
+	for _, les := range bounds {
+		slices.Sort(les)
+	}
+	return bounds, nil
 }
 
 type ScrapedMetric struct {

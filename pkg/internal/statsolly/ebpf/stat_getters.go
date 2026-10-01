@@ -66,10 +66,105 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 	case attr.NetworkIoDirection:
 		getter = func(s *Stat) attribute.KeyValue {
 			var direction uint8
-			if s.TCPIo != nil {
+			switch {
+			case s.TCPIo != nil:
 				direction = s.TCPIo.Direction
+			case s.NFSIO != nil:
+				direction = s.NFSIO.Direction
 			}
 			return attribute.String(string(attr.NetworkIoDirection), networkIoDirectionStr(NetworkIoDirectionCode(direction)))
+		}
+	case attr.SystemDevice:
+		getter = func(s *Stat) attribute.KeyValue {
+			if device := diskDevice(s); device != "" {
+				return attribute.String(string(attr.SystemDevice), device)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.DiskPartition:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.DiskIO == nil || s.DiskIO.Partition == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.DiskPartition), s.DiskIO.Partition)
+		}
+	case attr.DiskStacked:
+		getter = func(s *Stat) attribute.KeyValue {
+			switch {
+			case s.DiskIO != nil:
+				return attribute.Bool(string(attr.DiskStacked), s.DiskIO.Stacked)
+			case s.DiskPending != nil:
+				return attribute.Bool(string(attr.DiskStacked), s.DiskPending.Stacked)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.FsSyncType:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.FsSync == nil {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.FsSyncType), fsSyncTypeStr(s.FsSync.Type))
+		}
+	case attr.FilesystemMountpoint:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.FsSync == nil || s.FsSync.Mountpoint == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.FilesystemMountpoint), s.FsSync.Mountpoint)
+		}
+	case attr.FilesystemType:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.FsSync == nil || s.FsSync.FilesystemType == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.FilesystemType), s.FsSync.FilesystemType)
+		}
+	case attr.K8sVolumeName, attr.K8sVolumeType, attr.K8sPersistentVolumeClaimName, attr.K8sPersistentVolumeName,
+		attr.DiskVolumeDevice:
+		getter = podVolumeGetter(name)
+	case attr.ServerAddr:
+		getter = func(s *Stat) attribute.KeyValue {
+			if server := nfsServer(s); server != "" {
+				return attribute.String(string(attr.ServerAddr), server)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.OncRPCProcedureName:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSProcedure == nil || s.NFSProcedure.Procedure == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.OncRPCProcedureName), s.NFSProcedure.Procedure)
+		}
+	case attr.OncRPCVersion:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSProcedure == nil {
+				return attribute.KeyValue{}
+			}
+			return attribute.Int(string(attr.OncRPCVersion), int(s.NFSProcedure.Version))
+		}
+	case attr.DiskIODirection:
+		getter = func(s *Stat) attribute.KeyValue {
+			if direction := diskIODirectionStr(diskOp(s)); direction != "" {
+				return attribute.String(string(attr.DiskIODirection), direction)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.ErrorType:
+		getter = func(s *Stat) attribute.KeyValue {
+			// error.type only applies to failed operations: return an invalid
+			// KeyValue so the attribute is omitted instead of emitted empty.
+			if errorType := storageErrorType(s); errorType != "" {
+				return attribute.String(string(attr.ErrorType), errorType)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.ContainerID:
+		getter = func(s *Stat) attribute.KeyValue {
+			if containerID := s.ContainerID(); containerID != "" {
+				return attribute.String(string(attr.ContainerID), containerID)
+			}
+			return attribute.KeyValue{}
 		}
 
 	default:
@@ -123,4 +218,103 @@ func networkIoDirectionStr(d NetworkIoDirectionCode) string {
 		return string(DirectionReceive)
 	}
 	return ""
+}
+
+// diskIODirectionStr is the disk.io.direction of reads and writes, empty for other operations
+func diskIODirectionStr(op DiskOpCode) string {
+	switch op {
+	case CodeDiskOpRead:
+		return string(DiskDirectionRead)
+	case CodeDiskOpWrite:
+		return string(DiskDirectionWrite)
+	}
+	return ""
+}
+
+// diskDevice is the device of a block I/O or pod volume stat, empty for any other stat
+func diskDevice(s *Stat) string {
+	switch {
+	case s.DiskIO != nil:
+		return s.DiskIO.Device
+	case s.DiskPending != nil:
+		return s.DiskPending.Device
+	case s.PodVolume != nil:
+		return s.PodVolume.Device
+	}
+	return ""
+}
+
+// k8sVolumeTypePVC is the k8s.volume.type of the volumes that mount a PersistentVolumeClaim
+const k8sVolumeTypePVC = "persistentVolumeClaim"
+
+func podVolumeGetter(name attr.Name) attributes.Getter[*Stat, attribute.KeyValue] {
+	return func(s *Stat) attribute.KeyValue {
+		if s.PodVolume == nil {
+			return attribute.KeyValue{}
+		}
+		var value string
+		switch name {
+		case attr.K8sVolumeName:
+			value = s.PodVolume.VolumeName
+		case attr.K8sVolumeType:
+			value = k8sVolumeTypePVC
+		case attr.K8sPersistentVolumeClaimName:
+			value = s.PodVolume.ClaimName
+		case attr.K8sPersistentVolumeName:
+			value = s.PodVolume.PersistentVolume
+		case attr.DiskVolumeDevice:
+			value = s.PodVolume.MountedDevice
+		}
+		return attribute.String(string(name), value)
+	}
+}
+
+func diskOp(s *Stat) DiskOpCode {
+	switch {
+	case s.DiskIO != nil:
+		return s.DiskIO.Op
+	case s.DiskPending != nil:
+		return s.DiskPending.Op
+	}
+	return 0
+}
+
+// storageErrorType is the error of a block I/O, file sync or NFS RPC stat, empty on success
+func storageErrorType(s *Stat) string {
+	switch {
+	case s.DiskIO != nil:
+		return s.DiskIO.ErrorType
+	case s.FsSync != nil:
+		return s.FsSync.ErrorType
+	case s.NFSProcedure != nil:
+		return s.NFSProcedure.ErrorType
+	}
+	return ""
+}
+
+// nfsServer is the NFS server of an NFS client stat, empty for any other stat
+func nfsServer(s *Stat) string {
+	switch {
+	case s.NFSProcedure != nil:
+		return s.NFSProcedure.Server
+	case s.NFSIO != nil:
+		return s.NFSIO.Server
+	}
+	return ""
+}
+
+func fsSyncTypeStr(t FsSyncTypeCode) string {
+	switch t {
+	case CodeFsSyncFsync:
+		return "fsync"
+	case CodeFsSyncFdatasync:
+		return "fdatasync"
+	case CodeFsSyncSync:
+		return "sync"
+	case CodeFsSyncSyncfs:
+		return "syncfs"
+	case CodeFsSyncSyncFileRange:
+		return "sync_file_range"
+	}
+	return "unknown"
 }

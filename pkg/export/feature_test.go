@@ -55,6 +55,99 @@ func TestFeatureEnv_NetworkFlowPackets(t *testing.T) {
 	assert.False(t, doc.Features.has(FeatureAll))
 }
 
+func TestFeatureStatsDiskIsOptIn(t *testing.T) {
+	stats, err := LoadFeatures([]string{"stats"})
+	require.NoError(t, err)
+	assert.False(t, stats.StatsDiskOperationDuration(), "the stats aggregate must not enable disk stats")
+
+	disk, err := LoadFeatures([]string{"stats_disk_operation_duration"})
+	require.NoError(t, err)
+	assert.True(t, disk.StatsDiskOperationDuration())
+	assert.False(t, disk.StatsTCPRtt())
+	assert.True(t, disk.StatMetrics(), "a disk-only selection must still enable the stats pipeline")
+
+	assert.True(t, FeatureAll.StatsDiskOperationDuration())
+}
+
+func TestFeatureStatsFsSyncIsOptIn(t *testing.T) {
+	fsSync, err := LoadFeatures([]string{"stats_fs_sync_duration"})
+	require.NoError(t, err)
+	assert.True(t, fsSync.StatsFsSyncDuration())
+	assert.True(t, fsSync.StatMetrics(), "a file sync only selection must still enable the stats pipeline")
+	assert.False(t, fsSync.StatsDisk())
+
+	for _, aggregate := range []string{"stats", "stats_disk"} {
+		features, err := LoadFeatures([]string{aggregate})
+		require.NoError(t, err)
+		assert.False(t, features.StatsFsSyncDuration(), "%s must not enable file sync stats", aggregate)
+	}
+}
+
+func TestFeatureStatsNFSIsOptIn(t *testing.T) {
+	nfs, err := LoadFeatures([]string{"stats_nfs"})
+	require.NoError(t, err)
+	assert.True(t, nfs.StatsNFSClientProcedureDuration())
+	assert.True(t, nfs.StatsNFSClientIO())
+	assert.True(t, nfs.StatMetrics(), "an NFS only selection must still enable the stats pipeline")
+	assert.False(t, nfs.StatsDisk())
+
+	io, err := LoadFeatures([]string{"stats_nfs_client_io"})
+	require.NoError(t, err)
+	assert.True(t, io.StatsNFS())
+	assert.False(t, io.StatsNFSClientProcedureDuration())
+
+	for _, aggregate := range []string{"stats", "stats_disk"} {
+		features, err := LoadFeatures([]string{aggregate})
+		require.NoError(t, err)
+		assert.False(t, features.StatsNFS(), "%s must not enable NFS stats", aggregate)
+	}
+}
+
+func TestFeatureStatsDiskPodVolumesIsOptIn(t *testing.T) {
+	volumes, err := LoadFeatures([]string{"stats_disk_pod_volumes"})
+	require.NoError(t, err)
+	assert.True(t, volumes.StatsDiskPodVolumes())
+	assert.True(t, volumes.StatMetrics(), "a pod volumes only selection must still enable the stats pipeline")
+	assert.False(t, volumes.StatsDisk(), "it loads no block I/O probes")
+
+	for _, aggregate := range []string{"stats", "stats_disk"} {
+		features, err := LoadFeatures([]string{aggregate})
+		require.NoError(t, err)
+		assert.False(t, features.StatsDiskPodVolumes(), "%s must not watch the PersistentVolumes", aggregate)
+	}
+}
+
+func TestFeatureStatsDiskAggregate(t *testing.T) {
+	disk, err := LoadFeatures([]string{"stats_disk"})
+	require.NoError(t, err)
+	assert.True(t, disk.StatsDiskIO())
+	assert.True(t, disk.StatsDiskOperations())
+	assert.True(t, disk.StatsDiskOperationTime())
+	assert.True(t, disk.StatsDiskOperationDuration())
+	assert.True(t, disk.StatsDiskQueueDuration())
+	assert.True(t, disk.StatsDiskFlush())
+	assert.True(t, disk.StatsDiskDiscard())
+	assert.True(t, disk.StatsDiskPendingOperations())
+	assert.False(t, disk.StatsTCPIo(), "the disk aggregate doesn't enable TCP stats")
+
+	for _, feature := range []string{"stats_disk_queue_duration", "stats_disk_flush", "stats_disk_discard", "stats_disk_pending_operations"} {
+		features, err := LoadFeatures([]string{feature})
+		require.NoError(t, err)
+		assert.True(t, features.StatsDisk(), "%s loads the block I/O probes", feature)
+		assert.True(t, features.StatMetrics(), "%s enables the stats pipeline", feature)
+		assert.False(t, features.StatsDiskOperationDuration(), "%s alone doesn't report the request durations", feature)
+	}
+
+	counters, err := LoadFeatures([]string{"stats_disk_io", "stats_disk_operations", "stats_disk_operation_time"})
+	require.NoError(t, err)
+	assert.True(t, counters.StatsDisk())
+	assert.False(t, counters.StatsDiskOperationDuration())
+
+	stats, err := LoadFeatures([]string{"stats"})
+	require.NoError(t, err)
+	assert.False(t, stats.StatsDisk(), "the stats aggregate must not enable any disk stat")
+}
+
 func TestFeatureEnv_Separator(t *testing.T) {
 	doc := struct {
 		Features Features `env:"FOO" envSeparator:","`
@@ -347,6 +440,16 @@ func TestFeatureMarshalYAML(t *testing.T) {
 			name:     "partial aggregate expands to its bits",
 			features: FeatureStatsTCPRtt | FeatureStatsTCPRetransmits,
 			expected: "features:\n    - stats_tcp_rtt\n    - stats_tcp_retransmits\n",
+		},
+		{
+			name:     "disk stats are listed apart from the stats aggregate",
+			features: FeatureStats | FeatureStatsDiskOperationDuration,
+			expected: "features:\n    - stats\n    - stats_disk_operation_duration\n",
+		},
+		{
+			name:     "disk aggregate",
+			features: FeatureStatsDisk,
+			expected: "features:\n    - stats_disk\n",
 		},
 		{name: "all features", features: FeatureAll, expected: "features:\n    - all\n"},
 	} {

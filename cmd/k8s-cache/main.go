@@ -66,8 +66,11 @@ func main() {
 	// add the internal metrics to the context
 	ctx = instrument.Start(ctx, &config.InternalMetrics)
 
-	if err := ic.Run(ctx,
-		meta.WithResyncPeriod(config.InformerResyncPeriod)); err != nil {
+	opts := []meta.InformerOption{meta.WithResyncPeriod(config.InformerResyncPeriod)}
+	if config.PersistentVolumes {
+		opts = append(opts, meta.WithPersistentVolumes())
+	}
+	if err := ic.Run(ctx, opts...); err != nil {
 		slog.Error("starting informers' cache service", "error", err)
 		os.Exit(-1)
 	}

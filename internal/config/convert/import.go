@@ -2515,6 +2515,32 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsTCPRetransmits
 		case statsFeatureTCPIo:
 			out |= export.FeatureStatsTCPIo
+		case statsFeatureDiskIO:
+			out |= export.FeatureStatsDiskIO
+		case statsFeatureDiskOperations:
+			out |= export.FeatureStatsDiskOperations
+		case statsFeatureDiskOperationTime:
+			out |= export.FeatureStatsDiskOperationTime
+		case statsFeatureDiskOperationDuration:
+			out |= export.FeatureStatsDiskOperationDuration
+		case statsFeatureFsSyncDuration:
+			out |= export.FeatureStatsFsSyncDuration
+		case statsFeatureDiskQueueDuration:
+			out |= export.FeatureStatsDiskQueueDuration
+		case statsFeatureDiskFlush:
+			out |= export.FeatureStatsDiskFlush
+		case statsFeatureDiskDiscard:
+			out |= export.FeatureStatsDiskDiscard
+		case statsFeatureDiskPendingOperations:
+			out |= export.FeatureStatsDiskPendingOperations
+		case statsFeatureDiskStackedVolumes:
+			out |= export.FeatureStatsDiskStackedVolumes
+		case statsFeatureNFSClientProcedureDuration:
+			out |= export.FeatureStatsNFSClientProcedureDuration
+		case statsFeatureNFSClientIO:
+			out |= export.FeatureStatsNFSClientIO
+		case statsFeatureDiskPodVolumes:
+			out |= export.FeatureStatsDiskPodVolumes
 		}
 	}
 	return out

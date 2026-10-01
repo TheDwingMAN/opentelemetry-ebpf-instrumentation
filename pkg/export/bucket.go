@@ -6,14 +6,20 @@ package export // import "go.opentelemetry.io/obi/pkg/export"
 // Buckets defines the histograms bucket boundaries, and allows users to
 // redefine them
 type Buckets struct {
-	DurationHistogram            []float64 `yaml:"duration_histogram"`
-	RequestSizeHistogram         []float64 `yaml:"request_size_histogram"`
-	ResponseSizeHistogram        []float64 `yaml:"response_size_histogram"`
-	GenAITokenUsageHistogram     []float64 `yaml:"gen_ai_client_token_usage_histogram"`
-	GenAIClientDurationHistogram []float64 `yaml:"gen_ai_client_operation_duration_histogram"`
-	StatTCPRttHistogram          []float64 `yaml:"stat_tcp_rtt_histogram"`
-	V8JSGCDurationHistogram      []float64 `yaml:"v8js_gc_duration_histogram"`
-	JVMGCDurationHistogram       []float64 `yaml:"jvm_gc_duration_histogram"`
+	DurationHistogram                       []float64 `yaml:"duration_histogram"`
+	RequestSizeHistogram                    []float64 `yaml:"request_size_histogram"`
+	ResponseSizeHistogram                   []float64 `yaml:"response_size_histogram"`
+	GenAITokenUsageHistogram                []float64 `yaml:"gen_ai_client_token_usage_histogram"`
+	GenAIClientDurationHistogram            []float64 `yaml:"gen_ai_client_operation_duration_histogram"`
+	StatTCPRttHistogram                     []float64 `yaml:"stat_tcp_rtt_histogram"`
+	StatDiskOperationDurationHistogram      []float64 `yaml:"stat_disk_operation_duration_histogram"`
+	StatFsSyncDurationHistogram             []float64 `yaml:"stat_fs_sync_duration_histogram"`
+	StatDiskQueueDurationHistogram          []float64 `yaml:"stat_disk_queue_duration_histogram"`
+	StatDiskFlushDurationHistogram          []float64 `yaml:"stat_disk_flush_duration_histogram"`
+	StatDiskDiscardDurationHistogram        []float64 `yaml:"stat_disk_discard_duration_histogram"`
+	StatNFSClientProcedureDurationHistogram []float64 `yaml:"stat_nfs_client_procedure_duration_histogram"`
+	V8JSGCDurationHistogram                 []float64 `yaml:"v8js_gc_duration_histogram"`
+	JVMGCDurationHistogram                  []float64 `yaml:"jvm_gc_duration_histogram"`
 }
 
 // DefaultBuckets define the default explicit bucket boundaries. They are ignored by the OTEL exporter when
@@ -33,6 +39,15 @@ var DefaultBuckets = Buckets{
 
 	// Covers sub-millisecond to low-second RTT range.
 	StatTCPRttHistogram: []float64{0.0005, 0.001, 0.002, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0},
+
+	// From NVMe reads (tens of microseconds) to network storage stalls (seconds).
+	StatDiskOperationDurationHistogram: []float64{0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+	StatFsSyncDurationHistogram:        []float64{0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+	StatDiskQueueDurationHistogram:     []float64{0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+	StatDiskFlushDurationHistogram:     []float64{0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+	StatDiskDiscardDurationHistogram:   []float64{0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+	// From RPCs to a server on the same network (hundreds of microseconds) to server stalls.
+	StatNFSClientProcedureDurationHistogram: []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
 
 	// https://opentelemetry.io/docs/specs/semconv/runtime/nodejs-metrics/#metric-v8jsgcduration
 	V8JSGCDurationHistogram: []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10},

@@ -54,6 +54,8 @@ type MetadataConfig struct {
 	ResourceLabels           ResourceLabels
 	RestrictLocalNode        bool
 	ServiceNameTemplate      *template.Template
+	// PersistentVolumes watches the PersistentVolumes too. It needs extra RBAC permissions.
+	PersistentVolumes bool
 }
 
 type MetadataProvider struct {
@@ -146,6 +148,11 @@ func (mp *MetadataProvider) getInformer(ctx context.Context) (meta.Notifier, err
 		return mp.informer, nil
 	}
 	if mp.cfg.MetaCacheAddr != "" {
+		if mp.cfg.PersistentVolumes {
+			klog().Info("the volumes of the pods are only reported if the Kubernetes metadata cache "+
+				"watches the PersistentVolumes: check that its persistent_volumes option is enabled",
+				"address", mp.cfg.MetaCacheAddr)
+		}
 		mp.informer = mp.initRemoteInformerCacheClient(ctx)
 	} else {
 		var err error
@@ -299,6 +306,9 @@ func (mp *MetadataProvider) initLocalInformers(ctx context.Context) (*meta.Infor
 			return nil, fmt.Errorf("getting local node name: %w", err)
 		}
 		opts = append(opts, meta.RestrictNode(localNode))
+	}
+	if mp.cfg.PersistentVolumes {
+		opts = append(opts, meta.WithPersistentVolumes())
 	}
 	return meta.InitInformers(ctx, opts...)
 }

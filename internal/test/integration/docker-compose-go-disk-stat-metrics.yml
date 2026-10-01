@@ -1,0 +1,85 @@
+services:
+  disk-io:
+    build:
+      context: ../../..
+      dockerfile: ./internal/test/integration/components/go-disk-io/Dockerfile
+    image: hatest-go-disk-io
+    volumes:
+      # a named volume, so the O_DIRECT I/O goes to the host block device and not to the
+      # container overlay filesystem
+      - disk-io-data:/data
+    depends_on:
+      obi:
+        condition: service_started
+
+  obi:
+    build:
+      context: ../../..
+      dockerfile: ./internal/test/integration/components/obi/Dockerfile
+    volumes:
+      - ./configs/:/configs
+      - ./system/sys/kernel/security:/sys/kernel/security
+      - ../../../testoutput:/coverage
+      - ../../../testoutput/run-go-disk-stat-metrics:/var/run/obi
+      - /sys/kernel/tracing:/sys/kernel/tracing:rw
+    image: hatest-obi
+    privileged: true # in some environments (not GH Pull Requests) you can set it to false and then cap_add: [ SYS_ADMIN ]
+    pid: "host"
+    environment:
+      OTEL_EBPF_CONFIG_PATH: /configs/obi-config${OTEL_EBPF_CONFIG_SUFFIX}.yml
+      GOCOVERDIR: "/coverage"
+      OTEL_EBPF_METRICS_INTERVAL: "1s"
+      OTEL_EBPF_BPF_BATCH_TIMEOUT: "10ms"
+      OTEL_EBPF_LOG_LEVEL: "DEBUG"
+      OTEL_EBPF_BPF_DEBUG: "TRUE"
+      OTEL_EBPF_HOSTNAME: "obi"
+      OTEL_EBPF_METRICS_FEATURES: "stats_disk,stats_fs_sync_duration"
+    depends_on:
+      otelcol:
+        condition: service_started
+
+  # OpenTelemetry Collector
+  otelcol:
+    image: otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+    container_name: otel-col
+    deploy:
+      resources:
+        limits:
+          memory: 125M
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-config/otelcol-config-weaver-no-jaeger.yml"]
+    volumes:
+      - ./configs/:/etc/otelcol-config
+    ports:
+      - "4317" # OTLP over gRPC receiver
+      - "4318:4318" # OTLP over HTTP receiver
+      - "9464" # Prometheus exporter
+      - "8888" # metrics endpoint
+    depends_on:
+      prometheus:
+        condition: service_started
+      weaver:
+        condition: service_healthy
+
+  weaver:
+    extends:
+      file: components/weaver/service.yml
+      service: weaver
+    volumes:
+      - ../../../schemas/obi:/obi-registry:ro
+
+ # Prometheus
+  prometheus:
+    image: quay.io/prometheus/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
+    container_name: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus-config${PROM_CONFIG_SUFFIX}.yml
+      - --web.enable-lifecycle
+      - --web.route-prefix=/
+    volumes:
+      - ./configs/:/etc/prometheus
+    ports:
+      - "9090:9090"
+
+volumes:
+  disk-io-data:

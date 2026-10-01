@@ -484,7 +484,7 @@ extensions:
         stats:
           # Master switch for TCP stats observability.
           enabled: false
-          # Supported values: tcp_rtt, tcp_failed_connections, tcp_successful_connections, tcp_retransmits, tcp_io.
+          # Supported values: tcp_rtt, tcp_failed_connections, tcp_successful_connections, tcp_retransmits, tcp_io, disk_io, disk_operations, disk_operation_time, disk_operation_duration, disk_queue_duration, disk_flush, disk_discard, disk_pending_operations, disk_stacked_volumes, fs_sync_duration, nfs_client_procedure_duration, nfs_client_io, disk_pod_volumes.
           features: []
           endpoint_identity:
             agent_ip: ""

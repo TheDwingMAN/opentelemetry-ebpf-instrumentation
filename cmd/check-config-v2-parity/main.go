@@ -406,6 +406,45 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsTCPIo() {
 		want = append(want, "tcp_io")
 	}
+	if features.StatsDiskIO() {
+		want = append(want, "disk_io")
+	}
+	if features.StatsDiskOperations() {
+		want = append(want, "disk_operations")
+	}
+	if features.StatsDiskOperationTime() {
+		want = append(want, "disk_operation_time")
+	}
+	if features.StatsDiskOperationDuration() {
+		want = append(want, "disk_operation_duration")
+	}
+	if features.StatsFsSyncDuration() {
+		want = append(want, "fs_sync_duration")
+	}
+	if features.StatsDiskQueueDuration() {
+		want = append(want, "disk_queue_duration")
+	}
+	if features.StatsDiskFlush() {
+		want = append(want, "disk_flush")
+	}
+	if features.StatsDiskDiscard() {
+		want = append(want, "disk_discard")
+	}
+	if features.StatsDiskPendingOperations() {
+		want = append(want, "disk_pending_operations")
+	}
+	if features.StatsDiskStackedVolumes() {
+		want = append(want, "disk_stacked_volumes")
+	}
+	if features.StatsNFSClientProcedureDuration() {
+		want = append(want, "nfs_client_procedure_duration")
+	}
+	if features.StatsNFSClientIO() {
+		want = append(want, "nfs_client_io")
+	}
+	if features.StatsDiskPodVolumes() {
+		want = append(want, "disk_pod_volumes")
+	}
 
 	got := toStringSlice(featuresValue)
 	if !sameStringSet(got, want) {

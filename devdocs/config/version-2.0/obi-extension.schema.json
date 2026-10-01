@@ -2077,7 +2077,7 @@
         },
         "stats": {
           "type": "object",
-          "description": "TCP stats capture controls.",
+          "description": "TCP, block I/O (disk) and file sync stats capture controls.",
           "additionalProperties": true,
           "properties": {
             "enabled": {
@@ -2094,11 +2094,24 @@
                   "tcp_failed_connections",
                   "tcp_successful_connections",
                   "tcp_retransmits",
-                  "tcp_io"
+                  "tcp_io",
+                  "disk_io",
+                  "disk_operations",
+                  "disk_operation_time",
+                  "disk_operation_duration",
+                  "disk_queue_duration",
+                  "disk_flush",
+                  "disk_discard",
+                  "disk_pending_operations",
+                  "disk_stacked_volumes",
+                  "fs_sync_duration",
+                  "nfs_client_procedure_duration",
+                  "nfs_client_io",
+                  "disk_pod_volumes"
                 ]
               },
               "default": [],
-              "description": "Enabled TCP stats families.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones, the block I/O (disk) ones, file syncs, the NFS client ones and the devices of the pod volumes.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",

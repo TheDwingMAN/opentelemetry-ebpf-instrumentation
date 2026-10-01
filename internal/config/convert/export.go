@@ -375,11 +375,24 @@ func statsCIDRDefinitions(cfg *obi.Config) schema.CIDRDefinitions {
 }
 
 const (
-	statsFeatureTCPRtt                   = "tcp_rtt"
-	statsFeatureTCPFailedConnections     = "tcp_failed_connections"
-	statsFeatureTCPSuccessfulConnections = "tcp_successful_connections"
-	statsFeatureTCPRetransmits           = "tcp_retransmits"
-	statsFeatureTCPIo                    = "tcp_io"
+	statsFeatureTCPRtt                     = "tcp_rtt"
+	statsFeatureTCPFailedConnections       = "tcp_failed_connections"
+	statsFeatureTCPSuccessfulConnections   = "tcp_successful_connections"
+	statsFeatureTCPRetransmits             = "tcp_retransmits"
+	statsFeatureTCPIo                      = "tcp_io"
+	statsFeatureDiskIO                     = "disk_io"
+	statsFeatureDiskOperations             = "disk_operations"
+	statsFeatureDiskOperationTime          = "disk_operation_time"
+	statsFeatureDiskOperationDuration      = "disk_operation_duration"
+	statsFeatureFsSyncDuration             = "fs_sync_duration"
+	statsFeatureDiskQueueDuration          = "disk_queue_duration"
+	statsFeatureDiskFlush                  = "disk_flush"
+	statsFeatureDiskDiscard                = "disk_discard"
+	statsFeatureDiskPendingOperations      = "disk_pending_operations"
+	statsFeatureDiskStackedVolumes         = "disk_stacked_volumes"
+	statsFeatureNFSClientProcedureDuration = "nfs_client_procedure_duration"
+	statsFeatureNFSClientIO                = "nfs_client_io"
+	statsFeatureDiskPodVolumes             = "disk_pod_volumes"
 )
 
 func statsFeatures(features featureexport.Features) []string {
@@ -398,6 +411,45 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsTCPIo() {
 		out = append(out, statsFeatureTCPIo)
+	}
+	if features.StatsDiskIO() {
+		out = append(out, statsFeatureDiskIO)
+	}
+	if features.StatsDiskOperations() {
+		out = append(out, statsFeatureDiskOperations)
+	}
+	if features.StatsDiskOperationTime() {
+		out = append(out, statsFeatureDiskOperationTime)
+	}
+	if features.StatsDiskOperationDuration() {
+		out = append(out, statsFeatureDiskOperationDuration)
+	}
+	if features.StatsFsSyncDuration() {
+		out = append(out, statsFeatureFsSyncDuration)
+	}
+	if features.StatsDiskQueueDuration() {
+		out = append(out, statsFeatureDiskQueueDuration)
+	}
+	if features.StatsDiskFlush() {
+		out = append(out, statsFeatureDiskFlush)
+	}
+	if features.StatsDiskDiscard() {
+		out = append(out, statsFeatureDiskDiscard)
+	}
+	if features.StatsDiskPendingOperations() {
+		out = append(out, statsFeatureDiskPendingOperations)
+	}
+	if features.StatsDiskStackedVolumes() {
+		out = append(out, statsFeatureDiskStackedVolumes)
+	}
+	if features.StatsNFSClientProcedureDuration() {
+		out = append(out, statsFeatureNFSClientProcedureDuration)
+	}
+	if features.StatsNFSClientIO() {
+		out = append(out, statsFeatureNFSClientIO)
+	}
+	if features.StatsDiskPodVolumes() {
+		out = append(out, statsFeatureDiskPodVolumes)
 	}
 	return out
 }

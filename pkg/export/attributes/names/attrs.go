@@ -389,4 +389,24 @@ const (
 	TCPFailedConnectionReason = Name("reason")
 	NetworkTCPHandshakeRole   = Name("network.tcp.handshake.role")
 	NetworkIoDirection        = Name(semconv.NetworkIODirectionKey)
+	SystemDevice              = Name(semconv.SystemDeviceKey)
+	DiskIODirection           = Name(semconv.DiskIODirectionKey)
+	// DiskPartition is the partition of system.device that block I/O targets, e.g. nvme0n1p1
+	DiskPartition = Name("obi.disk.partition")
+	// DiskStacked tells whether system.device is built on other block devices, which report the
+	// same I/O too
+	DiskStacked = Name("obi.disk.stacked")
+	// FsSyncType is the call that synced files: fsync, fdatasync, sync, syncfs or sync_file_range
+	FsSyncType           = Name("obi.fs.sync.type")
+	FilesystemMountpoint = Name(semconv.SystemFilesystemMountpointKey)
+	FilesystemType       = Name(semconv.SystemFilesystemTypeKey)
+
+	// the volumes of the pods and the PersistentVolumes they mount
+	K8sVolumeName                = Name(semconv.K8SVolumeNameKey)
+	K8sVolumeType                = Name(semconv.K8SVolumeTypeKey)
+	K8sPersistentVolumeClaimName = Name(semconv.K8SPersistentvolumeclaimNameKey)
+	K8sPersistentVolumeName      = Name(semconv.K8SPersistentvolumeNameKey)
+	// DiskVolumeDevice is the block device that a volume is mounted from, e.g. a partition or an
+	// LVM volume on the disk that system.device names
+	DiskVolumeDevice = Name("obi.disk.volume.device")
 )
