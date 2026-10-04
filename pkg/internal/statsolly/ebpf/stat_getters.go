@@ -5,6 +5,7 @@ package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
 	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
@@ -114,10 +115,10 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		}
 	case attr.FilesystemType:
 		getter = func(s *Stat) attribute.KeyValue {
-			if s.FsSync == nil || s.FsSync.FilesystemType == "" {
+			if s.FsSync == nil {
 				return attribute.KeyValue{}
 			}
-			return attribute.String(string(attr.FilesystemType), s.FsSync.FilesystemType)
+			return semconvFilesystemType(s.FsSync.FilesystemType)
 		}
 	case attr.K8sVolumeName, attr.K8sVolumeType, attr.K8sPersistentVolumeClaimName, attr.K8sPersistentVolumeName,
 		attr.DiskVolumeDevice:
@@ -301,6 +302,28 @@ func nfsServer(s *Stat) string {
 		return s.NFSIO.Server
 	}
 	return ""
+}
+
+// semconvFilesystemTypes are the members of the system.filesystem.type enum of the semantic
+// conventions
+var semconvFilesystemTypes = []attribute.KeyValue{
+	semconv.SystemFilesystemTypeFat32,
+	semconv.SystemFilesystemTypeExfat,
+	semconv.SystemFilesystemTypeNtfs,
+	semconv.SystemFilesystemTypeRefs,
+	semconv.SystemFilesystemTypeHfsplus,
+	semconv.SystemFilesystemTypeExt4,
+}
+
+// semconvFilesystemType is the system.filesystem.type attribute of a filesystem type of the kernel.
+// It is omitted for the types that are not members of the enum, like xfs, tmpfs or overlay.
+func semconvFilesystemType(kernelType string) attribute.KeyValue {
+	for _, member := range semconvFilesystemTypes {
+		if member.Value.AsString() == kernelType {
+			return member
+		}
+	}
+	return attribute.KeyValue{}
 }
 
 func fsSyncTypeStr(t FsSyncTypeCode) string {

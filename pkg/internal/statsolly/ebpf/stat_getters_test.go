@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 )
 
@@ -88,6 +90,24 @@ func TestStatGetters_FsSync(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "0123abcd", containerID(failed).Value.AsString())
 	assert.False(t, containerID(succeeded).Valid())
+}
+
+func TestStatGetters_FilesystemTypeIsOnlyASemconvMember(t *testing.T) {
+	filesystemType, ok := StatGetters(attr.FilesystemType)
+	require.True(t, ok)
+	ofType := func(kernelType string) *Stat {
+		return &Stat{Type: StatTypeFsSync, FsSync: &FsSync{FilesystemType: kernelType}}
+	}
+
+	assert.Equal(t, attribute.String("system.filesystem.type", "ext4"), filesystemType(ofType("ext4")))
+	assert.Equal(t, attribute.String("system.filesystem.type", "exfat"), filesystemType(ofType("exfat")))
+	for _, kernelType := range []string{"xfs", "tmpfs", "overlay", "vfat", "nfs4", ""} {
+		assert.False(t, filesystemType(ofType(kernelType)).Valid(), kernelType)
+	}
+
+	filesystemTypeString, ok := StatStringGetters(attr.FilesystemType)
+	require.True(t, ok)
+	assert.Empty(t, filesystemTypeString(ofType("xfs")))
 }
 
 func TestStatGetters_NFSProcedure(t *testing.T) {

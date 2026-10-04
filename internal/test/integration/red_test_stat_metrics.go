@@ -114,7 +114,9 @@ var (
 	// the host may keep the docker volumes on an LVM volume, reported with its disk
 	stackedPattern    = regexp.MustCompile(`^(true|false)$`)
 	mountpointPattern = regexp.MustCompile(`^/`)
-	fsTypePattern     = regexp.MustCompile(`^[a-z0-9._]+$`)
+	// the type is only there when semantic conventions list it, which depends on the filesystem
+	// the host keeps the docker volumes on: ext4 is listed, xfs and overlay aren't
+	fsTypePattern = regexp.MustCompile(`^(fat32|exfat|ntfs|refs|hfsplus|ext4)?$`)
 )
 
 // assertDiskStatLabels checks that a series of a disk or file sync stat metric has exactly the
