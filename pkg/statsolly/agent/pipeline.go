@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/export"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
+	"go.opentelemetry.io/obi/pkg/kube"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm/swarms"
@@ -133,9 +134,13 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		storageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "storageStats")
 		swi.Add(mergeStats(diskStats, podVolumeStats, storageStats), swarm.WithID("StorageStatsMerger"))
 
+		selectedStorageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "selectedStorageStats")
+		swi.Add(filter.ByDynamicContainer(dynamicSelector, s.ctxInfo.K8sInformer, selectsStorageStat,
+			storageStats, selectedStorageStats), swarm.WithID("DynamicContainerFilter"))
+
 		kubeDecoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "kubeDecoratedDiskStats")
 		swi.Add(k8s.ContainerMetadataDecoratorProvider(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
-			(*ebpf.Stat).ContainerID, statAttrs, storageStats, kubeDecoratedDiskStats),
+			(*ebpf.Stat).ContainerID, statAttrs, selectedStorageStats, kubeDecoratedDiskStats),
 			swarm.WithID("DiskKubeDecorator"))
 
 		decoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "decoratedDiskStats")
@@ -179,6 +184,17 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 func (s *Stats) storageStatsEnabled() bool {
 	features := s.cfg.Metrics.Features
 	return features.StatsDisk() || features.StatsFsSyncDuration() || features.StatsNFS() || features.StatsDiskPodVolumes()
+}
+
+// selectsStorageStat tells whether a storage stat belongs to a dynamically selected application: a
+// pod volume, to a selected pod, and any other stat, to a selected container. The stats of devices,
+// like their requests in flight, belong to no application.
+func selectsStorageStat(containers *selection.DynamicAppContainers, stat *ebpf.Stat) bool {
+	if volume := stat.PodVolume; volume != nil {
+		owner := kube.WorkloadOwner{Namespace: volume.Namespace, Kind: volume.OwnerKind, Name: volume.OwnerName}
+		return containers.AllowsPod(volume.Namespace, volume.PodName, owner)
+	}
+	return containers.AllowsContainer(stat.ContainerID())
 }
 
 // mergeStats forwards the stats of both inputs to the output, and closes the output once both

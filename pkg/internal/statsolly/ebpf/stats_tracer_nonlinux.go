@@ -23,7 +23,7 @@ type LatencyHistograms struct {
 	NFS            []float64
 }
 
-func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ attributes.AttrGroups, _ *attributes.SelectorConfig, _ LatencyHistograms) (*StatsFetcher, error) {
+func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ attributes.AttrGroups, _ *attributes.SelectorConfig, _ LatencyHistograms, _ bool) (*StatsFetcher, error) {
 	return nil, nil
 }
 

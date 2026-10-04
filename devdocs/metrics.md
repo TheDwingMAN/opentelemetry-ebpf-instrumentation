@@ -160,7 +160,6 @@ StatsO11y probes fire at different points relative to `inet_put_port()`, so the 
 - Requests issued before OBI started are not measured.
 - The kernel buckets the latencies of all the disk histograms with the same boundaries: the union of the `stat_disk_operation_duration_histogram`, `stat_disk_queue_duration_histogram`, `stat_disk_flush_duration_histogram` and `stat_disk_discard_duration_histogram` buckets of the enabled metrics in the enabled exporters. It supports up to 24 distinct boundaries, and so do the file sync and NFS histograms: OBI fails to start with more.
 - The tracepoint arguments changed across kernel versions (and some of those changes were backported to older kernels), so OBI reads them from the kernel BTF instead of guessing from the kernel version. If the kernel BTF lacks the tracepoint prototypes, the disk probes are not loaded and a warning is logged; the other stat metrics keep working.
-- Disk stat metrics are not supported together with dynamic application selection: they are disabled when a dynamic PID selector is set.
 
 The disk metrics are charged to the workload that owns the I/O: the cgroup that the request's first bio is charged to, which is the cgroup the kernel also uses for `io.stat` and `io.max`. OBI reads the cgroup name in the kernel, takes the container ID from it, and decorates the metrics with the pod and container of that ID. Limitations:
 
@@ -218,6 +217,15 @@ OBI resolves the volumes every 30 seconds, from the Kubernetes metadata and the 
 - An RPC is charged to the workload of the thread that started it, through the cgroup of its `io` controller. The kernel writes cached data back from its own threads, unless the application syncs it, so those write RPCs are charged to no workload, like block I/O writeback on cgroup v1.
 - `server.address` is the IP address of the server, as the RPC transport displays it, not the host name of the mount.
 - `error.type` is the errno of failed RPCs, or the number of NFSv4 errors that the client doesn't translate into errnos.
+
+#### Storage stats under dynamic application selection
+
+When OBI is embedded with a dynamic selector (`instrumenter.WithDynamicSelector`), the block I/O, file sync and NFS metrics keep only what the kernel charges to the containers of the selected processes, and to the containers of the pods of the selected Kubernetes workloads. `obi.stat.k8s.pod.volume.device` keeps only the volumes of those pods. Limitations:
+
+- The selection works through containers: a selected process outside a container, and the operations charged to no container (like those of kernel threads), are not reported.
+- The requests in flight of the devices (`obi.stat.disk.pending_operations`) belong to no application, so they are not reported.
+- Selecting Kubernetes workloads needs the Kubernetes metadata.
+- While nothing is selected, no storage stat is reported.
 
 ### Performance considerations
 

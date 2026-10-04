@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/obi/internal/test/integration/components/promtest"
+	"go.opentelemetry.io/obi/pkg/appolly/discover"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/connector"
@@ -336,8 +338,8 @@ func TestDiskOperationsBeyondReadsAndWrites(t *testing.T) {
 }
 
 func TestDiskPendingOperationsOfSeveralStatsInOneSeries(t *testing.T) {
-	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskPendingOperations, func(cfg *obi.Config) {
-		cfg.Attributes.Select = attributes.Selection{
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskPendingOperations, func(s *Stats) {
+		s.cfg.Attributes.Select = attributes.Selection{
 			attributes.StatDiskPendingOperations.Section: attributes.InclusionLists{Exclude: []string{"disk.io.direction"}},
 		}
 	})
@@ -456,9 +458,27 @@ func TestPodVolumeStats(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+func TestStorageStatsOfUnselectedApplicationsUnderDynamicSelection(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskOperations|export.FeatureStatsDiskPendingOperations,
+		func(s *Stats) { s.ctxInfo.DynamicSelector = discover.NewDynamicSelector() })
+
+	ofContainer := fakeDiskRecord("vda", ebpf.CodeDiskOpWrite, "")
+	ofContainer.DiskIO.ContainerID = "0123abcd"
+	ofNoContainer := fakeDiskRecord("vda", ebpf.CodeDiskOpRead, "")
+	pending := &ebpf.Stat{Type: ebpf.StatTypeDiskPending, DiskPending: &ebpf.DiskPending{Device: "vda", Op: ebpf.CodeDiskOpRead, Requests: 2}}
+	diskEvents <- []*ebpf.Stat{ofContainer, ofNoContainer, pending}
+
+	exported := func() bool {
+		allMetrics, err := promtest.Scrape(promURL)
+		return err == nil &&
+			slices.ContainsFunc(allMetrics, func(m promtest.ScrapedMetric) bool { return strings.HasPrefix(m.Name, "obi_stat_disk") })
+	}
+	assert.Never(t, exported, time.Second, 100*time.Millisecond, "no application is selected, and the stats of devices belong to none")
+}
+
 // startDiskPipeline runs the stats pipeline with the given disk features, exporting to
 // Prometheus. It returns the channel to send disk stats through and the Prometheus URL.
-func startDiskPipeline(t *testing.T, features export.Features, configure ...func(*obi.Config)) (chan<- []*ebpf.Stat, string) {
+func startDiskPipeline(t *testing.T, features export.Features, configure ...func(*Stats)) (chan<- []*ebpf.Stat, string) {
 	registry := prometheus.NewRegistry()
 	promServer := httptest.NewServer(promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
 	t.Cleanup(promServer.Close)
@@ -484,7 +504,7 @@ func startDiskPipeline(t *testing.T, features export.Features, configure ...func
 	}
 
 	for _, c := range configure {
-		c(stats.cfg)
+		c(&stats)
 	}
 
 	diskEvents := make(chan []*ebpf.Stat, 10)

@@ -142,6 +142,45 @@ func TestContainerID(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrContainerNotFound)
 }
 
+func TestIDFromIOCgroupOfPID(t *testing.T) {
+	procRoot = mountFixtures(t) + "/"
+	const dockerCgroupfs app.PID = 1030
+	pdir := fmt.Sprintf("%s%d", procRoot, dockerCgroupfs)
+	require.NoError(t, os.Mkdir(pdir, 0o777))
+	require.NoError(t, os.WriteFile(pdir+"/cgroup", []byte("0::/docker/"+fixtureContainerID), 0o666))
+
+	const v1Container = "a2ffe0e97ac22657a2a023ad628e9df837c38a03b1ebc904d3f6d644eb1a1a81"
+	for pid, expected := range map[app.PID]string{
+		123:            fixtureContainerID,
+		589:            fixtureContainerID,
+		917:            fixtureContainerID,
+		dockerCgroupfs: fixtureContainerID,
+		// cgroup v1: the cgroup of the blkio hierarchy, not the cgroup v2
+		456:  v1Container,
+		1011: v1Container,
+		// the innermost container cgroup, which the I/O is charged to
+		999: "264c1e319d1f6080a48a9fabcf9ac8fd9afd9a5930cf35e8d0eeb03b258c3152",
+	} {
+		t.Run(fmt.Sprintf("PID %d", pid), func(t *testing.T) {
+			id, err := IDFromIOCgroupOfPID(pid)
+			require.NoError(t, err)
+			assert.Equal(t, expected, id)
+		})
+	}
+	// outside containers, a cgroup v1 node without the blkio hierarchy, and a cgroup below the
+	// container's, which the kernel charges the I/O to
+	for _, pid := range []app.PID{1012, 920, 922} {
+		t.Run(fmt.Sprintf("no container: PID %d", pid), func(t *testing.T) {
+			_, err := IDFromIOCgroupOfPID(pid)
+			assert.ErrorIs(t, err, ErrContainerNotFound)
+		})
+	}
+
+	_, err := IDFromIOCgroupOfPID(12345)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrContainerNotFound)
+}
+
 func TestIDFromCgroupName(t *testing.T) {
 	for _, name := range []string{
 		"cri-containerd-" + fixtureContainerID + ".scope",

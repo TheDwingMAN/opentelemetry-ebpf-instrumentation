@@ -142,9 +142,11 @@ func tlog() *slog.Logger {
 	return slog.With("component", "ebpf.StatFetcher")
 }
 
-// NewStatsFetcher loads and attaches the stat probes of the enabled features
+// NewStatsFetcher loads and attaches the stat probes of the enabled features. With readWorkloads,
+// the storage probes read the workload that each operation is charged to even when no reported
+// attribute needs it, as dynamic selection keeps only the storage stats of the selected workloads.
 func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups attributes.AttrGroups,
-	selectorCfg *attributes.SelectorConfig, histograms LatencyHistograms,
+	selectorCfg *attributes.SelectorConfig, histograms LatencyHistograms, readWorkloads bool,
 ) (*StatsFetcher, error) {
 	tlog := tlog()
 	// the kernel buckets each group of histograms with the union of their boundaries in the
@@ -215,6 +217,10 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 	bioAttached := diskAttached && features.StatsDiskStackedVolumes() && !blockLayout.bioUnknown
 	diskReads := diskAttributeReads(features, attrSel)
 	fsSyncReads := fsSyncAttributeReads(features, attrSel)
+	if readWorkloads {
+		diskReads.cgroup = true
+		fsSyncReads.cgroup = true
+	}
 	toDisable = append(toDisable, bioProgramsToDisable(bioAttached, blockLayout)...)
 	if !features.StatsFsSyncDuration() {
 		toDisable = append(toDisable, progObiStatsKprobeVfsFsyncRange, progObiStatsKretprobeVfsFsyncRange,

@@ -4,7 +4,6 @@
 package agent
 
 import (
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,15 +14,6 @@ import (
 	"go.opentelemetry.io/obi/pkg/export/prom"
 	"go.opentelemetry.io/obi/pkg/obi"
 )
-
-func TestProbedFeatures(t *testing.T) {
-	features := export.FeatureStatsTCPRtt | export.FeatureStatsDiskOperationDuration | export.FeatureStatsFsSyncDuration |
-		export.FeatureStatsNFSClientIO
-
-	assert.Equal(t, features, probedFeatures(slog.Default(), features, false))
-	assert.Equal(t, export.FeatureStatsTCPRtt, probedFeatures(slog.Default(), features, true),
-		"disk, file sync and NFS stats are left out under dynamic selection, TCP stats are kept")
-}
 
 func TestLatencyHistogramsOfTheEnabledExportersAndFeatures(t *testing.T) {
 	custom := []float64{0.0003, 0.0007, 0.003, 0.007, 0.03, 0.07, 0.3, 0.7, 3}

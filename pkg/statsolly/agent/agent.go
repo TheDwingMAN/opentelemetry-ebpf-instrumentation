@@ -122,9 +122,12 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		SelectionCfg:            cfg.Attributes.Select,
 		ExtraGroupAttributesCfg: cfg.Attributes.ExtraGroupAttributes,
 	}
-	features := probedFeatures(alog, cfg.Metrics.Features, ctxInfo.DynamicSelector != nil)
+	features := cfg.Metrics.Features
+	// dynamic selection keeps only the storage stats of the workloads of the selected applications
+	readWorkloads := ctxInfo.DynamicSelector != nil
 
-	statsFetcher, err = newFetcher(&cfg.EBPF, &features, ctxInfo.MetricAttributeGroups, selectorCfg, latencyHistograms(cfg))
+	statsFetcher, err = newFetcher(&cfg.EBPF, &features, ctxInfo.MetricAttributeGroups, selectorCfg, latencyHistograms(cfg),
+		readWorkloads)
 	if err != nil {
 		return nil, err
 	}
@@ -132,22 +135,10 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
 }
 
-// probedFeatures returns the stat features whose eBPF probes must be loaded. Block I/O, file sync
-// and NFS stats can't be matched to dynamically selected applications yet, so they are left out
-// under dynamic selection.
-func probedFeatures(log *slog.Logger, features export.Features, dynamicSelection bool) export.Features {
-	storage := export.FeatureStatsDisk | export.FeatureStatsFsSyncDuration | export.FeatureStatsNFS
-	if !dynamicSelection || features&storage == 0 {
-		return features
-	}
-	log.Warn("disk, file sync and NFS stat metrics are disabled: they are not supported with dynamic application selection")
-	return features &^ storage
-}
-
 func newFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups attributes.AttrGroups,
-	selectorCfg *attributes.SelectorConfig, histograms ebpf.LatencyHistograms,
+	selectorCfg *attributes.SelectorConfig, histograms ebpf.LatencyHistograms, readWorkloads bool,
 ) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, attrGroups, selectorCfg, histograms)
+	return ebpf.NewStatsFetcher(cfg, features, attrGroups, selectorCfg, histograms, readWorkloads)
 }
 
 // latencyHistograms returns the boundaries the kernel buckets latencies with: the union of the
