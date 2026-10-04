@@ -294,6 +294,13 @@ func launchJVM(t *testing.T, env []string, args ...string) *procs.ProcessHandle 
 
 	pid := app.PID(cmd.Process.Pid)
 
+	// Start returns once exec has replaced the image, but before the kernel has
+	// laid out the new command line and environment, which read empty until then.
+	require.Eventually(t, func() bool {
+		cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+		return err == nil && len(cmdline) > 0
+	}, 30*time.Second, 10*time.Millisecond, "JVM never laid out its command line")
+
 	var handle *procs.ProcessHandle
 	require.Eventually(t, func() bool {
 		startTime, err := procs.StartTime(pid)
