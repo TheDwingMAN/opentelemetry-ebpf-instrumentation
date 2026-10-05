@@ -3,6 +3,11 @@
 Complete configuration reference for OpenTelemetry eBPF Instrumentation (OBI).
 Configuration is provided via YAML file and/or environment variables.
 
+> [!IMPORTANT]
+> This reference documents Config v1, which is frozen for backward compatibility.
+> Config v1 does not receive bug fixes or new features. Migrate to
+> [Config v2](version-2.0/migration.md) to receive configuration improvements.
+
 Generated from [`config-schema.json`](config-schema.json).
 
 ---
@@ -188,6 +193,8 @@ EBPFTracer configuration for eBPF programs
 | `ebpf.high_request_volume` | `boolean` | `OTEL_EBPF_BPF_HIGH_REQUEST_VOLUME` | `false` |  |  | Optimizes for getting requests information immediately when request response is seen |
 | `ebpf.http_request_timeout` | `duration` | `OTEL_EBPF_BPF_HTTP_REQUEST_TIMEOUT` | `0s` | `30s`, `5m`, `1ms`, etc |  | Must be at least 0 |
 | `ebpf.instrument_cuda` | `integer` | `OTEL_EBPF_INSTRUMENT_CUDA` | `auto` |  |  | Enables GPU instrumentation for CUDA kernel launches and allocations |
+| `ebpf.kafka_consumer_group_cache_size` | `integer` | `OTEL_KAFKA_CONSUMER_GROUP_CACHE_SIZE` | `4096` |  |  | Kafka consumer groups cache size: number of processes whose consumer group membership, learned from group-coordination requests, is remembered and reported on consumer spans. |
+| `ebpf.kafka_consumer_group_ttl` | `duration` | `OTEL_EBPF_BPF_KAFKA_CONSUMER_GROUP_TTL` | `2m` | `30s`, `5m`, `1ms`, etc |  | Kafka consumer group membership lifetime: how long a consumer is remembered after its last group request, and how long a process is observed before its Fetches are attributed to a group. Keep it above both the heartbeat interval and the longest rebalance of classic consumers (bounded by max.poll.interval.ms, 5m by default), or their Fetches can be reported with another group of their process; a larger value delays the attribute for newly seen processes. The 2m default trades rebalances longer than that for a shorter warm-up; raise it above max.poll.interval.ms when cooperative classic consumers (Kafka Streams) share a process with another group. |
 | `ebpf.kafka_topic_uuid_cache_size` | `integer` | `OTEL_KAFKA_TOPIC_UUID_CACHE_SIZE` | `1024` |  |  | Kafka Topic UUID to Name cache size. |
 | `ebpf.max_transaction_time` | `duration` | `OTEL_EBPF_BPF_MAX_TRANSACTION_TIME` | `5m` | `30s`, `5m`, `1ms`, etc |  | Maximum time allowed for two requests to be correlated as parent -> child Some programs (e.g. load generators) keep on generating requests from the same thread in perpetuity, which can generate very large traces. We want to mark the parent trace as invalid if this happens. |
 | `ebpf.mongo_requests_cache_size` | `integer` | `OTEL_EBPF_BPF_MONGO_REQUESTS_CACHE_SIZE` | `1024` |  |  | MongoDB requests cache size. |
@@ -448,7 +455,7 @@ GlobalMetricsConfig is a placeholder for the progressive support of global and p
 |---|---|---|---|---|---|---|
 | `name_resolver.cache_expiry` | `duration` | `OTEL_EBPF_NAME_RESOLVER_CACHE_TTL` | `5m` | `30s`, `5m`, `1ms`, etc |  | Specifies the time-to-live of a cached IP->hostname entry. After the cached entry becomes older than this time, the IP->hostname entry will be looked up again. |
 | `name_resolver.cache_len` | `integer` | `OTEL_EBPF_NAME_RESOLVER_CACHE_LEN` | `1024` |  |  | Specifies the max size of the LRU cache that is checked before performing the name lookup. Default: 256 |
-| `name_resolver.sources` | `string`[] | `OTEL_EBPF_NAME_RESOLVER_SOURCES` | `k8s` | `dns`, `ecs`, `k8s`, `kube`, `kubernetes`, `rdns` |  | Specifies the backends used for name resolving. Accepted values: dns, ecs, k8s, rdns. The "ecs" source requires ecs:ListTasks and ecs:DescribeTasks permissions. |
+| `name_resolver.sources` | `string`[] | `OTEL_EBPF_NAME_RESOLVER_SOURCES` | `k8s`, `ecs` | `dns`, `ecs`, `k8s`, `kube`, `kubernetes`, `rdns` |  | Specifies the backends used for name resolving. Accepted values: dns, ecs, k8s, rdns. The "ecs" source requires ecs:ListTasks and ecs:DescribeTasks permissions. |
 
 ### `name_resolver.ecs`
 
