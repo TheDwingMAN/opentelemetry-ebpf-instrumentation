@@ -955,7 +955,7 @@ func TestConfigValidateForReceiverUsesHostMetricsForStats(t *testing.T) {
 	cfg := loadConfig(t, envMap{})
 	cfg.Metrics.Features = export.FeatureStats
 
-	require.ErrorContains(t, cfg.Validate(), "at least one of 'network', 'application', 'stats' or 'storage_block'")
+	require.ErrorContains(t, cfg.Validate(), "at least one of 'network', 'application', 'stats', 'storage_block' or 'storage_fs'")
 	require.NoError(t, cfg.ValidateForReceiver())
 }
 

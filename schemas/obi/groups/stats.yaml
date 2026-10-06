@@ -39,6 +39,42 @@ groups:
               stability: development
         stability: development
         brief: Classification of why a TCP connection failed.
+      # Mirrors `FsTypeName` and `FsOpType` in
+      # `pkg/internal/statsolly/ebpf/stat.go`. The filesystem is identified by
+      # which implementation the probe fired on, not by inspecting the event.
+      - id: fs.type
+        type:
+          allow_custom_values: false
+          members:
+            - id: nfs
+              value: nfs
+              stability: development
+            - id: ceph
+              value: ceph
+              stability: development
+            - id: cifs
+              value: cifs
+              stability: development
+            - id: fuse
+              value: fuse
+              stability: development
+            - id: unknown
+              value: unknown
+              stability: development
+        stability: development
+        brief: Network filesystem the operation was issued against.
+      - id: fs.operation
+        type:
+          allow_custom_values: false
+          members:
+            - id: read
+              value: read
+              stability: development
+            - id: write
+              value: write
+              stability: development
+        stability: development
+        brief: Filesystem operation performed.
       # Mirrors `NetworkTCPHandshakeRoleType` in
       # `pkg/internal/statsolly/ebpf/stat.go`. Identifies which side of the
       # TCP handshake OBI observed the failure on.
@@ -192,3 +228,41 @@ groups:
     attributes:
       - ref: system.device
       - ref: disk.io.direction
+
+  # Network filesystem stats. Emitted when the `storage_fs` feature is enabled.
+  # Probes attach to each filesystem's own file_operations read/write
+  # implementations (nfs_file_read, ceph_read_iter, cifs_loose_read_iter,
+  # fuse_file_read_iter and their write counterparts) rather than to generic
+  # VFS, so a node not using a given filesystem pays nothing for it.
+  #
+  # Semantics note: buffered writes return once data is in the page cache, so
+  # this is application-perceived latency, not server round-trip time -- the
+  # RPC happens later on a writeback thread.
+  - id: metric.obi_stat_fs_operation_duration
+    type: metric
+    metric_name: obi.stat.fs.operation.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Latency of a single network filesystem read or write as the application
+      experiences it, broken down by filesystem type and operation.
+    attributes:
+      - ref: fs.type
+      - ref: fs.operation
+
+  # Companion to the histogram above: volume of data moved by the same
+  # operations. Published under obi.* rather than system.filesystem.* so it
+  # cannot double-count against the Collector's hostmetrics receiver.
+  - id: metric.obi_stat_fs_io
+    type: metric
+    metric_name: obi.stat.fs.io
+    instrument: counter
+    unit: "By"
+    stability: development
+    brief: >
+      Count of bytes transferred through network filesystem read and write
+      operations, broken down by filesystem type and operation.
+    attributes:
+      - ref: fs.type
+      - ref: fs.operation
