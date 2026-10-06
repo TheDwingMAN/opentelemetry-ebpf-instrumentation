@@ -225,7 +225,9 @@ groups:
     brief: >
       Time a disk I/O request spent queued before being dispatched to the
       device, measured from `block_rq_insert` to `block_rq_issue`, broken down
-      by device and direction.
+      by device and direction. Requests that blk-mq issues directly, without
+      passing through `block_rq_insert`, are not observed: they have no queue
+      wait to report and recording a zero would understate the distribution.
     attributes:
       - ref: system.device
       - ref: disk.io.direction
@@ -266,10 +268,14 @@ groups:
       - ref: error.type
 
   # Filesystem stats. Emitted when the `storage_fs` feature is enabled.
-  # Probes attach to each filesystem's own file_operations read/write
-  # implementations (nfs_file_read, ceph_read_iter, cifs_loose_read_iter,
-  # fuse_file_read_iter and their write counterparts) rather than to generic
-  # VFS, so a node not using a given filesystem pays nothing for it.
+  # Probes attach to each of the seven supported filesystems' (nfs, ceph,
+  # cifs, fuse, ext4, xfs, btrfs) own file_operations read, write and fsync
+  # implementations rather than to generic VFS, so a node not using a given
+  # filesystem pays nothing for it.
+  #
+  # system.filesystem.type is an open enum upstream (the semconv member list
+  # is fat32, exfat, ntfs, refs, hfsplus, ext4): OBI emits nfs, ceph, cifs,
+  # fuse, xfs and btrfs in addition to the upstream ext4 member.
   #
   # Semantics note: buffered writes return once data is in the page cache, so
   # this is application-perceived latency, not server round-trip time -- the

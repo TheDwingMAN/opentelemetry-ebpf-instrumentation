@@ -64,6 +64,8 @@ func TestPrometheusNames(t *testing.T) {
 		{StatTCPFailedConnections, "obi_stat_tcp_failed_connections_total"},
 		{StatTCPRetransmits, "obi_stat_tcp_retransmits_total"},
 		{StatTCPIo, "obi_stat_tcp_io_bytes_total"},
+		{StatDiskOperationDuration, "obi_stat_disk_operation_duration_seconds"},
+		{StatDiskIO, "obi_stat_disk_io_bytes_total"},
 		{StatDiskQueueDuration, "obi_stat_disk_queue_duration_seconds"},
 		{StatDiskQueueDepth, "obi_stat_disk_queue_depth"},
 		{StatDiskOperationErrors, "obi_stat_disk_operation_errors_total"},

@@ -252,3 +252,73 @@ func TestStatMetricsExporter_FsOperationErrors(t *testing.T) {
 	}, opErrors.Attributes)
 	assert.Equal(t, int64(1), opErrors.IntVal)
 }
+
+// The filesystem counterpart of TestStatMetricsExporter_DiskOperationErrorsSkipsZeroError:
+// a successful read or write must not create an error series.
+func TestStatMetricsExporter_FsOperationErrorsSkipsZeroError(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	otelExporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: cfg}},
+		&StatMetricsConfig{
+			Metrics: cfg,
+			SelectorCfg: &attributes.SelectorConfig{
+				SelectionCfg: attributes.Selection{
+					attributes.StatFsOperationDuration.Section: attributes.InclusionLists{
+						Include: []string{"*"},
+					},
+					attributes.StatFsOperationErrors.Section: attributes.InclusionLists{
+						Include: []string{"*"},
+					},
+				},
+			},
+			CommonCfg: &perapp.GlobalMetricsConfig{Features: export.FeatureStorageFSDuration | export.FeatureStorageFSErrors},
+		}, stats)(ctx)
+	require.NoError(t, err)
+
+	go otelExporter(ctx)
+
+	// WHEN it receives a filesystem I/O completion that succeeded
+	stats.Send([]*ebpf.Stat{
+		{
+			Type: ebpf.StatTypeFsIo,
+			FsIo: &ebpf.FsIo{
+				Fs:        uint8(ebpf.CodeFsNFS),
+				Op:        uint8(ebpf.CodeFsOpWrite),
+				LatencyNs: 1_000_000,
+				Bytes:     4096,
+				Error:     0,
+			},
+		},
+	})
+
+	// THEN the operation duration histogram observes it.
+	seen := map[string]collector.MetricRecord{}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case rec := <-otlp.Records():
+				if _, ok := seen[rec.Name]; !ok {
+					seen[rec.Name] = rec
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.Contains(ct, seen, "obi.stat.fs.operation.duration")
+	}, timeout, 100*time.Millisecond)
+
+	// AND the errors counter never does.
+	assert.NotContains(t, seen, "obi.stat.fs.operation.errors", "errors counter must not be recorded for Error == 0")
+}

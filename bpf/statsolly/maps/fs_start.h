@@ -15,7 +15,8 @@ struct fs_start_val {
     u32 pid_ns;
     u8 fs;
     u8 op;
-    unsigned char _pad[2];
+    u8 depth;
+    unsigned char _pad[1];
 };
 
 // Keyed by pid_tgid. Entries whose exit probe never fires -- a task killed

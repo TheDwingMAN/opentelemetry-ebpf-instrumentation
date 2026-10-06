@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,16 +42,25 @@ func TestCachedPVCLookup_RetriesFailure(t *testing.T) {
 		calls++
 		return "", "", "", calls > 1
 	}
-	cached := CachedPVCLookup(lookup)
 
-	_, _, _, ok := cached(context.Background(), "pv-b")
+	now := time.Now()
+	c := &pvcCache{resolve: lookup, entries: map[string]pvcCacheEntry{}, now: func() time.Time { return now }}
+
+	_, _, _, ok := c.get(context.Background(), "pv-b")
 	assert.False(t, ok, "first lookup is expected to fail")
+	require.Equal(t, 1, calls)
 
-	namespace, claimName, storageClass, ok := cached(context.Background(), "pv-b")
-	assert.True(t, ok, "a failed lookup must be retried, not cached")
-	assert.Equal(t, "", namespace)
-	assert.Equal(t, "", claimName)
-	assert.Equal(t, "", storageClass)
+	_, _, _, ok = c.get(context.Background(), "pv-b")
+	assert.False(t, ok, "a failed lookup within the negative TTL must be served from cache")
+	assert.Equal(t, 1, calls, "a cached negative result must not retry before its TTL elapses")
+
+	now = now.Add(pvcCacheNegativeTTL)
+
+	namespace, claimName, storageClass, ok := c.get(context.Background(), "pv-b")
+	assert.True(t, ok, "a failed lookup must be retried once its negative TTL elapses")
+	assert.Empty(t, namespace)
+	assert.Empty(t, claimName)
+	assert.Empty(t, storageClass)
 	assert.Equal(t, 2, calls)
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -197,7 +198,7 @@ func TestStatMetricsExporter_DiskQueueAndErrorMetrics(t *testing.T) {
 				LatencyNs: 2_000_000,
 				QueueNs:   500_000,
 				Bytes:     4096,
-				Error:     -28, // -ENOSPC
+				Error:     -int32(unix.ENOSPC),
 				Inflight:  3,
 			},
 		},
@@ -247,4 +248,150 @@ func TestStatMetricsExporter_DiskQueueAndErrorMetrics(t *testing.T) {
 		"error.type":        "ENOSPC",
 	}, opErrors.Attributes)
 	assert.Equal(t, int64(1), opErrors.IntVal)
+}
+
+// TestStatMetricsExporter_DiskQueueDurationSkipsZeroQueueNs covers the A9
+// ruling: QueueNs == 0 means no block_rq_insert record matched this
+// completion (e.g. blk-mq issued it directly), so the queue duration
+// histogram must not observe it, while the operation duration histogram --
+// which doesn't depend on QueueNs -- still does.
+func TestStatMetricsExporter_DiskQueueDurationSkipsZeroQueueNs(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	otelExporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: cfg}},
+		&StatMetricsConfig{
+			Metrics: cfg,
+			SelectorCfg: &attributes.SelectorConfig{
+				SelectionCfg: attributes.Selection{
+					attributes.StatDiskOperationDuration.Section: attributes.InclusionLists{
+						Include: []string{"*"},
+					},
+					attributes.StatDiskQueueDuration.Section: attributes.InclusionLists{
+						Include: []string{"*"},
+					},
+				},
+			},
+			CommonCfg: &perapp.GlobalMetricsConfig{Features: export.FeatureStorageBlockDuration | export.FeatureStorageBlockQueue},
+		}, stats)(ctx)
+	require.NoError(t, err)
+
+	go otelExporter(ctx)
+
+	// WHEN it receives a block I/O completion whose request bypassed
+	// block_rq_insert (QueueNs == 0)
+	stats.Send([]*ebpf.Stat{
+		{
+			Type: ebpf.StatTypeBlockIo,
+			BlockIo: &ebpf.BlockIo{
+				Dev:       0x800010,
+				Op:        uint8(ebpf.CodeDirectionWrite),
+				LatencyNs: 2_000_000,
+				QueueNs:   0,
+				Bytes:     4096,
+			},
+		},
+	})
+
+	// THEN the operation duration histogram observes it.
+	seen := map[string]collector.MetricRecord{}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case rec := <-otlp.Records():
+				if _, ok := seen[rec.Name]; !ok {
+					seen[rec.Name] = rec
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.Contains(ct, seen, "obi.stat.disk.operation.duration")
+	}, timeout, 100*time.Millisecond)
+
+	// AND the queue duration histogram never does.
+	assert.NotContains(t, seen, "obi.stat.disk.queue.duration", "queue duration must not be observed for QueueNs == 0")
+}
+
+// A healthy completion must not create an error series: the errors counter is
+// gated on Error != 0, and an always-present zero-valued series would make
+// "any disk errors on this node?" impossible to answer with a simple presence
+// check.
+func TestStatMetricsExporter_DiskOperationErrorsSkipsZeroError(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	otelExporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: cfg}},
+		&StatMetricsConfig{
+			Metrics: cfg,
+			SelectorCfg: &attributes.SelectorConfig{
+				SelectionCfg: attributes.Selection{
+					attributes.StatDiskOperationDuration.Section: attributes.InclusionLists{
+						Include: []string{"*"},
+					},
+					attributes.StatDiskOperationErrors.Section: attributes.InclusionLists{
+						Include: []string{"*"},
+					},
+				},
+			},
+			CommonCfg: &perapp.GlobalMetricsConfig{Features: export.FeatureStorageBlockDuration | export.FeatureStorageBlockErrors},
+		}, stats)(ctx)
+	require.NoError(t, err)
+
+	go otelExporter(ctx)
+
+	// WHEN it receives a block I/O completion that succeeded
+	stats.Send([]*ebpf.Stat{
+		{
+			Type: ebpf.StatTypeBlockIo,
+			BlockIo: &ebpf.BlockIo{
+				Dev:       0x800010,
+				Op:        uint8(ebpf.CodeDirectionWrite),
+				LatencyNs: 2_000_000,
+				Bytes:     4096,
+				Error:     0,
+			},
+		},
+	})
+
+	// THEN the operation duration histogram observes it.
+	seen := map[string]collector.MetricRecord{}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case rec := <-otlp.Records():
+				if _, ok := seen[rec.Name]; !ok {
+					seen[rec.Name] = rec
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.Contains(ct, seen, "obi.stat.disk.operation.duration")
+	}, timeout, 100*time.Millisecond)
+
+	// AND the errors counter never does.
+	assert.NotContains(t, seen, "obi.stat.disk.operation.errors", "errors counter must not be recorded for Error == 0")
 }

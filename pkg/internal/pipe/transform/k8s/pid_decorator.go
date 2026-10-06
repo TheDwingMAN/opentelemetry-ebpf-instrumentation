@@ -27,7 +27,6 @@ func pidLog() *slog.Logger { return slog.With("component", "k8s.PIDMetadataDecor
 // namespace, container, and persistent volume/claim, using the PID triple and
 // filesystem superblock device number returned by pidOf.
 func PIDMetadataDecoratorProvider[T any](
-	ctx context.Context,
 	store *kube.Store,
 	attrs func(T) *pipe.CommonAttrs,
 	pidOf func(item T) (pidNs, hostPID, sDev uint32, ok bool),

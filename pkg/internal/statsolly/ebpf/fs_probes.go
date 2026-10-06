@@ -33,34 +33,48 @@ type fsTarget struct {
 }
 
 var fsTargets = []fsTarget{
-	{Fs: CodeFsNFS, Module: "nfs",
+	{
+		Fs: CodeFsNFS, Module: "nfs",
 		ReadSyms:  []string{"nfs_file_read"},
 		WriteSyms: []string{"nfs_file_write"},
-		FsyncSyms: []string{"nfs_file_fsync"}},
-	{Fs: CodeFsCeph, Module: "ceph",
+		FsyncSyms: []string{"nfs_file_fsync"},
+	},
+	{
+		Fs: CodeFsCeph, Module: "ceph",
 		ReadSyms:  []string{"ceph_read_iter"},
 		WriteSyms: []string{"ceph_write_iter"},
-		FsyncSyms: []string{"ceph_fsync"}},
-	{Fs: CodeFsCIFS, Module: "cifs",
+		FsyncSyms: []string{"ceph_fsync"},
+	},
+	{
+		Fs: CodeFsCIFS, Module: "cifs",
 		ReadSyms:  []string{"cifs_strict_readv", "cifs_loose_read_iter"},
 		WriteSyms: []string{"cifs_strict_writev", "cifs_file_write_iter"},
-		FsyncSyms: []string{"cifs_strict_fsync", "cifs_fsync"}},
-	{Fs: CodeFsFUSE, Module: "fuse",
+		FsyncSyms: []string{"cifs_strict_fsync", "cifs_fsync"},
+	},
+	{
+		Fs: CodeFsFUSE, Module: "fuse",
 		ReadSyms:  []string{"fuse_file_read_iter"},
 		WriteSyms: []string{"fuse_file_write_iter"},
-		FsyncSyms: []string{"fuse_fsync"}},
-	{Fs: CodeFsExt4, Module: "ext4",
+		FsyncSyms: []string{"fuse_fsync"},
+	},
+	{
+		Fs: CodeFsExt4, Module: "ext4",
 		ReadSyms:  []string{"ext4_file_read_iter"},
 		WriteSyms: []string{"ext4_file_write_iter"},
-		FsyncSyms: []string{"ext4_sync_file"}},
-	{Fs: CodeFsXFS, Module: "xfs",
+		FsyncSyms: []string{"ext4_sync_file"},
+	},
+	{
+		Fs: CodeFsXFS, Module: "xfs",
 		ReadSyms:  []string{"xfs_file_read_iter"},
 		WriteSyms: []string{"xfs_file_write_iter"},
-		FsyncSyms: []string{"xfs_file_fsync"}},
-	{Fs: CodeFsBtrfs, Module: "btrfs",
+		FsyncSyms: []string{"xfs_file_fsync"},
+	},
+	{
+		Fs: CodeFsBtrfs, Module: "btrfs",
 		ReadSyms:  []string{"btrfs_file_read_iter"},
 		WriteSyms: []string{"btrfs_file_write_iter"},
-		FsyncSyms: []string{"btrfs_sync_file"}},
+		FsyncSyms: []string{"btrfs_sync_file"},
+	},
 }
 
 // moduleBTFExists reports whether the kernel exposes BTF for a module, which is
