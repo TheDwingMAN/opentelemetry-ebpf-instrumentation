@@ -17,186 +17,211 @@ import (
 	"go.opentelemetry.io/obi/pkg/config"
 )
 
-// fsLateAttachInterval is how often filesystems that were not probeable at
-// startup are looked for again. A network filesystem's module (nfs, cifs,
-// ceph, fuse) is usually loaded only when the node mounts its first volume of
-// that type, which on a freshly started node comes after OBI.
-const fsLateAttachInterval = 30 * time.Second
+// fsAttachInterval is how often the attacher looks again at the node: for
+// network filesystems whose module has loaded since (nfs, cifs, ceph and
+// fuse usually load only when the node mounts its first volume of that type,
+// which on a freshly started node comes after OBI), and for kubelet volumes
+// of a local filesystem mounted or unmounted since.
+const fsAttachInterval = 30 * time.Second
 
-// fsLateAttachTries bounds how often a filesystem whose probes fail to attach
-// is tried again, one tick apart, before it is left alone until OBI restarts.
-// A module still initializing can fail once; a verifier rejection fails every
-// time.
-const fsLateAttachTries = 3
+// fsAttachTries bounds how often a filesystem whose probes fail to load or
+// attach is tried, one tick apart, before it is left alone until OBI
+// restarts. A module still initializing can fail once; a verifier rejection
+// fails every time.
+const fsAttachTries = 3
 
-// lateFsAttacher attaches the probes of a filesystem that became probeable
-// after the stats collection was loaded. Each such filesystem gets a small
-// collection of its own, containing only its programs; the maps they write
-// (the event ring buffer, the in-flight map, the device allowlist) are the
-// shared ones, so its events reach the same reader.
-type lateFsAttacher struct {
-	log  *slog.Logger
-	load func(toDisable []string, attachTo map[string]string, objects *StatsObjects) error
-	// plan returns the filesystems probeable now among those not in done.
-	plan func(done map[FsTypeCode]bool) []fsAttachPlan
-	// attachFn is attach, replaceable in tests that cannot load BPF.
-	attachFn func(fsAttachPlan) ([]io.Closer, error)
+// fsAttacher attaches the probes of each filesystem, as a collection of its
+// own, while the filesystem is worth probing:
+//   - a network filesystem (nfs, ceph, cifs, fuse) from the moment its module
+//     is loaded;
+//   - a local filesystem (ext4, xfs, btrfs) only while a kubelet volume of
+//     that type is mounted. These also hold the node's root filesystem and
+//     every container's writable layer, whose I/O fs_dev_filter keeps out of
+//     the metrics; without a volume their probes would only add a trampoline
+//     to each read and write of the node's own services.
+type fsAttacher struct {
+	log *slog.Logger
+	// attachFn loads a plan's collection and attaches its probes.
+	attachFn func(fsAttachPlan) (io.Closer, error)
+	// plan returns the attach plans of the targets that are probeable.
+	plan func([]fsTarget) []fsAttachPlan
+	// moduleLoaded reports whether a kernel module is loaded.
+	moduleLoaded func(module string) bool
+	// localPVs returns the local filesystems a kubelet volume is mounted
+	// from, after bringing fs_dev_filter in line with those volumes.
+	localPVs func() (map[FsTypeCode]bool, error)
 
-	// done holds every filesystem already attached or given up on, so a
-	// filesystem that keeps failing to attach is not retried on every tick.
-	done map[FsTypeCode]bool
-	// failures counts failed attach attempts per filesystem.
+	// started is false until the first refresh, which plans every network
+	// filesystem: one built into the kernel may have no /sys/module entry.
+	started bool
+	// withPV is the result of the last successful localPVs.
+	withPV   map[FsTypeCode]bool
+	attached map[FsTypeCode]io.Closer
+	// failures counts failed loads and attaches per filesystem.
 	failures map[FsTypeCode]int
-	// startLocalFilter starts the ext4/xfs/btrfs device allowlist refresher
-	// the first time a local filesystem attaches late; nil when it already
-	// runs.
-	startLocalFilter func() io.Closer
+	// noFentry holds the filesystems whose fentry/fexit probes failed, which
+	// use kprobes from then on.
+	noFentry map[FsTypeCode]bool
+	// fentryFallbacks counts the filesystems moved to kprobes.
+	fentryFallbacks int
 
-	mu        sync.Mutex
-	closables []io.Closer
-	stop      chan struct{}
-	stopped   chan struct{}
+	stop    chan struct{}
+	stopped chan struct{}
 }
 
-func (a *lateFsAttacher) run() {
+func newFsAttacher(
+	log *slog.Logger, attachFn func(fsAttachPlan) (io.Closer, error), localPVs func() (map[FsTypeCode]bool, error),
+) *fsAttacher {
+	return &fsAttacher{
+		log:          log,
+		attachFn:     attachFn,
+		plan:         planFsTargets,
+		moduleLoaded: moduleLoaded,
+		localPVs:     localPVs,
+		attached:     map[FsTypeCode]io.Closer{},
+		failures:     map[FsTypeCode]int{},
+		noFentry:     map[FsTypeCode]bool{},
+		stop:         make(chan struct{}),
+		stopped:      make(chan struct{}),
+	}
+}
+
+// startFsAttacher attaches the filesystems worth probing now, then keeps
+// looking every fsAttachInterval until closed.
+func startFsAttacher(
+	log *slog.Logger, cfg *config.EBPFTracer, consts map[string]any, sharedMaps map[string]*ebpf.Map, mu *sync.Mutex,
+) (io.Closer, error) {
+	a, err := newKernelFsAttacher(log, cfg, consts, sharedMaps, mu)
+	if err != nil {
+		return nil, err
+	}
+	a.refresh()
+	go a.run()
+	return a, nil
+}
+
+// newKernelFsAttacher returns an fsAttacher that loads the FsIo programs and
+// reads the node's kubelet volume mounts.
+func newKernelFsAttacher(
+	log *slog.Logger, cfg *config.EBPFTracer, consts map[string]any, sharedMaps map[string]*ebpf.Map, mu *sync.Mutex,
+) (*fsAttacher, error) {
+	loader, err := newFsLoader(log, cfg, consts, sharedMaps, mu)
+	if err != nil {
+		return nil, err
+	}
+	filterMap, err := loader.sharedMap(FsIoMapFsDevFilter)
+	if err != nil {
+		return nil, err
+	}
+	return newFsAttacher(log, loader.attach, func() (map[FsTypeCode]bool, error) {
+		return scanLocalPVs(log, filterMap)
+	}), nil
+}
+
+func (a *fsAttacher) run() {
 	defer close(a.stopped)
-	ticker := time.NewTicker(fsLateAttachInterval)
+	ticker := time.NewTicker(fsAttachInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-a.stop:
 			return
 		case <-ticker.C:
-			a.attachNew()
+			a.refresh()
 		}
 	}
 }
 
-// attachNew attaches every planned filesystem not attached or tried yet.
-func (a *lateFsAttacher) attachNew() {
-	for _, plan := range a.plan(a.done) {
-		if a.done[plan.Fs] {
-			continue
-		}
+// refresh detaches the local filesystems no kubelet volume uses any more,
+// and attaches every filesystem worth probing that is not attached yet.
+func (a *fsAttacher) refresh() {
+	if withPV, err := a.localPVs(); err != nil {
+		a.log.Debug("scanning kubelet volume mounts failed", "error", err)
+	} else {
+		a.withPV = withPV
+	}
 
-		closables, err := a.attachFn(plan)
-		if err != nil {
-			if a.failures == nil {
-				a.failures = map[FsTypeCode]int{}
+	var pending []fsTarget
+	for _, tgt := range fsTargets {
+		closer, attached := a.attached[tgt.Fs]
+		switch {
+		case attached && isLocalFs(tgt.Fs) && !a.withPV[tgt.Fs]:
+			a.detach(tgt.Fs, closer)
+		case attached, a.failures[tgt.Fs] >= fsAttachTries:
+		case isLocalFs(tgt.Fs):
+			if a.withPV[tgt.Fs] {
+				pending = append(pending, tgt)
 			}
-			a.failures[plan.Fs]++
-			if a.failures[plan.Fs] < fsLateAttachTries {
-				a.log.Warn("filesystem became probeable but its probes failed to attach; retrying",
-					"fs", fsTypeStr(plan.Fs), "fentry", plan.UseFentry, "error", err)
-				continue
-			}
-			a.done[plan.Fs] = true
-			a.log.Warn("filesystem became probeable but its probes failed to attach; not retrying",
-				"fs", fsTypeStr(plan.Fs), "fentry", plan.UseFentry, "error", err)
-			continue
+		case !a.started || a.moduleLoaded(tgt.Module):
+			pending = append(pending, tgt)
 		}
-		a.done[plan.Fs] = true
-		a.mu.Lock()
-		a.closables = append(a.closables, closables...)
-		a.mu.Unlock()
-		a.log.Info("filesystem became probeable after startup; probes attached",
-			"fs", fsTypeStr(plan.Fs), "fentry", plan.UseFentry)
+	}
+	a.started = true
+
+	// With nothing pending, as on most ticks, the symbol table is not read.
+	if len(pending) == 0 {
+		return
+	}
+	for _, plan := range a.plan(pending) {
+		a.attach(plan)
 	}
 }
 
-func (a *lateFsAttacher) attach(plan fsAttachPlan) ([]io.Closer, error) {
-	toDisable, attachTo := onlyFsPrograms(plan)
-	var objects StatsObjects
-	if err := a.load(toDisable, attachTo, &objects); err != nil {
-		return nil, err
-	}
-	closables, err := attachFsPlan(&objects, plan)
+func (a *fsAttacher) attach(plan fsAttachPlan) {
+	closer, err := a.loadAndAttach(plan)
 	if err != nil {
-		return nil, errors.Join(err, objects.Close())
+		a.failures[plan.Fs]++
+		if a.failures[plan.Fs] < fsAttachTries {
+			a.log.Warn("filesystem probes failed to load or attach; retrying",
+				"fs", fsTypeStr(plan.Fs), "error", err)
+			return
+		}
+		a.log.Warn("filesystem probes failed to load or attach; disabling this filesystem",
+			"fs", fsTypeStr(plan.Fs), "error", err)
+		return
 	}
-	closables = append(closables, &objects)
-	if isLocalFs(plan.Fs) && a.startLocalFilter != nil {
-		closables = append(closables, a.startLocalFilter())
-		a.startLocalFilter = nil
-	}
-	return closables, nil
+	a.attached[plan.Fs] = closer
+	a.log.Info("filesystem probes attached", "fs", fsTypeStr(plan.Fs), "fentry", plan.UseFentry && !a.noFentry[plan.Fs])
 }
 
-func (a *lateFsAttacher) Close() error {
+// loadAndAttach attaches plan, moving the filesystem to kprobes when its
+// fentry/fexit probes fail: those need the function's BTF and trampoline
+// support, kprobes neither.
+func (a *fsAttacher) loadAndAttach(plan fsAttachPlan) (io.Closer, error) {
+	if a.noFentry[plan.Fs] {
+		plan.UseFentry = false
+	}
+	closer, err := a.attachFn(plan)
+	if err == nil || !plan.UseFentry {
+		return closer, err
+	}
+
+	a.noFentry[plan.Fs] = true
+	a.fentryFallbacks++
+	a.log.Warn("filesystem fentry/fexit probes failed; retrying with kprobes",
+		"fs", fsTypeStr(plan.Fs), "error", err, "filesystems_on_kprobes", a.fentryFallbacks)
+	plan.UseFentry = false
+	return a.attachFn(plan)
+}
+
+func (a *fsAttacher) detach(fs FsTypeCode, closer io.Closer) {
+	delete(a.attached, fs)
+	if err := closer.Close(); err != nil {
+		a.log.Debug("detaching filesystem probes failed", "fs", fsTypeStr(fs), "error", err)
+	}
+	a.log.Info("no kubelet volume of this filesystem is mounted; probes detached", "fs", fsTypeStr(fs))
+}
+
+func (a *fsAttacher) Close() error {
 	close(a.stop)
 	<-a.stopped
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	var errs []error
-	for _, c := range a.closables {
-		errs = append(errs, c.Close())
+	for _, closer := range a.attached {
+		errs = append(errs, closer.Close())
 	}
 	return errors.Join(errs...)
 }
 
-// onlyFsPrograms returns the programs to stub, and the attach targets to set,
-// so that a load of the stats spec contains nothing but plan's filesystem
-// programs.
-func onlyFsPrograms(plan fsAttachPlan) (toDisable []string, attachTo map[string]string) {
-	fsDisable, attachTo := planFsToDisable([]fsAttachPlan{plan})
-	stubbed := make(map[string]bool, len(fsDisable))
-	for _, name := range fsDisable {
-		stubbed[name] = true
-	}
-	keep := map[string]bool{}
-	for _, name := range fsProgNamesFor(plan.Fs).all() {
-		if !stubbed[name] {
-			keep[name] = true
-		}
-	}
-	for name := range statsProgramNames() {
-		if !keep[name] {
-			toDisable = append(toDisable, name)
-		}
-	}
-	return toDisable, attachTo
-}
-
-// statsProgramNames lists every program in the stats collection.
-var statsProgramNames = sync.OnceValue(func() map[string]bool {
-	names := map[string]bool{}
-	spec, err := LoadStats()
-	if err != nil {
-		return names
-	}
-	for name := range spec.Programs {
-		names[name] = true
-	}
-	return names
-})
-
 func isLocalFs(fs FsTypeCode) bool {
 	return fs == CodeFsExt4 || fs == CodeFsXFS || fs == CodeFsBtrfs
-}
-
-// startLateFsAttacher starts looking for filesystems that become probeable
-// after startup. attached lists the filesystems planned at startup.
-func startLateFsAttacher(
-	log *slog.Logger, cfg *config.EBPFTracer, blockLoad blockLoadPlan, attached []fsAttachPlan, localFilterRunning bool,
-	sharedMaps map[string]*ebpf.Map, mu *sync.Mutex, filterMap *ebpf.Map,
-) io.Closer {
-	a := &lateFsAttacher{
-		log: log,
-		load: func(toDisable []string, attachTo map[string]string, objects *StatsObjects) error {
-			return loadStatsObjects(cfg, blockLoad, toDisable, attachTo, objects, sharedMaps, mu)
-		},
-		plan:    planPendingFsAttach,
-		done:    map[FsTypeCode]bool{},
-		stop:    make(chan struct{}),
-		stopped: make(chan struct{}),
-	}
-	a.attachFn = a.attach
-	for _, p := range attached {
-		a.done[p.Fs] = true
-	}
-	if !localFilterRunning {
-		a.startLocalFilter = func() io.Closer { return startFsDevFilterRefresher(log, filterMap) }
-	}
-	go a.run()
-	return a
 }
