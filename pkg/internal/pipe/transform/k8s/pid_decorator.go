@@ -66,28 +66,47 @@ func PIDMetadataDecoratorProvider[T any](
 			return swarm.Bypass(input, output)
 		}
 
-		dec := &pidDecorator{
-			store:      store,
-			pvc:        pvc,
-			containers: expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
-			namespaces: expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
-			volumes:    map[ebpf.MountKey]volumeEntry{},
-		}
+		decorate := NewPIDItemDecorator(store, attrs, pidOf, setMount, pvc)
 		in := input.Subscribe(msg.SubscriberName("k8s.PIDMetadataDecorator"))
 
 		return func(runCtx context.Context) {
 			defer output.Close()
 			swarms.ForEachInput(runCtx, in, pidLog().Debug, func(items []T) {
 				for _, item := range items {
-					pidNs, hostPID, mount, ok := pidOf(item)
-					if !ok {
-						continue
-					}
-					setMount(item, dec.decorate(runCtx, attrs(item), pidNs, hostPID, mount))
+					decorate(runCtx, item)
 				}
 				output.Send(items)
 			})
 		}, nil
+	}
+}
+
+// NewPIDItemDecorator returns what the PID metadata decorator does to an
+// item. It is nil without a store. Its caches are not safe for concurrent
+// use: each caller builds its own.
+func NewPIDItemDecorator[T any](
+	store *kube.Store,
+	attrs func(T) *pipe.CommonAttrs,
+	pidOf func(item T) (pidNs, hostPID uint32, mount ebpf.MountKey, ok bool),
+	setMount func(item T, mount *ebpf.MountAttrs),
+	pvc ebpf.PVCLookup,
+) func(ctx context.Context, item T) {
+	if store == nil {
+		return nil
+	}
+	dec := &pidDecorator{
+		store:      store,
+		pvc:        pvc,
+		containers: expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		namespaces: expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		volumes:    map[ebpf.MountKey]volumeEntry{},
+	}
+	return func(ctx context.Context, item T) {
+		pidNs, hostPID, mount, ok := pidOf(item)
+		if !ok {
+			return
+		}
+		setMount(item, dec.decorate(ctx, attrs(item), pidNs, hostPID, mount))
 	}
 }
 

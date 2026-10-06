@@ -106,15 +106,44 @@ func MetadataDecoratorProviderKeeping[T any](
 	}
 }
 
+// NewItemDecorator returns what the Kubernetes metadata decorator does to an
+// item, and whether the item stays: with drop_external, an item whose
+// endpoints are not Kubernetes objects is dropped, unless keep exempts it. It
+// is nil when Kubernetes is disabled.
+func NewItemDecorator[T any](
+	ctx context.Context,
+	cfg *transform.KubernetesDecorator,
+	k8sInformer *kube.MetadataProvider,
+	attrs func(T) *pipe.CommonAttrs,
+	keep func(T) bool,
+) (func(T) bool, error) {
+	if !k8sInformer.IsKubeEnabled() {
+		return nil, nil
+	}
+	nt, err := newDecorator(ctx, cfg, k8sInformer)
+	if err != nil {
+		return nil, fmt.Errorf("instantiating k8s.MetadataDecorator: %w", err)
+	}
+	return func(item T) bool {
+		return decorateItem(item, attrs, nt, keep) || !cfg.DropExternal
+	}, nil
+}
+
+// decorateItem decorates an item, the ones keep exempts with the cluster name
+// only, and reports whether it was matched to Kubernetes or exempted.
+func decorateItem[T any](item T, attrs func(T) *pipe.CommonAttrs, n *decorator, keep func(T) bool) bool {
+	if keep != nil && keep(item) {
+		n.labelCluster(attrs(item))
+		return true
+	}
+	return n.transform(attrs(item))
+}
+
 // decorateAll decorates items, the ones keep exempts with the cluster name
 // only.
 func decorateAll[T any](items []T, attrs func(T) *pipe.CommonAttrs, n *decorator, keep func(T) bool) {
 	for _, item := range items {
-		if keep != nil && keep(item) {
-			n.labelCluster(attrs(item))
-			continue
-		}
-		n.transform(attrs(item))
+		decorateItem(item, attrs, n, keep)
 	}
 }
 
@@ -123,12 +152,7 @@ func decorateAll[T any](items []T, attrs func(T) *pipe.CommonAttrs, n *decorator
 func dropExternal[T any](items []T, attrs func(T) *pipe.CommonAttrs, n *decorator, keep func(T) bool) []T {
 	out := make([]T, 0, len(items))
 	for _, item := range items {
-		if keep != nil && keep(item) {
-			n.labelCluster(attrs(item))
-			out = append(out, item)
-			continue
-		}
-		if n.transform(attrs(item)) {
+		if decorateItem(item, attrs, n, keep) {
 			out = append(out, item)
 		}
 	}
