@@ -40,16 +40,20 @@ const rootCgroupID = 1
 // the host's, through PID 1's root.
 var defaultCgroupRoots = []string{"/sys/fs/cgroup", "/proc/1/root/sys/fs/cgroup"}
 
-// The kubelet's top-level cgroups: systemd and cgroupfs drivers.
-var kubepodsDirs = []string{"kubepods.slice", "kubepods"}
+// The kubelet's top-level cgroup under the cgroup v2 root, systemd and
+// cgroupfs drivers: with the default --cgroup-root (/), and with /kubelet,
+// kind's, whose systemd slices get a kubelet- prefix. Other cgroup roots are
+// not supported: no id under them has a pod.
+var kubepodsDirs = []string{"kubepods.slice", "kubepods", "kubelet.slice/kubelet-kubepods.slice", "kubelet/kubepods"}
 
 // Path components, anchored: the index maps every level under kubepods and
 // assumes no depth.
 var (
-	// kubepods-pod<uid>.slice (Guaranteed), kubepods-<qos>-pod<uid>.slice;
-	// the systemd driver writes the UID's dashes as underscores. Static
-	// pods have 32-hex UIDs.
-	systemdPodPattern = regexp.MustCompile(`^kubepods(?:-besteffort|-burstable)?-pod([0-9a-f_]{36}|[0-9a-f]{32})\.slice$`)
+	// kubepods-pod<uid>.slice (Guaranteed), kubepods-<qos>-pod<uid>.slice,
+	// prefixed with kubelet- under --cgroup-root=/kubelet; the systemd
+	// driver writes the UID's dashes as underscores. Static pods have
+	// 32-hex UIDs.
+	systemdPodPattern = regexp.MustCompile(`^(?:kubelet-)?kubepods(?:-besteffort|-burstable)?-pod([0-9a-f_]{36}|[0-9a-f]{32})\.slice$`)
 	// pod<uid>, under kubepods/<qos>/ or kubepods/.
 	cgroupfsPodPattern = regexp.MustCompile(`^pod([0-9a-f-]{36}|[0-9a-f]{32})$`)
 	// A container scope of CRI-O, containerd or cri-dockerd (systemd
@@ -135,6 +139,10 @@ type cgroupEntry struct {
 // known to have no pod without a rescan. A node with no kubelet cgroup has no
 // pod anywhere: its scans complete with every id known to have none, and a
 // kubelet cgroup that appears later is found by the next scan.
+//
+// The kubelet cgroup is found for the default --cgroup-root (/) and for
+// /kubelet (kind nodes: kubelet.slice/kubelet-kubepods.slice); the latter is
+// covered by fixtures only. With any other --cgroup-root no id has a pod.
 //
 // It is safe for concurrent use.
 type CgroupIndex struct {

@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -125,8 +126,38 @@ func inoOf(t *testing.T, path string) uint64 {
 	return info.Sys().(*syscall.Stat_t).Ino
 }
 
+// kind runs the kubelet with --cgroup-root=/kubelet: systemd driver, and
+// the cgroupfs equivalent.
+var kindFixture = []cgroupFixture{
+	{"kubelet.slice", CgroupIdentity{}},
+	{"kubelet.slice/kubelet-kubepods.slice", CgroupIdentity{}},
+	{"kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice", CgroupIdentity{}},
+	{
+		"kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-pod" + strings.ReplaceAll(containerdUID, "-", "_") + ".slice",
+		CgroupIdentity{PodUID: containerdUID},
+	},
+	{
+		"kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-pod" + strings.ReplaceAll(containerdUID, "-", "_") + ".slice/cri-containerd-" + containerdCtr + ".scope",
+		CgroupIdentity{PodUID: containerdUID, ContainerID: containerdCtr},
+	},
+	{
+		"kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-pod" + strings.ReplaceAll(guaranteedUID, "-", "_") + ".slice",
+		CgroupIdentity{PodUID: guaranteedUID},
+	},
+}
+
+var kindCgroupfsFixture = []cgroupFixture{
+	{"kubelet", CgroupIdentity{}},
+	{"kubelet/kubepods", CgroupIdentity{}},
+	{"kubelet/kubepods/burstable/pod" + burstableUID, CgroupIdentity{PodUID: burstableUID}},
+	{"kubelet/kubepods/burstable/pod" + burstableUID + "/" + burstableCtr, CgroupIdentity{PodUID: burstableUID, ContainerID: burstableCtr}},
+}
+
 func TestCgroupIndex_EveryLevelResolves(t *testing.T) {
-	for name, fixture := range map[string][]cgroupFixture{"crio-containerd-systemd": crioFixture, "cgroupfs": cgroupfsFixture} {
+	for name, fixture := range map[string][]cgroupFixture{
+		"crio-containerd-systemd": crioFixture, "cgroupfs": cgroupfsFixture,
+		"kind-systemd": kindFixture, "kind-cgroupfs": kindCgroupfsFixture,
+	} {
 		t.Run(name, func(t *testing.T) {
 			root := makeTree(t, fixture)
 			x := NewCgroupIndex(WithCgroupRoots(root))
@@ -504,4 +535,16 @@ func TestCgroupIndex_ConcurrentLookupsAndScans(t *testing.T) {
 		x.Tombstoned(leaf)
 	}
 	<-done
+}
+
+// Under any other --cgroup-root the kubelet cgroup is not found: its pods'
+// cgroups have no pod, like everything else.
+func TestCgroupIndex_OtherCgroupRootsHaveNoPods(t *testing.T) {
+	pod := "custom.slice/custom-kubepods.slice/custom-kubepods-pod" + strings.ReplaceAll(guaranteedUID, "-", "_") + ".slice"
+	root := makeTree(t, []cgroupFixture{{pod, CgroupIdentity{}}})
+	x := NewCgroupIndex(WithCgroupRoots(root))
+	require.NoError(t, x.Scan())
+	got, final := x.Lookup(inoOf(t, filepath.Join(root, pod)))
+	assert.True(t, final)
+	assert.Equal(t, CgroupIdentity{}, got)
 }

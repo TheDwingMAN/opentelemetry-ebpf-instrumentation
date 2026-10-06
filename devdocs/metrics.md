@@ -234,6 +234,12 @@ Per filesystem and per symbol, OBI prefers `fentry`/`fexit` over classic `kprobe
   (`WarnIfNoKubeletVolumeMounts` in [pkg/internal/statsolly/ebpf/mount_resolver.go](../pkg/internal/statsolly/ebpf/mount_resolver.go), called from `buildPipeline` in [pkg/statsolly/agent/pipeline.go](../pkg/statsolly/agent/pipeline.go).)
 - **OpenShift** needs the `privileged` SCC bound to the DaemonSet's ServiceAccount; the official Helm chart does not grant it automatically.
 
+#### Kernel aggregation and the cgroup index
+
+Stats families moved to kernel aggregation count in per-CPU eBPF hash maps instead of sending an event per operation, and [pkg/internal/statsolly/statagg](../pkg/internal/statsolly/statagg) reads those maps and exports their metrics through the same OTel and Prometheus exporters. Metrics keyed by cgroup resolve the cgroup id to a pod and container through `CgroupIndex` ([cgroup_index.go](../pkg/internal/statsolly/statagg/cgroup_index.go)), which walks the cgroup v2 hierarchy in the background (every 30 seconds, and at most once a second when a lookup meets an id it does not know) and never on a lookup.
+
+The index finds the kubelet's cgroup for the default `--cgroup-root` (`/`: `kubepods.slice` with the systemd cgroup driver, `kubepods` with cgroupfs) and for `/kubelet`, the root kind nodes use (`kubelet.slice/kubelet-kubepods.slice`, `kubelet/kubepods`); the `/kubelet` layout is covered by test fixtures only, not by a cluster run. With any other `--cgroup-root` no cgroup id resolves to a pod, and pod-attributed series carry no pod labels. A node with no kubelet cgroup at all (no Kubernetes, or before the kubelet starts) resolves every id to no pod and picks the kubelet cgroup up when it appears.
+
 ### Known limitations
 
 #### `src.port` may be reported as `0`
