@@ -36,6 +36,7 @@ type Collector struct {
 
 	mu       sync.Mutex
 	families []*promFamily
+	lastWarn time.Time
 }
 
 type promFamily struct {
@@ -50,10 +51,26 @@ type promMetric struct {
 	fold   []int
 }
 
+// buildErrorWarnInterval is how often a series that can't be built is
+// logged at Warn; in between, at Debug.
+const buildErrorWarnInterval = 10 * time.Minute
+
 // NewCollector emits the metrics of the registry that Add names; series
 // unchanged for ttl are dropped.
 func NewCollector(r *Registry, ttl time.Duration) *Collector {
 	return &Collector{registry: r, ttl: ttl, log: slog.With("component", "statagg.Collector")}
+}
+
+// logBuildError logs a series that can't be built, which the scrape then
+// lacks: at Warn the first time and then at most every
+// buildErrorWarnInterval, at Debug otherwise. It runs with c.mu held.
+func (c *Collector) logBuildError(now time.Time, desc *prometheus.Desc, err error) {
+	if c.lastWarn.IsZero() || now.Sub(c.lastWarn) >= buildErrorWarnInterval {
+		c.lastWarn = now
+		c.log.Warn("can't build an aggregated metric; it is missing from the scrape", "metric", desc, "error", err)
+		return
+	}
+	c.log.Debug("can't build aggregated metric", "metric", desc, "error", err)
 }
 
 // Add makes the Collector emit an aggregated metric.
@@ -120,7 +137,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 				for _, s := range pf.acc.metrics[i].series {
 					m, err := out.metric(pf.acc.metrics[i].def, s)
 					if err != nil {
-						c.log.Debug("can't build aggregated metric", "metric", out.desc, "error", err)
+						c.logBuildError(now, out.desc, err)
 						continue
 					}
 					ch <- m

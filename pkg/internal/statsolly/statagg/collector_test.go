@@ -4,7 +4,10 @@
 package statagg
 
 import (
+	"context"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,4 +127,56 @@ func promText(tb testing.TB, cs ...prometheus.Collector) string {
 		require.NoError(tb, err)
 	}
 	return sb.String()
+}
+
+// levelCounter counts the records a logger emits, by level.
+type levelCounter struct {
+	mu     sync.Mutex
+	counts map[slog.Level]int
+}
+
+func (h *levelCounter) Enabled(context.Context, slog.Level) bool { return true }
+func (h *levelCounter) WithAttrs([]slog.Attr) slog.Handler      { return h }
+func (h *levelCounter) WithGroup(string) slog.Handler           { return h }
+
+func (h *levelCounter) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.counts[r.Level]++
+	return nil
+}
+
+func (h *levelCounter) count(l slog.Level) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.counts[l]
+}
+
+func TestCollector_BuildErrorsWarnOnceInAWhile(t *testing.T) {
+	tf := newTestFamily(t, 1, diskBounds, nil)
+	c := NewCollector(tf.reg, 0)
+	logs := &levelCounter{counts: map[slog.Level]int{}}
+	c.log = slog.New(logs)
+	// One label name for two label values: the series can't be built.
+	_, proj := devOpLabels(false)
+	require.NoError(t, c.Add(testIO, PromMetric{Help: "io", LabelNames: []string{"dev"}, Project: proj}))
+	reg := prometheus.NewRegistry()
+	require.NoError(t, reg.Register(c))
+	record(tf.m, tf.layout, blkKey(devA, ebpf.CodeBlockRead, 0), 0, 1, 1)
+	record(tf.m, tf.layout, blkKey(devB, ebpf.CodeBlockRead, 0), 0, 1, 1)
+
+	gather := func() {
+		_, _ = reg.Gather()
+		tf.clock.Advance(time.Minute)
+	}
+	gather()
+	assert.Equal(t, 1, logs.count(slog.LevelWarn), "the first error is a warning")
+	assert.Equal(t, 1, logs.count(slog.LevelDebug), "the second series of the same scrape is not")
+	for range 9 {
+		gather()
+	}
+	assert.Equal(t, 1, logs.count(slog.LevelWarn), "rate-limited")
+	assert.Equal(t, 19, logs.count(slog.LevelDebug))
+	gather()
+	assert.Equal(t, 2, logs.count(slog.LevelWarn), "warned again after 10 minutes")
 }
