@@ -129,3 +129,49 @@ func TestBlockRawTracepointCapableWith(t *testing.T) {
 		})
 	}
 }
+
+// A burst's cache lives until the burst is released, and a renewed cache
+// replaces the retained one: never more than one is held.
+func TestBTFBurstReleasesCache(t *testing.T) {
+	releases := 0
+	b := &btfBurst{onRelease: func() { releases++ }}
+
+	first := b.Cache()
+	assert.Same(t, first, b.Cache(), "one cache per burst")
+	b.Release()
+	assert.Equal(t, 1, releases)
+	assert.Nil(t, b.cache, "released: nothing retained")
+
+	second := b.Cache()
+	assert.NotSame(t, first, second, "the next load starts a new burst")
+	renewed := b.Renew()
+	assert.NotSame(t, second, renewed)
+	assert.Same(t, renewed, b.cache, "the renewed cache replaces the burst's")
+
+	b.Release()
+	b.Release()
+	assert.Equal(t, 2, releases, "releasing no burst is a no-op")
+	assert.Nil(t, b.cache)
+}
+
+// The modules' BTF is parsed once per burst, failures included: cilium
+// keeps no failed parse, so asking again must not parse a broken module
+// again.
+func TestBTFBurstParsesOncePerBurst(t *testing.T) {
+	b := &btfBurst{}
+	b.Parse()
+	b.broken = []string{"obi_broken"}
+	assert.True(t, b.ModuleBTFBroken(""))
+	assert.True(t, b.ModuleBTFBroken("obi_broken"))
+	assert.False(t, b.ModuleBTFBroken("obi_fine"))
+	_, ok := b.Parse()
+	assert.False(t, ok)
+	assert.Equal(t, 1, b.parses)
+
+	b.Release()
+	assert.False(t, b.ModuleBTFBroken("obi_broken"), "a new burst forgets the failures of the last")
+	assert.Equal(t, 2, b.parses)
+	b.Renew()
+	b.ModuleBTFBroken("")
+	assert.Equal(t, 3, b.parses, "a renewed cache is parsed again")
+}

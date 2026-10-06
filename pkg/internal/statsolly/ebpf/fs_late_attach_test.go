@@ -423,3 +423,26 @@ func TestFsAttacherDetachHysteresis(t *testing.T) {
 
 	closeAttacher(t, a)
 }
+
+// A refresh that plans a load ends the kernel BTF burst when done, so the
+// parsed BTF is not kept between loads; an idle refresh has none to end.
+func TestFsAttacherEndsBTFBurst(t *testing.T) {
+	n := newFakeNode()
+	n.probeable[CodeFsNFS] = true
+	n.loaded["nfs"] = true
+	a := n.attacher()
+	bursts := 0
+	a.endBurst = func() { bursts++ }
+
+	a.refresh()
+	assert.Equal(t, 1, bursts, "the startup pass")
+	a.refresh()
+	assert.Equal(t, 1, bursts, "nothing to load")
+
+	n.loaded["cifs"], n.probeable[CodeFsCIFS] = true, true
+	a.refresh()
+	assert.Equal(t, 2, bursts, "cifs loaded")
+	assert.Contains(t, a.attached, CodeFsCIFS)
+
+	closeAttacher(t, a)
+}

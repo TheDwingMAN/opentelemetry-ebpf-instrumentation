@@ -135,7 +135,10 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 	start := time.Now()
-	btfParse := timeKernelBTFParse()
+	// The startup loads are one BTF burst; startFsAttacher's first pass ends
+	// it when filesystems are probed, this when they are not or on an error.
+	btfParse, _ := kernelBTFCache.Parse()
+	defer kernelBTFCache.Release()
 
 	storageBlock := features.StorageBlock()
 	storage := planStorage(storageBlock)
@@ -151,7 +154,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	var mu sync.Mutex
 	load := func(toDisable []string) error {
 		objects = StatsObjects{}
-		return loadStatsObjects(cfg, blockLoad, consts, toDisable, &objects, sharedMaps, &mu, kernelBTFCache)
+		return loadStatsObjects(cfg, blockLoad, consts, toDisable, &objects, sharedMaps, &mu, kernelBTFCache.Cache())
 	}
 	storageBlock, err = loadWithStorageFallback(load, toDisable, storageBlock, tlog)
 	if err != nil {
@@ -292,7 +295,8 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		closables = append(closables, l)
 	}
 
-	tlog.Info("stats eBPF programs loaded", "duration", time.Since(start), "kernel_btf_parse", btfParse)
+	tlog.Info("stats eBPF programs loaded", "duration", time.Since(start), "kernel_btf_parse", btfParse.kernel,
+		"module_btf_parse", btfParse.modules, "btf_modules", btfParse.moduleCount)
 
 	return &StatsFetcher{
 		log:       tlog,

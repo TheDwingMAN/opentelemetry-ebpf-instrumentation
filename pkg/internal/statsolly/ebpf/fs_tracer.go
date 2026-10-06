@@ -320,7 +320,7 @@ type fsLoader struct {
 	consts     map[string]any
 	sharedMaps map[string]*ebpf.Map
 	mu         *sync.Mutex
-	cache      *btf.Cache
+	btf        *btfBurst
 	// newCollection is ebpf.NewCollectionWithOptions, replaceable in tests
 	// that cannot load BPF.
 	newCollection func(*ebpf.CollectionSpec, ebpf.CollectionOptions) (*ebpf.Collection, error)
@@ -343,7 +343,7 @@ func newFsLoader(
 		consts:        consts,
 		sharedMaps:    sharedMaps,
 		mu:            mu,
-		cache:         kernelBTFCache,
+		btf:           kernelBTFCache,
 		newCollection: ebpf.NewCollectionWithOptions,
 	}, nil
 }
@@ -430,59 +430,52 @@ func (l *fsLoader) prepare(plan fsAttachPlan) (*ebpf.CollectionSpec, ebpf.Collec
 	}
 	opts.Programs = ebpf.ProgramOptions{LogSizeStart: fsVerifierLogSize}
 	opts.Cache = l.cacheFor(plan.Module)
+	if times, ok := l.btf.Parse(); ok {
+		l.log.Debug("kernel BTF parsed for a filesystem load", "fs", fsTypeStr(plan.Fs),
+			"kernel_btf_parse", times.kernel, "module_btf_parse", times.modules, "btf_modules", times.moduleCount)
+	}
 	return spec, *opts, nil
 }
 
 // cacheFor returns the BTF cache for a load of a filesystem in module. A
 // cache lists the kernel's modules once, the first time it relocates a load,
 // so a module that loaded since (nfs, on the node's first NFS mount) is seen
-// only through a fresh cache.
+// only through a fresh cache, which replaces the burst's.
 func (l *fsLoader) cacheFor(module string) *btf.Cache {
+	cache := l.btf.Cache()
 	if !moduleBTFExists(module) {
-		return l.cache
+		return cache
 	}
-	modules, err := l.cache.Modules()
+	modules, err := cache.Modules()
 	if err != nil || slices.Contains(modules, module) {
-		return l.cache
+		return cache
 	}
 	l.log.Debug("kernel module loaded after the BTF cache was filled; parsing the kernel BTF again", "module", module)
-	l.cache = btf.NewCache()
-	return l.cache
+	return l.btf.Renew()
 }
 
 // relocationTargets returns the kernel BTF and the BTF of module, when some
 // loaded module's BTF cannot be parsed.
 func (l *fsLoader) relocationTargets(module string) (*btf.Spec, []*btf.Spec, bool) {
-	if !moduleBTFBroken(l.cache) {
+	if !l.btf.ModuleBTFBroken("") {
 		return nil, nil, false
 	}
-	kernel, err := l.cache.Kernel()
+	cache := l.btf.Cache()
+	kernel, err := cache.Kernel()
 	if err != nil {
 		return nil, nil, false
 	}
 	if !moduleBTFExists(module) {
 		return kernel, nil, true
 	}
-	spec, err := l.cache.Module(module)
+	if l.btf.ModuleBTFBroken(module) {
+		return nil, nil, false
+	}
+	spec, err := cache.Module(module)
 	if err != nil {
 		return nil, nil, false
 	}
 	return kernel, []*btf.Spec{spec}, true
-}
-
-// moduleBTFBroken reports whether the BTF of some loaded module cannot be
-// parsed.
-func moduleBTFBroken(cache *btf.Cache) bool {
-	modules, err := cache.Modules()
-	if err != nil {
-		return false
-	}
-	for _, module := range modules {
-		if _, err := cache.Module(module); err != nil {
-			return true
-		}
-	}
-	return false
 }
 
 // fsAttachment is one filesystem's collection and the links of its probes.

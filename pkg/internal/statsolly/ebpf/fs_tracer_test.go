@@ -104,8 +104,9 @@ func fakeFsLoader(t *testing.T, consts map[string]any) (*fsLoader, *[]ebpf.Colle
 	return l, &opts, &specs
 }
 
-// Every filesystem load uses the process's one kernel BTF cache, the one the
-// stats collection loaded with, so vmlinux BTF is parsed once.
+// Every filesystem load of a burst uses the burst's kernel BTF cache, the one
+// the stats collection loaded with at startup, so vmlinux BTF is parsed once
+// per burst.
 func TestFsLoaderSharesTheBTFCache(t *testing.T) {
 	old := sysKernelBTFDir
 	sysKernelBTFDir = t.TempDir() // ext4 and xfs: built in, no module BTF
@@ -118,8 +119,9 @@ func TestFsLoaderSharesTheBTFCache(t *testing.T) {
 	}
 
 	require.Len(t, *opts, 2)
+	assert.Same(t, kernelBTFCache, l.btf)
 	for _, o := range *opts {
-		assert.Same(t, kernelBTFCache, o.Cache)
+		assert.Same(t, kernelBTFCache.Cache(), o.Cache)
 	}
 }
 
@@ -172,9 +174,11 @@ func TestFsLoaderCacheForNewModule(t *testing.T) {
 	require.NoError(t, os.WriteFile(sysKernelBTFDir+"/obi_test_new_module", nil, 0o644))
 	require.NotContains(t, modules, "obi_test_new_module")
 
-	l := &fsLoader{log: slog.Default(), cache: cache}
+	l := &fsLoader{log: slog.Default(), btf: &btfBurst{cache: cache}}
 	assert.Same(t, cache, l.cacheFor("ext4"), "no module BTF: shared cache")
-	assert.NotSame(t, cache, l.cacheFor("obi_test_new_module"), "module unknown to the cache: fresh cache")
+	fresh := l.cacheFor("obi_test_new_module")
+	assert.NotSame(t, cache, fresh, "module unknown to the cache: fresh cache")
+	assert.Same(t, fresh, l.btf.Cache(), "the fresh cache replaces the burst's, which is not retained")
 }
 
 // On detach every entry probe goes before any exit probe, so no call records

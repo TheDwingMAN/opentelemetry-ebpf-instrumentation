@@ -60,6 +60,8 @@ type fsAttacher struct {
 	// localPVs returns the local filesystems a kubelet volume is mounted
 	// from, after bringing fs_dev_filter in line with those volumes.
 	localPVs func() (map[FsTypeCode]bool, error)
+	// endBurst ends the kernel BTF burst of a refresh that planned a load.
+	endBurst func()
 
 	// started is false until the first refresh, which plans every network
 	// filesystem: one built into the kernel may have no /sys/module entry.
@@ -92,6 +94,7 @@ func newFsAttacher(
 		plan:         planFsTargets,
 		moduleLoaded: moduleLoaded,
 		localPVs:     localPVs,
+		endBurst:     func() {},
 		withoutPV:    map[FsTypeCode]int{},
 		attached:     map[FsTypeCode]io.Closer{},
 		failures:     map[FsTypeCode]int{},
@@ -128,9 +131,11 @@ func newKernelFsAttacher(
 	if err != nil {
 		return nil, err
 	}
-	return newFsAttacher(log, loader.attach, func() (map[FsTypeCode]bool, error) {
+	a := newFsAttacher(log, loader.attach, func() (map[FsTypeCode]bool, error) {
 		return scanLocalPVs(log, filterMap)
-	}), nil
+	})
+	a.endBurst = loader.btf.Release
+	return a, nil
 }
 
 func (a *fsAttacher) run() {
@@ -185,6 +190,8 @@ func (a *fsAttacher) refresh() {
 	if len(pending) == 0 {
 		return
 	}
+	// Planning and loading are one BTF burst: its cache goes with it.
+	defer a.endBurst()
 	for _, plan := range a.plan(pending) {
 		a.attach(plan, startup)
 	}
