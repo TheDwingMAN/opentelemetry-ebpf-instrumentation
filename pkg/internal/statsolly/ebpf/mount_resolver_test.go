@@ -281,6 +281,9 @@ func resetMountCache() {
 	mountOrder = nil
 	mountMu.Unlock()
 	forgetRootInodes(nil)
+	rootInodeMu.Lock()
+	clear(rootInodeWarnedAt)
+	rootInodeMu.Unlock()
 }
 
 // The kubelet's mounts live in the host mount namespace, which hostPID makes
@@ -410,11 +413,10 @@ func withRootDir(t *testing.T, mountPoint string) uint64 {
 func knownRootInode(t *testing.T, mountPoint string) uint64 {
 	t.Helper()
 
-	path := filepath.Join(rootOf(mountInfoPath), mountPoint)
 	var ino uint64
 	require.Eventually(t, func() bool {
 		var ok bool
-		ino, ok, _ = mountRootInode(path)
+		ino, ok, _ = mountRootInode(rootOf(mountInfoPath), mountPoint)
 		return ok
 	}, 5*time.Second, time.Millisecond)
 	return ino
@@ -612,7 +614,8 @@ func TestMountTableWatchDropsOnlyChangedDevices(t *testing.T) {
 	withRootDir(t, mpY)
 
 	w := mountTableWatch{known: map[string]mountSet{}}
-	w.changed(mountInfoPath)
+	table := openTable(t, mountInfoPath)
+	w.changed(mountInfoPath, table)
 	_, ok := resolveMount(MountKey{Dev: 32})
 	require.True(t, ok)
 	_, ok = resolveMount(MountKey{Dev: 41})
@@ -620,13 +623,13 @@ func TestMountTableWatchDropsOnlyChangedDevices(t *testing.T) {
 
 	// A pod unrelated to either volume starts: nothing is dropped.
 	require.NoError(t, os.WriteFile(mountInfoPath, []byte(lineX+"\n"+lineY+"\n"+unrelated+"\n"), 0o644))
-	w.changed(mountInfoPath)
+	w.changed(mountInfoPath, table)
 	assert.True(t, mountCached(MountKey{Dev: 32}))
 	assert.True(t, mountCached(MountKey{Dev: 41}))
 
 	// The pod on pvc-y goes away: only its device is resolved again.
 	require.NoError(t, os.WriteFile(mountInfoPath, []byte(lineX+"\n"+unrelated+"\n"), 0o644))
-	w.changed(mountInfoPath)
+	w.changed(mountInfoPath, table)
 	assert.True(t, mountCached(MountKey{Dev: 32}))
 	assert.False(t, mountCached(MountKey{Dev: 41}))
 	assert.True(t, rootInodeCached(mpX))
@@ -645,11 +648,10 @@ func TestMountTableWatchUnreadableTableDropsAll(t *testing.T) {
 	w := mountTableWatch{known: map[string]mountSet{}}
 	_, ok := resolveMount(MountKey{Dev: 32})
 	require.True(t, ok)
-	w.changed(mountInfoPath)
+	w.changed(mountInfoPath, openTable(t, mountInfoPath))
 	assert.True(t, mountCached(MountKey{Dev: 32}), "the first read only records the table")
 
-	require.NoError(t, os.Remove(mountInfoPath))
-	w.changed(mountInfoPath)
+	w.changed(mountInfoPath, unreadableTable{})
 	assert.False(t, mountCached(MountKey{Dev: 32}))
 }
 
@@ -675,6 +677,130 @@ func mountCached(key MountKey) bool {
 func rootInodeCached(mountPoint string) bool {
 	rootInodeMu.Lock()
 	defer rootInodeMu.Unlock()
-	_, ok := rootInodes[filepath.Join(rootOf(mountInfoPath), mountPoint)]
+	_, ok := rootInodes[mountPoint]
 	return ok
+}
+
+// openTable opens a fixture mount table the way a watch holds it open.
+func openTable(t *testing.T, path string) *os.File {
+	t.Helper()
+	f, err := os.Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// unreadableTable is a mount table whose read fails.
+type unreadableTable struct{}
+
+func (unreadableTable) Read([]byte) (int, error)       { return 0, os.ErrClosed }
+func (unreadableTable) Seek(int64, int) (int64, error) { return 0, os.ErrClosed }
+
+// The watch reads a table through the file it holds open, never by its path
+// again: once the process it was opened for exits, the path names no table,
+// or, with the PID reused, another process's. Here the path comes to hold a
+// table without the volume while the watched namespace still has it.
+func TestMountTableWatchNeverReadsThePathAgain(t *testing.T) {
+	const mpX = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-x"
+	lineX := "36 35 0:32 / " + mpX + " rw - nfs4 10.0.0.1:/x rw"
+	withMountInfo(t, rootLine, lineX)
+
+	w := mountTableWatch{known: map[string]mountSet{}}
+	table := openTable(t, mountInfoPath)
+	w.changed(mountInfoPath, table)
+	_, ok := resolveMount(MountKey{Dev: 32})
+	require.True(t, ok)
+
+	// The PID is reused: its path is another process's table now.
+	reused := filepath.Join(t.TempDir(), "mountinfo")
+	require.NoError(t, os.WriteFile(reused, []byte(rootLine+"\n"), 0o644))
+	require.NoError(t, os.Rename(reused, mountInfoPath))
+
+	w.changed(mountInfoPath, table)
+	assert.True(t, mountCached(MountKey{Dev: 32}), "the watched table did not change")
+}
+
+// With OpenShift's mount namespace encapsulation the kubelet's table is
+// watched through the kubelet's mountinfo. After the kubelet restarts its PID
+// can belong to any process; a second pod mounting the volume must still
+// make it shared, rather than the first pod being charged for its I/O until
+// the resolution's TTL.
+func TestKubeletNamespaceWatchSurvivesPIDReuse(t *testing.T) {
+	const sharer = "37 35 0:32 / /var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-kubens rw,relatime shared:1 - nfs 10.0.0.1:/export rw"
+	root := kubensNode(t)
+	resetMountCache()
+	t.Cleanup(resetMountCache)
+
+	info, ok := resolveMount(MountKey{Dev: 32})
+	require.True(t, ok)
+	require.Equal(t, "pvc-kubens", info.PVName)
+	require.False(t, info.Shared)
+
+	w := mountTableWatch{known: map[string]mountSet{}}
+	kubeletTable := filepath.Join(root, "901", "mountinfo")
+	table := openTable(t, kubeletTable)
+	w.changed(kubeletTable, table)
+
+	// A second pod mounts the volume: the namespace's table, which the open
+	// file and CRI-O both show, gains its mount.
+	nsTable := []byte(kubeletNFSLine + "\n" + sharer + "\n")
+	require.NoError(t, os.WriteFile(kubeletTable, nsTable, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "812", "mountinfo"), nsTable, 0o644))
+	// The kubelet restarts, and its old PID goes to a process in another
+	// mount namespace whose table is the one from before.
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "901")))
+	fakeProc(t, root, "901", "sleep", "mnt:[4026533999]", hostPidNS, kubeletNFSLine)
+
+	w.changed(kubeletTable, table)
+
+	info, ok = resolveMount(MountKey{Dev: 32})
+	require.True(t, ok)
+	assert.Equal(t, "pvc-kubens", info.PVName)
+	assert.True(t, info.Shared, "the second pod's mount must be seen through the namespace, not the reused PID")
+}
+
+// A mount table change that lands between reading the table and storing the
+// resolution must not leave the resolution read before it cached: the watch
+// has already dropped the device, and nothing would drop it again.
+func TestResolveMountDoesNotStoreAcrossTableChange(t *testing.T) {
+	const first = "36 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw"
+	const second = "37 35 0:32 / /var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw"
+	withMountInfo(t, first)
+	w := mountTableWatch{known: map[string]mountSet{}}
+	table := openTable(t, mountInfoPath)
+	w.changed(mountInfoPath, table)
+
+	scan := mountScan
+	t.Cleanup(func() { mountScan = scan })
+	mountScan = func(key MountKey) (MountInfo, bool, bool) {
+		info, found, pending := scan(key)
+		// A second pod mounts the volume, and the watch sees it, before
+		// the resolution read from the table without it is stored.
+		require.NoError(t, os.WriteFile(mountInfoPath, []byte(first+"\n"+second+"\n"), 0o644))
+		w.changed(mountInfoPath, table)
+		return info, found, pending
+	}
+
+	info, ok := resolveMount(MountKey{Dev: 32})
+	require.True(t, ok)
+	assert.False(t, info.Shared, "the event was read from the table before the change")
+	mountScan = scan
+
+	assert.False(t, mountCached(MountKey{Dev: 32}), "a resolution read before a change is not stored after it")
+	info, _ = resolveMount(MountKey{Dev: 32})
+	assert.True(t, info.Shared)
+}
+
+func TestReadMountSetRejectsMalformedTable(t *testing.T) {
+	_, err := readMountSet(strings.NewReader("36 35 0:32 / /mnt rw\n"))
+	require.Error(t, err)
+
+	set, err := readMountSet(strings.NewReader(nfsFixtureLine + "\n" + rootLine + "\n"))
+	require.NoError(t, err)
+	assert.Contains(t, set, mountIdentity{
+		id: 2827, majMin: "0:574", root: "/",
+		mountPoint: "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-b3befffd-ae0d-4fa0-8cef-4949329d8c3f",
+		source:     "10.96.84.126:/export/pvc-b3befffd",
+	})
+	assert.Len(t, set, 2)
 }

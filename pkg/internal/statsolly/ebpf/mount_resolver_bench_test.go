@@ -4,6 +4,7 @@
 package ebpf
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,7 +57,14 @@ func BenchmarkResolveMount_SlowRootInode(b *testing.B) {
 		time.Sleep(20 * time.Millisecond)
 		return 0, os.ErrNotExist
 	}
-	b.Cleanup(func() { rootInodeStat = old })
+	// Every iteration forgets the lookups the one before started, which are
+	// still sleeping: lift their limit, so each iteration starts its own.
+	oldMax := maxRootInodeLookups
+	maxRootInodeLookups = math.MaxInt
+	b.Cleanup(func() {
+		rootInodeStat = old
+		maxRootInodeLookups = oldMax
+	})
 
 	key := MountKey{Dev: 77, RootIno: 12345}
 	for b.Loop() {

@@ -5,6 +5,7 @@ package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -97,10 +98,21 @@ var (
 	mountMu    sync.RWMutex
 	mountCache = map[MountKey]mountCacheEntry{}
 	mountOrder []MountKey // insertion order, oldest first, for FIFO eviction
+	// mountTableGen moves each time a mount table change drops resolutions,
+	// so a resolution read from the table before the change is not stored
+	// after it.
+	mountTableGen uint64
+
+	// mountScan is scanForMount; tests wrap it.
+	mountScan = scanForMount
 
 	mountWatchOnce sync.Once
 	mountWatch     = mountTableWatch{known: map[string]mountSet{}}
 )
+
+func mrlog() *slog.Logger {
+	return slog.With("component", "ebpf.MountResolver")
+}
 
 // invalidateMountCache drops every cached resolution, so the next lookup of
 // each device rescans the mount table.
@@ -108,6 +120,7 @@ func invalidateMountCache() {
 	mountMu.Lock()
 	clear(mountCache)
 	mountOrder = nil
+	mountTableGen++
 	mountMu.Unlock()
 	forgetRootInodes(nil)
 }
@@ -116,7 +129,23 @@ func invalidateMountCache() {
 func dropMountsWhere(drop func(MountKey, mountCacheEntry) bool) {
 	mountMu.Lock()
 	defer mountMu.Unlock()
+	dropMountsWhereLocked(drop)
+}
 
+// dropChangedMounts drops the cached resolutions of devs, whose mounts a
+// mount table change added or removed.
+func dropChangedMounts(devs map[uint32]struct{}) {
+	mountMu.Lock()
+	defer mountMu.Unlock()
+	mountTableGen++
+	dropMountsWhereLocked(func(key MountKey, _ mountCacheEntry) bool {
+		_, changed := devs[key.Dev]
+		return changed
+	})
+}
+
+// dropMountsWhereLocked is dropMountsWhere with mountMu held.
+func dropMountsWhereLocked(drop func(MountKey, mountCacheEntry) bool) {
 	kept := mountOrder[:0]
 	for _, key := range mountOrder {
 		if drop(key, mountCache[key]) {
@@ -146,6 +175,7 @@ func resolveMount(key MountKey) (MountInfo, bool) {
 
 	mountMu.RLock()
 	entry, ok := mountCache[key]
+	gen := mountTableGen
 	mountMu.RUnlock()
 	if ok {
 		ttl := mountCacheTTL
@@ -158,9 +188,17 @@ func resolveMount(key MountKey) (MountInfo, bool) {
 	}
 
 	learned := rootInodesLearned.Load()
-	info, found, pending := scanForMount(key)
+	info, found, pending := mountScan(key)
 
 	mountMu.Lock()
+	if mountTableGen != gen {
+		// A mount table change dropped resolutions while this one was read,
+		// maybe this device's: the table read may be the one from before the
+		// change. It serves this event only, and the next reads the table
+		// again.
+		mountMu.Unlock()
+		return info, found
+	}
 	if _, exists := mountCache[key]; !exists {
 		if len(mountCache) >= maxCachedMounts {
 			// Evict the oldest entry rather than the whole cache, so filling
@@ -244,7 +282,7 @@ func scanForMount(key MountKey) (info MountInfo, found, pending bool) {
 	// that cannot be told, the volume is left unnamed rather than guessed.
 	var matched []candidate
 	for _, c := range cands {
-		ino, ok, lookingUp := mountRootInode(filepath.Join(root, c.mountPoint))
+		ino, ok, lookingUp := mountRootInode(root, c.mountPoint)
 		pending = pending || lookingUp
 		if ok && ino == key.RootIno {
 			matched = append(matched, c)
@@ -283,18 +321,24 @@ type mountTableWatch struct {
 	known map[string]mountSet
 }
 
-// changed reads the table at path again and drops the resolutions its change
-// affected. The first read of a table, when its watch starts, only records it.
-func (w *mountTableWatch) changed(path string) {
+// changed reads again the table the watch identifies by key, through the
+// file the watch holds open, and drops the resolutions its change affected.
+// The first read of a table, when its watch starts, only records it.
+//
+// The table is never read again by path. An open mountinfo keeps the mount
+// namespace and root it was opened in after its process exits, while the
+// path does not: once the process is gone it names no table, or, with the
+// PID reused, another process's.
+func (w *mountTableWatch) changed(key string, table io.ReadSeeker) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	var now mountSet
-	if mounts, err := mountsFrom(path); err == nil {
-		now = mountSetOf(mounts)
+	now, err := readMountSet(table)
+	if err != nil {
+		mrlog().Debug("can't read a watched mount table", "table", key, "error", err)
 	}
-	before, seen := w.known[path]
-	w.known[path] = now
+	before, seen := w.known[key]
+	w.known[key] = now
 	if !seen {
 		return
 	}
@@ -304,7 +348,7 @@ func (w *mountTableWatch) changed(path string) {
 	}
 
 	devs := map[uint32]struct{}{}
-	var points []string
+	var mountPoints []string
 	for _, diff := range [2][2]mountSet{{before, now}, {now, before}} {
 		for m := range diff[0] {
 			if _, ok := diff[1][m]; ok {
@@ -313,27 +357,42 @@ func (w *mountTableWatch) changed(path string) {
 			if dev, ok := parseDev(m.majMin); ok {
 				devs[dev] = struct{}{}
 			}
-			points = append(points, filepath.Join(rootOf(path), m.mountPoint))
+			mountPoints = append(mountPoints, m.mountPoint)
 		}
 	}
-	if len(points) == 0 {
+	if len(mountPoints) == 0 {
 		return
 	}
-	dropMountsWhere(func(key MountKey, _ mountCacheEntry) bool {
-		_, changed := devs[key.Dev]
-		return changed
-	})
-	forgetRootInodes(points)
+	dropChangedMounts(devs)
+	forgetRootInodes(mountPoints)
 }
 
-func mountSetOf(mounts []*procfs.MountInfo) mountSet {
-	set := make(mountSet, len(mounts))
-	for _, m := range mounts {
+// readMountSet reads a mountinfo file, in the format documented by proc(5),
+// from its start. Only what tells one mount from another is parsed.
+func readMountSet(table io.ReadSeeker) (mountSet, error) {
+	if _, err := table.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(table)
+	if err != nil {
+		return nil, err
+	}
+	set := mountSet{}
+	for line := range strings.Lines(string(data)) {
+		fields := strings.Split(strings.TrimSuffix(line, "\n"), " ")
+		n := len(fields)
+		if n < 10 || fields[n-4] != "-" {
+			return nil, fmt.Errorf("malformed mountinfo line %q", line)
+		}
+		id, err := strconv.Atoi(fields[0])
+		if err != nil {
+			return nil, fmt.Errorf("malformed mount ID in %q: %w", line, err)
+		}
 		set[mountIdentity{
-			id: m.MountID, majMin: m.MajorMinorVer, root: m.Root, mountPoint: m.MountPoint, source: m.Source,
+			id: id, majMin: fields[2], root: fields[3], mountPoint: fields[4], source: fields[n-2],
 		}] = struct{}{}
 	}
-	return set
+	return set, nil
 }
 
 // parseDev parses a "<major>:<minor>" device number, the inverse of fmtDev.

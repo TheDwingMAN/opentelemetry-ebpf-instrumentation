@@ -143,7 +143,6 @@ section empty once drained.
   carry no `k8s.persistentvolume.name`, claim or storage class: the mount root's inode, which
   tells the volumes apart, is now looked up in the background instead of holding up the
   pipeline.
-- The OTLP stats resource gains `host.name`.
 
 - A span attribute OBI parses but could not determine is no longer emitted as an empty
   string. It covers every such attribute the span exporter appends, among them

@@ -6,8 +6,9 @@ package agent // import "go.opentelemetry.io/obi/pkg/statsolly/agent"
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"time"
 
-	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/otel"
 	"go.opentelemetry.io/obi/pkg/export/prom"
@@ -22,7 +23,6 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/pipe/transform/k8s"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/export"
-	"go.opentelemetry.io/obi/pkg/internal/traces/hostname"
 	"go.opentelemetry.io/obi/pkg/kube"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
@@ -98,13 +98,7 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		if err != nil {
 			return nil, fmt.Errorf("initializing PIDMetadataDecorator: %w", err)
 		}
-		// k8s.node.name is the same for every stat: the exporters' getters
-		// read it once, when they are built below.
-		if nodeName, err := s.ctxInfo.K8sInformer.CurrentNodeName(ctx); err == nil {
-			ebpf.SetNodeName(nodeName)
-		} else {
-			alog.Debug("can't get the Kubernetes node name", "error", err)
-		}
+		setNodeName(ctx, s.ctxInfo.K8sInformer, alog)
 	}
 	pvcLookup := ebpf.PVCLookup(noPVCLookup)
 	if pidK8sStore != nil {
@@ -168,7 +162,6 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		Metrics:     &s.cfg.OTELMetrics,
 		SelectorCfg: selectorCfg,
 		CommonCfg:   &s.cfg.Metrics,
-		HostName:    statsHostName(&s.cfg.Attributes.InstanceID),
 	}, filteredStats), swarm.WithID("OTelExporter"))
 
 	swi.Add(prom.StatsPrometheusEndpoint(s.ctxInfo, &prom.StatsPrometheusConfig{
@@ -183,13 +176,20 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	return swi.Instance(ctx)
 }
 
-// statsHostName is host.name for the stats resource, resolved as for the
-// application metrics; "" when it cannot be.
-func statsHostName(cfg *config.InstanceIDConfig) string {
-	name, err := hostname.CreateResolver(cfg.OverrideHostname, cfg.HostnameDNSResolution).Query()
+// nodeNameTimeout bounds the node name lookup, as for the node's host.id.
+var nodeNameTimeout = 30 * time.Second
+
+// setNodeName records the node the agent runs on. k8s.node.name is the same
+// for every stat: the exporters' getters read it once, when they are built.
+// A node name that cannot be read in time leaves it unset rather than hold
+// up the pipeline.
+func setNodeName(ctx context.Context, informer *kube.MetadataProvider, log *slog.Logger) {
+	ctx, cancel := context.WithTimeout(ctx, nodeNameTimeout)
+	defer cancel()
+	nodeName, err := informer.CurrentNodeName(ctx)
 	if err != nil {
-		alog().Warn("can't read the hostname; stats will have no host.name", "error", err)
-		return ""
+		log.Debug("can't get the Kubernetes node name", "error", err)
+		return
 	}
-	return name
+	ebpf.SetNodeName(nodeName)
 }
