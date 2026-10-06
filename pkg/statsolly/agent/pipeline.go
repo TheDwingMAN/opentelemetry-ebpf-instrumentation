@@ -146,7 +146,7 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		swi.Add(mergeStats(storageStats, diskStats, diskVolumeStats, podVolumeStats), swarm.WithID("StorageStatsMerger"))
 
 		selectedStorageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "selectedStorageStats")
-		swi.Add(filter.ByDynamicContainer(dynamicSelector, s.ctxInfo.K8sInformer, selectsStorageStat,
+		swi.Add(filter.ByDynamicContainer(dynamicSelector, s.ctxInfo.K8sInformer, newStorageStatSelector().selects,
 			storageStats, selectedStorageStats), swarm.WithID("DynamicContainerFilter"))
 
 		kubeDecoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "kubeDecoratedDiskStats")
@@ -198,15 +198,40 @@ func (s *Stats) storageStatsEnabled() bool {
 		features.StatsNFS() || features.StatsDiskVolumeDevices() || features.StatsDiskPodVolumes()
 }
 
-// selectsStorageStat tells whether a storage stat belongs to a dynamically selected application: a
+// storageStatSelector tells whether a storage stat belongs to a dynamically selected application: a
 // pod volume, to a selected pod, and any other stat, to a selected container. The stats of devices,
 // like their requests in flight or the disks of the stacked volumes, belong to no application.
-func selectsStorageStat(containers *selection.DynamicAppContainers, stat *ebpf.Stat) bool {
-	if volume := stat.PodVolume; volume != nil {
-		owner := kube.WorkloadOwner{Namespace: volume.Namespace, Kind: volume.OwnerKind, Name: volume.OwnerName}
-		return containers.AllowsPod(volume.Namespace, volume.PodName, owner)
+type storageStatSelector struct {
+	// reportedVolumes are the pod volumes that were let through, by their value of 1. Their
+	// removal, which a value of 0 reports, is let through too: once its pod is deleted, the pod
+	// is no longer selected.
+	reportedVolumes map[ebpf.PodVolume]struct{}
+}
+
+func newStorageStatSelector() *storageStatSelector {
+	return &storageStatSelector{reportedVolumes: map[ebpf.PodVolume]struct{}{}}
+}
+
+func (s *storageStatSelector) selects(containers *selection.DynamicAppContainers, stat *ebpf.Stat) bool {
+	volume := stat.PodVolume
+	if volume == nil {
+		return containers.AllowsContainer(stat.ContainerID())
 	}
-	return containers.AllowsContainer(stat.ContainerID())
+
+	series := *volume
+	series.Value = 1
+	if volume.Value == 0 {
+		_, reported := s.reportedVolumes[series]
+		delete(s.reportedVolumes, series)
+		return reported
+	}
+
+	owner := kube.WorkloadOwner{Namespace: volume.Namespace, Kind: volume.OwnerKind, Name: volume.OwnerName}
+	if !containers.AllowsPod(volume.Namespace, volume.PodName, owner) {
+		return false
+	}
+	s.reportedVolumes[series] = struct{}{}
+	return true
 }
 
 // mergeStats forwards the stats of all the inputs to the output, and closes the output once all the

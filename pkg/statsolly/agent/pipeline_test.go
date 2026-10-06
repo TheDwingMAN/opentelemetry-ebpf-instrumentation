@@ -31,6 +31,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/pipe/global"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
+	"go.opentelemetry.io/obi/pkg/selection"
 )
 
 const timeout = 5 * time.Second
@@ -529,6 +530,30 @@ func TestStorageStatsOfUnselectedApplicationsUnderDynamicSelection(t *testing.T)
 			slices.ContainsFunc(allMetrics, func(m promtest.ScrapedMetric) bool { return strings.HasPrefix(m.Name, "obi_stat_disk") })
 	}
 	assert.Never(t, exported, time.Second, 100*time.Millisecond, "no application is selected, and the stats of devices belong to none")
+}
+
+// The removal of a pod volume is reported once its pod is deleted, and no longer selected
+func TestStorageSelectionReportsTheRemovalOfAReportedPodVolume(t *testing.T) {
+	selector := newStorageStatSelector()
+	allSelected := selection.NewDynamicAppContainers(nil, nil)
+	noneSelected := selection.NewDynamicAppContainers(discover.NewDynamicSelector().StatsMetrics(), nil)
+	stat := func(volume ebpf.PodVolume) *ebpf.Stat {
+		return &ebpf.Stat{Type: ebpf.StatTypePodVolume, PodVolume: &volume}
+	}
+	mounted := ebpf.PodVolume{Namespace: "default", PodName: "db-0", VolumeName: "data", MountedDevice: "dm-0", Device: "sda", Value: 1}
+	gone := mounted
+	gone.Value = 0
+	other := mounted
+	other.PodName = "db-1"
+
+	assert.True(t, selector.selects(allSelected, stat(mounted)))
+	assert.False(t, selector.selects(noneSelected, stat(other)), "the volumes of the unselected pods are not reported")
+	assert.True(t, selector.selects(noneSelected, stat(gone)), "the removal of a reported volume is")
+	assert.False(t, selector.selects(noneSelected, stat(gone)), "once")
+
+	otherGone := other
+	otherGone.Value = 0
+	assert.False(t, selector.selects(noneSelected, stat(otherGone)), "nor the removal of a volume that was never reported")
 }
 
 // startDiskPipeline runs the stats pipeline with the given disk features, exporting to
