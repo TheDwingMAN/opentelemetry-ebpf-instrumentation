@@ -179,6 +179,7 @@ type FsIo struct {
 	PidNs     uint32 `json:"pid_ns"`
 	LatencyNs uint64 `json:"latency_ns"`
 	Bytes     uint64 `json:"bytes"`
+	Error     int32  `json:"error"`
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.
@@ -251,6 +252,8 @@ type StatsFsIo struct {
 	PidNs     uint32
 	LatencyNs uint64
 	Bytes     uint64
+	Error     int32
+	Pad2      [4]uint8
 }
 
 // TCPIoBatchSize mirrors k_tcp_io_batch_size in bpf/statsolly/types.h.

@@ -627,6 +627,12 @@ func getDefinitions(
 			SubGroups:  []*AttrReportGroup{&statsFsAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
+		StatFsOperationErrors.Section: {
+			SubGroups: []*AttrReportGroup{&statsFsAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
 
 		// span and service graph metrics don't yet implement attribute selection,
 		// but their values can still be filtered, so we list them here just to

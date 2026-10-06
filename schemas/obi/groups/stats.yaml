@@ -299,3 +299,23 @@ groups:
     attributes:
       - ref: system.filesystem.type
       - ref: fs.operation
+
+  # Failed filesystem operations, keyed by the upstream error.type attribute so
+  # the failure mode (ESTALE, EIO, ENOSPC, ETIMEDOUT, ...) is queryable without
+  # an OBI-specific attribute. Emitted when the `storage_fs_errors` feature is
+  # enabled. The async io_uring completion marker (-EIOCBQUEUED) is excluded at
+  # the probe: it is not a failure, just a deferred completion OBI does not
+  # observe.
+  - id: metric.obi_stat_fs_operation_errors
+    type: metric
+    metric_name: obi.stat.fs.operation.errors
+    instrument: counter
+    unit: "{error}"
+    stability: development
+    brief: >
+      Count of network filesystem read or write operations that failed,
+      broken down by filesystem type, operation and errno.
+    attributes:
+      - ref: system.filesystem.type
+      - ref: fs.operation
+      - ref: error.type

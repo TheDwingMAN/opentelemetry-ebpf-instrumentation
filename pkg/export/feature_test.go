@@ -271,12 +271,21 @@ func TestStorageFSFeatureParsing(t *testing.T) {
 	assert.True(t, f.StorageFS())
 	assert.True(t, f.StorageFSDuration())
 	assert.True(t, f.StorageFSIo())
+	assert.True(t, f.StorageFSErrors())
 	assert.True(t, f.StatMetrics(), "storage_fs rides the stats pipeline")
 
 	var d Features
 	require.NoError(t, yaml.Unmarshal([]byte(`["storage_fs_duration"]`), &d))
 	assert.True(t, d.StorageFS())
 	assert.False(t, d.StorageFSIo())
+	assert.False(t, d.StorageFSErrors())
+
+	var e Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_fs_errors"]`), &e))
+	assert.True(t, e.StorageFS())
+	assert.True(t, e.StorageFSErrors())
+	assert.False(t, e.StorageFSDuration())
+	assert.False(t, e.StorageFSIo())
 }
 
 func TestFeatureUndefined(t *testing.T) {
