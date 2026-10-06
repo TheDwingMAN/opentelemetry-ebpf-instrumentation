@@ -251,6 +251,30 @@ func TestFamily_AttachingAnExporterLater(t *testing.T) {
 		"counts from its attachment on")
 }
 
+func TestFamily_ReadsNothingBeforeRun(t *testing.T) {
+	tf := newTestFamily(t, 1, diskBounds, nil)
+	f, err := NewFamily(tf.family.cfg)
+	require.NoError(t, err)
+	reg, err := NewRegistry(f)
+	require.NoError(t, err)
+	tf.family, tf.reg = f, reg
+
+	first := tf.otelProducer(t, cumulative, 0)
+	k := blkKey(devA, ebpf.CodeBlockRead, 0)
+	record(tf.m, tf.layout, k, 0, 100, 1000)
+	assert.Empty(t, produce(t, first), "not running: the map is not read")
+
+	second := tf.otelProducer(t, cumulative, 0)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	f.Run(ctx)
+	tf.clock.Advance(time.Second)
+	for _, p := range []*Producer{first, second} {
+		assert.Equal(t, int64(100), sumValue(t, produce(t, p)["test.io"], devOp(devA, ebpf.CodeBlockRead)...),
+			"every exporter attached before Run sees every count")
+	}
+}
+
 func TestFamily_ValidatesMetrics(t *testing.T) {
 	l, err := NewExplicitLayout(diskBounds)
 	require.NoError(t, err)
