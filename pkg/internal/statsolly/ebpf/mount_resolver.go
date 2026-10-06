@@ -221,8 +221,11 @@ var procRoot = "/proc"
 const kubeletSearchInterval = 30 * time.Second
 
 var (
-	kubeletMu         sync.Mutex
-	kubeletMountInfo  string // "<procRoot>/<pid>/mountinfo" of a kubelet outside init's mount namespace
+	kubeletMu sync.Mutex
+	// kubeletNS is the mount namespace, as its ns/mnt link reads, of a
+	// kubelet running outside init's; kubeletPID is a process in it.
+	kubeletNS         string
+	kubeletPID        string
 	kubeletSearchedAt time.Time
 	kubeletWatchOnce  sync.Once
 )
@@ -233,12 +236,19 @@ func kubeletNamespaceMounts() ([]*procfs.MountInfo, bool) {
 	kubeletMu.Lock()
 	defer kubeletMu.Unlock()
 
-	if kubeletMountInfo != "" {
-		if mounts, err := mountsFrom(kubeletMountInfo); err == nil {
-			return mounts, true
+	if kubeletNS != "" {
+		// The namespace outlives the kubelet: while it restarts, CRI-O and
+		// every conmon are still in it, with the same table. So follow the
+		// namespace, not the process, and never wait for the next search.
+		if !inMountNamespace(procRoot, kubeletPID, kubeletNS) {
+			kubeletPID = findInMountNamespace(procRoot, kubeletNS)
 		}
-		// The kubelet restarted under a new PID.
-		kubeletMountInfo = ""
+		if kubeletPID != "" {
+			if mounts, err := mountsFrom(mountInfoOf(kubeletPID)); err == nil {
+				return mounts, true
+			}
+		}
+		kubeletNS, kubeletPID = "", ""
 	}
 
 	if time.Since(kubeletSearchedAt) < kubeletSearchInterval {
@@ -246,48 +256,84 @@ func kubeletNamespaceMounts() ([]*procfs.MountInfo, bool) {
 	}
 	kubeletSearchedAt = time.Now()
 
-	path, ok := findKubeletMountInfo(procRoot)
+	pid, ns, ok := findKubelet(procRoot)
 	if !ok {
 		return nil, false
 	}
-	mounts, err := mountsFrom(path)
+	if mounts, err := mountsFrom(mountInfoOf(pid)); err != nil || !hasKubeletVolumeMount(mounts) {
+		return nil, false
+	}
+	// The watch on init's table does not see this namespace. An open
+	// mountinfo holds its namespace, so one watch outlives any kubelet. It
+	// only reports changes after it opens, so the table is read after it.
+	kubeletWatchOnce.Do(func() { watchMountTable(invalidateMountCache, mountInfoOf(pid)) })
+	mounts, err := mountsFrom(mountInfoOf(pid))
 	if err != nil {
 		return nil, false
 	}
-	kubeletMountInfo = path
-	// The watch on init's table does not see this namespace change. The
-	// namespace outlives any one kubelet process, so one watch is enough.
-	kubeletWatchOnce.Do(func() { watchMountTable(invalidateMountCache, path) })
+	kubeletNS, kubeletPID = ns, pid
 	return mounts, true
 }
 
-// findKubeletMountInfo returns the mountinfo path of a process named
-// "kubelet" whose mount namespace differs from init's.
-func findKubeletMountInfo(root string) (string, bool) {
-	initNS, err := os.Readlink(filepath.Join(root, "1", "ns", "mnt"))
-	if err != nil {
-		return "", false
+func mountInfoOf(pid string) string { return filepath.Join(procRoot, pid, "mountinfo") }
+
+// findKubelet returns the PID and mount namespace of the node's kubelet when
+// that namespace differs from init's. The node's kubelet shares init's PID
+// namespace; a kubelet inside a container (kind, a nested cluster in a CI
+// pod) does not, and is skipped.
+func findKubelet(root string) (pid, mntNS string, ok bool) {
+	initMnt, err1 := os.Readlink(filepath.Join(root, "1", "ns", "mnt"))
+	initPid, err2 := os.Readlink(filepath.Join(root, "1", "ns", "pid"))
+	if err1 != nil || err2 != nil {
+		return "", "", false
 	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return "", false
-	}
-	for _, e := range entries {
-		if _, err := strconv.Atoi(e.Name()); err != nil {
-			continue
-		}
-		dir := filepath.Join(root, e.Name())
-		comm, err := os.ReadFile(filepath.Join(dir, "comm"))
+	for _, p := range procPIDs(root) {
+		comm, err := os.ReadFile(filepath.Join(root, p, "comm"))
 		if err != nil || strings.TrimSpace(string(comm)) != "kubelet" {
 			continue
 		}
-		ns, err := os.Readlink(filepath.Join(dir, "ns", "mnt"))
-		if err != nil || ns == initNS {
+		mnt, err := os.Readlink(filepath.Join(root, p, "ns", "mnt"))
+		if err != nil || mnt == initMnt {
 			continue
 		}
-		return filepath.Join(dir, "mountinfo"), true
+		if pidNS, err := os.Readlink(filepath.Join(root, p, "ns", "pid")); err != nil || pidNS != initPid {
+			continue
+		}
+		return p, mnt, true
 	}
-	return "", false
+	return "", "", false
+}
+
+// findInMountNamespace returns any process in mount namespace ns.
+func findInMountNamespace(root, ns string) string {
+	for _, p := range procPIDs(root) {
+		if inMountNamespace(root, p, ns) {
+			return p
+		}
+	}
+	return ""
+}
+
+func inMountNamespace(root, pid, ns string) bool {
+	if pid == "" {
+		return false
+	}
+	link, err := os.Readlink(filepath.Join(root, pid, "ns", "mnt"))
+	return err == nil && link == ns
+}
+
+func procPIDs(root string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	pids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err == nil {
+			pids = append(pids, e.Name())
+		}
+	}
+	return pids
 }
 
 // mountsFrom parses a mountinfo file addressed as <root>/<pid|self>/mountinfo,
