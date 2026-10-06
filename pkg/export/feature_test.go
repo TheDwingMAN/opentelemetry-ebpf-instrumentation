@@ -246,7 +246,23 @@ func TestStorageBlockFeatureParsing(t *testing.T) {
 	var f Features
 	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block"]`), &f))
 	assert.True(t, f.StorageBlock())
+	assert.True(t, f.StorageBlockDuration())
+	assert.True(t, f.StorageBlockIo())
+	assert.True(t, f.StorageBlockQueue())
+	assert.True(t, f.StorageBlockErrors())
 	assert.True(t, f.StatMetrics()) // storage rides the stats pipeline
+
+	var q Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block_queue"]`), &q))
+	assert.True(t, q.StorageBlock())
+	assert.True(t, q.StorageBlockQueue())
+	assert.False(t, q.StorageBlockErrors())
+
+	var e Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block_errors"]`), &e))
+	assert.True(t, e.StorageBlock())
+	assert.True(t, e.StorageBlockErrors())
+	assert.False(t, e.StorageBlockQueue())
 }
 
 func TestStorageFSFeatureParsing(t *testing.T) {

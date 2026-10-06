@@ -261,6 +261,7 @@ discovery:
 				GenAIClientDurationHistogram:       export.DefaultBuckets.GenAIClientDurationHistogram,
 				StatTCPRttHistogram:                export.DefaultBuckets.StatTCPRttHistogram,
 				StatDiskOperationDurationHistogram: export.DefaultBuckets.StatDiskOperationDurationHistogram,
+				StatDiskQueueDepthHistogram:        export.DefaultBuckets.StatDiskQueueDepthHistogram,
 				StatFsOperationDurationHistogram:   export.DefaultBuckets.StatFsOperationDurationHistogram,
 			},
 			Instrumentations: []instrumentations.Instrumentation{
@@ -314,6 +315,7 @@ discovery:
 				GenAIClientDurationHistogram:       []float64{5, 6, 7, 8},
 				StatTCPRttHistogram:                export.DefaultBuckets.StatTCPRttHistogram,
 				StatDiskOperationDurationHistogram: export.DefaultBuckets.StatDiskOperationDurationHistogram,
+				StatDiskQueueDepthHistogram:        export.DefaultBuckets.StatDiskQueueDepthHistogram,
 				StatFsOperationDurationHistogram:   export.DefaultBuckets.StatFsOperationDurationHistogram,
 			},
 		},

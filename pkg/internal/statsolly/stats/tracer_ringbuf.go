@@ -163,7 +163,10 @@ func readBlockIoIntoStat(record *ringbuf.Record) (ebpf.Stat, error) {
 			Dev:       event.Dev,
 			Op:        event.Op,
 			LatencyNs: event.LatencyNs,
+			QueueNs:   event.QueueNs,
 			Bytes:     event.Bytes,
+			Error:     event.Error,
+			Inflight:  event.Inflight,
 		},
 	}, nil
 }

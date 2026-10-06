@@ -438,6 +438,33 @@ var (
 		Unit:    "By",
 		Type:    InstrumentCounter,
 	})
+	// Time a request spent queued before being dispatched to the device:
+	// block_rq_insert -> block_rq_issue. Recorded for every block event,
+	// including a zero wait, since zero is a valid (and common) observation.
+	StatDiskQueueDuration = metric(Name{
+		Section: "obi.stat.disk.queue.duration",
+		OTEL:    "obi.stat.disk.queue.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	// Count of requests still in flight on the device immediately after this
+	// one completed. Observed per completion rather than time-averaged, so it
+	// approximates instantaneous saturation rather than a true utilization
+	// integral.
+	StatDiskQueueDepth = metric(Name{
+		Section: "obi.stat.disk.queue.depth",
+		OTEL:    "obi.stat.disk.queue.depth",
+		Unit:    "{operation}",
+		Type:    InstrumentHistogram,
+	})
+	// Count of block I/O completions with a non-zero error, broken down by
+	// errno via the upstream error.type attribute.
+	StatDiskOperationErrors = metric(Name{
+		Section: "obi.stat.disk.operation.errors",
+		OTEL:    "obi.stat.disk.operation.errors",
+		Unit:    "{error}",
+		Type:    InstrumentCounter,
+	})
 	// Latency of a single filesystem read or write as the application
 	// experiences it. NOTE: buffered writes return once data is in the page
 	// cache, so this is app-perceived latency, not server round-trip time.

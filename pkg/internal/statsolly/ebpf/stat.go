@@ -165,7 +165,10 @@ type BlockIo struct {
 	Dev       uint32 `json:"dev"`
 	Op        uint8  `json:"op"`
 	LatencyNs uint64 `json:"latency_ns"`
+	QueueNs   uint64 `json:"queue_ns"`
 	Bytes     uint64 `json:"bytes"`
+	Error     int32  `json:"error"`
+	Inflight  uint32 `json:"inflight"`
 }
 
 type FsIo struct {
@@ -230,7 +233,10 @@ type StatsBlockIo struct {
 	Pad       [2]uint8
 	Dev       uint32
 	LatencyNs uint64
+	QueueNs   uint64
 	Bytes     uint64
+	Error     int32
+	Inflight  uint32
 }
 
 // StatsFsIo mirrors fs_io_t in bpf/statsolly/types.h.
