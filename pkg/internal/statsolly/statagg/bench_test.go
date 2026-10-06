@@ -147,20 +147,21 @@ func BenchmarkCollect(b *testing.B) {
 
 // Many-CPU benchmarks: a per-CPU map holds a copy of every value per possible
 // CPU, so what the Reader keeps per key, and what a poll reads, grow with the
-// CPU count. Every key has counted on every CPU, the worst case. retained-B/key
-// is the heap the first poll leaves behind per key (Reader state, decorations,
+// CPU count. Unless Sparse, every key has counted on every CPU, the worst
+// case. retained-B/key is the heap the first poll leaves behind per key (Reader state, decorations,
 // both exporters' series), without the map itself.
 
 var cpuBenchSizes = []struct{ cpus, keys int }{{64, 1_000}, {64, 9_000}, {128, 1_000}, {128, 9_000}}
 
-func benchFamilyCPUs(b *testing.B, cpus, keys int) (*testFamily, [][]byte) {
+// benchFamilyCPUs makes keys that counted on spread CPUs each.
+func benchFamilyCPUs(b *testing.B, cpus, keys, spread int) (*testFamily, [][]byte) {
 	b.Helper()
 	tf := newTestFamily(b, cpus, diskBounds, neverDelete)
 	ks := make([][]byte, keys)
 	for i := range ks {
 		ks[i] = blkKey(uint32(i), ebpf.CodeBlockRead, 0)
-		for cpu := range cpus {
-			record(tf.m, tf.layout, ks[i], cpu, 4096, 200_000)
+		for n := range spread {
+			record(tf.m, tf.layout, ks[i], (i+n)%cpus, 4096, 200_000)
 		}
 	}
 	tf.otelProducer(b, cumulative, 0)
@@ -192,25 +193,40 @@ func cpuBenchName(cpus, keys int) string {
 func BenchmarkPollCPUs_Unchanged(b *testing.B) {
 	for _, s := range cpuBenchSizes {
 		b.Run(cpuBenchName(s.cpus, s.keys), func(b *testing.B) {
-			tf, _ := benchFamilyCPUs(b, s.cpus, s.keys)
-			report := firstPoll(b, tf, s.keys)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
-				tf.clock.Advance(time.Second)
-				tf.family.poll(tf.clock.Now())
-			}
-			perKey(b, s.keys)
-			report()
+			benchPollUnchanged(b, s.cpus, s.keys, s.cpus)
 		})
 	}
+}
+
+// Keys that counted on 4 CPUs each, as a container's keys typically do: the
+// CPUs that never counted for a key cost a comparison with zero.
+func BenchmarkPollCPUs_UnchangedSparse(b *testing.B) {
+	for _, s := range cpuBenchSizes {
+		b.Run(cpuBenchName(s.cpus, s.keys), func(b *testing.B) {
+			benchPollUnchanged(b, s.cpus, s.keys, 4)
+		})
+	}
+}
+
+func benchPollUnchanged(b *testing.B, cpus, keys, spread int) {
+	b.Helper()
+	tf, _ := benchFamilyCPUs(b, cpus, keys, spread)
+	report := firstPoll(b, tf, keys)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		tf.clock.Advance(time.Second)
+		tf.family.poll(tf.clock.Now())
+	}
+	perKey(b, keys)
+	report()
 }
 
 // Every key counted one more request on one CPU since the last poll.
 func BenchmarkPollCPUs_AllChanged(b *testing.B) {
 	for _, s := range cpuBenchSizes {
 		b.Run(cpuBenchName(s.cpus, s.keys), func(b *testing.B) {
-			tf, ks := benchFamilyCPUs(b, s.cpus, s.keys)
+			tf, ks := benchFamilyCPUs(b, s.cpus, s.keys, s.cpus)
 			report := firstPoll(b, tf, s.keys)
 			b.ReportAllocs()
 			b.ResetTimer()

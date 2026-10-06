@@ -69,19 +69,47 @@ func TestReader_BucketDeltasAreWrapSafe(t *testing.T) {
 	require.NoError(t, err)
 	k := []byte("wrap")
 
-	// Both CPUs' copies of bucket 1 close to 2^32.
+	// CPU 0's copy of bucket 1 close to 2^32.
 	m.addU32(k, 0, 1, math.MaxUint32-9)
-	m.addU32(k, 1, 1, math.MaxUint32-2)
+	m.addU32(k, 1, 1, 3)
 	got := pollAll(t, r)
 	require.Len(t, got, 1)
-	assert.Equal(t, uint64(2*math.MaxUint32-11), got[0].delta[3])
+	assert.Equal(t, uint64(math.MaxUint32-6), got[0].delta[3])
 
-	// Both wrap before the next poll: 15 and 8 more values.
+	// It wraps before the next poll, and so does the total of both CPUs.
 	m.addU32(k, 0, 1, 15)
 	m.addU32(k, 1, 1, 8)
 	got = pollAll(t, r)
 	require.Len(t, got, 1)
-	assert.Equal(t, uint64(23), got[0].delta[3], "each CPU wrapped once; the delta is still exact")
+	assert.Equal(t, uint64(23), got[0].delta[3], "a copy and the total wrapped; the delta is still exact")
+
+	// Both copies wrap many times over polls: every delta stays exact.
+	var total uint64
+	for range 40 {
+		m.addU32(k, 0, 1, 1<<30)
+		m.addU32(k, 1, 1, 1<<30+1)
+		got = pollAll(t, r)
+		require.Len(t, got, 1)
+		total += got[0].delta[3]
+	}
+	assert.Equal(t, uint64(40*(1<<31+1)), total)
+}
+
+// The Reader keeps one total per word and key, whatever the number of CPUs.
+func TestReader_StateDoesNotGrowWithCPUs(t *testing.T) {
+	for _, cpus := range []int{1, 128} {
+		m := newFakeMap(4, readerStride, cpus)
+		r, err := NewReader(m, readerLayout)
+		require.NoError(t, err)
+		for cpu := range cpus {
+			m.addU64([]byte("key1"), cpu, 0, 1)
+			m.addU32([]byte("key1"), cpu, 2, 1)
+		}
+		got := pollAll(t, r)
+		require.Len(t, got, 1)
+		assert.Equal(t, []uint64{uint64(cpus), 0, 0, 0, uint64(cpus)}, got[0].delta)
+		assert.Len(t, r.keys["key1"].prev, readerLayout.size())
+	}
 }
 
 func TestReader_SignedCountersCancelAcrossCPUs(t *testing.T) {

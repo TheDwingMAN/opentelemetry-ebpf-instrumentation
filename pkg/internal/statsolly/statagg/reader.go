@@ -36,12 +36,19 @@ type Source interface {
 
 // ValueLayout describes the counting part of a kernel value: Counters u64
 // words followed by Buckets u32 words. Anything after them (padding, a sample
-// PID) is not counted. u64 words are summed across CPUs as they are, which is
-// exact for monotonic counters and, in two's complement, for signed ones (a
-// +1 on one CPU and a -1 on another). u32 bucket words wrap, so each CPU's
-// copy is subtracted from its previous copy before the sum: that is exact as
-// long as no single CPU counts 2^32 values in one bucket between two polls,
-// which the 30 s background poll guarantees at any realistic rate.
+// PID) is not counted.
+//
+// The Reader keeps, per key, only the previous totals: each word summed
+// across CPUs, u64 words modulo 2^64 and u32 bucket words modulo 2^32. A
+// delta is the difference of two totals in the same modulus, which equals
+// the sum of the per-CPU differences: exact for monotonic counters and, in
+// two's complement, for signed ones (a +1 on one CPU and a -1 on another),
+// and exact for buckets whatever the CPUs' copies wrapped, as long as a key
+// counts fewer than 2^32 values in one bucket between two polls on all CPUs
+// together: 143 million a second with the 30 s background poll, well above
+// what one device, errno and request kind completes. Keeping totals rather
+// than every CPU's copy makes the Reader's memory independent of the number
+// of CPUs.
 type ValueLayout struct {
 	Counters int
 	Buckets  int
@@ -69,7 +76,8 @@ func (d Delta) Sum(i, n int) uint64 {
 // kernelKey is the Reader's state of one key of the kernel map.
 type kernelKey struct {
 	key string
-	// prev holds the values of every CPU at the previous poll.
+	// prev holds the key's totals at the previous poll, in the value
+	// layout: counters summed across CPUs, then buckets summed modulo 2^32.
 	prev []byte
 	// changed is when a poll last found the key changed, or first found it.
 	changed time.Time
@@ -94,6 +102,11 @@ type Reader struct {
 	delta  Delta
 	final  []byte
 	keyBuf []byte
+	// totals is the scratch of diff: the current totals of a key.
+	totals []uint64
+	// zero is one CPU's counting words, zeroed: CPUs that never counted
+	// for a key are skipped.
+	zero []byte
 }
 
 // NewReader checks that the layout fits the source's values.
@@ -109,6 +122,8 @@ func NewReader(src Source, layout ValueLayout) (*Reader, error) {
 		keys:   map[string]*kernelKey{},
 		delta:  make(Delta, layout.Counters+layout.Buckets),
 		final:  make([]byte, src.ValueStride()*src.CPUs()),
+		totals: make([]uint64, layout.Counters+layout.Buckets),
+		zero:   make([]byte, layout.size()),
 	}, nil
 }
 
@@ -122,7 +137,7 @@ func (r *Reader) Poll(now time.Time, visit func(k *kernelKey, d Delta, values []
 		k, ok := r.keys[string(key)]
 		if !ok {
 			// A key enters the map zeroed, so all of its first values are new.
-			k = &kernelKey{key: string(key), prev: make([]byte, len(values)), changed: now}
+			k = &kernelKey{key: string(key), prev: make([]byte, r.layout.size()), changed: now}
 			r.keys[k.key] = k
 		}
 		k.seen = r.gen
@@ -164,32 +179,53 @@ func (r *Reader) keyBytes(k *kernelKey) []byte {
 	return r.keyBuf
 }
 
-// diff sets r.delta to cur - prev and stores cur in prev. It reports whether
-// anything changed.
-func (r *Reader) diff(prev, cur []byte) bool {
-	clear(r.delta)
+// diff sets r.delta to the totals of values minus prev and stores them in
+// prev. It reports whether anything changed.
+func (r *Reader) diff(prev, values []byte) bool {
+	r.sum(values)
 	changed := false
-	for cpu := range r.cpus {
-		off := cpu * r.stride
-		p, c := prev[off:off+r.stride], cur[off:off+r.stride]
-		if bytes.Equal(p, c) {
-			continue
-		}
-		changed = true
-		r.addCPU(p, c)
-		copy(p, c)
-	}
-	return changed
-}
-
-func (r *Reader) addCPU(prev, cur []byte) {
 	for w := range r.layout.Counters {
 		at := w * counterSize
-		r.delta[w] += binary.NativeEndian.Uint64(cur[at:]) - binary.NativeEndian.Uint64(prev[at:])
+		cur := r.totals[w]
+		d := cur - binary.NativeEndian.Uint64(prev[at:])
+		r.delta[w] = d
+		if d != 0 {
+			changed = true
+			binary.NativeEndian.PutUint64(prev[at:], cur)
+		}
 	}
 	base := r.layout.Counters * counterSize
 	for b := range r.layout.Buckets {
 		at := base + b*bucketSize
-		r.delta[r.layout.Counters+b] += uint64(binary.NativeEndian.Uint32(cur[at:]) - binary.NativeEndian.Uint32(prev[at:]))
+		cur := uint32(r.totals[r.layout.Counters+b])
+		d := cur - binary.NativeEndian.Uint32(prev[at:])
+		r.delta[r.layout.Counters+b] = uint64(d)
+		if d != 0 {
+			changed = true
+			binary.NativeEndian.PutUint32(prev[at:], cur)
+		}
+	}
+	return changed
+}
+
+// sum sets r.totals to the words of values summed across CPUs; bucket words
+// are only meaningful modulo 2^32.
+func (r *Reader) sum(values []byte) {
+	clear(r.totals)
+	size := r.layout.size()
+	base := r.layout.Counters * counterSize
+	counters, buckets := r.totals[:r.layout.Counters], r.totals[r.layout.Counters:]
+	for cpu := range r.cpus {
+		c := values[cpu*r.stride:][:size]
+		if bytes.Equal(c, r.zero) {
+			continue
+		}
+		for w := range counters {
+			counters[w] += binary.NativeEndian.Uint64(c[w*counterSize:])
+		}
+		b := c[base:]
+		for i := range buckets {
+			buckets[i] += uint64(binary.NativeEndian.Uint32(b[i*bucketSize:]))
+		}
 	}
 }
