@@ -114,3 +114,10 @@ func TestMapSource_DeleteMissingKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, found)
 }
+
+func TestMapSource_RejectsLRUMaps(t *testing.T) {
+	for _, typ := range []cebpf.MapType{cebpf.LRUHash, cebpf.LRUCPUHash} {
+		_, err := NewMapSource(newTestMap(t, typ, 8))
+		assert.Error(t, err, typ)
+	}
+}

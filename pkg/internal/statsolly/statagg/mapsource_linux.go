@@ -48,7 +48,25 @@ type MapSource struct {
 	noLookupAndDelete bool
 }
 
-// NewMapSource reads m.
+// perCPUMap reports whether a map of type typ holds a value per CPU. It
+// rejects the map types a Reader cannot read: an LRU map evicts keys by
+// itself, and a key evicted and created again between two polls counts
+// from zero while the Reader diffs it against the totals it had, so the
+// delta of each word would wrap around to a huge count.
+func perCPUMap(typ cebpf.MapType) (bool, error) {
+	switch typ {
+	case cebpf.PerCPUHash, cebpf.PerCPUArray:
+		return true, nil
+	case cebpf.Hash, cebpf.Array:
+		return false, nil
+	case cebpf.LRUHash, cebpf.LRUCPUHash:
+		return false, fmt.Errorf("%s map: an aggregation map must not evict keys, use a hash map", typ)
+	default:
+		return false, fmt.Errorf("%s map: not an aggregation map type", typ)
+	}
+}
+
+// NewMapSource reads m, a hash or array map, per CPU or not.
 func NewMapSource(m *cebpf.Map) (*MapSource, error) {
 	s := &MapSource{
 		m:         m,
@@ -57,8 +75,11 @@ func NewMapSource(m *cebpf.Map) (*MapSource, error) {
 		stride:    int(m.ValueSize()),
 		cpus:      1,
 	}
-	switch m.Type() {
-	case cebpf.PerCPUHash, cebpf.PerCPUArray, cebpf.LRUCPUHash:
+	perCPU, err := perCPUMap(m.Type())
+	if err != nil {
+		return nil, err
+	}
+	if perCPU {
 		cpus, err := cebpf.PossibleCPU()
 		if err != nil {
 			return nil, fmt.Errorf("possible CPUs: %w", err)
