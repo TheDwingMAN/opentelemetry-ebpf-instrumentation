@@ -281,6 +281,19 @@ func TestStatDiskOperationTimeSelection(t *testing.T) {
 	}
 }
 
+func TestStatDiskPendingOperationsSelection(t *testing.T) {
+	for _, key := range []Section{
+		"obi.stat.disk.pending_operations",
+		"obi_stat_disk_pending_operations",
+	} {
+		selection := Selection{key: InclusionLists{Include: []string{"obi.ip"}}}
+		selection.Normalize()
+		p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: selection})
+		require.NoError(t, err)
+		assert.Equal(t, []attr.Name{attr.OBIIP}, p.For(StatDiskPendingOperations), key)
+	}
+}
+
 func TestDefault_StatFsSyncDuration(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)
