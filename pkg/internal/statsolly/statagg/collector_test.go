@@ -136,8 +136,8 @@ type levelCounter struct {
 }
 
 func (h *levelCounter) Enabled(context.Context, slog.Level) bool { return true }
-func (h *levelCounter) WithAttrs([]slog.Attr) slog.Handler      { return h }
-func (h *levelCounter) WithGroup(string) slog.Handler           { return h }
+func (h *levelCounter) WithAttrs([]slog.Attr) slog.Handler       { return h }
+func (h *levelCounter) WithGroup(string) slog.Handler            { return h }
 
 func (h *levelCounter) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Lock()

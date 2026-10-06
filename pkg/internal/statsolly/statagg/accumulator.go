@@ -45,7 +45,9 @@ type seriesCore struct {
 	owner reviver
 }
 
-type reviver interface{ revive(now time.Time) *seriesCore }
+type reviver interface {
+	revive(now time.Time) *seriesCore
+}
 
 // touch returns the series a count at now goes into, marked updated: s, or
 // when s expired, the series exported under its key now.
