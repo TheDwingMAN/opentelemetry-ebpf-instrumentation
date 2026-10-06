@@ -23,6 +23,14 @@ func TestFsIoGetters(t *testing.T) {
 	assert.Equal(t, "write", opGetter(s).Value.Emit())
 }
 
+func TestFsIoGetters_Fsync(t *testing.T) {
+	s := &Stat{Type: StatTypeFsIo, FsIo: &FsIo{Fs: uint8(CodeFsNFS), Op: uint8(CodeFsOpFsync)}}
+
+	opGetter, ok := StatGetters(attr.FsOperation)
+	assert.True(t, ok)
+	assert.Equal(t, "fsync", opGetter(s).Value.Emit())
+}
+
 func TestFsIoGetters_NilFsIo(t *testing.T) {
 	s := &Stat{}
 

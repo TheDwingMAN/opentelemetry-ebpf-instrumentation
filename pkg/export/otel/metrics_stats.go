@@ -396,7 +396,7 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				h, attrs := me.fsOpDuration.ForRecord(v)
 				h.Record(ctx, time.Duration(v.FsIo.LatencyNs).Seconds(), metric2.WithAttributeSet(attrs))
 			}
-			if me.fsIOBytes != nil && v.FsIo != nil {
+			if me.fsIOBytes != nil && v.FsIo != nil && v.FsIo.Bytes != 0 {
 				c, attrs := me.fsIOBytes.ForRecord(v)
 				c.Add(ctx, int64(v.FsIo.Bytes), metric2.WithAttributeSet(attrs))
 			}

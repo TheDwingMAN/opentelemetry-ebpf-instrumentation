@@ -50,35 +50,51 @@ const (
 	progObiStatsFexitNFSRead    = "obi_stats_fexit_nfs_read"
 	progObiStatsFentryNFSWrite  = "obi_stats_fentry_nfs_write"
 	progObiStatsFexitNFSWrite   = "obi_stats_fexit_nfs_write"
+	progObiStatsFentryNFSFsync  = "obi_stats_fentry_nfs_fsync"
+	progObiStatsFexitNFSFsync   = "obi_stats_fexit_nfs_fsync"
 	progObiStatsFentryCephRead  = "obi_stats_fentry_ceph_read"
 	progObiStatsFexitCephRead   = "obi_stats_fexit_ceph_read"
 	progObiStatsFentryCephWrite = "obi_stats_fentry_ceph_write"
 	progObiStatsFexitCephWrite  = "obi_stats_fexit_ceph_write"
+	progObiStatsFentryCephFsync = "obi_stats_fentry_ceph_fsync"
+	progObiStatsFexitCephFsync  = "obi_stats_fexit_ceph_fsync"
 	progObiStatsFentryCIFSRead  = "obi_stats_fentry_cifs_read"
 	progObiStatsFexitCIFSRead   = "obi_stats_fexit_cifs_read"
 	progObiStatsFentryCIFSWrite = "obi_stats_fentry_cifs_write"
 	progObiStatsFexitCIFSWrite  = "obi_stats_fexit_cifs_write"
+	progObiStatsFentryCIFSFsync = "obi_stats_fentry_cifs_fsync"
+	progObiStatsFexitCIFSFsync  = "obi_stats_fexit_cifs_fsync"
 	progObiStatsFentryFUSERead  = "obi_stats_fentry_fuse_read"
 	progObiStatsFexitFUSERead   = "obi_stats_fexit_fuse_read"
 	progObiStatsFentryFUSEWrite = "obi_stats_fentry_fuse_write"
 	progObiStatsFexitFUSEWrite  = "obi_stats_fexit_fuse_write"
+	progObiStatsFentryFUSEFsync = "obi_stats_fentry_fuse_fsync"
+	progObiStatsFexitFUSEFsync  = "obi_stats_fexit_fuse_fsync"
 
 	progObiStatsKprobeNFSRead      = "obi_stats_kprobe_nfs_read"
 	progObiStatsKretprobeNFSRead   = "obi_stats_kretprobe_nfs_read"
 	progObiStatsKprobeNFSWrite     = "obi_stats_kprobe_nfs_write"
 	progObiStatsKretprobeNFSWrite  = "obi_stats_kretprobe_nfs_write"
+	progObiStatsKprobeNFSFsync     = "obi_stats_kprobe_nfs_fsync"
+	progObiStatsKretprobeNFSFsync  = "obi_stats_kretprobe_nfs_fsync"
 	progObiStatsKprobeCephRead     = "obi_stats_kprobe_ceph_read"
 	progObiStatsKretprobeCephRead  = "obi_stats_kretprobe_ceph_read"
 	progObiStatsKprobeCephWrite    = "obi_stats_kprobe_ceph_write"
 	progObiStatsKretprobeCephWrite = "obi_stats_kretprobe_ceph_write"
+	progObiStatsKprobeCephFsync    = "obi_stats_kprobe_ceph_fsync"
+	progObiStatsKretprobeCephFsync = "obi_stats_kretprobe_ceph_fsync"
 	progObiStatsKprobeCIFSRead     = "obi_stats_kprobe_cifs_read"
 	progObiStatsKretprobeCIFSRead  = "obi_stats_kretprobe_cifs_read"
 	progObiStatsKprobeCIFSWrite    = "obi_stats_kprobe_cifs_write"
 	progObiStatsKretprobeCIFSWrite = "obi_stats_kretprobe_cifs_write"
+	progObiStatsKprobeCIFSFsync    = "obi_stats_kprobe_cifs_fsync"
+	progObiStatsKretprobeCIFSFsync = "obi_stats_kretprobe_cifs_fsync"
 	progObiStatsKprobeFUSERead     = "obi_stats_kprobe_fuse_read"
 	progObiStatsKretprobeFUSERead  = "obi_stats_kretprobe_fuse_read"
 	progObiStatsKprobeFUSEWrite    = "obi_stats_kprobe_fuse_write"
 	progObiStatsKretprobeFUSEWrite = "obi_stats_kretprobe_fuse_write"
+	progObiStatsKprobeFUSEFsync    = "obi_stats_kprobe_fuse_fsync"
+	progObiStatsKretprobeFUSEFsync = "obi_stats_kretprobe_fuse_fsync"
 )
 
 // Hook point names, grouped by attach type.
@@ -456,14 +472,16 @@ func setFsAttachTargets(spec *ebpf.CollectionSpec, attachTo map[string]string) e
 	return nil
 }
 
-// fsProgramNames names the eight programs -- fentry read/write, fexit
-// read/write, kprobe read/write, kretprobe read/write -- available for one
-// filesystem.
+// fsProgramNames names the twelve programs -- fentry read/write/fsync, fexit
+// read/write/fsync, kprobe read/write/fsync, kretprobe read/write/fsync --
+// available for one filesystem.
 type fsProgramNames struct {
 	FentryRead, FexitRead       string
 	FentryWrite, FexitWrite     string
+	FentryFsync, FexitFsync     string
 	KprobeRead, KretprobeRead   string
 	KprobeWrite, KretprobeWrite string
+	KprobeFsync, KretprobeFsync string
 }
 
 func fsProgNamesFor(fs FsTypeCode) fsProgramNames {
@@ -472,29 +490,37 @@ func fsProgNamesFor(fs FsTypeCode) fsProgramNames {
 		return fsProgramNames{
 			FentryRead: progObiStatsFentryNFSRead, FexitRead: progObiStatsFexitNFSRead,
 			FentryWrite: progObiStatsFentryNFSWrite, FexitWrite: progObiStatsFexitNFSWrite,
+			FentryFsync: progObiStatsFentryNFSFsync, FexitFsync: progObiStatsFexitNFSFsync,
 			KprobeRead: progObiStatsKprobeNFSRead, KretprobeRead: progObiStatsKretprobeNFSRead,
 			KprobeWrite: progObiStatsKprobeNFSWrite, KretprobeWrite: progObiStatsKretprobeNFSWrite,
+			KprobeFsync: progObiStatsKprobeNFSFsync, KretprobeFsync: progObiStatsKretprobeNFSFsync,
 		}
 	case CodeFsCeph:
 		return fsProgramNames{
 			FentryRead: progObiStatsFentryCephRead, FexitRead: progObiStatsFexitCephRead,
 			FentryWrite: progObiStatsFentryCephWrite, FexitWrite: progObiStatsFexitCephWrite,
+			FentryFsync: progObiStatsFentryCephFsync, FexitFsync: progObiStatsFexitCephFsync,
 			KprobeRead: progObiStatsKprobeCephRead, KretprobeRead: progObiStatsKretprobeCephRead,
 			KprobeWrite: progObiStatsKprobeCephWrite, KretprobeWrite: progObiStatsKretprobeCephWrite,
+			KprobeFsync: progObiStatsKprobeCephFsync, KretprobeFsync: progObiStatsKretprobeCephFsync,
 		}
 	case CodeFsCIFS:
 		return fsProgramNames{
 			FentryRead: progObiStatsFentryCIFSRead, FexitRead: progObiStatsFexitCIFSRead,
 			FentryWrite: progObiStatsFentryCIFSWrite, FexitWrite: progObiStatsFexitCIFSWrite,
+			FentryFsync: progObiStatsFentryCIFSFsync, FexitFsync: progObiStatsFexitCIFSFsync,
 			KprobeRead: progObiStatsKprobeCIFSRead, KretprobeRead: progObiStatsKretprobeCIFSRead,
 			KprobeWrite: progObiStatsKprobeCIFSWrite, KretprobeWrite: progObiStatsKretprobeCIFSWrite,
+			KprobeFsync: progObiStatsKprobeCIFSFsync, KretprobeFsync: progObiStatsKretprobeCIFSFsync,
 		}
 	case CodeFsFUSE:
 		return fsProgramNames{
 			FentryRead: progObiStatsFentryFUSERead, FexitRead: progObiStatsFexitFUSERead,
 			FentryWrite: progObiStatsFentryFUSEWrite, FexitWrite: progObiStatsFexitFUSEWrite,
+			FentryFsync: progObiStatsFentryFUSEFsync, FexitFsync: progObiStatsFexitFUSEFsync,
 			KprobeRead: progObiStatsKprobeFUSERead, KretprobeRead: progObiStatsKretprobeFUSERead,
 			KprobeWrite: progObiStatsKprobeFUSEWrite, KretprobeWrite: progObiStatsKretprobeFUSEWrite,
+			KprobeFsync: progObiStatsKprobeFUSEFsync, KretprobeFsync: progObiStatsKretprobeFUSEFsync,
 		}
 	default:
 		return fsProgramNames{}
@@ -509,12 +535,22 @@ func (n fsProgramNames) kprobePrograms() []string {
 	return []string{n.KprobeRead, n.KretprobeRead, n.KprobeWrite, n.KretprobeWrite}
 }
 
+func (n fsProgramNames) fentryFsyncPrograms() []string {
+	return []string{n.FentryFsync, n.FexitFsync}
+}
+
+func (n fsProgramNames) kprobeFsyncPrograms() []string {
+	return []string{n.KprobeFsync, n.KretprobeFsync}
+}
+
 // planFsToDisable turns the per-filesystem attach plans into the programs to
 // stub out before load and the AttachTo targets to set on the survivors.
-// A filesystem absent from plans (module not loaded, or neither symbol
-// probeable) has both its program families disabled; a planned filesystem
-// has only its losing family disabled. Both families are never loaded
-// together for the same filesystem.
+// A filesystem absent from plans (module not loaded, or neither read/write
+// symbol probeable) has all its program families disabled; a planned
+// filesystem has only its losing read/write family disabled. Both families
+// are never loaded together for the same filesystem. Fsync is decided
+// separately: a plan with no FsyncSym (no fsync candidate probeable) has both
+// its fsync families disabled while read/write still attach.
 func planFsToDisable(plans []fsAttachPlan) (toDisable []string, attachTo map[string]string) {
 	byFs := make(map[FsTypeCode]fsAttachPlan, len(plans))
 	for _, p := range plans {
@@ -528,17 +564,33 @@ func planFsToDisable(plans []fsAttachPlan) (toDisable []string, attachTo map[str
 		if !planned {
 			toDisable = append(toDisable, names.fentryPrograms()...)
 			toDisable = append(toDisable, names.kprobePrograms()...)
+			toDisable = append(toDisable, names.fentryFsyncPrograms()...)
+			toDisable = append(toDisable, names.kprobeFsyncPrograms()...)
+			continue
+		}
+
+		if !plan.UseFentry {
+			toDisable = append(toDisable, names.fentryPrograms()...)
+		} else {
+			toDisable = append(toDisable, names.kprobePrograms()...)
+			attachTo[names.FentryRead] = plan.ReadSym
+			attachTo[names.FexitRead] = plan.ReadSym
+			attachTo[names.FentryWrite] = plan.WriteSym
+			attachTo[names.FexitWrite] = plan.WriteSym
+		}
+
+		if plan.FsyncSym == "" {
+			toDisable = append(toDisable, names.fentryFsyncPrograms()...)
+			toDisable = append(toDisable, names.kprobeFsyncPrograms()...)
 			continue
 		}
 		if !plan.UseFentry {
-			toDisable = append(toDisable, names.fentryPrograms()...)
-			continue
+			toDisable = append(toDisable, names.fentryFsyncPrograms()...)
+		} else {
+			toDisable = append(toDisable, names.kprobeFsyncPrograms()...)
+			attachTo[names.FentryFsync] = plan.FsyncSym
+			attachTo[names.FexitFsync] = plan.FsyncSym
 		}
-		toDisable = append(toDisable, names.kprobePrograms()...)
-		attachTo[names.FentryRead] = plan.ReadSym
-		attachTo[names.FexitRead] = plan.ReadSym
-		attachTo[names.FentryWrite] = plan.WriteSym
-		attachTo[names.FexitWrite] = plan.WriteSym
 	}
 	return toDisable, attachTo
 }
@@ -573,13 +625,36 @@ func fsProgramsFor(fs FsTypeCode, objects *StatsObjects) (fentryRead, fexitRead,
 	}
 }
 
-// attachFsPlan attaches the four programs (read+write, entry+exit) for one
-// filesystem's chosen plan. On the first attach failure it rolls back the
-// links already made for this filesystem and returns an error; the caller
-// disables only this filesystem and leaves the rest of the fetcher running.
+// fsFsyncProgramsFor returns the loaded fsync programs backing an
+// fsAttachPlan.
+func fsFsyncProgramsFor(fs FsTypeCode, objects *StatsObjects) (fentryFsync, fexitFsync, kprobeFsync, kretprobeFsync *ebpf.Program) {
+	switch fs {
+	case CodeFsNFS:
+		return objects.ObiStatsFentryNfsFsync, objects.ObiStatsFexitNfsFsync,
+			objects.ObiStatsKprobeNfsFsync, objects.ObiStatsKretprobeNfsFsync
+	case CodeFsCeph:
+		return objects.ObiStatsFentryCephFsync, objects.ObiStatsFexitCephFsync,
+			objects.ObiStatsKprobeCephFsync, objects.ObiStatsKretprobeCephFsync
+	case CodeFsCIFS:
+		return objects.ObiStatsFentryCifsFsync, objects.ObiStatsFexitCifsFsync,
+			objects.ObiStatsKprobeCifsFsync, objects.ObiStatsKretprobeCifsFsync
+	case CodeFsFUSE:
+		return objects.ObiStatsFentryFuseFsync, objects.ObiStatsFexitFuseFsync,
+			objects.ObiStatsKprobeFuseFsync, objects.ObiStatsKretprobeFuseFsync
+	default:
+		return nil, nil, nil, nil
+	}
+}
+
+// attachFsPlan attaches the read+write programs (entry+exit), plus fsync when
+// plan.FsyncSym is set, for one filesystem's chosen plan. On the first attach
+// failure it rolls back the links already made for this filesystem and
+// returns an error; the caller disables only this filesystem and leaves the
+// rest of the fetcher running.
 func attachFsPlan(objects *StatsObjects, plan fsAttachPlan) ([]io.Closer, error) {
 	fentryRead, fexitRead, fentryWrite, fexitWrite,
 		kprobeRead, kretprobeRead, kprobeWrite, kretprobeWrite := fsProgramsFor(plan.Fs, objects)
+	fentryFsync, fexitFsync, kprobeFsync, kretprobeFsync := fsFsyncProgramsFor(plan.Fs, objects)
 
 	var steps []func() (io.Closer, error)
 	if plan.UseFentry {
@@ -597,12 +672,28 @@ func attachFsPlan(objects *StatsObjects, plan fsAttachPlan) ([]io.Closer, error)
 				return link.AttachTracing(link.TracingOptions{Program: fexitWrite, AttachType: ebpf.AttachTraceFExit})
 			},
 		}
+		if plan.FsyncSym != "" {
+			steps = append(steps,
+				func() (io.Closer, error) {
+					return link.AttachTracing(link.TracingOptions{Program: fentryFsync, AttachType: ebpf.AttachTraceFEntry})
+				},
+				func() (io.Closer, error) {
+					return link.AttachTracing(link.TracingOptions{Program: fexitFsync, AttachType: ebpf.AttachTraceFExit})
+				},
+			)
+		}
 	} else {
 		steps = []func() (io.Closer, error){
 			func() (io.Closer, error) { return link.Kprobe(plan.ReadSym, kprobeRead, nil) },
 			func() (io.Closer, error) { return link.Kretprobe(plan.ReadSym, kretprobeRead, nil) },
 			func() (io.Closer, error) { return link.Kprobe(plan.WriteSym, kprobeWrite, nil) },
 			func() (io.Closer, error) { return link.Kretprobe(plan.WriteSym, kretprobeWrite, nil) },
+		}
+		if plan.FsyncSym != "" {
+			steps = append(steps,
+				func() (io.Closer, error) { return link.Kprobe(plan.FsyncSym, kprobeFsync, nil) },
+				func() (io.Closer, error) { return link.Kretprobe(plan.FsyncSym, kretprobeFsync, nil) },
+			)
 		}
 	}
 

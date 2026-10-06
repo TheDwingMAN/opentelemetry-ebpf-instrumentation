@@ -79,6 +79,34 @@ func TestStatsReporterRecordsFsMetrics(t *testing.T) {
 	assert.InEpsilon(t, 65536.0, ioBytes.GetCounter().GetValue(), 0)
 }
 
+// TestStatsReporterFsIOBytesSkipsZeroBytes asserts a completion that carries
+// no bytes (an fsync success, or a queued/interrupted read/write with
+// Bytes == 0) does not touch the counter at all rather than adding a zero
+// increment for that label set.
+func TestStatsReporterFsIOBytesSkipsZeroBytes(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter := newFsStatsReporter(t, registry)
+
+	fsyncStat := &ebpf.Stat{
+		Type: ebpf.StatTypeFsIo,
+		FsIo: &ebpf.FsIo{
+			Fs:        uint8(ebpf.CodeFsNFS),
+			Op:        uint8(ebpf.CodeFsOpFsync),
+			LatencyNs: 1_000_000,
+			Bytes:     0,
+		},
+	}
+
+	reporter.observeFsIOBytes(fsyncStat)
+
+	fsyncLabels := map[string]string{
+		"system_filesystem_type": "nfs",
+		"fs_operation":           "fsync",
+	}
+	ioBytes := gatheredMetric(t, registry, "obi_stat_fs_io_bytes_total", fsyncLabels)
+	assert.Nil(t, ioBytes, "zero-byte completion must not create a bytes series")
+}
+
 // TestStatsReporterFsMetricsNotRegisteredWithoutFeature asserts the fs
 // families are not registered at all when storage_fs is off, so enabling only
 // TCP stats does not silently emit empty fs series.

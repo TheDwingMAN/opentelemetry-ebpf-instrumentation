@@ -101,6 +101,82 @@ func TestStatMetricsExporter_FsMetrics(t *testing.T) {
 	assert.Equal(t, int64(65536), ioBytes.IntVal)
 }
 
+// TestStatMetricsExporter_FsIOBytesSkipsZeroBytes covers an fsync completion,
+// which carries LatencyNs but no Bytes: the duration histogram must still be
+// exported, but the bytes counter must never appear for that event.
+func TestStatMetricsExporter_FsIOBytesSkipsZeroBytes(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	otelExporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: cfg}},
+		&StatMetricsConfig{
+			Metrics: cfg,
+			SelectorCfg: &attributes.SelectorConfig{
+				SelectionCfg: attributes.Selection{
+					attributes.StatFsOperationDuration.Section: attributes.InclusionLists{
+						Include: []string{"*"},
+					},
+					attributes.StatFsIO.Section: attributes.InclusionLists{
+						Include: []string{"*"},
+					},
+				},
+			},
+			CommonCfg: &perapp.GlobalMetricsConfig{Features: export.FeatureStorageFS},
+		}, stats)(ctx)
+	require.NoError(t, err)
+
+	go otelExporter(ctx)
+
+	// WHEN it receives a successful fsync completion (Bytes == 0)
+	stats.Send([]*ebpf.Stat{
+		{
+			Type: ebpf.StatTypeFsIo,
+			FsIo: &ebpf.FsIo{
+				Fs:        uint8(ebpf.CodeFsNFS),
+				Op:        uint8(ebpf.CodeFsOpFsync),
+				LatencyNs: 1_000_000,
+				Bytes:     0,
+			},
+		},
+	})
+
+	// THEN the latency histogram is exported...
+	seen := map[string]collector.MetricRecord{}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case rec := <-otlp.Records():
+				if _, ok := seen[rec.Name]; !ok {
+					seen[rec.Name] = rec
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.Contains(ct, seen, "obi.stat.fs.operation.duration")
+	}, timeout, 100*time.Millisecond)
+
+	latency := seen["obi.stat.fs.operation.duration"]
+	assert.Equal(t, map[string]string{
+		"system.filesystem.type": "nfs",
+		"fs.operation":           "fsync",
+	}, latency.Attributes)
+
+	// ...but the bytes counter never appears for a zero-byte completion.
+	assert.NotContains(t, seen, "obi.stat.fs.io")
+}
+
 // TestStatMetricsExporter_FsOperationErrors covers the error counter added on
 // top of the base duration/io pair. Only storage_fs_errors is enabled (not
 // duration/io), which doubles as a gating test: the base fs metrics must not
