@@ -29,6 +29,13 @@ import (
 
 func statAttrs(s *ebpf.Stat) *pipe.CommonAttrs { return &s.CommonAttrs }
 
+// isStorageStat reports block and filesystem stats. They carry no network
+// endpoints, so drop_external, which keeps only items whose endpoints are
+// Kubernetes objects, must not judge them: it would drop every one.
+func isStorageStat(s *ebpf.Stat) bool {
+	return s.Type == ebpf.StatTypeBlockIo || s.Type == ebpf.StatTypeFsIo
+}
+
 // fsIoPID extracts the PID namespace, host PID, and the mount (superblock
 // device and mount root inode) from a filesystem I/O stat, for Kubernetes pod
 // and persistent volume attribution. Stats that don't carry FsIo are left
@@ -71,8 +78,8 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	// Many of the nodes here are not mandatory. It's decision of each InstanceFunc to decide
 	// whether the node needs to be instantiated or just bypass their input/output channels.
 	kubeDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "kubeDecoratedStats")
-	swi.Add(k8s.MetadataDecoratorProvider(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
-		statAttrs, ebpfStats, kubeDecoratedStats), swarm.WithID("K8sMetadataDecorator"))
+	swi.Add(k8s.MetadataDecoratorProviderKeeping(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
+		statAttrs, isStorageStat, ebpfStats, kubeDecoratedStats), swarm.WithID("K8sMetadataDecorator"))
 
 	var pidK8sStore *kube.Store
 	if s.ctxInfo.K8sInformer.IsKubeEnabled() {

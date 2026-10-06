@@ -64,6 +64,21 @@ func MetadataDecoratorProvider[T any](
 	attrs func(T) *pipe.CommonAttrs,
 	input, output *msg.Queue[[]T],
 ) swarm.InstanceFunc {
+	return MetadataDecoratorProviderKeeping(ctx, cfg, k8sInformer, attrs, nil, input, output)
+}
+
+// MetadataDecoratorProviderKeeping is MetadataDecoratorProvider, except that
+// items for which keep returns true are never dropped by drop_external. That
+// option judges items by their network endpoints, and some items, such as
+// storage stats, have none.
+func MetadataDecoratorProviderKeeping[T any](
+	ctx context.Context,
+	cfg *transform.KubernetesDecorator,
+	k8sInformer *kube.MetadataProvider,
+	attrs func(T) *pipe.CommonAttrs,
+	keep func(T) bool,
+	input, output *msg.Queue[[]T],
+) swarm.InstanceFunc {
 	return func(_ context.Context) (swarm.RunFunc, error) {
 		if !k8sInformer.IsKubeEnabled() {
 			return swarm.Bypass(input, output)
@@ -80,13 +95,7 @@ func MetadataDecoratorProvider[T any](
 			defer output.Close()
 			swarms.ForEachInput(ctx, in, log().Debug, func(items []T) {
 				if cfg.DropExternal {
-					out := make([]T, 0, len(items))
-					for _, item := range items {
-						if nt.transform(attrs(item)) {
-							out = append(out, item)
-						}
-					}
-					output.Send(out)
+					output.Send(dropExternal(items, attrs, nt.transform, keep))
 				} else {
 					for _, item := range items {
 						nt.transform(attrs(item))
@@ -96,6 +105,18 @@ func MetadataDecoratorProvider[T any](
 			})
 		}, nil
 	}
+}
+
+// dropExternal decorates items and returns those that transform matched to
+// Kubernetes, plus those keep exempts.
+func dropExternal[T any](items []T, attrs func(T) *pipe.CommonAttrs, transform func(*pipe.CommonAttrs) bool, keep func(T) bool) []T {
+	out := make([]T, 0, len(items))
+	for _, item := range items {
+		if transform(attrs(item)) || (keep != nil && keep(item)) {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 type decorator struct {
