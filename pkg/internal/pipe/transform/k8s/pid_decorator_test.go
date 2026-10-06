@@ -6,6 +6,7 @@ package k8s
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -432,4 +433,68 @@ func TestPIDMetadataDecorator_ExitedPIDResolvedThroughItsNamespace(t *testing.T)
 		assert.Equal(t, "io", item.Metadata[attr.K8sContainerName])
 	}
 	assert.Equal(t, 1, scans, "the namespace's container is cached")
+}
+
+// A pod doing I/O in its first seconds is attributed even before the Store
+// has heard of its container: the pod UID in the cgroup path names the pod.
+func TestPIDMetadataDecorator_NewContainerResolvedByPodUID(t *testing.T) {
+	originalInfoForPID := kube.InfoForPID
+	defer func() { kube.InfoForPID = originalInfoForPID }()
+	originalPodUIDForPID := podUIDForPID
+	defer func() { podUIDForPID = originalPodUIDForPID }()
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	store := newPIDTestStore(t)
+	const hostPID = app.PID(6001)
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		if pid == hostPID {
+			return container.Info{ContainerID: "cid-not-yet-reported", PIDNamespace: 8100}, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	podUIDForPID = func(pid app.PID) string {
+		if pid == hostPID {
+			return "0e0c38ef-d14c-4ca4-8810-5b6360663f4b"
+		}
+		return ""
+	}
+	// Scheduled, but its status does not list the container yet.
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: &informer.ObjectMeta{
+		Name: "early-writer", Namespace: "jobs", Kind: "Pod",
+		Pod: &informer.PodInfo{Uid: "0e0c38ef-d14c-4ca4-8810-5b6360663f4b"},
+	}}))
+	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "someone-else", PVName: "pvc-shared", VolumeType: "nfs", Shared: true}, true
+	}
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	input.Send([]*pidTestItem{{pidNs: 8100, hostPID: uint32(hostPID), sDev: 42, hasPID: true}})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Equal(t, "early-writer", got[0].Metadata[attr.K8sPodName])
+	assert.Equal(t, "jobs", got[0].Metadata[attr.K8sNamespaceName])
+	assert.Empty(t, got[0].Metadata[attr.K8sContainerName], "the container name is not known yet")
+}
+
+func TestPodUIDPatternMatchesBothCgroupDrivers(t *testing.T) {
+	for _, line := range []string{
+		"0::/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod44c76ce5_f953_4bd3_bc89_12621681af49.slice/crio-40c03570b6f4c30bc8d69923d37ee698f5cfcced92c7b7df1c47f6f7887378a9.scope",
+		"0::/kubepods/burstable/pod44c76ce5-f953-4bd3-bc89-12621681af49/40c03570b6f4c30bc8d69923d37ee698f5cfcced92c7b7df1c47f6f7887378a9",
+	} {
+		m := podUIDPattern.FindStringSubmatch(line)
+		require.NotNil(t, m, line)
+		assert.Equal(t, "44c76ce5-f953-4bd3-bc89-12621681af49", strings.ReplaceAll(m[1], "_", "-"))
+	}
 }
