@@ -142,3 +142,53 @@ groups:
       - ref: dst.zone
       - ref: reason
       - ref: network.tcp.handshake.role
+
+  # Disk / storage block-layer stats. Emitted when the `storage_block`
+  # feature is enabled. Both attributes are reused from upstream semconv
+  # (`system.device` + `disk.io.direction`), so no OBI-specific attribute is
+  # introduced here. The metric name follows the OBI `obi.stat.*` convention
+  # used by the TCP stats above, rather than the upstream `system.disk.*`
+  # namespace.
+  #
+  # `operation.duration` rather than `io.latency`: semconv reserves `duration`
+  # for a histogram of a discrete operation's elapsed time, and a name must not
+  # be both a leaf and a namespace -- `obi.stat.disk.io` is a metric in its own
+  # right below.
+  - id: metric.obi_stat_disk_operation_duration
+    type: metric
+    metric_name: obi.stat.disk.operation.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Block-layer service latency per disk I/O request, measured from
+      `block_rq_issue` to `block_rq_complete`, broken down by device and
+      direction.
+    attributes:
+      - ref: system.device
+      - ref: disk.io.direction
+
+  # Companion to the latency histogram above: the volume of data moved by the
+  # same block requests. Shares the `storage_block` feature gate and attribute
+  # set, so enabling the feature yields both metrics.
+  #
+  # This carries the same semantics as upstream semconv's `system.disk.io` but
+  # is published under the OBI namespace on purpose: emitting `system.disk.io`
+  # would collide with the OTel Collector's `hostmetrics` receiver, which
+  # publishes that metric with these same attributes, so a host running both
+  # agents would get two writers on one series.
+  #
+  # The unit is not repeated in the metric name: semconv states that metrics
+  # carrying their unit in OTEL metadata SHOULD NOT include it in the name.
+  - id: metric.obi_stat_disk_io
+    type: metric
+    metric_name: obi.stat.disk.io
+    instrument: counter
+    unit: "By"
+    stability: development
+    brief: >
+      Count of bytes transferred at the block layer, accumulated per completed
+      disk I/O request and broken down by device and direction.
+    attributes:
+      - ref: system.device
+      - ref: disk.io.direction
