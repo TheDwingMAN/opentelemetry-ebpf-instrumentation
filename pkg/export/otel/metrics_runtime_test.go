@@ -933,3 +933,39 @@ func collectGoRuntimeInt64Metric(
 
 	return metricdata.Metrics{}
 }
+
+func TestCurrentUpDownCounterOmitsInvalidAttributes(t *testing.T) {
+	type volume struct{ name, device string }
+	reader := metric.NewManualReader()
+	meter := metric.NewMeterProvider(metric.WithReader(reader)).Meter("test")
+	volumes, err := meter.Int64UpDownCounter("volumes")
+	require.NoError(t, err)
+	attrs := []attributes.Field[volume, attribute.KeyValue]{
+		{ExposedName: "name", Get: func(v volume) attribute.KeyValue {
+			if v.name == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String("name", v.name)
+		}},
+		{ExposedName: "device", Get: func(v volume) attribute.KeyValue { return attribute.String("device", v.device) }},
+	}
+	counter := newCurrentUpDownCounter(t.Context(), volumes, attrs, time.Now, time.Hour)
+
+	counter.Record(volume{device: "loop0"}, 1)
+	counter.Record(volume{name: "loop0"}, 1)
+
+	var collected metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &collected))
+	sum := collected.ScopeMetrics[0].Metrics[0].Data.(metricdata.Sum[int64])
+	var sets []attribute.Set
+	for _, point := range sum.DataPoints {
+		for _, kv := range point.Attributes.ToSlice() {
+			assert.True(t, kv.Valid(), "an absent attribute is omitted, not exported with an empty key")
+		}
+		sets = append(sets, point.Attributes)
+	}
+	assert.ElementsMatch(t, []attribute.Set{
+		attribute.NewSet(attribute.String("device", "loop0")),
+		attribute.NewSet(attribute.String("name", "loop0"), attribute.String("device", "")),
+	}, sets, "records that differ in which attribute is absent are different series")
+}
