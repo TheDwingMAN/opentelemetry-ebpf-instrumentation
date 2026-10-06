@@ -63,6 +63,12 @@ const (
 	FeatureStorageFSDuration
 	FeatureStorageFSIo
 	FeatureStorageFSErrors
+	// FeatureStorageBlockQueueDepth emits the per-completion in-flight histogram
+	// obi.stat.disk.queue.depth. It is in no umbrella: it is the only block metric
+	// that needs a counter shared by every CPU on the block path.
+	//
+	// Deprecated: the metric will be removed.
+	FeatureStorageBlockQueueDepth
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
@@ -100,6 +106,7 @@ var FeatureMapper = map[string]Features{
 	"storage_block_io":                 FeatureStorageBlockIo,
 	"storage_block_queue":              FeatureStorageBlockQueue,
 	"storage_block_errors":             FeatureStorageBlockErrors,
+	"storage_block_queue_depth":        FeatureStorageBlockQueueDepth,
 	"storage_fs":                       FeatureStorageFS,
 	"storage_fs_duration":              FeatureStorageFSDuration,
 	"storage_fs_io":                    FeatureStorageFSIo,
@@ -125,8 +132,9 @@ var FeatureMapper = map[string]Features{
 // The names keep working; they are reported at startup and flagged as deprecated in the
 // generated JSON schema and configuration reference.
 var deprecatedFeatures = map[string]string{
-	"application_span":       "application_span_otel",
-	"application_span_sizes": "",
+	"application_span":          "application_span_otel",
+	"application_span_sizes":    "",
+	"storage_block_queue_depth": "",
 }
 
 // DeprecatedFeature is a deprecated feature name together with the feature that
@@ -405,7 +413,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStorageBlock | FeatureStorageFS)
+	return f.any(FeatureStats | FeatureStorageBlock | FeatureStorageBlockQueueDepth | FeatureStorageFS)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -429,9 +437,10 @@ func (f Features) StatsTCPIo() bool {
 }
 
 // StorageBlock reports whether any block-layer storage metric is enabled. It
-// gates the shared setup (eBPF probes, ring buffer) that both metrics need.
+// gates the shared setup (eBPF probes, ring buffer) that every block metric
+// needs, including the deprecated queue depth outside the umbrella.
 func (f Features) StorageBlock() bool {
-	return f.any(FeatureStorageBlock)
+	return f.any(FeatureStorageBlock | FeatureStorageBlockQueueDepth)
 }
 
 func (f Features) StorageBlockDuration() bool {
@@ -448,6 +457,10 @@ func (f Features) StorageBlockQueue() bool {
 
 func (f Features) StorageBlockErrors() bool {
 	return f.any(FeatureStorageBlockErrors)
+}
+
+func (f Features) StorageBlockQueueDepth() bool {
+	return f.any(FeatureStorageBlockQueueDepth)
 }
 
 // StorageFS reports whether any filesystem metric is enabled. It gates

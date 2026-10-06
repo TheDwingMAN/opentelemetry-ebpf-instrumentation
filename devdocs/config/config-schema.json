@@ -1102,9 +1102,10 @@
             "type": "string",
             "enum": [
               "application_span",
-              "application_span_sizes"
+              "application_span_sizes",
+              "storage_block_queue_depth"
             ],
-            "description": "Deprecated feature names, kept for backwards compatibility: application_span (use application_span_otel), application_span_sizes (no direct replacement).",
+            "description": "Deprecated feature names, kept for backwards compatibility: application_span (use application_span_otel), application_span_sizes (no direct replacement), storage_block_queue_depth (no direct replacement).",
             "deprecated": true
           }
         ]

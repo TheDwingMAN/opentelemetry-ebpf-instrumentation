@@ -266,13 +266,15 @@ func TestFeatureJSONSchemaFlagsDeprecatedNames(t *testing.T) {
 	assert.Contains(t, items.OneOf[0].Enum, "*")
 	assert.NotContains(t, items.OneOf[0].Enum, "application_span")
 	assert.NotContains(t, items.OneOf[0].Enum, "application_span_sizes")
+	assert.NotContains(t, items.OneOf[0].Enum, "storage_block_queue_depth")
 
 	assert.True(t, items.OneOf[1].Deprecated)
-	assert.Equal(t, []any{"application_span", "application_span_sizes"}, items.OneOf[1].Enum)
+	assert.Equal(t, []any{"application_span", "application_span_sizes", "storage_block_queue_depth"}, items.OneOf[1].Enum)
 
 	// the schema names the migration target instead of pointing elsewhere for it
 	assert.Contains(t, items.OneOf[1].Description, "application_span (use application_span_otel)")
 	assert.Contains(t, items.OneOf[1].Description, "application_span_sizes (no direct replacement)")
+	assert.Contains(t, items.OneOf[1].Description, "storage_block_queue_depth (no direct replacement)")
 }
 
 func TestDeprecatedEnabled(t *testing.T) {
@@ -308,6 +310,28 @@ func TestStorageBlockFeatureParsing(t *testing.T) {
 	assert.True(t, e.StorageBlock())
 	assert.True(t, e.StorageBlockErrors())
 	assert.False(t, e.StorageBlockQueue())
+}
+
+// The deprecated queue depth is outside the storage_block umbrella: it costs a
+// counter shared by every CPU on the block path, so it is only paid for when
+// asked for by name. Asked for alone, it still needs the block probes.
+func TestStorageBlockQueueDepthFeatureParsing(t *testing.T) {
+	var umbrella Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block"]`), &umbrella))
+	assert.False(t, umbrella.StorageBlockQueueDepth())
+
+	var queue Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block_queue"]`), &queue))
+	assert.False(t, queue.StorageBlockQueueDepth())
+
+	var depth Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_block_queue_depth"]`), &depth))
+	assert.True(t, depth.StorageBlockQueueDepth())
+	assert.True(t, depth.StorageBlock(), "the queue depth needs the block probes")
+	assert.True(t, depth.StatMetrics(), "the queue depth rides the stats pipeline")
+	assert.False(t, depth.StorageBlockQueue())
+	assert.False(t, depth.StorageBlockDuration())
+	assert.Equal(t, []DeprecatedFeature{{Name: "storage_block_queue_depth"}}, depth.DeprecatedEnabled())
 }
 
 func TestStorageFSFeatureParsing(t *testing.T) {

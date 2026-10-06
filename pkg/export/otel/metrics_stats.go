@@ -290,6 +290,10 @@ func newStatMetricsExporter(
 			attrProv.For(attributes.StatDiskQueueDuration))
 
 		nme.diskQueueDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if cfg.CommonCfg.Features.StorageBlockQueueDepth() {
+		log := log.With("metricFamily", "StorageBlockQueueDepth")
 
 		depth, err := ebpfEvents.Float64Histogram(attributes.StatDiskQueueDepth.OTEL, metric2.WithUnit(attributes.StatDiskQueueDepth.Unit))
 		if err != nil {

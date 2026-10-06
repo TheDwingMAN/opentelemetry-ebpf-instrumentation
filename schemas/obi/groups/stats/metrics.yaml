@@ -459,14 +459,21 @@ groups:
   # Queue depth, not queue latency: the count of requests still in flight on
   # the device immediately after this one completed. Observed once per
   # completion rather than time-averaged, so it approximates instantaneous
-  # saturation rather than a true utilization integral. Shares the
-  # `storage_block_queue` feature gate with the queue duration metric above.
+  # saturation rather than a true utilization integral. Emitted only with its
+  # own `storage_block_queue_depth` feature, outside the `storage_block`
+  # umbrella: it is the one block metric that needs a counter shared by every
+  # CPU on the block path.
   - id: metric.obi.obi.stat.disk.queue.depth
     type: metric
     metric_name: obi.stat.disk.queue.depth
     instrument: histogram
     unit: "{operation}"
     stability: development
+    deprecated:
+      reason: obsoleted
+      note: >
+        The `storage_block_queue_depth` metrics feature that emits this
+        histogram is deprecated with no replacement.
     brief: >
       Number of block I/O requests still in flight on the device immediately
       after this request completed, observed per completion and broken down
