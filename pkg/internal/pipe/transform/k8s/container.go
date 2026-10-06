@@ -51,7 +51,7 @@ func ContainerMetadataDecoratorProvider[T any](
 				for _, item := range items {
 					dec.decorate(attrs(item), containerID(item))
 				}
-				output.Send(items)
+				output.SendCtx(ctx, items)
 			})
 		}, nil
 	}
