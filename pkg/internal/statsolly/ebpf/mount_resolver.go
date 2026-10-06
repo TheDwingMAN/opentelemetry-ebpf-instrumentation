@@ -47,6 +47,10 @@ type MountInfo struct {
 	PVName     string
 	VolumeType string
 	Server     string
+	// Shared is set when more than one pod has this superblock mounted, as
+	// happens with a ReadWriteMany volume. PodUID is then one of several and
+	// must not be used to attribute I/O; the volume itself is still certain.
+	Shared bool
 }
 
 // maxCachedMounts bounds mountCache so a node churning through many transient
@@ -126,17 +130,30 @@ func scanForMount(sDev uint32) (MountInfo, bool) {
 
 	target := fmtDev(sDev)
 
+	// Every pod mounting a shared volume has its own kubelet mount of the
+	// same superblock, so keep scanning after the first hit: the volume is
+	// the same for all of them, but the pod is only known if there is one.
+	var found MountInfo
+	var ok bool
 	for _, m := range mounts {
 		if m.MajorMinorVer != target {
 			continue
 		}
 
-		if info, ok := parseKubeletMount(m.MountPoint, m.Source); ok {
-			return info, true
+		info, parsed := parseKubeletMount(m.MountPoint, m.Source)
+		if !parsed {
+			continue
+		}
+		if !ok {
+			found, ok = info, true
+			continue
+		}
+		if info.PodUID != found.PodUID {
+			found.Shared = true
 		}
 	}
 
-	return MountInfo{}, false
+	return found, ok
 }
 
 // scanMounts parses mountInfoPath via procfs. procfs.FS.GetMounts always

@@ -208,3 +208,33 @@ func TestScanMountsFallsBackToSelf(t *testing.T) {
 
 	assert.NoError(t, err, "a self-addressed path must still be readable")
 }
+
+// A ReadWriteMany volume is mounted once per pod, and every mount reports the
+// same superblock. The volume is certain; the pod is not, and the resolver
+// must say so rather than hand back whichever pod mounted first.
+func TestScanForMountMarksSharedSuperblock(t *testing.T) {
+	withMountInfo(t,
+		"36 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw",
+		"36 35 0:32 / /var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw",
+	)
+
+	info, ok := scanForMount(32)
+
+	require.True(t, ok)
+	assert.Equal(t, "pvc-shared", info.PVName, "the volume is the same for every mount")
+	assert.True(t, info.Shared, "two pods on one superblock must be reported as shared")
+}
+
+// The same pod mounting a volume twice, or one mount seen twice, is not
+// sharing: only a second distinct pod makes attribution ambiguous.
+func TestScanForMountSinglePodIsNotShared(t *testing.T) {
+	withMountInfo(t,
+		"36 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw",
+		"36 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-shared-again rw,relatime shared:1 - nfs 10.0.0.1:/export rw",
+	)
+
+	info, ok := scanForMount(32)
+
+	require.True(t, ok)
+	assert.False(t, info.Shared)
+}

@@ -77,10 +77,12 @@ func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs,
 	mountInfo, mountFound := resolveMount(sDev)
 
 	// PodContainerByPIDNs misses processes it hasn't tracked yet. Falling back
-	// to the mount's owning pod still gives useful pod/namespace attribution;
-	// the container is left unset since a shared (ReadWriteMany) volume's pod
-	// UID does not always match the process that issued this I/O.
-	if podMeta == nil && mountFound {
+	// to the mount's owning pod still gives pod/namespace attribution, but
+	// only when the volume has exactly one owner: on a shared (ReadWriteMany)
+	// volume the mount's pod is one of several and naming it would attribute
+	// this I/O to whichever pod mounted first. The container is left unset in
+	// either case, since it comes from the PID path alone.
+	if podMeta == nil && mountFound && !mountInfo.Shared {
 		podMeta = d.store.PodByUID(mountInfo.PodUID)
 		containerName = ""
 	}
