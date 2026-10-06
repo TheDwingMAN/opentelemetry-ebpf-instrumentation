@@ -44,7 +44,9 @@ var kubeletVolumeRe = regexp.MustCompile(`/pods/([0-9a-f-]{36})/volumes/kubernet
 
 // MountInfo describes the Kubernetes volume backing a mounted filesystem.
 type MountInfo struct {
-	PodUID     string
+	PodUID string
+	// PVName is empty when several volumes share the superblock and the
+	// device cannot tell them apart.
 	PVName     string
 	VolumeType string
 	Server     string
@@ -151,8 +153,15 @@ func scanForMount(sDev uint32) (MountInfo, bool) {
 	// Every pod mounting a shared volume has its own kubelet mount of the
 	// same superblock, so keep scanning after the first hit: the volume is
 	// the same for all of them, but the pod is only known if there is one.
+	//
+	// Different volumes can share a superblock too: NFS shares one per
+	// server export, so every PV a subdirectory provisioner (csi-driver-nfs,
+	// nfs-subdir-external-provisioner) carves out of an export has the same
+	// device. The device then cannot say which volume the I/O went to, and
+	// naming the first would label it with another claim.
 	var found MountInfo
 	var ok bool
+	ambiguousPV := false
 	for _, m := range mounts {
 		if m.MajorMinorVer != target {
 			continue
@@ -169,8 +178,14 @@ func scanForMount(sDev uint32) (MountInfo, bool) {
 		if info.PodUID != found.PodUID {
 			found.Shared = true
 		}
+		if info.PVName != found.PVName {
+			ambiguousPV = true
+		}
 	}
 
+	if ambiguousPV {
+		found.PVName = ""
+	}
 	return found, ok
 }
 

@@ -140,7 +140,7 @@ func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs,
 		}
 	}
 
-	if !mountFound {
+	if !mountFound || mountInfo.PVName == "" {
 		return
 	}
 
