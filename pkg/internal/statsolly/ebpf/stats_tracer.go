@@ -35,8 +35,6 @@ type probe struct {
 	name    string
 	program *ebpf.Program
 	enabled bool
-	// retprobeMaxActive is how many calls a return probe tracks at once, 0 for the kernel default
-	retprobeMaxActive int
 }
 
 // fsSyncRetprobeMaxActive is how many calls of a sync function the kernel tracks at once for their
@@ -121,6 +119,7 @@ type StatsFetcher struct {
 	bioAttached           bool
 	fsSyncAttached        bool
 	nfs                   nfsAttached
+	disabled              []DisabledFeature
 }
 
 // LatencyHistograms are the boundaries, in seconds, of the latency histograms that the kernel
@@ -137,7 +136,9 @@ func tlog() *slog.Logger {
 }
 
 // NewStatsFetcher loads and attaches the stat probes of the enabled features. The storage probes
-// read the attributes that the reported attributes need, and the ones in reads.
+// read the attributes that the reported attributes need, and the ones in reads. The TCP probes are
+// required, while the storage ones are optional: a storage feature whose probes can't be loaded or
+// attached is disabled, and listed by DisabledStorageFeatures, and the other stats keep working.
 func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups attributes.AttrGroups,
 	selectorCfg *attributes.SelectorConfig, histograms LatencyHistograms, reads ProbeReads,
 ) (*StatsFetcher, error) {
@@ -162,12 +163,6 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 			"error", err)
 	}
 
-	objects := StatsObjects{}
-	spec, err := LoadStats()
-	if err != nil {
-		return nil, fmt.Errorf("loading BPF data: %w", err)
-	}
-
 	attrSel, err := attributes.NewAttrSelector(attrGroups, selectorCfg)
 	if err != nil {
 		return nil, fmt.Errorf("creating attr selector: %w", err)
@@ -180,111 +175,109 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 		slices.Contains(attrSel.For(attributes.StatTCPFailedConnections), attr.NetworkTCPHandshakeRole)
 	connRoleUsed := (features.StatsTCPFailedConnections() || features.StatsTCPRtt()) && connRoleAttrSelected
 
-	var toDisable []string
+	var tcpToDisable []string
 	if !features.StatsTCPFailedConnections() {
-		toDisable = append(toDisable, progObiStatsTpInetSockSetStateTCPFailedConnection)
+		tcpToDisable = append(tcpToDisable, progObiStatsTpInetSockSetStateTCPFailedConnection)
 	}
 	if !features.StatsTCPSuccessfulConnections() {
-		toDisable = append(toDisable, progObiStatsTpInetSockSetStateTCPSuccessfulConnection)
+		tcpToDisable = append(tcpToDisable, progObiStatsTpInetSockSetStateTCPSuccessfulConnection)
 	}
 	if !connRoleUsed {
-		toDisable = append(toDisable, progObiStatsTpInetSockSetStateConnRole)
+		tcpToDisable = append(tcpToDisable, progObiStatsTpInetSockSetStateConnRole)
 	}
 	if !features.StatsTCPRtt() {
-		toDisable = append(toDisable, progObiStatsKprobeTCPCloseSrtt)
+		tcpToDisable = append(tcpToDisable, progObiStatsKprobeTCPCloseSrtt)
 	}
 	if !features.StatsTCPRetransmits() {
-		toDisable = append(toDisable, progObiStatsRawTpTCPRetransmitSkb)
+		tcpToDisable = append(tcpToDisable, progObiStatsRawTpTCPRetransmitSkb)
 	}
 	if !features.StatsTCPIo() {
-		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
+		tcpToDisable = append(tcpToDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 
-	diskEnabled := features.StatsDisk()
-	var blockLayout blockTracepointLayout
-	if diskEnabled {
-		blockLayout = kernelBlockTracepointLayout(tlog)
-	}
-	diskAttached := diskEnabled && !blockLayout.unknown
-	toDisable = append(toDisable, diskProgramsToDisable(diskEnabled, blockLayout)...)
-	bioAttached := diskAttached && features.StatsDiskStackedVolumes() && !blockLayout.bioUnknown
+	storage := planStorageProbes(tlog, features)
 	diskReads := diskAttributeReads(features, attrSel, reads.Filtered)
 	fsSyncReads := fsSyncAttributeReads(features, attrSel, reads.Filtered)
 	if reads.Workloads {
 		diskReads.cgroup = true
 		fsSyncReads.cgroup = true
 	}
-	toDisable = append(toDisable, bioProgramsToDisable(bioAttached, blockLayout)...)
-	if !features.StatsFsSyncDuration() {
-		toDisable = append(toDisable, progObiStatsKprobeVfsFsyncRange, progObiStatsKretprobeVfsFsyncRange,
-			progObiStatsKprobeDoFsync, progObiStatsKretprobeDoFsync,
-			progObiStatsKprobeSysFsync, progObiStatsKprobeSysFdatasync, progObiStatsKprobeSysSyncfs,
-			progObiStatsKprobeSysSyncFileRange, progObiStatsKprobeSysSync, progObiStatsKretprobeSysFsSync)
-	}
-	var nfsProbesAvailable nfsProbes
-	if features.StatsNFS() {
-		nfsProbesAvailable = kernelNFSProbes()
-		warnUnavailableNFSProbes(tlog, features, nfsProbesAvailable)
-	}
-	nfsLoaded := nfsLoadFor(features, nfsProbesAvailable)
-	toDisable = append(toDisable, nfsLoaded.programsToDisable()...)
 
-	if err := fixupSpec(spec, toDisable); err != nil {
-		return nil, fmt.Errorf("fixing up BPF spec: %w", err)
-	}
-
-	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
-	if cpus, err := ebpf.PossibleCPU(); err == nil {
-		sizeInFlightMaps(spec, cpus)
-	} else {
-		tlog.Debug("can't size the in-flight maps to the CPUs", "error", err)
-	}
-
+	objects := StatsObjects{}
 	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
-	if err := ebpfconvenience.LoadSpec(spec, &objects, map[string]any{
-		"g_bpf_debug":                cfg.BpfDebug,
-		"stats_wakeup_data_bytes":    uint32(cfg.StatsWakeupDataBytes),
-		"disk_latency_bounds_ns":     diskLatencyBoundsNs,
-		"disk_latency_bounds_len":    uint32(len(histograms.Disk)),
-		"disk_status_is_blk_status":  blockLayout.completeReportsBlkStatus,
-		"disk_rqf_flush_seq":         blockLayout.flushSeqFlag,
-		"disk_read_cgroup":           diskReads.cgroup,
-		"disk_read_partition":        diskReads.partition,
-		"fs_sync_latency_bounds_ns":  fsSyncLatencyBoundsNs,
-		"fs_sync_latency_bounds_len": uint32(len(histograms.FsSyncDuration)),
-		"fs_sync_read_cgroup":        fsSyncReads.cgroup,
-		"fs_sync_read_filesystem":    fsSyncReads.filesystem,
-		"nfs_latency_bounds_ns":      nfsLatencyBoundsNs,
-		"nfs_latency_bounds_len":     uint32(len(histograms.NFS)),
-	}, sharedMaps, &mu, "", nil); err != nil {
+	load := func(toDisable []string) error {
+		spec, err := LoadStats()
+		if err != nil {
+			return fmt.Errorf("loading BPF data: %w", err)
+		}
+		if err := fixupSpec(spec, toDisable); err != nil {
+			return fmt.Errorf("fixing up BPF spec: %w", err)
+		}
+		ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
+		if cpus, err := ebpf.PossibleCPU(); err == nil {
+			sizeInFlightMaps(spec, cpus)
+		} else {
+			tlog.Debug("can't size the in-flight maps to the CPUs", "error", err)
+		}
+		return ebpfconvenience.LoadSpec(spec, &objects, map[string]any{
+			"g_bpf_debug":                cfg.BpfDebug,
+			"stats_wakeup_data_bytes":    uint32(cfg.StatsWakeupDataBytes),
+			"disk_latency_bounds_ns":     diskLatencyBoundsNs,
+			"disk_latency_bounds_len":    uint32(len(histograms.Disk)),
+			"disk_status_is_blk_status":  storage.layout.completeReportsBlkStatus,
+			"disk_rqf_flush_seq":         storage.layout.flushSeqFlag,
+			"disk_read_cgroup":           diskReads.cgroup,
+			"disk_read_partition":        diskReads.partition,
+			"fs_sync_latency_bounds_ns":  fsSyncLatencyBoundsNs,
+			"fs_sync_latency_bounds_len": uint32(len(histograms.FsSyncDuration)),
+			"fs_sync_read_cgroup":        fsSyncReads.cgroup,
+			"fs_sync_read_filesystem":    fsSyncReads.filesystem,
+			"nfs_latency_bounds_ns":      nfsLatencyBoundsNs,
+			"nfs_latency_bounds_len":     uint32(len(histograms.NFS)),
+		}, sharedMaps, &mu, "", nil)
+	}
+	err = load(slices.Concat(tcpToDisable, storage.programsToDisable()))
+	if err != nil && storage.any() {
+		// as OBI does with an optional tracer that can't be loaded, the stats go on without the
+		// storage programs
+		storage.disableAll(fmt.Errorf("can't load their BPF programs: %w", err))
+		err = load(slices.Concat(tcpToDisable, storage.programsToDisable()))
+	}
+	if err != nil {
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
 
+	closables, err := attachTCPProbes(tlog, &objects, features, connRoleUsed)
+	if err != nil {
+		closeAll(closables)
+		return nil, err
+	}
+	closables = append(closables, storage.attach(tlog, &objects)...)
+
+	return &StatsFetcher{
+		log:                   tlog,
+		objects:               &objects,
+		closables:             closables,
+		diskAttached:          storage.disk,
+		diskStatusIsBlkStatus: storage.layout.completeReportsBlkStatus,
+		bioAttached:           storage.bio,
+		fsSyncAttached:        storage.fsSync,
+		nfs:                   storage.nfsAttached,
+		disabled:              storage.disabled,
+	}, nil
+}
+
+// attachTCPProbes attaches the probes of the enabled TCP stats, which are required
+func attachTCPProbes(log *slog.Logger, objects *StatsObjects, features *export.Features, connRoleUsed bool) ([]io.Closer, error) {
 	var closables []io.Closer
 
 	// kretprobes, attached before the kprobes: a call that starts once its kprobe is attached must
 	// not return before its kretprobe is, or its start is never completed
-	for _, k := range []probe{
-		{
-			name:    KprobeTCPSendMsg,
-			program: objects.ObiStatsKretprobeTcpSendmsg,
-			enabled: features.StatsTCPIo(),
-		},
-		{
-			name:              KprobeVfsFsyncRange,
-			program:           objects.ObiStatsKretprobeVfsFsyncRange,
-			enabled:           features.StatsFsSyncDuration(),
-			retprobeMaxActive: fsSyncRetprobeMaxActive,
-		},
-	} {
-		if !k.enabled {
-			continue
-		}
-		l, err := attachKretprobe(tlog, k.name, k.program, k.retprobeMaxActive)
+	if features.StatsTCPIo() {
+		l, err := attachKretprobe(log, KprobeTCPSendMsg, objects.ObiStatsKretprobeTcpSendmsg, 0)
 		if err != nil {
-			closeAll(closables)
-			return nil, fmt.Errorf("failed kretprobe attachment %s: %w", k.name, err)
+			return closables, fmt.Errorf("failed kretprobe attachment %s: %w", KprobeTCPSendMsg, err)
 		}
 		closables = append(closables, l)
 	}
@@ -311,11 +304,6 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 			program: objects.ObiStatsKprobeTcpCleanupRbuf,
 			enabled: features.StatsTCPIo(),
 		},
-		{
-			name:    KprobeVfsFsyncRange,
-			program: objects.ObiStatsKprobeVfsFsyncRange,
-			enabled: features.StatsFsSyncDuration(),
-		},
 	} {
 		if !k.enabled {
 			continue
@@ -323,15 +311,9 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 
 		l, err := kprobe.Attach(k.name, k.program, false)
 		if err != nil {
-			closeAll(closables)
-			return nil, fmt.Errorf("failed kprobe attachment %s: %w", k.name, err)
+			return closables, fmt.Errorf("failed kprobe attachment %s: %w", k.name, err)
 		}
 		closables = append(closables, l)
-	}
-
-	if features.StatsFsSyncDuration() {
-		closables = append(closables, attachDoFsync(tlog, &objects)...)
-		closables = append(closables, attachSyncSyscalls(tlog, &objects)...)
 	}
 
 	// tracepoints
@@ -365,80 +347,23 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 		group, tp, _ := strings.Cut(t.name, "/")
 		l, err := link.Tracepoint(group, tp, t.program, nil)
 		if err != nil {
-			closeAll(closables)
-			return nil, fmt.Errorf("failed tracepoint attachment %s: %w", t.name, err)
+			return closables, fmt.Errorf("failed tracepoint attachment %s: %w", t.name, err)
 		}
 		closables = append(closables, l)
 	}
 
 	// raw tracepoints
-	for _, t := range []probe{
-		{
-			name:    RawTracepointTCPRetransmitSkb,
-			program: objects.ObiStatsRawTpTcpRetransmitSkb,
-			enabled: features.StatsTCPRetransmits(),
-		},
-		// the completions are attached before the starts, so that no start is recorded without
-		// its completion being measured: a stale start of a bio would be matched by another bio
-		// that reuses its memory
-		{
-			name:    RawTracepointBlockRqComplete,
-			program: objects.ObiStatsRawTpBlockRqComplete,
-			enabled: diskAttached,
-		},
-		{
-			name:    RawTracepointBlockRqIssue,
-			program: objects.ObiStatsRawTpBlockRqIssue,
-			enabled: diskAttached && !blockLayout.issueHasQueueArg,
-		},
-		{
-			name:    RawTracepointBlockRqIssue,
-			program: objects.ObiStatsRawTpBlockRqIssueLegacy,
-			enabled: diskAttached && blockLayout.issueHasQueueArg,
-		},
-		{
-			name:    RawTracepointBlockBioComplete,
-			program: objects.ObiStatsRawTpBlockBioComplete,
-			enabled: bioAttached,
-		},
-		{
-			name:    RawTracepointBlockBioQueue,
-			program: objects.ObiStatsRawTpBlockBioQueue,
-			enabled: bioAttached && !blockLayout.bioQueueHasQueueArg,
-		},
-		{
-			name:    RawTracepointBlockBioQueue,
-			program: objects.ObiStatsRawTpBlockBioQueueLegacy,
-			enabled: bioAttached && blockLayout.bioQueueHasQueueArg,
-		},
-	} {
-		if !t.enabled {
-			continue
-		}
+	if features.StatsTCPRetransmits() {
 		l, err := link.AttachRawTracepoint(link.RawTracepointOptions{
-			Name:    t.name,
-			Program: t.program,
+			Name:    RawTracepointTCPRetransmitSkb,
+			Program: objects.ObiStatsRawTpTcpRetransmitSkb,
 		})
 		if err != nil {
-			closeAll(closables)
-			return nil, fmt.Errorf("failed raw tracepoint attachment %s: %w", t.name, err)
+			return closables, fmt.Errorf("failed raw tracepoint attachment %s: %w", RawTracepointTCPRetransmitSkb, err)
 		}
 		closables = append(closables, l)
 	}
-
-	nfs, nfsClosables := attachNFS(tlog, &objects, nfsLoaded)
-	closables = append(closables, nfsClosables...)
-
-	return &StatsFetcher{
-		log:                   tlog,
-		objects:               &objects,
-		closables:             closables,
-		diskAttached:          diskAttached,
-		diskStatusIsBlkStatus: blockLayout.completeReportsBlkStatus,
-		bioAttached:           bioAttached,
-		fsSyncAttached:        features.StatsFsSyncDuration(),
-		nfs:                   nfs,
-	}, nil
+	return closables, nil
 }
 
 // attachSyncSyscalls attaches the probes of the sync system calls. The entry and return probes of
@@ -594,6 +519,12 @@ func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
 	return m.objects.DiskCgroupNames
 }
 
+// DisabledStorageFeatures returns the enabled storage features whose probes can't be loaded or
+// attached on this node
+func (m *StatsFetcher) DisabledStorageFeatures() []DisabledFeature {
+	return m.disabled
+}
+
 // DiskStatusIsBlkStatus tells whether the kernel reports block request completion statuses as
 // blk_status_t values (Linux 5.16+) instead of errnos.
 func (m *StatsFetcher) DiskStatusIsBlkStatus() bool {
@@ -618,23 +549,22 @@ type blockTracepointLayout struct {
 
 // kernelBlockTracepointLayout reads the block tracepoint prototypes from the kernel BTF. The kernel
 // version can't be used: the block_rq_issue change was backported to 5.10.137 and RHEL 8.6.
-func kernelBlockTracepointLayout(log *slog.Logger) blockTracepointLayout {
+func kernelBlockTracepointLayout(log *slog.Logger) (blockTracepointLayout, error) {
 	spec, err := btf.LoadKernelSpec()
-	if err == nil {
-		var layout blockTracepointLayout
-		if layout, err = blockTracepointLayoutFrom(tracepointProto(spec)); err == nil {
-			major, minor := ebpfcommon.KernelVersion()
-			layout.flushSeqFlag = requestFlushSeqFlag(enumerator(spec), major, minor)
-			if layout.flushSeqFlag == 0 {
-				log.Warn("can't find the RQF_FLUSH_SEQ request flag in the kernel BTF: the writes with a cache " +
-					"flush before or after them may be counted twice")
-			}
-			return layout
-		}
+	if err != nil {
+		return blockTracepointLayout{unknown: true}, err
 	}
-	log.Warn("disk stat metrics are disabled: can't tell the block tracepoints arguments from the kernel BTF",
-		"error", err)
-	return blockTracepointLayout{unknown: true}
+	layout, err := blockTracepointLayoutFrom(tracepointProto(spec))
+	if err != nil {
+		return blockTracepointLayout{unknown: true}, err
+	}
+	major, minor := ebpfcommon.KernelVersion()
+	layout.flushSeqFlag = requestFlushSeqFlag(enumerator(spec), major, minor)
+	if layout.flushSeqFlag == 0 {
+		log.Warn("can't find the RQF_FLUSH_SEQ request flag in the kernel BTF: the writes with a cache " +
+			"flush before or after them may be counted twice")
+	}
+	return layout, nil
 }
 
 func tracepointProto(spec *btf.Spec) func(string) (*btf.FuncProto, error) {

@@ -64,6 +64,10 @@ func (s Status) String() string {
 
 var errShutdownTimeout = errors.New("graceful shutdown has timed out while waiting for eBPF statsolly to finish")
 
+// disabledStorageReminder is how often the storage features that can't run on the node are logged
+// again, so that the warning is not lost among the startup logs
+const disabledStorageReminder = time.Hour
+
 // defaultDiskReadInterval is how often the disk accumulation map is read when ebpf.batch_timeout
 // doesn't set a period
 const defaultDiskReadInterval = time.Second
@@ -100,6 +104,7 @@ type ebpFetcher interface {
 	NFSIOAccumMap() *ciliumebpf.Map
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
+	DisabledStorageFeatures() []ebpf.DisabledFeature
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -140,6 +145,11 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	if err != nil {
 		return nil, err
 	}
+	if disabled := statsFetcher.DisabledStorageFeatures(); len(disabled) > 0 {
+		warnDisabledStorage(disabled)
+	} else if storageProbesEnabled(&features) {
+		alog.Info("the probes of the enabled storage metrics are loaded")
+	}
 
 	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
 }
@@ -157,6 +167,33 @@ func filteredAttributes(filters filter.AttributeFamilyConfig) []attr.Name {
 		names = append(names, attr.Name(name))
 	}
 	return names
+}
+
+// storageProbesEnabled tells whether any enabled storage metric needs probes
+func storageProbesEnabled(features *export.Features) bool {
+	return features.StatsDisk() || features.StatsFsSyncDuration() || features.StatsNFS()
+}
+
+// warnDisabledStorage logs the enabled storage features whose probes can't be loaded or attached
+func warnDisabledStorage(disabled []ebpf.DisabledFeature) {
+	for _, d := range disabled {
+		alog().Warn("storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working",
+			"metrics", d.Feature, "reason", d.Reason)
+	}
+}
+
+// remindDisabledStorage logs the disabled storage features again, periodically
+func remindDisabledStorage(ctx context.Context, disabled []ebpf.DisabledFeature) {
+	ticker := time.NewTicker(disabledStorageReminder)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			warnDisabledStorage(disabled)
+		}
+	}
 }
 
 // latencyHistograms returns the boundaries the kernel buckets latencies with: the union of the
@@ -271,6 +308,9 @@ func (s *Stats) Run(ctx context.Context) error {
 	if s.cfg.EBPF.BpfDebug {
 		go logger.ReadDebugEventsMap(runCtx, s.fetcher.DebugEventsMap(),
 			slog.With("component", "statsolly.BPFDebug"))
+	}
+	if disabled := s.fetcher.DisabledStorageFeatures(); len(disabled) > 0 {
+		go remindDisabledStorage(runCtx, disabled)
 	}
 
 	graph, err := s.buildPipeline(ctx)

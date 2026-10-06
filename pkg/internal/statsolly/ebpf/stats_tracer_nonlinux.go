@@ -32,6 +32,10 @@ func (m *StatsFetcher) Close() error {
 	return nil
 }
 
+func (m *StatsFetcher) DisabledStorageFeatures() []DisabledFeature {
+	return nil
+}
+
 func (m *StatsFetcher) StatsEventsMap() *ciliumebpf.Map {
 	return nil
 }

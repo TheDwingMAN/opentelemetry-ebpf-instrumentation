@@ -189,15 +189,6 @@ func (l nfsLoad) programsToDisable() []string {
 	return toDisable
 }
 
-func warnUnavailableNFSProbes(log *slog.Logger, features *export.Features, probes nfsProbes) {
-	if features.StatsNFSClientProcedureDuration() && probes.rpc != nil {
-		log.Warn("NFS client procedure stats are disabled", "error", probes.rpc)
-	}
-	if features.StatsNFSClientIO() && probes.pgio != nil {
-		log.Warn("NFS client I/O stats are disabled", "error", probes.pgio)
-	}
-}
-
 // nfsAttached tells which NFS client metrics have their probes attached
 type nfsAttached struct {
 	procedures, bytes bool

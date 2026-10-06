@@ -151,6 +151,8 @@ StatsO11y probes fire at different points relative to `inet_put_port()`, so the 
 
 #### Block I/O (disk) stats
 
+The storage stats (disk, file sync and NFS client) are optional, as OBI's optional tracers are: when the probes of an enabled storage feature can't be loaded or attached on a node, because of a kernel without kprobes, without the BTF that they need, or a BPF verifier that rejects them, that feature is disabled on the node with a warning that names it and the reason, repeated every hour, and OBI and the other metrics keep working. The TCP stats remain required.
+
 `obi.stat.disk.operation.duration` is measured from the `block_rq_issue` to the final `block_rq_complete` tracepoint of each request, so it is the time the device took to serve it: it excludes the time requests wait in the I/O scheduler or in blk-throttle before being issued. Other limitations:
 
 - Reads and writes are reported per direction by the disk I/O metrics. Cache flushes are reported by `obi.stat.disk.flush.duration`, and discards (including secure erases) by `obi.stat.disk.discard.duration` and `obi.stat.disk.discard.io`. Write-zeroes and passthrough requests are not measured.
@@ -185,7 +187,7 @@ The opt-in `obi.disk.partition` attribute is the partition that the I/O targets,
 
 The `obi.fs.sync.type` attribute tells the system call apart: syncs outside of the system calls are reported as `fsync` or `fdatasync`, depending on whether they sync the metadata too. The opt-in `system.filesystem.mountpoint` and `system.filesystem.type` attributes are the filesystem of the synced file, from the mounts of the host (`/proc/1/mountinfo`): when a filesystem is mounted more than once, its mount of the root of the filesystem with the shortest path. `sync(2)` syncs every filesystem, so it has no mountpoint. `system.filesystem.type` is only set for the types that the semantic conventions list (`ext4`, `exfat`, `ntfs`, `hfsplus`, `fat32`, `refs`), as the kernel names them: it is omitted for others, like `xfs`, `tmpfs` or `overlay`. Limitations:
 
-- It needs kprobes. On kernels without them, enabling it makes StatsO11y fail to start, like the TCP IO stats. The system call probes are optional: when one can't attach, the syncs of that system call are measured through the kernel functions, if they call them.
+- It needs kprobes. On kernels without them, it is disabled with a warning, and the other metrics keep working. The system call probes are optional: when one can't attach, the syncs of that system call are measured through the kernel functions, if they call them.
 - A sync is charged to the workload of the thread that called it, through the cgroup of its `io` controller (`blkio` on cgroup v1), so the same cgroup name rules as the disk metrics apply.
 - Stacked filesystems, like overlayfs, sync the file of the filesystem below them: outside of the system calls, the sync of the lower file is measured, once per call, with the filesystem of the lower file.
 - The writeback of dirty pages by the kernel is not measured.
