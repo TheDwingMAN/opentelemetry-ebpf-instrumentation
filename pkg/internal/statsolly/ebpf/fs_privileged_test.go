@@ -76,7 +76,7 @@ func TestFailingFilesystemKeepsBlockAndOtherFilesystems(t *testing.T) {
 	}
 
 	a.refresh()
-	require.Contains(t, a.attached, CodeFsExt4)
+	require.Contains(t, a.attached, fsPlanKey{Fs: CodeFsExt4})
 	writeAndSync(t, vol.mountPoint)
 	events.waitFs(t, vol.dev, CodeFsExt4)
 	events.waitBlock(t, vol.disk.kernelDev)
@@ -86,10 +86,10 @@ func TestFailingFilesystemKeepsBlockAndOtherFilesystems(t *testing.T) {
 			" a failing filesystem cannot be made to fail next to it")
 	}
 	name := fsTypeStr(failing.Fs)
-	assert.NotContains(t, a.attached, failing.Fs, "%s attached", name)
-	assert.Equal(t, 1, a.failures[failing.Fs], "%s failed once, with every probe type it tried", name)
+	assert.NotContains(t, a.attached, failing.Key(), "%s attached", name)
+	assert.Equal(t, 1, a.failures[failing.Key()], "%s failed once, with every probe type it tried", name)
 	if failing.UseFentry {
-		assert.True(t, a.noFentry[failing.Fs], "%s was retried with kprobes", name)
+		assert.True(t, a.noFentry[failing.Key()], "%s was retried with kprobes", name)
 	}
 }
 
@@ -175,10 +175,17 @@ func TestLocalFilesystemsAttachOnlyWithAVolume(t *testing.T) {
 }
 
 func newTestFsAttacher(t *testing.T, sharedMaps map[string]*ebpf.Map) *fsAttacher {
+	return newTestFsAttacherWithSync(t, sharedMaps, false)
+}
+
+// newTestFsAttacherWithSync is newTestFsAttacher with the sync syscall set
+// (storage_fs_sync, step 14) attached too, when syncEnabled is set.
+func newTestFsAttacherWithSync(t *testing.T, sharedMaps map[string]*ebpf.Map, syncEnabled bool) *fsAttacher {
 	t.Helper()
 
 	cfg := &config.EBPFTracer{}
-	a, err := newKernelFsAttacher(slog.Default(), cfg, statsConstants(cfg, blockLoadPlan{}), sharedMaps, &sync.Mutex{})
+	a, err := newKernelFsAttacher(slog.Default(), cfg, statsConstants(cfg, blockLoadPlan{}, FsAggregation{}),
+		FsAggregation{}, sharedMaps, &sync.Mutex{}, syncEnabled)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		close(a.stopped) // run() is never started: the test drives refresh
@@ -190,9 +197,9 @@ func newTestFsAttacher(t *testing.T, sharedMaps map[string]*ebpf.Map) *fsAttache
 func assertLocalAttached(t *testing.T, a *fsAttacher, want ...FsTypeCode) {
 	t.Helper()
 	var got []FsTypeCode
-	for fs := range a.attached {
-		if isLocalFs(fs) {
-			got = append(got, fs)
+	for key := range a.attached {
+		if isLocalFs(key.Fs) {
+			got = append(got, key.Fs)
 		}
 	}
 	assert.ElementsMatch(t, want, got)
@@ -223,64 +230,64 @@ func newFsVolumeIfSupported(t *testing.T, fstype string, n int) *fsVolume {
 
 // newFsVolume makes a filesystem on a fresh loop device and mounts it where
 // the kubelet mounts a CSI volume, for pod UID number n.
-func newFsVolume(t *testing.T, fstype string, n int) *fsVolume {
-	t.Helper()
-	if !filesystemRegistered(t, fstype) {
-		t.Skipf("%s is not registered with this kernel", fstype)
+func newFsVolume(tb testing.TB, fstype string, n int) *fsVolume {
+	tb.Helper()
+	if !filesystemRegistered(tb, fstype) {
+		tb.Skipf("%s is not registered with this kernel", fstype)
 	}
 	mkfs, err := exec.LookPath("mkfs." + fstype)
 	if err != nil {
-		t.Skipf("no mkfs.%s", fstype)
+		tb.Skipf("no mkfs.%s", fstype)
 	}
 
-	disk := newLoopDevice(t, fsVolumeBytes)
+	disk := newLoopDevice(tb, fsVolumeBytes)
 	force := map[string]string{"ext4": "-F", "xfs": "-f", "btrfs": "-f"}[fstype]
 	out, err := exec.Command(mkfs, "-q", force, disk.path).CombinedOutput()
-	require.NoError(t, err, "mkfs.%s: %s", fstype, out)
+	require.NoError(tb, err, "mkfs.%s: %s", fstype, out)
 
 	pod := filepath.Join("/var/lib/kubelet/pods", fmt.Sprintf("0b1f5e0a-0000-4000-8000-%012d", n))
 	mountPoint := filepath.Join(pod, "volumes/kubernetes.io~csi", "pv-"+fstype, "mount")
-	require.NoError(t, os.MkdirAll(mountPoint, 0o755))
-	t.Cleanup(func() { os.RemoveAll(pod) })
-	require.NoError(t, unix.Mount(disk.path, mountPoint, fstype, 0, ""))
+	require.NoError(tb, os.MkdirAll(mountPoint, 0o755))
+	tb.Cleanup(func() { os.RemoveAll(pod) })
+	require.NoError(tb, unix.Mount(disk.path, mountPoint, fstype, 0, ""))
 
 	vol := &fsVolume{disk: disk, mountPoint: mountPoint, mounted: true}
-	t.Cleanup(func() { vol.unmount(t) })
-	vol.dev = superblockDev(t, mountPoint)
+	tb.Cleanup(func() { vol.unmount(tb) })
+	vol.dev = superblockDev(tb, mountPoint)
 	return vol
 }
 
-func (v *fsVolume) unmount(t *testing.T) {
-	t.Helper()
+func (v *fsVolume) unmount(tb testing.TB) {
+	tb.Helper()
 	if !v.mounted {
 		return
 	}
-	require.NoError(t, unix.Unmount(v.mountPoint, 0))
+	require.NoError(tb, unix.Unmount(v.mountPoint, 0))
 	v.mounted = false
 }
 
 // superblockDev reads the superblock dev_t of the mount at mountPoint from
 // the mount table, as the allowlist does: for btrfs it is an anonymous device,
 // not the loop device.
-func superblockDev(t *testing.T, mountPoint string) uint32 {
-	t.Helper()
+func superblockDev(tb testing.TB, mountPoint string) uint32 {
+	tb.Helper()
 	mounts, err := mountsFrom(selfMountInfoPath)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	for _, m := range mounts {
 		if m.MountPoint == mountPoint {
 			dev, ok := parseDevT(m.MajorMinorVer)
-			require.True(t, ok)
+			require.True(tb, ok)
 			return dev
 		}
 	}
-	require.FailNow(t, "mount not in the mount table", mountPoint)
+	require.FailNow(tb, "mount not in the mount table", mountPoint)
 	return 0
 }
 
-func filesystemRegistered(t *testing.T, fstype string) bool {
-	t.Helper()
+func filesystemRegistered(tb testing.TB, fstype string) bool {
+	tb.Helper()
 	raw, err := os.ReadFile("/proc/filesystems")
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		if fields := strings.Fields(line); len(fields) > 0 && fields[len(fields)-1] == fstype {
 			return true

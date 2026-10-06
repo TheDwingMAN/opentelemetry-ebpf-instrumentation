@@ -26,6 +26,7 @@ import (
 type aggregationDeps struct {
 	store        *kube.Store
 	pvc          ebpf.PVCLookup
+	mountpoints  k8s.PIDMountpoints[*ebpf.Stat]
 	dynamicAttrs *selection.DynamicFlowAttrs
 	dynamicIPs   *selection.DynamicAppIPs
 }
@@ -37,7 +38,7 @@ type aggregationDeps struct {
 // both export paths drop the same series. It returns false for a stat the
 // pipeline drops. The stages that cache for a single goroutine get their own
 // instances, so each family needs its own decorator; the dynamic PID trackers
-// are the pipeline's. Call it after buildPipeline.
+// are the pipeline's. Call it once buildPipeline has set s.aggDeps.
 func (s *Stats) newAggregatedStatDecorator(ctx context.Context) (func(*ebpf.Stat) bool, error) {
 	k8sDecorate, err := k8s.NewItemDecorator(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
 		statAttrs, isStorageStat)
@@ -48,7 +49,8 @@ func (s *Stats) newAggregatedStatDecorator(ctx context.Context) (func(*ebpf.Stat
 	if pvc == nil {
 		pvc = noPVCLookup
 	}
-	pidDecorate := k8s.NewPIDItemDecorator(s.aggDeps.store, statAttrs, fsIoPID, fsIoSetMount, ebpf.CachedPVCLookup(pvc))
+	pidDecorate := k8s.NewPIDItemDecoratorWith(s.aggDeps.store, statAttrs, fsIoPID, fsIoSetMount,
+		ebpf.CachedPVCLookup(pvc), s.aggDeps.mountpoints)
 	nfsOwnerDecorate := s.newNFSOwnerDecorate()
 	rdnsDecorate := rdns.NewItemDecorator(&s.cfg.Stats.ReverseDNS, statAttrs)
 	geoIPDecorate, err := geoip.NewItemDecorator(&s.cfg.Stats.GeoIP, statAttrs)
@@ -88,12 +90,47 @@ func (s *Stats) newAggregatedStatDecorator(ctx context.Context) (func(*ebpf.Stat
 	}, nil
 }
 
-// aggregatedFamilies builds the families of the kernel aggregation maps the
-// fetcher created, with the decoration of newAggregatedStatDecorator, and
-// returns the registry the exporters emit them from: nil when there is none.
-// Call it once the dynamic PID trackers are built; Run starts the families
-// once the exporters attached.
-func (s *Stats) aggregatedFamilies(ctx context.Context) (*statagg.Registry, error) {
+// cgroupIndex returns the cgroup index the families' decoration shares,
+// built on first use: one scan of the cgroup tree serves them all. Run
+// starts it.
+func (s *Stats) cgroupIndex() *statagg.CgroupIndex {
+	if s.cgroups == nil {
+		s.cgroups = statagg.NewCgroupIndex()
+	}
+	return s.cgroups
+}
+
+// buildAggregation builds the families of the kernel aggregation maps the
+// fetcher created, each with its own newAggregatedStatDecorator, and returns
+// the registry the exporters emit them from: nil when there is none. It
+// keeps the families (and the cgroup index their decoration uses) for Run to
+// start once the exporters attached. Call it once the pipeline has set
+// s.aggDeps.
+func (s *Stats) buildAggregation(ctx context.Context) (*statagg.Registry, error) {
+	var families []*statagg.Family
+	for _, build := range [...]func(context.Context) (*statagg.Family, error){s.fsFamily, s.nfsFamily} {
+		family, err := build(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if family != nil {
+			families = append(families, family)
+		}
+	}
+	if len(families) == 0 {
+		return nil, nil
+	}
+	registry, err := statagg.NewRegistry(families...)
+	if err != nil {
+		return nil, err
+	}
+	s.families = families
+	return registry, nil
+}
+
+// nfsFamily returns the family of the NFS client RPC map, nil when the
+// fetcher created none.
+func (s *Stats) nfsFamily(ctx context.Context) (*statagg.Family, error) {
 	if s.fetcher == nil || s.fetcher.NFSRPCMap() == nil {
 		return nil, nil
 	}
@@ -105,10 +142,17 @@ func (s *Stats) aggregatedFamilies(ctx context.Context) (*statagg.Registry, erro
 	if err != nil {
 		return nil, err
 	}
-	nfs, err := stats.NewNFSRPCFamily(src, s.nfsLayout, s.cfg.Metrics.Features, decorate)
-	if err != nil {
-		return nil, err
+	return stats.NewNFSRPCFamily(src, s.nfsLayout, s.cfg.Metrics.Features, decorate)
+}
+
+// runAggregation reads the kernel aggregation maps until ctx is done; stop
+// waits for the last read. The exporters must be attached, which building
+// the pipeline does.
+func (s *Stats) runAggregation(ctx context.Context) {
+	if s.cgroups != nil {
+		go s.cgroups.Run(ctx)
 	}
-	s.families = []*statagg.Family{nfs}
-	return statagg.NewRegistry(s.families...)
+	for _, f := range s.families {
+		s.familiesRunning.Go(func() { f.Run(ctx) })
+	}
 }

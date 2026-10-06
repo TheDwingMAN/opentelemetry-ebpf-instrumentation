@@ -92,7 +92,7 @@ func nfsEvents(n int, bounds []uint64, avoid bool) []*ebpf.Stat {
 
 func nfsKernel(t *testing.T, layout *statagg.Layout, features export.Features) func(decorate func(*ebpf.Stat) bool) Kernel {
 	return func(decorate func(*ebpf.Stat) bool) Kernel {
-		n, err := stataggtest.NewNFS(layout, features, decorate)
+		n, err := stataggtest.NewNFS(stats.NewNFSRPCFamily, layout, features, decorate)
 		require.NoError(t, err)
 		return Kernel{Registry: n.Registry, Families: []*statagg.Family{n.Family}, Record: n.Record}
 	}
@@ -263,7 +263,7 @@ func TestParity_NFSOwner(t *testing.T) {
 				OTelBuckets: export.DefaultBuckets, PromBuckets: export.DefaultBuckets,
 			}
 			Run(t, setup, perEvent, func(decorate func(*ebpf.Stat) bool) Kernel {
-				n, err := stataggtest.NewNFS(layout, export.FeatureStorageNFS, func(s *ebpf.Stat) bool {
+				n, err := stataggtest.NewNFS(stats.NewNFSRPCFamily, layout, export.FeatureStorageNFS, func(s *ebpf.Stat) bool {
 					ownerDecorate(s)
 					return decorate(s)
 				})

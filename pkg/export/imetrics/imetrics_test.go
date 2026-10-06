@@ -63,6 +63,30 @@ func TestPrometheusReporterQueueBufferUtilization(t *testing.T) {
 	assert.InDelta(t, 0.9, gaugeValue("traces"), 0.001)
 }
 
+func TestPrometheusReporterBpfStorageDrops(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter := NewPrometheusReporter(&InternalMetricsConfig{}, nil, registry)
+
+	reporter.BpfStorageDrops("fs_accum_full", 3)
+	reporter.BpfStorageDrops("fs_start_failed", 1)
+	reporter.BpfStorageDrops("fs_accum_full", 2)
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	got := map[string]float64{}
+	for _, family := range families {
+		if family.GetName() != "obi_bpf_storage_dropped_operations_total" {
+			continue
+		}
+		for _, m := range family.GetMetric() {
+			require.Len(t, m.GetLabel(), 1)
+			assert.Equal(t, "bpf_drop_reason", m.GetLabel()[0].GetName())
+			got[m.GetLabel()[0].GetValue()] = m.GetCounter().GetValue()
+		}
+	}
+	assert.Equal(t, map[string]float64{"fs_accum_full": 5, "fs_start_failed": 1}, got)
+}
+
 type noopEmbeddingReporter struct {
 	NoopReporter
 }

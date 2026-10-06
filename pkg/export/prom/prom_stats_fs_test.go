@@ -274,3 +274,59 @@ func TestStatsReporterFsKubeLabels(t *testing.T) {
 		"server_address":                 "",
 	}), "an unknown filesystem has no type label, not \"unknown\"")
 }
+
+// The mount paths are opt-in: absent by default, labels once selected, and
+// the empty label for a stat that has none.
+func TestStatsReporterFsMountpointLabelsAreOptIn(t *testing.T) {
+	newReporter := func(registry *prometheus.Registry, include ...string) *statMetricsReporter {
+		sel := attributes.Selection{}
+		if include != nil {
+			sel[attributes.StatFsOperationDuration.Section] = attributes.InclusionLists{Include: include}
+			sel.Normalize()
+		}
+		reporter, err := newStatsReporter(
+			&global.ContextInfo{Prometheus: &connector.PrometheusManager{}, MetricAttributeGroups: attributes.GroupKubernetes},
+			&StatsPrometheusConfig{
+				Config:      &PrometheusConfig{Registry: registry, TTL: time.Minute},
+				SelectorCfg: &attributes.SelectorConfig{SelectionCfg: sel},
+				CommonCfg:   &perapp.GlobalMetricsConfig{Features: export.FeatureStorageFS},
+			},
+			msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(1)),
+		)
+		require.NoError(t, err)
+		return reporter
+	}
+	stat := fsIoStat()
+	stat.FsIo.Mount = &ebpf.MountAttrs{PVName: "pvc-1", HostPath: "/var/lib/kubelet/pods/u/volumes/kubernetes.io~csi/pvc-1/mount", ContainerPath: "/data"}
+
+	defaults := map[string]string{
+		"system_filesystem_type":         "nfs",
+		"fs_operation":                   "write",
+		"k8s_pod_name":                   "",
+		"k8s_namespace_name":             "",
+		"k8s_container_name":             "",
+		"k8s_persistentvolume_name":      "pvc-1",
+		"k8s_persistentvolumeclaim_name": "",
+		"k8s_storageclass_name":          "",
+		"k8s_owner_name":                 "",
+		"k8s_node_name":                  "",
+		"system_device":                  "",
+		"obi_disk_physical_device":       "",
+		"server_address":                 "",
+	}
+	const name = "obi_stat_fs_operation_duration_seconds"
+
+	off := prometheus.NewRegistry()
+	newReporter(off).observeFsOpDuration(stat)
+	assert.NotNil(t, gatheredMetric(t, off, name, defaults), "no mount path label by default")
+
+	on := prometheus.NewRegistry()
+	newReporter(on, "system_filesystem_mountpoint", "obi_fs_container_mountpoint", "fs_operation", "k8s_persistentvolume_name").
+		observeFsOpDuration(stat)
+	assert.NotNil(t, gatheredMetric(t, on, name, map[string]string{
+		"system_filesystem_mountpoint": stat.FsIo.Mount.HostPath,
+		"obi_fs_container_mountpoint":  "/data",
+		"fs_operation":                 "write",
+		"k8s_persistentvolume_name":    "pvc-1",
+	}))
+}

@@ -55,15 +55,16 @@ var nfsCgroupV1 = func() bool {
 // newNFSOwnerDecorate returns what newAggregatedStatDecorator does to
 // attribute an NFS RPC stat to its submitting pod (step 19): nil when no
 // pod attribute is selected or Kubernetes is disabled. On a cgroup v2 host
-// it builds s.nfsCgroupIndex once, which Run starts scanning once the
-// pipeline is up; on cgroup v1 it resolves by the pid path instead and
-// needs no index.
+// it uses the cgroup index the families share, which Run starts scanning
+// once the pipeline is up; on cgroup v1 it resolves by the pid path instead
+// and needs no index.
 func (s *Stats) newNFSOwnerDecorate() func(*ebpf.Stat) {
 	if !s.nfsOwner || s.aggDeps.store == nil {
 		return nil
 	}
-	if !s.nfsCgroupV1 && s.nfsCgroupIndex == nil {
-		s.nfsCgroupIndex = statagg.NewCgroupIndex()
+	var index *statagg.CgroupIndex
+	if !s.nfsCgroupV1 {
+		index = s.cgroupIndex()
 	}
-	return stats.NewNFSOwnerDecorator(s.aggDeps.store, s.nfsCgroupIndex, s.nfsCgroupV1)
+	return stats.NewNFSOwnerDecorator(s.aggDeps.store, index, s.nfsCgroupV1)
 }

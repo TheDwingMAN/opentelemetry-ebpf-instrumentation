@@ -35,6 +35,7 @@ func TestInternalPrometheusNames(t *testing.T) {
 		{internal.KubeCacheForwardLag, "obi_kube_cache_forward_lag_seconds"},
 		{internal.BpfNetworkIgnoredPackets, "obi_bpf_network_ignored_packets_total"},
 		{internal.BpfNetworkPackets, "obi_bpf_network_packets_total"},
+		{internal.BpfStorageDrops, "obi_bpf_storage_dropped_operations_total"},
 		{internal.QueueCapacityRatio, "obi_queue_capacity_ratio"},
 	}
 
@@ -76,6 +77,7 @@ func TestInternalMetricsAllDeclared(t *testing.T) {
 		"KubeCacheForwardLag":      internal.KubeCacheForwardLag,
 		"BpfNetworkIgnoredPackets": internal.BpfNetworkIgnoredPackets,
 		"BpfNetworkPackets":        internal.BpfNetworkPackets,
+		"BpfStorageDrops":          internal.BpfStorageDrops,
 		"QueueCapacityRatio":       internal.QueueCapacityRatio,
 	} {
 		t.Run(name, func(t *testing.T) {

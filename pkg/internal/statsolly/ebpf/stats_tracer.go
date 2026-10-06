@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,6 +29,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	ebpfconvenience "go.opentelemetry.io/obi/pkg/internal/ebpf/convenience"
 )
 
@@ -87,6 +89,9 @@ type StatsFetcher struct {
 	objects   *StatsObjects
 	closables []io.Closer
 	nfs       *nfsRPC
+	// fsAccum is the filesystem aggregation map in use, nil when the
+	// filesystem programs emit ring buffer events.
+	fsAccum *ebpf.Map
 }
 
 func tlog() *slog.Logger {
@@ -94,7 +99,8 @@ func tlog() *slog.Logger {
 }
 
 func NewStatsFetcher(
-	cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, nfsCfg NFSConfig,
+	cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, fsAgg FsAggregation,
+	nfsCfg NFSConfig, metrics imetrics.Reporter,
 ) (*StatsFetcher, error) {
 	tlog := tlog()
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -151,7 +157,10 @@ func NewStatsFetcher(
 		return blockInflightEntries(sysBlockDevicesDir)
 	})
 	blockLoad.emitKinds = blockEmitKinds(*features)
-	consts := statsConstants(cfg, blockLoad)
+	if !features.StorageFS() {
+		fsAgg = FsAggregation{}
+	}
+	consts := statsConstants(cfg, blockLoad, fsAgg)
 
 	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
@@ -280,12 +289,14 @@ func NewStatsFetcher(
 	// collection of its own, when it becomes probeable (network filesystems)
 	// or when the node first mounts a volume of its type (ext4, xfs, btrfs),
 	// so a filesystem the kernel rejects disables only itself.
+	var fsAccum *ebpf.Map
 	if features.StorageFS() {
-		attacher, err := startFsAttacher(tlog, cfg, consts, sharedMaps, &mu)
+		attacher, err := startFsAttacher(tlog, cfg, consts, fsAgg, sharedMaps, &mu, metrics, features.StorageFSSync())
 		if err != nil {
 			tlog.Warn("filesystem probes cannot be loaded; disabling filesystem metrics", "error", err)
 		} else {
 			closables = append(closables, attacher)
+			fsAccum = attacher.accum
 		}
 	}
 
@@ -319,6 +330,7 @@ func NewStatsFetcher(
 		objects:   &objects,
 		closables: closables,
 		nfs:       nfs,
+		fsAccum:   fsAccum,
 	}, nil
 }
 
@@ -361,6 +373,12 @@ func (m *StatsFetcher) NFSRPCMap() *ebpf.Map {
 		return nil
 	}
 	return m.nfs.accum
+}
+
+// FsAccumMap returns the kernel map the filesystem programs aggregate into,
+// or nil when they send ring buffer events or no filesystem program loads.
+func (m *StatsFetcher) FsAccumMap() *ebpf.Map {
+	return m.fsAccum
 }
 
 // storagePlan is what the block programs need done to the stats spec before
@@ -412,7 +430,7 @@ func PrepareStorageSpec(spec *ebpf.CollectionSpec) error {
 // statsConstants returns the load-time constants of every stats collection:
 // the main one and each filesystem's. A collection is given the ones it
 // declares (specConstants), so the values never differ between collections.
-func statsConstants(cfg *config.EBPFTracer, blockLoad blockLoadPlan) map[string]any {
+func statsConstants(cfg *config.EBPFTracer, blockLoad blockLoadPlan, fsAgg FsAggregation) map[string]any {
 	var wantQueueDepth uint8
 	if blockLoad.wantQueueDepth {
 		wantQueueDepth = 1
@@ -422,8 +440,41 @@ func statsConstants(cfg *config.EBPFTracer, blockLoad blockLoadPlan) map[string]
 		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
 		"blk_want_queue_depth":    wantQueueDepth,
 		"blk_emit_kinds":          blockLoad.emitKinds,
+		"fs_emit_mode":            fsEmitMode(fsAgg),
+		"fs_hist_exp":             boolConst(fsAgg.Enabled && fsAgg.Exponential),
+		"fs_bounds_ns":            fsKernelBounds(fsAgg.BoundsNs),
 	}
 }
+
+func boolConst(b bool) uint8 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func fsEmitMode(fsAgg FsAggregation) uint8 {
+	if fsAgg.Enabled {
+		return uint8(FsIoFsEmitKindFsEmitAgg)
+	}
+	return uint8(FsIoFsEmitKindFsEmitRingbuf)
+}
+
+// fsKernelBounds returns fs_bounds_ns: bounds, padded with math.MaxUint64 to
+// the exponential layout's size, which the explicit layout's search reads the
+// first entries of. Bounds beyond it are dropped: the layout never has them.
+func fsKernelBounds(bounds []uint64) [fsHistMaxBounds]uint64 {
+	var padded [fsHistMaxBounds]uint64
+	n := copy(padded[:], bounds)
+	for i := n; i < len(padded); i++ {
+		padded[i] = math.MaxUint64
+	}
+	return padded
+}
+
+// fsHistMaxBounds is k_stat_hist_exp_max_bounds (bpf/statsolly/hist.h), the
+// size of fs_bounds_ns.
+const fsHistMaxBounds = 128
 
 // specConstants returns the members of consts that spec declares.
 func specConstants(spec *ebpf.CollectionSpec, consts map[string]any) map[string]any {

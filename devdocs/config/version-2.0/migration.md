@@ -416,6 +416,8 @@ include:
 | `jvm_runtime_metrics.sampling_interval` | No v2 field exists. Keep the default or remain on v1 if the override is required. |
 | `attributes.instance_id.dns` | V2 can represent explicit `host.name` and `host.id` overrides, but not this DNS lookup control. |
 | `ebpf.stats_wakeup_data_bytes` | No v2 field exists. Keep v1 when non-default stats wakeup behavior is required. |
+| `ebpf.stats_storage_per_event` | No v2 field exists. Keep v1 to export storage metrics per event instead of aggregating them in the kernel. |
+| `ebpf.stats_storage_exponential_histograms` | No v2 field exists. Keep v1 to opt into exponential kernel histograms for storage metrics. |
 | Selector `name` or `namespace`, any per-selector `metrics.features` or `sampler`, and refinements on exclusion selectors | The current v2 rules cannot preserve these fields. Express supported identity criteria as rule matches; otherwise keep v1. |
 | Selector `exports` containing `logs` | V2 rule export refinements represent traces and metrics only. Remove the log-specific override only after verifying equivalent behavior, or keep v1. |
 | Multiple include selectors that mix explicit and omitted `exports`, or mix explicit and omitted `routes` | V1 layers each refinement field across every matching selector, while v2 applies one winning rule and resets its omitted refinements. Refactor the selectors so each effective selector states its intended refinement, then test both overlapping and selector-only matches. If behavior depends on conditional inheritance from another selector, keep v1. The command rejects the mixed shape rather than broadening telemetry or changing routes. |

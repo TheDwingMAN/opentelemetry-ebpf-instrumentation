@@ -87,6 +87,9 @@ enum fs_op : u8 {
     fs_op_write = 1,
     fs_op_fsync = 2,
     fs_op_fdatasync = 3, // fdatasync(2): flush data without metadata
+    fs_op_sync = 4,
+    fs_op_syncfs = 5,
+    fs_op_sync_file_range = 6,
 };
 
 typedef struct fs_io {

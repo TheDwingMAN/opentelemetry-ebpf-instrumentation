@@ -403,3 +403,75 @@ func TestStatMetricsExporter_FsOmitsEmptyAttributes(t *testing.T) {
 		assert.ElementsMatch(ct, want, got)
 	}, timeout, 100*time.Millisecond)
 }
+
+// Selected mount paths are attributes of the series that have them and are
+// left out of the others, never an empty string.
+func TestStatMetricsExporter_FsMountpointsWhenSelected(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	selection := attributes.Selection{
+		attributes.StatFsIO.Section: attributes.InclusionLists{
+			Include: []string{"fs_operation", "system_filesystem_mountpoint", "obi_fs_container_mountpoint"},
+		},
+	}
+	selection.Normalize()
+	otelExporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{
+			OTELMetricsExporter:   &otelcfg.MetricsExporterInstancer{Cfg: cfg},
+			MetricAttributeGroups: attributes.GroupKubernetes,
+		},
+		&StatMetricsConfig{
+			Metrics:     cfg,
+			SelectorCfg: &attributes.SelectorConfig{SelectionCfg: selection},
+			CommonCfg:   &perapp.GlobalMetricsConfig{Features: export.FeatureStorageFSIo},
+		}, stats)(ctx)
+	require.NoError(t, err)
+	go otelExporter(ctx)
+
+	onVolume := &ebpf.Stat{
+		Type: ebpf.StatTypeFsIo,
+		FsIo: &ebpf.FsIo{
+			Fs: uint8(ebpf.CodeFsXFS), Op: uint8(ebpf.CodeFsOpWrite), Bytes: 4096,
+			Mount: &ebpf.MountAttrs{PVName: "pvc-1", HostPath: "/var/lib/kubelet/pods/u/volumes/kubernetes.io~csi/pvc-1/mount", ContainerPath: "/data"},
+		},
+	}
+	noVolume := &ebpf.Stat{
+		Type: ebpf.StatTypeFsIo,
+		FsIo: &ebpf.FsIo{Fs: uint8(ebpf.CodeFsXFS), Op: uint8(ebpf.CodeFsOpRead), Bytes: 512},
+	}
+	stats.Send([]*ebpf.Stat{onVolume, noVolume})
+
+	want := []map[string]string{
+		{
+			"fs.operation":                 "write",
+			"system.filesystem.mountpoint": onVolume.FsIo.Mount.HostPath,
+			"obi.fs.container.mountpoint":  "/data",
+		},
+		{"fs.operation": "read"},
+	}
+	var got []map[string]string
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case rec := <-otlp.Records():
+				if rec.Name == "obi.stat.fs.io" && !slices.ContainsFunc(got, func(a map[string]string) bool { return maps.Equal(a, rec.Attributes) }) {
+					got = append(got, rec.Attributes)
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.ElementsMatch(ct, want, got)
+	}, timeout, 100*time.Millisecond)
+}

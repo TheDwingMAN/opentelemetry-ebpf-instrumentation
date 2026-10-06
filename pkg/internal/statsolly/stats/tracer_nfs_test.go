@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/statagg"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/statagg/stataggtest"
+	"go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 )
 
 // Each NFS flag makes the family aggregate its metric only: the exporters
@@ -37,7 +38,7 @@ func TestNFSRPCFamilyMetricsFollowTheFlags(t *testing.T) {
 		{export.FeatureStorageNFSErrors, all[1:2]},
 		{export.FeatureStorageNFSRetransmits, all[2:]},
 	} {
-		n, err := stataggtest.NewNFS(layout, tc.features, nil)
+		n, err := stataggtest.NewNFS(stats.NewNFSRPCFamily, layout, tc.features, nil)
 		require.NoError(t, err)
 		for _, name := range all {
 			assert.Equal(t, contains(tc.want, name), n.Registry.Handles(name), "%s with %v", name.OTEL, tc.features)
@@ -105,7 +106,7 @@ func BenchmarkNFSRPCScrape(b *testing.B) {
 	for _, keys := range []int{64, 1024, 4096} {
 		b.Run(strconv.Itoa(keys), func(b *testing.B) {
 			clock := &benchClock{now: time.Unix(1_700_000_000, 0)}
-			n, err := stataggtest.NewNFS(layout, export.FeatureStorageNFS, nil, func(c *statagg.Config) {
+			n, err := stataggtest.NewNFS(stats.NewNFSRPCFamily, layout, export.FeatureStorageNFS, nil, func(c *statagg.Config) {
 				c.MinPollInterval = time.Nanosecond
 				c.TickInterval = time.Hour
 				c.Clock = clock.Now

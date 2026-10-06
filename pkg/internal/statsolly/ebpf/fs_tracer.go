@@ -12,10 +12,13 @@ import (
 	"iter"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/btf"
+	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
+	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/obi/pkg/config"
 	ebpfconvenience "go.opentelemetry.io/obi/pkg/internal/ebpf/convenience"
@@ -27,7 +30,7 @@ import (
 // filesystem the kernel rejects then disables only itself, and a load copies
 // no TCP or block map.
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -target amd64,arm64 -output-stem stats_fsio FsIo ../../../../bpf/statsolly/fs_io.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type fs_emit_kind -type fs_drop_reason -target amd64,arm64 -output-stem stats_fsio FsIo ../../../../bpf/statsolly/fs_io.c -- -I../../../../bpf
 
 // Program names of the FsIo object.
 const (
@@ -328,9 +331,9 @@ func verifierFsProbes(plans []fsAttachPlan, kernel *btf.Spec) []fsProbe {
 		FsyncSym:      inKernel(fsStandIns.fsync),
 		SpliceReadSym: inKernel(fsStandIns.spliceRead),
 	}
-	planned := map[FsTypeCode]fsAttachPlan{}
+	planned := map[fsPlanKey]fsAttachPlan{}
 	for _, plan := range plans {
-		planned[plan.Fs] = plan
+		planned[plan.Key()] = plan
 	}
 	or := func(sym, standIn string) string {
 		if sym != "" {
@@ -342,7 +345,7 @@ func verifierFsProbes(plans []fsAttachPlan, kernel *btf.Spec) []fsProbe {
 	var probes []fsProbe
 	for _, tgt := range fsTargets {
 		fentry := standIn
-		if plan, ok := planned[tgt.Fs]; ok && plan.UseFentry {
+		if plan, ok := planned[tgt.Key()]; ok && plan.UseFentry {
 			fentry = fsAttachPlan{
 				ReadSym: plan.ReadSym, WriteSym: plan.WriteSym,
 				FsyncSym:      or(plan.FsyncSym, standIn.FsyncSym),
@@ -361,7 +364,7 @@ func verifierFsProbes(plans []fsAttachPlan, kernel *btf.Spec) []fsProbe {
 		}
 		probes = append(probes, fsPlanProbes(kprobe)...)
 	}
-	return probes
+	return append(probes, verifierFsSyncProbes(kernel)...)
 }
 
 // fsVerifierLogSize is the initial verifier log buffer of a filesystem load,
@@ -381,13 +384,18 @@ type fsLoader struct {
 	sharedMaps map[string]*ebpf.Map
 	mu         *sync.Mutex
 	btf        *btfBurst
+	// taskBTF is fs_task_btf: fentry/fexit programs keep their start in
+	// task storage. Cleared for good the first time a load that uses it
+	// fails and one without it succeeds.
+	taskBTF bool
 	// newCollection is ebpf.NewCollectionWithOptions, replaceable in tests
 	// that cannot load BPF.
 	newCollection func(*ebpf.CollectionSpec, ebpf.CollectionOptions) (*ebpf.Collection, error)
 }
 
 func newFsLoader(
-	log *slog.Logger, cfg *config.EBPFTracer, consts map[string]any, sharedMaps map[string]*ebpf.Map, mu *sync.Mutex,
+	log *slog.Logger, cfg *config.EBPFTracer, consts map[string]any, fsAgg FsAggregation,
+	sharedMaps map[string]*ebpf.Map, mu *sync.Mutex,
 ) (*fsLoader, error) {
 	spec, err := LoadFsIo()
 	if err != nil {
@@ -396,6 +404,14 @@ func newFsLoader(
 	// Sized as the stats collection sizes its maps, or the shared ring
 	// buffer it created would not match this spec's.
 	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
+	if err := setMapEntries(spec, fsAccumEntries(fsAgg)); err != nil {
+		return nil, fmt.Errorf("sizing filesystem maps: %w", err)
+	}
+
+	taskBTF := haveTaskStorage()
+	if !taskBTF {
+		stubTaskStorage(spec)
+	}
 
 	return &fsLoader{
 		log:           log,
@@ -404,8 +420,49 @@ func newFsLoader(
 		sharedMaps:    sharedMaps,
 		mu:            mu,
 		btf:           kernelBTFCache,
+		taskBTF:       taskBTF,
 		newCollection: ebpf.NewCollectionWithOptions,
 	}, nil
+}
+
+// fsAccumEntries sizes the aggregation map not in use, or both in
+// per-event mode, at one entry: nothing touches them.
+func fsAccumEntries(fsAgg FsAggregation) map[string]uint32 {
+	entries := map[string]uint32{}
+	switch {
+	case !fsAgg.Enabled:
+		entries[FsIoMapFsIoAccum] = unusedMapEntries
+		entries[FsIoMapFsIoAccumExp] = unusedMapEntries
+	case fsAgg.Exponential:
+		entries[FsIoMapFsIoAccum] = unusedMapEntries
+	default:
+		entries[FsIoMapFsIoAccumExp] = unusedMapEntries
+	}
+	return entries
+}
+
+// fsAccumMapName is the aggregation map the programs add into.
+func fsAccumMapName(fsAgg FsAggregation) string {
+	if fsAgg.Exponential {
+		return FsIoMapFsIoAccumExp
+	}
+	return FsIoMapFsIoAccum
+}
+
+// haveTaskStorage reports whether the kernel has task storage maps (5.11).
+// Whether tracing programs may use them is only known once one loads.
+var haveTaskStorage = func() bool {
+	return features.HaveMapType(ebpf.TaskStorage) == nil
+}
+
+// stubTaskStorage replaces fs_start_task with a one-entry hash map, for a
+// kernel that cannot create task storage: with fs_task_btf clear no program
+// reaches it, but every load still creates the maps its programs reference.
+func stubTaskStorage(spec *ebpf.CollectionSpec) {
+	m := spec.Maps[FsIoMapFsStartTask]
+	m.Type = ebpf.Hash
+	m.Flags = 0
+	m.MaxEntries = unusedMapEntries
 }
 
 // sharedMap returns one of the PinInternal maps of the filesystem
@@ -432,8 +489,23 @@ func (l *fsLoader) attach(plan fsAttachPlan) (io.Closer, error) {
 	starts := l.sharedMaps[FsIoMapFsStart]
 	l.mu.Unlock()
 
-	a := &fsAttachment{coll: coll, clearStarts: func() error { return clearMapFsStarts(starts, plan.Fs) }}
-	a.probes, a.links, err = attachFsProbes(coll.Programs, plan)
+	a := &fsAttachment{
+		coll:      coll,
+		startHash: l.startsInHash(plan),
+		// Task storage cannot be walked from userspace; its leftover
+		// starts go stale after k_fs_start_stale_ns, or with their thread.
+		// fs_start has no variant field (2.4), so this clears every start of
+		// plan.Fs: harmless when plan is the only attachment of that Fs, but
+		// a failure of one CIFS variant mid-setup, while a sibling variant
+		// is already live, can wipe a start the sibling's threads are about
+		// to look up -- that in-flight call then loses its one sample, the
+		// same degradation an exit probe detaching mid-call already causes
+		// (fsAttachment.Close above). Narrow and failure-path-only: left
+		// undone pending real-world CIFS traffic to size it (UNVERIFIED,
+		// step 12).
+		clearStarts: func() error { return clearMapFsStarts(starts, plan.Fs) },
+	}
+	a.probes, a.links, err = attachFsProbes(l.log, coll.Programs, plan)
 	if err != nil {
 		a.Close()
 		return nil, err
@@ -441,7 +513,32 @@ func (l *fsLoader) attach(plan fsAttachPlan) (io.Closer, error) {
 	return a, nil
 }
 
+// startsInHash reports whether plan's programs keep their starts in the
+// fs_start hash map rather than in task storage.
+func (l *fsLoader) startsInHash(plan fsAttachPlan) bool {
+	return !plan.UseFentry || !l.taskBTF
+}
+
 func (l *fsLoader) load(plan fsAttachPlan) (*ebpf.Collection, error) {
+	coll, err := l.loadOnce(plan)
+	if err == nil || !plan.UseFentry || !l.taskBTF {
+		return coll, err
+	}
+
+	// Task storage for tracing programs came after fentry (5.11 and later):
+	// a kernel may run the programs without it.
+	l.taskBTF = false
+	coll, retryErr := l.loadOnce(plan)
+	if retryErr != nil {
+		l.taskBTF = true
+		return nil, err
+	}
+	l.log.Info("filesystem fentry/fexit programs cannot use task storage on this kernel;"+
+		" their starts go to the fs_start hash map", "fs", fsTypeStr(plan.Fs), "error", err)
+	return coll, nil
+}
+
+func (l *fsLoader) loadOnce(plan fsAttachPlan) (*ebpf.Collection, error) {
 	spec, opts, err := l.prepare(plan)
 	if err != nil {
 		return nil, err
@@ -481,7 +578,9 @@ func (l *fsLoader) prepare(plan fsAttachPlan) (*ebpf.CollectionSpec, ebpf.Collec
 	if err := keepFsPrograms(spec, fsPlanProbes(plan)); err != nil {
 		return nil, ebpf.CollectionOptions{}, err
 	}
-	if err := ebpfconvenience.RewriteConstants(spec, specConstants(spec, l.consts)); err != nil {
+	consts := specConstants(spec, l.consts)
+	consts[fsTaskBTFConst] = boolConst(l.taskBTF)
+	if err := ebpfconvenience.RewriteConstants(spec, consts); err != nil {
 		return nil, ebpf.CollectionOptions{}, fmt.Errorf("rewriting filesystem BPF constants: %w", err)
 	}
 	opts, err := ebpfconvenience.ResolveMaps(spec, l.sharedMaps, l.mu)
@@ -526,14 +625,36 @@ func (l *fsLoader) relocationTargets(module string) (*btf.Spec, []*btf.Spec, boo
 	return kernel, []*btf.Spec{spec}, true
 }
 
+// fsTaskBTFConst names fs_task_btf, the one filesystem constant the loader
+// sets rather than statsConstants.
+const fsTaskBTFConst = "fs_task_btf"
+
 // fsAttachment is one filesystem's collection and the links of its probes.
 type fsAttachment struct {
 	coll *ebpf.Collection
+	// startHash is set when the programs keep their starts in fs_start.
+	startHash bool
 	// probes[i] is the probe links[i] attached.
 	probes []fsProbe
 	links  []io.Closer
 	// clearStarts deletes the filesystem's fs_start entries.
 	clearStarts func() error
+	// missed[i] is the kprobe "missed" count links[i] last reported, kept
+	// only for kretprobe-mode exit links (pollMissedKretprobes). nil until
+	// the first poll.
+	missed []uint64
+}
+
+// pollMissedKretprobes reports the kretprobe misses (kprobe nmissed) this
+// filesystem's kprobe-mode return probes (the step 3 fentry -> kprobe
+// re-plan) accumulated since the last call: new misses since the last poll,
+// summed across every return probe. A fentry/fexit attachment reports 0,
+// since a tracing link's Info() is not a PerfEvent one.
+func (a *fsAttachment) pollMissedKretprobes() uint64 {
+	if a.missed == nil {
+		a.missed = make([]uint64, len(a.links))
+	}
+	return pollMissedKretprobes(a.probes, a.links, a.missed)
 }
 
 // Close detaches the entry probes, then the exit probes, unloads the
@@ -599,14 +720,97 @@ func clearFsStarts(entries iter.Seq2[uint64, FsIoFsStartVal], del func(uint64) e
 	return errors.Join(errs...)
 }
 
+// StartsInHash reports whether the attachment's programs keep their starts in
+// the fs_start hash map, which then needs sweeping.
+func (a *fsAttachment) StartsInHash() bool { return a.startHash }
+
+// fsStartMaxAge is how old an fs_start entry must be before the sweep deletes
+// it: its thread died mid-call, or its exit probe was lost. The programs
+// already treat a start older than k_fs_start_stale_ns (30 s) as an orphan
+// on the thread's next call, but only the sweep frees the entry of a thread
+// that makes no further call; without it, a node whose threads die inside
+// filesystem calls (a hung NFS server, a wedged FUSE daemon) would fill the
+// map and stop timing new calls. A call really in flight for this long
+// loses its one sample.
+const fsStartMaxAge = 10 * time.Minute
+
+// sweepMapFsStarts deletes the entries of the fs_start map m older than
+// maxAge at now, a CLOCK_MONOTONIC time as bpf_ktime_get_ns returns it.
+func sweepMapFsStarts(m *ebpf.Map, now uint64, maxAge time.Duration) (int, error) {
+	var (
+		id  uint64
+		val FsIoFsStartVal
+	)
+	it := m.Iterate()
+	entries := func(yield func(uint64, FsIoFsStartVal) bool) {
+		for it.Next(&id, &val) {
+			if !yield(id, val) {
+				return
+			}
+		}
+	}
+	n, err := sweepFsStarts(entries, func(id uint64) error { return m.Delete(id) }, now, maxAge)
+	return n, errors.Join(err, it.Err())
+}
+
+// sweepFsStarts deletes, through del, the fs_start entries among entries that
+// are older than maxAge at now, and returns how many it deleted.
+func sweepFsStarts(
+	entries iter.Seq2[uint64, FsIoFsStartVal], del func(uint64) error, now uint64, maxAge time.Duration,
+) (int, error) {
+	var stale []uint64
+	for id, val := range entries {
+		if val.Ts != 0 && now > val.Ts && now-val.Ts > uint64(maxAge) {
+			stale = append(stale, id)
+		}
+	}
+	var errs []error
+	deleted := 0
+	for _, id := range stale {
+		switch err := del(id); {
+		case err == nil:
+			deleted++
+		case !errors.Is(err, ebpf.ErrKeyNotExist):
+			errs = append(errs, err)
+		}
+	}
+	return deleted, errors.Join(errs...)
+}
+
+// monotonicNow returns CLOCK_MONOTONIC in nanoseconds, the clock of
+// bpf_ktime_get_ns.
+func monotonicNow() uint64 {
+	var ts unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &ts); err != nil {
+		return 0
+	}
+	return uint64(ts.Nano())
+}
+
+// readFsDrops returns the fs_drops counters, summed across CPUs, indexed by
+// enum fs_drop_reason.
+func readFsDrops(m *ebpf.Map) ([]uint64, error) {
+	drops := make([]uint64, FsIoFsDropReasonFsDropReasons)
+	var perCPU []uint64
+	for reason := range drops {
+		if err := m.Lookup(uint32(reason), &perCPU); err != nil {
+			return nil, err
+		}
+		for _, n := range perCPU {
+			drops[reason] += n
+		}
+	}
+	return drops, nil
+}
+
 // attachFsProbes attaches plan's probes to the loaded programs, and returns
 // the probes it attached and their links. On a failure, those are the ones
 // attached before it, for the caller to close.
-func attachFsProbes(programs map[string]*ebpf.Program, plan fsAttachPlan) ([]fsProbe, []io.Closer, error) {
+func attachFsProbes(log *slog.Logger, programs map[string]*ebpf.Program, plan fsAttachPlan) ([]fsProbe, []io.Closer, error) {
 	probes := fsPlanProbes(plan)
 	links := make([]io.Closer, 0, len(probes))
 	for i, p := range probes {
-		l, err := attachFsProbe(programs[p.prog], p, plan.UseFentry)
+		l, err := attachFsProbe(log, programs[p.prog], p, plan.UseFentry)
 		if err != nil {
 			return probes[:i], links, fmt.Errorf("attaching %s to %s: %w", p.prog, p.sym, err)
 		}
@@ -615,7 +819,10 @@ func attachFsProbes(programs map[string]*ebpf.Program, plan fsAttachPlan) ([]fsP
 	return probes, links, nil
 }
 
-func attachFsProbe(prog *ebpf.Program, p fsProbe, fentry bool) (link.Link, error) {
+// attachFsProbe attaches one probe. A kprobe-mode return probe goes through
+// attachKretprobe (2.4, step 14): it needs the same RetprobeMaxActive
+// headroom as the sync syscalls' kretprobes, for the same reason.
+func attachFsProbe(log *slog.Logger, prog *ebpf.Program, p fsProbe, fentry bool) (link.Link, error) {
 	if prog == nil {
 		return nil, errors.New("program not loaded")
 	}
@@ -625,7 +832,7 @@ func attachFsProbe(prog *ebpf.Program, p fsProbe, fentry bool) (link.Link, error
 	case fentry:
 		return link.AttachTracing(link.TracingOptions{Program: prog, AttachType: ebpf.AttachTraceFEntry})
 	case p.exit:
-		return link.Kretprobe(p.sym, prog, nil)
+		return attachKretprobe(log, p.sym, prog)
 	default:
 		return link.Kprobe(p.sym, prog, nil)
 	}

@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
 )
 
 type StatsFetcher struct{}
@@ -23,7 +24,9 @@ type NFSConfig struct {
 	CgroupV1     bool
 }
 
-func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig, _ NFSConfig) (*StatsFetcher, error) {
+func NewStatsFetcher(
+	_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig, _ FsAggregation, _ NFSConfig, _ imetrics.Reporter,
+) (*StatsFetcher, error) {
 	return nil, nil
 }
 
@@ -41,5 +44,9 @@ func (m *StatsFetcher) DebugEventsMap() *ciliumebpf.Map {
 }
 
 func (m *StatsFetcher) NFSRPCMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) FsAccumMap() *ciliumebpf.Map {
 	return nil
 }

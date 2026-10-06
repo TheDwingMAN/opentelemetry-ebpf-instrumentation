@@ -228,3 +228,53 @@ func TestFsIoPIDCarriesTheMount(t *testing.T) {
 	_, _, _, ok = fsIoPID(&ebpf.Stat{Type: ebpf.StatTypeBlockIo})
 	assert.False(t, ok)
 }
+
+func TestFsMountpointsAreOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		features      export.Features
+		kube          bool
+		include       []string
+		host, cont    bool
+		includeMetric attributes.Name
+	}{
+		{name: "default", features: export.FeatureStorageFS, kube: true},
+		{
+			name: "host selected", features: export.FeatureStorageFS, kube: true,
+			include: []string{"system_filesystem_mountpoint"}, host: true, includeMetric: attributes.StatFsIO,
+		},
+		{
+			name: "both selected on another fs metric", features: export.FeatureStorageFS, kube: true,
+			include: []string{"system_filesystem_mountpoint", "obi_fs_container_mountpoint"},
+			host:    true, cont: true, includeMetric: attributes.StatFsOperationDuration,
+		},
+		{
+			name: "selected without kubernetes", features: export.FeatureStorageFS,
+			include: []string{"system_filesystem_mountpoint"}, includeMetric: attributes.StatFsIO,
+		},
+		{
+			name: "selected without the fs feature", features: export.FeatureStorageBlock, kube: true,
+			include: []string{"system_filesystem_mountpoint"}, includeMetric: attributes.StatFsIO,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			groups := attributes.UndefinedGroup
+			if tc.kube {
+				groups.Add(attributes.GroupKubernetes)
+			}
+			cfg := &obi.Config{Metrics: perapp.GlobalMetricsConfig{Features: tc.features}}
+			if tc.include != nil {
+				cfg.Attributes.Select = attributes.Selection{
+					tc.includeMetric.Section: attributes.InclusionLists{Include: tc.include},
+				}
+				cfg.Attributes.Select.Normalize()
+			}
+			s := Stats{ctxInfo: &global.ContextInfo{MetricAttributeGroups: groups}, cfg: cfg}
+
+			mp := s.fsMountpoints(&attributes.SelectorConfig{SelectionCfg: cfg.Attributes.Select})
+
+			assert.Equal(t, tc.host, mp.Host)
+			assert.Equal(t, tc.cont, mp.ContainerPath != nil)
+		})
+	}
+}

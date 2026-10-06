@@ -626,11 +626,13 @@ groups:
     unit: "s"
     stability: development
     brief: >
-      Latency of a single filesystem read, write, fsync or fdatasync as the
-      application experiences it, broken down by filesystem type and
-      operation. Buffered writes (no O_SYNC, O_DIRECT or fsync) end once the
-      data is in the page cache, so their latency is the copy into memory; the
-      server's or device's latency shows in fsync and fdatasync.
+      Latency of a single filesystem read, write, fsync, fdatasync, sync,
+      syncfs or sync_file_range as the application experiences it, broken
+      down by filesystem type and operation. Buffered writes (no O_SYNC,
+      O_DIRECT or fsync) end once the data is in the page cache, so their
+      latency is the copy into memory; the server's or device's latency
+      shows in fsync, fdatasync and the sync syscalls (`storage_fs_sync`,
+      waiting `sync_file_range` calls only, D7).
     attributes:
       - ref: system.filesystem.type
         requirement_level: recommended
@@ -671,6 +673,15 @@ groups:
       - ref: k8s.storageclass.name
         requirement_level:
           conditionally_required: if Kubernetes decoration is enabled and the PersistentVolume is Bound
+      - ref: system.filesystem.mountpoint
+        requirement_level: opt_in
+        note: >
+          The kubelet's mount path of the volume on the host, never the
+          container's (see `obi.fs.container.mountpoint`). The pod's own
+          mount for a ReadWriteMany volume. Omitted when the I/O went
+          through no kubelet volume, and for `sync`.
+      - ref: obi.fs.container.mountpoint
+        requirement_level: opt_in
 
   # Companion to the histogram above: volume of data moved by the same
   # operations. Published under obi.* rather than system.filesystem.* so it
@@ -724,6 +735,15 @@ groups:
       - ref: k8s.storageclass.name
         requirement_level:
           conditionally_required: if Kubernetes decoration is enabled and the PersistentVolume is Bound
+      - ref: system.filesystem.mountpoint
+        requirement_level: opt_in
+        note: >
+          The kubelet's mount path of the volume on the host, never the
+          container's (see `obi.fs.container.mountpoint`). The pod's own
+          mount for a ReadWriteMany volume. Omitted when the I/O went
+          through no kubelet volume, and for `sync`.
+      - ref: obi.fs.container.mountpoint
+        requirement_level: opt_in
 
   # Failed filesystem operations, keyed by the upstream error.type attribute so
   # the failure mode (ESTALE, EIO, ENOSPC, ETIMEDOUT, ...) is queryable without
@@ -782,6 +802,15 @@ groups:
       - ref: k8s.storageclass.name
         requirement_level:
           conditionally_required: if Kubernetes decoration is enabled and the PersistentVolume is Bound
+      - ref: system.filesystem.mountpoint
+        requirement_level: opt_in
+        note: >
+          The kubelet's mount path of the volume on the host, never the
+          container's (see `obi.fs.container.mountpoint`). The pod's own
+          mount for a ReadWriteMany volume. Omitted when the I/O went
+          through no kubelet volume, and for `sync`.
+      - ref: obi.fs.container.mountpoint
+        requirement_level: opt_in
 
   # NFS client RPC stats. Emitted when the `storage_nfs` feature (or one of
   # `storage_nfs_duration`, `storage_nfs_errors`, `storage_nfs_retransmits`)

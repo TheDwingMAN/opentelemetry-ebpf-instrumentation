@@ -55,6 +55,8 @@ type PrometheusReporter struct {
 	bpfPacketCount        prometheus.Counter
 	bpfIgnoredPacketCount prometheus.Counter
 
+	bpfStorageDrops *prometheus.CounterVec
+
 	queueCapacityRatio *prometheus.GaugeVec
 }
 
@@ -150,6 +152,10 @@ func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.Promet
 			Name: internalNames.BpfNetworkPackets.Prom,
 			Help: "How many network packets have been internally accounted",
 		}),
+		bpfStorageDrops: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: internalNames.BpfStorageDrops.Prom,
+			Help: "Operations the storage eBPF programs could not record, missing from the storage metrics",
+		}, []string{attr.BpfDropReason.Prom()}),
 		queueCapacityRatio: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: internalNames.QueueCapacityRatio.Prom,
 			Help: "Ratio [0-1] between the unread messages of an internal Go channel and its total capacity",
@@ -184,6 +190,7 @@ func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.Promet
 		pr.informerLag,
 		pr.bpfPacketCount,
 		pr.bpfIgnoredPacketCount,
+		pr.bpfStorageDrops,
 		pr.queueCapacityRatio,
 	}
 	if pr.avoidedServices != nil {
@@ -283,6 +290,10 @@ func (p *PrometheusReporter) BPFPacketStats(count, ignored uint64) {
 	p.bpfPacketCount.Add(float64(count - p.totalPackets))
 	p.bpfIgnoredPacketCount.Add(float64(ignored - p.totalIgnoredPackets))
 	p.totalPackets, p.totalIgnoredPackets = count, ignored
+}
+
+func (p *PrometheusReporter) BpfStorageDrops(reason string, dropped uint64) {
+	p.bpfStorageDrops.WithLabelValues(reason).Add(float64(dropped))
 }
 
 func (p *PrometheusReporter) QueueBufferUtilization(subscriber string, ratio float64) {

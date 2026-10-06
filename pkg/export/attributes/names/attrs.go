@@ -262,6 +262,9 @@ const (
 	BpfProbeName = Name("bpf.probe.name")
 	BpfProbeType = Name("bpf.probe.type")
 
+	// BpfDropReason says why an eBPF program could not record an operation.
+	BpfDropReason = Name("bpf.drop.reason")
+
 	TelemetryType = Name("telemetry.type")
 	Subscriber    = Name("subscriber")
 )
@@ -401,5 +404,7 @@ const (
 	FsOperation               = Name("fs.operation")
 	// NFSOperationName is the NFSv4 operation of an NFS client RPC, whose
 	// ONC RPC procedure is always COMPOUND.
-	NFSOperationName = Name(semconv.NfsOperationNameKey)
+	NFSOperationName      = Name(semconv.NfsOperationNameKey)
+	FsMountpoint          = Name("system.filesystem.mountpoint")
+	FsContainerMountpoint = Name("obi.fs.container.mountpoint")
 )

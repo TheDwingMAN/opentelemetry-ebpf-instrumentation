@@ -62,6 +62,18 @@ type EBPFTracer struct {
 	// The value should be well below ring buffer size / flushInterval to avoid event loss.
 	StatsWakeupDataBytes int `yaml:"stats_wakeup_data_bytes" env:"OTEL_EBPF_STATS_WAKEUP_DATA_BYTES" validate:"gte=0"`
 
+	// StatsStoragePerEvent sends each storage operation to userspace as a ring buffer event
+	// instead of aggregating the storage metrics in the kernel (today the filesystem metrics).
+	// It costs userspace CPU per operation and exists for troubleshooting and comparisons;
+	// the series and their counts are the same.
+	StatsStoragePerEvent bool `yaml:"stats_storage_per_event" env:"OTEL_EBPF_STATS_STORAGE_PER_EVENT" validate:"boolean"`
+
+	// StatsStorageExponentialHistograms counts the storage histograms aggregated in the kernel in
+	// base-2 exponential buckets at scale 2, exported as OTLP exponential and Prometheus native
+	// histograms, with no classic buckets. They are also selected when the OTLP exporter's
+	// histogram_aggregation is base2_exponential_bucket_histogram.
+	StatsStorageExponentialHistograms bool `yaml:"stats_storage_exponential_histograms" env:"OTEL_EBPF_STATS_STORAGE_EXPONENTIAL_HISTOGRAMS" validate:"boolean"`
+
 	// BatchLength allows specifying how many items (traces/metrics) will be batched at the initial
 	// stage before being forwarded to the next stage
 	// Must be at least 1

@@ -616,3 +616,28 @@ func TestFamily_VariantsWithEqualAttributesMergeOnPrometheusToo(t *testing.T) {
 	require.Len(t, mfs[0].Metric, 1, "one merged series, not one per variant")
 	assert.InDelta(t, 333, mfs[0].Metric[0].GetCounter().GetValue(), 0)
 }
+
+// A series exists from the first count a key adds to it, as a per-event
+// series from its first record: a key that adds only zeros to a counter that
+// skips them exports no series, and a series counted into later starts then.
+func TestFamily_NoSeriesBeforeItCounts(t *testing.T) {
+	tf := newTestFamily(t, 1, diskBounds, func(c *Config) {
+		c.Metrics[1].SkipZero = true // test.io
+	})
+	p := tf.otelProducer(t, cumulative, 0)
+
+	read := blkKey(devA, ebpf.CodeBlockRead, 0)
+	record(tf.m, tf.layout, read, 0, 0, 150_000)
+	got := produce(t, p)
+	assert.Len(t, got["test.duration"].Data.(metricdata.Histogram[float64]).DataPoints, 1)
+	assert.NotContains(t, got, "test.io", "a key that added no bytes")
+
+	tf.clock.Advance(time.Minute)
+	record(tf.m, tf.layout, read, 0, 4096, 150_000)
+	got = produce(t, p)
+	require.Contains(t, got, "test.io")
+	dp := got["test.io"].Data.(metricdata.Sum[int64]).DataPoints
+	require.Len(t, dp, 1)
+	assert.Equal(t, int64(4096), dp[0].Value)
+	assert.Equal(t, tf.clock.Now(), dp[0].StartTime, "the series starts with its first count")
+}

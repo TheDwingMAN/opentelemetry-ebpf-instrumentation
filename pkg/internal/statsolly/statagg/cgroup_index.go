@@ -422,6 +422,25 @@ func walkCgroup(dir string, info fs.FileInfo, s scope, kubepods string, found ma
 	return nil
 }
 
+// CgroupV2 reports whether the host runs the cgroup v2 hierarchy alone,
+// where bpf_get_current_cgroup_id() is the cgroup of the calling thread. On a
+// cgroup v1 or hybrid host it is the unified hierarchy's, the root for every
+// container, and a key's cgroup names no pod.
+func CgroupV2() bool { return cgroupV2(defaultCgroupRoots) }
+
+// cgroupV2 reports whether the first of roots that exists is a cgroup v2
+// root: only its root directory has cgroup.controllers.
+func cgroupV2(roots []string) bool {
+	for _, root := range roots {
+		if !isDir(root) {
+			continue
+		}
+		_, err := os.Stat(filepath.Join(root, "cgroup.controllers"))
+		return err == nil
+	}
+	return false
+}
+
 // PodStore is what ResolvePod needs of the Kubernetes metadata store.
 type PodStore interface {
 	PodContainerByContainerID(containerID string) (*ikube.CachedObjMeta, string)

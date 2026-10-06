@@ -7,7 +7,6 @@ import (
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/statagg"
-	"go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 )
 
 // NFS is the NFS client RPC aggregation map for tests: a map shared by every
@@ -22,14 +21,22 @@ type NFS struct {
 	WantStatus bool
 }
 
-// NewNFS returns an NFS map whose histograms use layout, read into the
-// metrics features enables, whose keys go through decorate. tune changes
-// the family's defaults.
+// NFSFamilyFunc is stats.NewNFSRPCFamily, which this package cannot import:
+// the tests of the stats package use its maps.
+type NFSFamilyFunc func(
+	src statagg.Source, layout *statagg.Layout, features export.Features, decorate func(*ebpf.Stat) bool,
+	tune ...func(*statagg.Config),
+) (*statagg.Family, error)
+
+// NewNFS returns an NFS map whose histograms use layout, read by the family
+// newFamily builds into the metrics features enables, whose keys go through
+// decorate. tune changes the family's defaults.
 func NewNFS(
-	layout *statagg.Layout, features export.Features, decorate func(*ebpf.Stat) bool, tune ...func(*statagg.Config),
+	newFamily NFSFamilyFunc, layout *statagg.Layout, features export.Features, decorate func(*ebpf.Stat) bool,
+	tune ...func(*statagg.Config),
 ) (*NFS, error) {
 	m := NewMemMap(ebpf.NFSRPCKeySize, ebpf.NFSRPCCounters*counterSize+layout.Buckets()*bucketSize, 1)
-	f, err := stats.NewNFSRPCFamily(m, layout, features, decorate, tune...)
+	f, err := newFamily(m, layout, features, decorate, tune...)
 	if err != nil {
 		return nil, err
 	}

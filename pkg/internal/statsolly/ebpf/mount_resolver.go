@@ -67,6 +67,41 @@ type MountInfo struct {
 	// happens with a ReadWriteMany volume. PodUID is then one of several and
 	// must not be used to attribute I/O; the volume itself is still certain.
 	Shared bool
+	// HostPath is where the host's mount table lists the kubelet mount of
+	// the volume, the one the pod reads it through. It is empty when no one
+	// mount is the answer: for a Shared volume, which has one per pod (use
+	// HostPathFor), and for a superblock whose volume could not be named.
+	HostPath string
+	// podPaths holds the HostPath of each pod of a Shared volume. It is
+	// built once per resolution and never modified, so MountInfo values of
+	// one resolution compare equal.
+	podPaths *podHostPaths
+}
+
+// podHostPaths is the kubelet mount path of a Shared volume, by pod UID.
+type podHostPaths struct {
+	byPod map[string]string
+}
+
+// HostPathFor returns the host path of the kubelet mount the pod with uid
+// reads the volume through: HostPath for a volume with one mount, the pod's
+// own mount for a Shared one, and "" when that pod has none. It never
+// answers with another pod's path.
+func (m MountInfo) HostPathFor(uid string) string {
+	if !m.Shared {
+		return m.HostPath
+	}
+	if m.podPaths == nil {
+		return ""
+	}
+	return m.podPaths.byPod[uid]
+}
+
+// WithPodHostPaths returns m with the host path of each pod of a Shared
+// volume set. Resolution does it itself; tests of what reads it use this.
+func (m MountInfo) WithPodHostPaths(byPod map[string]string) MountInfo {
+	m.podPaths = &podHostPaths{byPod: byPod}
+	return m
 }
 
 // MountKey identifies the mount a filesystem operation went through: the
@@ -246,10 +281,6 @@ func scanForMount(key MountKey) (info MountInfo, found, pending bool) {
 
 	target := fmtDev(key.Dev)
 
-	type candidate struct {
-		info       MountInfo
-		mountPoint string
-	}
 	var cands []candidate
 	for _, m := range mounts {
 		if m.MajorMinorVer != target {
@@ -276,6 +307,11 @@ func scanForMount(key MountKey) (info MountInfo, found, pending bool) {
 			if c.info.PVName != found.PVName {
 				found.PVName = ""
 			}
+		}
+		// The host path is only an answer for one volume; a volume with a
+		// mount per pod has the path of each, never the first one's.
+		if found.PVName != "" {
+			found.HostPath, found.podPaths = hostPaths(cs, found.Shared)
 		}
 		return found
 	}
@@ -306,6 +342,64 @@ func scanForMount(key MountKey) (info MountInfo, found, pending bool) {
 		}
 	}
 	return byDev, true, pending
+}
+
+// candidate is a kubelet volume mount of the device being resolved.
+type candidate struct {
+	info       MountInfo
+	mountPoint string
+}
+
+// hostPaths picks the host path of the kubelet mount of a volume from the
+// mounts cs that name it. A mount per pod is told apart by its pod UID; the
+// one pod can mount a volume twice (two volumes of one claim), and the
+// shortest path then wins, ties broken by the path itself so the answer
+// does not depend on the order of the mount table. A Shared volume has no
+// single path: it is returned per pod.
+func hostPaths(cs []candidate, shared bool) (string, *podHostPaths) {
+	if !shared {
+		return pickHostPath(cs), nil
+	}
+	byPod := map[string][]candidate{}
+	for _, c := range cs {
+		byPod[c.info.PodUID] = append(byPod[c.info.PodUID], c)
+	}
+	paths := &podHostPaths{byPod: make(map[string]string, len(byPod))}
+	for uid, pcs := range byPod {
+		paths.byPod[uid] = pickHostPath(pcs)
+	}
+	return "", paths
+}
+
+func pickHostPath(cs []candidate) string {
+	best := cs[0].mountPoint
+	for _, c := range cs[1:] {
+		if len(c.mountPoint) < len(best) || (len(c.mountPoint) == len(best) && c.mountPoint < best) {
+			best = c.mountPoint
+		}
+	}
+	return unescapeMountInfo(best)
+}
+
+// unescapeMountInfo undoes the octal escapes (\040 for a space, \011, \012,
+// \134) that the kernel writes into the paths of mountinfo. A kubelet path
+// has none unless the node's directory names do.
+func unescapeMountInfo(path string) string {
+	if !strings.Contains(path, `\`) {
+		return path
+	}
+	var b strings.Builder
+	for i := 0; i < len(path); i++ {
+		if path[i] == '\\' && i+3 < len(path) {
+			if v, err := strconv.ParseUint(path[i+1:i+4], 8, 8); err == nil {
+				b.WriteByte(byte(v))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(path[i])
+	}
+	return b.String()
 }
 
 // mountSet is a mount table as a set, for comparing two reads of it.

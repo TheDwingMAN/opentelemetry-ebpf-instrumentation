@@ -146,6 +146,36 @@ func TestInternalMetricsReporterQueueBufferUtilization(t *testing.T) {
 	assert.InDelta(t, 0.42, records[0].FloatVal, 0.001)
 }
 
+func TestInternalMetricsReporterBpfStorageDrops(t *testing.T) {
+	metricRecords := make(chan collector.MetricRecord, 16)
+	mcfg := &otelcfg.MetricsConfig{
+		Interval:        10 * time.Millisecond,
+		MetricsConsumer: testMetricsConsumer(metricRecords),
+	}
+	ctxInfo := &global.ContextInfo{
+		NodeMeta:            metadata.NodeMeta{HostID: "test-host"},
+		OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: mcfg},
+	}
+
+	reporter, err := NewInternalMetricsReporter(
+		t.Context(),
+		ctxInfo,
+		mcfg,
+		&imetrics.InternalMetricsConfig{BpfMetricScrapeInterval: time.Millisecond},
+	)
+	require.NoError(t, err)
+
+	reporter.BpfStorageDrops("fs_accum_full", 5)
+
+	records := readMetricsByName(t, metricRecords, time.Second,
+		attr.VendorPrefix+".bpf.storage.dropped.operations",
+	)
+	require.Len(t, records, 1)
+	assert.Equal(t, "fs_accum_full", records[0].Attributes["bpf.drop.reason"])
+	assert.Equal(t, "{operation}", records[0].Unit)
+	assert.Equal(t, int64(5), records[0].IntVal)
+}
+
 // A process basename comes straight off the filesystem, where Linux permits invalid UTF-8. The
 // internal metrics build their datapoint attributes directly, so without sanitization such a
 // name poisons every internal-metrics export batch for as long as the series stays aggregated.

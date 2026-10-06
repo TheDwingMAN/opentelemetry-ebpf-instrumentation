@@ -46,6 +46,14 @@ const (
 // the cache is simply dropped when full.
 const maxCachedVolumes = 4096
 
+// maxVolumeVariants bounds the per-pod and per-container variants of one
+// volume, and maxCachedVariants those of all of them: the decorator holds a
+// few thousand small values at most, not volumes times variants.
+const (
+	maxVolumeVariants = 64
+	maxCachedVariants = 16384
+)
+
 // unboundVolumeRetry is how long a volume whose claim was not found keeps
 // that answer before volumeOf asks the PVC lookup again, matching
 // pvcCacheNegativeTTL so a newly bound claim is picked up promptly.
@@ -69,12 +77,42 @@ func PIDMetadataDecoratorProvider[T any](
 	pvc ebpf.PVCLookup,
 	input, output *msg.Queue[[]T],
 ) swarm.InstanceFunc {
+	return PIDMetadataDecoratorProviderWith(store, attrs, pidOf, setMount, pvc, PIDMountpoints[T]{}, input, output)
+}
+
+// PIDMountpoints selects the mount path attributes of a volume. The zero
+// value selects none, and then nothing about mount paths is resolved.
+type PIDMountpoints[T any] struct {
+	// Host selects system.filesystem.mountpoint, which the mount resolver
+	// answers from the host's mount table it has read anyway.
+	Host bool
+	// ContainerPath, when set, selects obi.fs.container.mountpoint: it
+	// returns where the container of a process mounts the volume, "" when
+	// unknown. scope is the container's name.
+	ContainerPath func(pidNs, hostPID uint32, scope string, mount ebpf.MountKey) string
+	// PodUID returns the UID of the pod an item already comes with, "" when
+	// it has none. A shared volume has a host path per pod, and the pod of
+	// such an item is not found again.
+	PodUID func(item T) string
+}
+
+// PIDMetadataDecoratorProviderWith is PIDMetadataDecoratorProvider with the
+// mount path attributes mountpoints selects.
+func PIDMetadataDecoratorProviderWith[T any](
+	store *kube.Store,
+	attrs func(T) *pipe.CommonAttrs,
+	pidOf func(item T) (pidNs, hostPID uint32, mount ebpf.MountKey, ok bool),
+	setMount func(item T, mount *ebpf.MountAttrs),
+	pvc ebpf.PVCLookup,
+	mountpoints PIDMountpoints[T],
+	input, output *msg.Queue[[]T],
+) swarm.InstanceFunc {
 	return func(_ context.Context) (swarm.RunFunc, error) {
 		if store == nil {
 			return swarm.Bypass(input, output)
 		}
 
-		decorate := NewPIDItemDecorator(store, attrs, pidOf, setMount, pvc)
+		decorate := NewPIDItemDecoratorWith(store, attrs, pidOf, setMount, pvc, mountpoints)
 		in := input.Subscribe(msg.SubscriberName("k8s.PIDMetadataDecorator"))
 
 		return func(runCtx context.Context) {
@@ -99,28 +137,51 @@ func NewPIDItemDecorator[T any](
 	setMount func(item T, mount *ebpf.MountAttrs),
 	pvc ebpf.PVCLookup,
 ) func(ctx context.Context, item T) {
+	return NewPIDItemDecoratorWith(store, attrs, pidOf, setMount, pvc, PIDMountpoints[T]{})
+}
+
+// NewPIDItemDecoratorWith is NewPIDItemDecorator with the mount path
+// attributes mountpoints selects.
+func NewPIDItemDecoratorWith[T any](
+	store *kube.Store,
+	attrs func(T) *pipe.CommonAttrs,
+	pidOf func(item T) (pidNs, hostPID uint32, mount ebpf.MountKey, ok bool),
+	setMount func(item T, mount *ebpf.MountAttrs),
+	pvc ebpf.PVCLookup,
+	mountpoints PIDMountpoints[T],
+) func(ctx context.Context, item T) {
 	if store == nil {
 		return nil
 	}
 	dec := &pidDecorator{
-		store:      store,
-		pvc:        pvc,
-		containers: expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
-		namespaces: expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
-		volumes:    map[ebpf.MountKey]volumeEntry{},
+		store:         store,
+		pvc:           pvc,
+		hostPath:      mountpoints.Host,
+		containerPath: mountpoints.ContainerPath,
+		containers:    expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		namespaces:    expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		volumes:       map[ebpf.MountKey]volumeEntry{},
 	}
 	return func(ctx context.Context, item T) {
 		pidNs, hostPID, mount, ok := pidOf(item)
 		if !ok {
 			return
 		}
-		setMount(item, dec.decorate(ctx, attrs(item), pidNs, hostPID, mount))
+		presetPod := ""
+		if mountpoints.PodUID != nil {
+			presetPod = mountpoints.PodUID(item)
+		}
+		setMount(item, dec.decorateItem(ctx, attrs(item), pidNs, hostPID, mount, presetPod))
 	}
 }
 
 type pidDecorator struct {
 	store *kube.Store
 	pvc   ebpf.PVCLookup
+	// hostPath and containerPath select the mount path attributes; with
+	// neither, a volume's attributes are the same for every pod and process.
+	hostPath      bool
+	containerPath func(pidNs, hostPID uint32, scope string, mount ebpf.MountKey) string
 	// containers caches the cgroup identity, empty for none, of host PIDs
 	// the Store does not track.
 	containers *expirable.LRU[app.PID, cgroupIdentity]
@@ -131,6 +192,8 @@ type pidDecorator struct {
 	// claim is looked up once per mount resolution rather than per event.
 	// Only the decorator's goroutine uses it.
 	volumes map[ebpf.MountKey]volumeEntry
+	// variantCount is the variants held by volumes, all together.
+	variantCount int
 }
 
 type volumeEntry struct {
@@ -140,6 +203,18 @@ type volumeEntry struct {
 	// retryAt is when attrs is looked up again: unboundVolumeRetry away while
 	// the claim was not found, boundVolumeRetry away once it is.
 	retryAt time.Time
+	// variants hold the attributes of the volume as one pod or container
+	// sees it, when a mount path selected differs between them. Like attrs
+	// they are never modified.
+	variants map[pathVariant]*ebpf.MountAttrs
+}
+
+// pathVariant is what makes one stat's mount paths differ from another's on
+// the same mount: the pod of a shared volume, whose host path is its own, and
+// the path the stat's container mounts the volume at.
+type pathVariant struct {
+	podUID        string
+	containerPath string
 }
 
 // cgroupIdentity is what a process's cgroup path says about it: its container
@@ -156,6 +231,63 @@ type cgroupIdentity struct {
 // over one mount, so the mount alone cannot identify which pod issued this
 // I/O.
 func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs, hostPID uint32, mount ebpf.MountKey) *ebpf.MountAttrs {
+	return d.decorateItem(ctx, a, pidNs, hostPID, mount, "")
+}
+
+// decorateItem is decorate for an item that comes with the pod whose UID is
+// presetPod, "" for one that does not.
+func (d *pidDecorator) decorateItem(
+	ctx context.Context, a *pipe.CommonAttrs, pidNs, hostPID uint32, mount ebpf.MountKey, presetPod string,
+) *ebpf.MountAttrs {
+	// dev_t 0 is never a real superblock: sync(2) has no file to take it
+	// from (step 14, bpf/statsolly/fs_io.c fs_probe_entry_sync) and reports
+	// it that way on purpose. Skip the mount table lookup rather than churn
+	// the resolver's cache with a key that can never resolve; pod
+	// attribution below still runs from the PID path alone.
+	var mountInfo ebpf.MountInfo
+	var mountFound bool
+	if mount.Dev != 0 {
+		mountInfo, mountFound = resolveMount(mount)
+	}
+
+	// Kernel-aggregated stats keyed by cgroup come with the pod of their
+	// cgroup, which names it for every process of the key; only the volume
+	// is left to resolve.
+	podUID := presetPod
+	if a.Metadata[attr.K8sPodName] == "" {
+		podUID = d.decoratePod(a, pidNs, hostPID, mountInfo, mountFound)
+	}
+
+	if !mountFound || mountInfo.PVName == "" {
+		return nil
+	}
+
+	volume := d.volumeOf(ctx, mount, mountInfo, d.pathVariantOf(a, pidNs, hostPID, mount, mountInfo, podUID))
+	if a.Metadata[attr.K8sNamespaceName] == "" && volume.PVCNamespace != "" {
+		setMetadata(a, attr.K8sNamespaceName, volume.PVCNamespace)
+	}
+	return volume
+}
+
+// pathVariantOf returns what is particular to this stat in the mount paths
+// that are selected: none of them is looked at when none is.
+func (d *pidDecorator) pathVariantOf(
+	a *pipe.CommonAttrs, pidNs, hostPID uint32, mount ebpf.MountKey, info ebpf.MountInfo, podUID string,
+) pathVariant {
+	var v pathVariant
+	if d.hostPath && info.Shared {
+		v.podUID = podUID
+	}
+	if d.containerPath != nil {
+		v.containerPath = d.containerPath(pidNs, hostPID, a.Metadata[attr.K8sContainerName], mount)
+	}
+	return v
+}
+
+// decoratePod sets the pod, namespace and container of the process that did
+// the I/O, or of the mount's pod when the process has none. It returns the
+// UID of that pod, "" when there is none.
+func (d *pidDecorator) decoratePod(a *pipe.CommonAttrs, pidNs, hostPID uint32, mountInfo ebpf.MountInfo, mountFound bool) string {
 	podMeta, containerName := d.store.PodContainerByPIDNs(pidNs, app.PID(hostPID))
 
 	// The Store only tracks processes that application discovery has seen,
@@ -164,8 +296,6 @@ func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs,
 	if podMeta == nil {
 		podMeta, containerName = d.podContainerByCgroup(pidNs, app.PID(hostPID))
 	}
-
-	mountInfo, mountFound := resolveMount(mount)
 
 	// A process that is gone, or that runs outside any container, leaves the
 	// PID path empty. Falling back to the mount's owning pod still gives
@@ -179,26 +309,18 @@ func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs,
 		containerName = ""
 	}
 
-	if podMeta != nil {
-		setMetadata(a, attr.K8sPodName, podMeta.Meta.Name)
-		setMetadata(a, attr.K8sNamespaceName, podMeta.Meta.Namespace)
-		if containerName != "" {
-			setMetadata(a, attr.K8sContainerName, containerName)
-		}
-		ownerName, ownerKind := topOwnerNameKind(podMeta.Meta)
-		setMetadata(a, attr.K8sOwnerName, ownerName)
-		setMetadata(a, attr.K8sKind, ownerKind)
+	if podMeta == nil {
+		return ""
 	}
-
-	if !mountFound || mountInfo.PVName == "" {
-		return nil
+	setMetadata(a, attr.K8sPodName, podMeta.Meta.Name)
+	setMetadata(a, attr.K8sNamespaceName, podMeta.Meta.Namespace)
+	if containerName != "" {
+		setMetadata(a, attr.K8sContainerName, containerName)
 	}
-
-	volume := d.volumeOf(ctx, mount, mountInfo)
-	if a.Metadata[attr.K8sNamespaceName] == "" && volume.PVCNamespace != "" {
-		setMetadata(a, attr.K8sNamespaceName, volume.PVCNamespace)
-	}
-	return volume
+	ownerName, ownerKind := topOwnerNameKind(podMeta.Meta)
+	setMetadata(a, attr.K8sOwnerName, ownerName)
+	setMetadata(a, attr.K8sKind, ownerKind)
+	return podMeta.Meta.GetPod().GetUid()
 }
 
 // volumeOf returns the attributes of the volume a resolved mount belongs to,
@@ -208,25 +330,64 @@ func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs,
 // whose claim is not found (not bound yet, or no RBAC to read PVs) is asked
 // about again after unboundVolumeRetry; one that is found, after
 // boundVolumeRetry, so a claim rebound later is not cached forever.
-func (d *pidDecorator) volumeOf(ctx context.Context, mount ebpf.MountKey, info ebpf.MountInfo) *ebpf.MountAttrs {
+func (d *pidDecorator) volumeOf(ctx context.Context, mount ebpf.MountKey, info ebpf.MountInfo, v pathVariant) *ebpf.MountAttrs {
 	if e, ok := d.volumes[mount]; ok && e.info == info && time.Now().Before(e.retryAt) {
-		return e.attrs
+		if v == (pathVariant{}) {
+			return e.attrs
+		}
+		attrs := d.variantOf(&e, v, info)
+		d.volumes[mount] = e
+		return attrs
 	}
 
-	attrs := &ebpf.MountAttrs{PVName: info.PVName, ServerAddress: info.Addr}
-	attrs.SystemDevice, attrs.PhysicalDevice = ebpf.FSJoinDevice(mount.Dev, info.Source)
+	entry := volumeEntry{info: info, attrs: &ebpf.MountAttrs{PVName: info.PVName, ServerAddress: info.Addr}}
+	entry.attrs.SystemDevice, entry.attrs.PhysicalDevice = ebpf.FSJoinDevice(mount.Dev, info.Source)
+	if d.hostPath {
+		entry.attrs.HostPath = info.HostPathFor("")
+	}
 
 	retry := unboundVolumeRetry
 	if namespace, claimName, storageClass, ok := d.pvc(ctx, info.PVName); ok {
-		attrs.PVCName, attrs.StorageClass, attrs.PVCNamespace = claimName, storageClass, namespace
+		entry.attrs.PVCName, entry.attrs.StorageClass, entry.attrs.PVCNamespace = claimName, storageClass, namespace
 		retry = boundVolumeRetry
 	}
+	entry.retryAt = time.Now().Add(retry)
 
 	if len(d.volumes) >= maxCachedVolumes {
 		clear(d.volumes)
+		d.variantCount = 0
 	}
-	d.volumes[mount] = volumeEntry{info: info, attrs: attrs, retryAt: time.Now().Add(retry)}
+	attrs := entry.attrs
+	if v != (pathVariant{}) {
+		attrs = d.variantOf(&entry, v, info)
+	}
+	d.volumes[mount] = entry
 	return attrs
+}
+
+// variantOf returns the attributes of the volume of e as v sees it, and
+// remembers them in e, which the caller stores back.
+func (d *pidDecorator) variantOf(e *volumeEntry, v pathVariant, info ebpf.MountInfo) *ebpf.MountAttrs {
+	if attrs, ok := e.variants[v]; ok {
+		return attrs
+	}
+	attrs := *e.attrs
+	attrs.ContainerPath = v.containerPath
+	if v.podUID != "" {
+		attrs.HostPath = info.HostPathFor(v.podUID)
+	}
+	if d.variantCount >= maxCachedVariants {
+		clear(d.volumes)
+		d.variantCount = 0
+		e.variants = nil
+	}
+	if e.variants == nil || len(e.variants) >= maxVolumeVariants {
+		d.variantCount -= len(e.variants)
+		e.variants = map[pathVariant]*ebpf.MountAttrs{}
+	}
+	e.variants[v] = &attrs
+	d.variantCount++
+	return &attrs
 }
 
 // setMetadata sets a Metadata entry, creating the map on the first one: a

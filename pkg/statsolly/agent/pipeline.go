@@ -7,9 +7,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	"go.opentelemetry.io/obi/pkg/export/otel"
 	"go.opentelemetry.io/obi/pkg/export/prom"
 	"go.opentelemetry.io/obi/pkg/filter"
@@ -56,6 +58,45 @@ func fsIoSetMount(s *ebpf.Stat, mount *ebpf.MountAttrs) {
 	if s.FsIo != nil {
 		s.FsIo.Mount = mount
 	}
+}
+
+// fsIoPodUID returns the UID of the pod a filesystem I/O stat already comes
+// with, "" when it has none.
+func fsIoPodUID(s *ebpf.Stat) string {
+	if s.FsIo == nil {
+		return ""
+	}
+	return s.FsIo.PodUID
+}
+
+// fsMountpoints returns which mount path attributes the user selected on a
+// filesystem metric. Both are opt-in, and resolving them costs reads of
+// mount tables, so nothing is resolved for one that is not selected.
+func (s *Stats) fsMountpoints(selectorCfg *attributes.SelectorConfig) k8s.PIDMountpoints[*ebpf.Stat] {
+	var mp k8s.PIDMountpoints[*ebpf.Stat]
+	if !s.cfg.Metrics.Features.StorageFS() {
+		return mp
+	}
+	sel, err := attributes.NewAttrSelector(s.ctxInfo.MetricAttributeGroups, selectorCfg)
+	if err != nil {
+		return mp
+	}
+	selected := func(name attr.Name) bool {
+		for _, metric := range [...]attributes.Name{
+			attributes.StatFsOperationDuration, attributes.StatFsIO, attributes.StatFsOperationErrors,
+		} {
+			if slices.Contains(sel.For(metric), name) {
+				return true
+			}
+		}
+		return false
+	}
+	mp.PodUID = fsIoPodUID
+	mp.Host = selected(attr.FsMountpoint)
+	if selected(attr.FsContainerMountpoint) {
+		mp.ContainerPath = ebpf.NewMountpointResolver().ContainerPath
+	}
+	return mp
 }
 
 // noPVCLookup reports every volume as unbound. Used when Kubernetes is
@@ -116,8 +157,9 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	}
 
 	pidDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "pidDecoratedStats")
-	swi.Add(k8s.PIDMetadataDecoratorProvider(pidK8sStore, statAttrs, fsIoPID, fsIoSetMount,
-		ebpf.CachedPVCLookup(pvcLookup), kubeDecoratedStats, pidDecoratedStats),
+	mountpoints := s.fsMountpoints(selectorCfg)
+	swi.Add(k8s.PIDMetadataDecoratorProviderWith(pidK8sStore, statAttrs, fsIoPID, fsIoSetMount,
+		ebpf.CachedPVCLookup(pvcLookup), mountpoints, kubeDecoratedStats, pidDecoratedStats),
 		swarm.WithID("PIDMetadataDecorator"))
 
 	dnsDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "dnsDecoratedStats")
@@ -139,7 +181,7 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	dynamicFilteredStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "dynamicFilteredStats")
 	// The dynamic PID trackers are built here rather than by their nodes so
 	// that aggregated stats go through the same ones; the nodes run them.
-	s.aggDeps = aggregationDeps{store: pidK8sStore, pvc: pvcLookup}
+	s.aggDeps = aggregationDeps{store: pidK8sStore, pvc: pvcLookup, mountpoints: mountpoints}
 	if s.ctxInfo.DynamicPIDSelector != nil {
 		dynamicSelector := s.ctxInfo.DynamicPIDSelector.StatsMetrics()
 		s.aggDeps.dynamicAttrs = selection.NewDynamicFlowAttrs(s.ctxInfo.DynamicPIDSelector, dynamicSelector, pidK8sStore)
@@ -147,16 +189,16 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 			s.aggDeps.dynamicIPs = selection.NewDynamicAppIPs(dynamicSelector, pidK8sStore)
 		}
 	}
+	aggregated, err := s.buildAggregation(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	dynamicDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "dynamicDecoratedStats")
 	swi.Add(dynamicpid.MetadataDecoratorProviderFor(s.aggDeps.dynamicAttrs, statAttrs, decoratedStats, dynamicDecoratedStats),
 		swarm.WithID("DynamicPIDMetadataDecorator"))
 	swi.Add(filter.ByDynamicPIDTracker(s.aggDeps.dynamicIPs, statAttrs, dynamicDecoratedStats, dynamicFilteredStats),
 		swarm.WithID("DynamicPIDFilter"))
-
-	aggregated, err := s.aggregatedFamilies(ctx)
-	if err != nil {
-		return nil, err
-	}
 
 	filteredStats := s.ctxInfo.OverrideStatsExportQueue
 	if filteredStats == nil {

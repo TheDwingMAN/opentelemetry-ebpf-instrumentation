@@ -141,20 +141,26 @@ const (
 type FsOpType string
 
 const (
-	FsOpRead      FsOpType = "read"
-	FsOpWrite     FsOpType = "write"
-	FsOpFsync     FsOpType = "fsync"
-	FsOpFdatasync FsOpType = "fdatasync"
+	FsOpRead          FsOpType = "read"
+	FsOpWrite         FsOpType = "write"
+	FsOpFsync         FsOpType = "fsync"
+	FsOpFdatasync     FsOpType = "fdatasync"
+	FsOpSync          FsOpType = "sync"
+	FsOpSyncfs        FsOpType = "syncfs"
+	FsOpSyncFileRange FsOpType = "sync_file_range"
 )
 
 // FsOpCode mirrors enum fs_op in bpf/statsolly/types.h.
 type FsOpCode uint8
 
 const (
-	CodeFsOpRead      FsOpCode = 0
-	CodeFsOpWrite     FsOpCode = 1
-	CodeFsOpFsync     FsOpCode = 2
-	CodeFsOpFdatasync FsOpCode = 3
+	CodeFsOpRead          FsOpCode = 0
+	CodeFsOpWrite         FsOpCode = 1
+	CodeFsOpFsync         FsOpCode = 2
+	CodeFsOpFdatasync     FsOpCode = 3
+	CodeFsOpSync          FsOpCode = 4
+	CodeFsOpSyncfs        FsOpCode = 5
+	CodeFsOpSyncFileRange FsOpCode = 6
 )
 
 // Stat contains accumulated metrics from a stat, with extra metadata
@@ -239,6 +245,10 @@ type FsIo struct {
 	// Mount holds the attributes of the mount the file was reached through,
 	// or nil when it is no Kubernetes volume. The PID decorator sets it.
 	Mount *MountAttrs `json:"-"`
+	// PodUID is the UID of the pod a kernel-aggregated key's cgroup named,
+	// "" for any other stat. The PID decorator needs it to tell the pods of
+	// a shared volume apart when the pod is already set.
+	PodUID string `json:"-"`
 }
 
 // MountAttrs are the attributes of a filesystem stat that depend only on the
@@ -266,6 +276,11 @@ type MountAttrs struct {
 	// ServerAddress is "" for ceph (several monitors, ambiguous) and local
 	// filesystems.
 	ServerAddress string
+	// HostPath is the kubelet's mount path of the volume, as the host sees
+	// it; ContainerPath is where the process's container sees the volume.
+	// Each is "" until the attribute is selected, and when it is unknown.
+	HostPath      string
+	ContainerPath string
 }
 
 // NFSRPC is an NFS client RPC attempt, or the kernel aggregation key of

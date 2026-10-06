@@ -407,6 +407,21 @@ groups:
       How many network packets have been internally ignored due to collisions
       in the internal eBPF cache.
 
+  # --- Storage metrics (statsolly) ----------------------------------------
+  - id: metric.obi.obi.bpf.storage.dropped.operations
+    type: metric
+    metric_name: obi.bpf.storage.dropped.operations
+    instrument: counter
+    unit: "{operation}"
+    stability: development
+    brief: >
+      Operations the storage eBPF programs could not record, which the storage
+      metrics are missing. The kernel maps never evict: an operation that
+      finds its map full is counted here instead.
+    attributes:
+      - ref: bpf.drop.reason
+        requirement_level: required
+
   # --- Kubernetes informer ------------------------------------------------
   - id: metric.obi.obi.kube.cache.forward.lag
     type: metric

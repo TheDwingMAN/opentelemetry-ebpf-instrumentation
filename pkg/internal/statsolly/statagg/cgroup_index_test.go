@@ -548,3 +548,18 @@ func TestCgroupIndex_OtherCgroupRootsHaveNoPods(t *testing.T) {
 	assert.True(t, final)
 	assert.Equal(t, CgroupIdentity{}, got)
 }
+
+// A root with cgroup.controllers is cgroup v2; a v1 or hybrid root (tmpfs of
+// per-controller hierarchies) is not, and neither is a host without one.
+func TestCgroupV2(t *testing.T) {
+	v2, v1 := t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(v2, "cgroup.controllers"), []byte("cpu io memory\n"), 0o644))
+	require.NoError(t, os.Mkdir(filepath.Join(v1, "blkio"), 0o755))
+	missing := filepath.Join(t.TempDir(), "missing")
+
+	assert.True(t, cgroupV2([]string{v2}))
+	assert.True(t, cgroupV2([]string{missing, v2}), "the first root that exists decides")
+	assert.False(t, cgroupV2([]string{v1, v2}), "the first root that exists decides")
+	assert.False(t, cgroupV2([]string{v1}))
+	assert.False(t, cgroupV2([]string{missing}))
+}

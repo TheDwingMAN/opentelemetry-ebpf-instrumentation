@@ -926,6 +926,18 @@ Latency distribution of the eBPF probe in seconds.
 | `bpf.probe.name` | string | `required` | development | Name of the eBPF probe. | kprobe_tcp_sendmsg |
 | `bpf.probe.type` | string | `required` | development | eBPF program type of the probe. | kprobe; tracepoint |
 
+## `obi.bpf.storage.dropped.operations`
+
+Operations the storage eBPF programs could not record, which the storage metrics are missing. The kernel maps never evict: an operation that finds its map full is counted here instead.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `bpf.drop.reason` | string | `required` | development | Why an eBPF program could not record an operation. fs_accum_full: the filesystem aggregation map was full, so an operation of a new series was not counted; fs_start_failed: the start of a filesystem operation could not be stored, so the operation was not recorded. | fs_accum_full; fs_start_failed |
+
 ## `obi.ebpf.tracer.flushes`
 
 Length of the groups of traces flushed from the eBPF tracer to the next pipeline stage.
@@ -1333,7 +1345,7 @@ Count of bytes transferred through filesystem read and write operations, broken 
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
-| `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
+| `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync; sync; syncfs; sync_file_range |
 | `k8s.container.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
 | `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
 | `k8s.namespace.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the namespace that the pod is running in. | default |
@@ -1344,13 +1356,15 @@ Count of bytes transferred through filesystem read and write operations, broken 
 | `k8s.pod.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `k8s.storageclass.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of K8s [StorageClass](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#storageclass-v1-storage-k8s-io) object. | gold.storageclass.storage.k8s.io |
 | `obi.disk.physical_device` | string | `recommended` | development | Physical disk(s) behind a filesystem's block device: sorted, comma-joined, at most 8. Omitted when the filesystem is not block-backed, or the walk cannot resolve one. | vdb; nvme0n1,nvme1n1 |
+| `obi.fs.container.mountpoint` | string | `opt_in` | development | Path at which the container of the process mounts the filesystem the operation went through, read from the process's mount table. | /data |
 | `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+| `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
 
 ## `obi.stat.fs.operation.duration`
 
-Latency of a single filesystem read, write, fsync or fdatasync as the application experiences it, broken down by filesystem type and operation. Buffered writes (no O_SYNC, O_DIRECT or fsync) end once the data is in the page cache, so their latency is the copy into memory; the server's or device's latency shows in fsync and fdatasync.
+Latency of a single filesystem read, write, fsync, fdatasync, sync, syncfs or sync_file_range as the application experiences it, broken down by filesystem type and operation. Buffered writes (no O_SYNC, O_DIRECT or fsync) end once the data is in the page cache, so their latency is the copy into memory; the server's or device's latency shows in fsync, fdatasync and the sync syscalls (`storage_fs_sync`, waiting `sync_file_range` calls only, D7).
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1358,7 +1372,7 @@ Latency of a single filesystem read, write, fsync or fdatasync as the applicatio
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
-| `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
+| `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync; sync; syncfs; sync_file_range |
 | `k8s.container.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
 | `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
 | `k8s.namespace.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the namespace that the pod is running in. | default |
@@ -1369,8 +1383,10 @@ Latency of a single filesystem read, write, fsync or fdatasync as the applicatio
 | `k8s.pod.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `k8s.storageclass.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of K8s [StorageClass](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#storageclass-v1-storage-k8s-io) object. | gold.storageclass.storage.k8s.io |
 | `obi.disk.physical_device` | string | `recommended` | development | Physical disk(s) behind a filesystem's block device: sorted, comma-joined, at most 8. Omitted when the filesystem is not block-backed, or the walk cannot resolve one. | vdb; nvme0n1,nvme1n1 |
+| `obi.fs.container.mountpoint` | string | `opt_in` | development | Path at which the container of the process mounts the filesystem the operation went through, read from the process's mount table. | /data |
 | `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+| `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
 
 ## `obi.stat.fs.operation.errors`
@@ -1384,7 +1400,7 @@ Count of filesystem read or write operations that failed, broken down by filesys
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `error.type` | string | `recommended` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
-| `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
+| `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync; sync; syncfs; sync_file_range |
 | `k8s.container.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
 | `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
 | `k8s.namespace.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the namespace that the pod is running in. | default |
@@ -1395,8 +1411,10 @@ Count of filesystem read or write operations that failed, broken down by filesys
 | `k8s.pod.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `k8s.storageclass.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of K8s [StorageClass](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#storageclass-v1-storage-k8s-io) object. | gold.storageclass.storage.k8s.io |
 | `obi.disk.physical_device` | string | `recommended` | development | Physical disk(s) behind a filesystem's block device: sorted, comma-joined, at most 8. Omitted when the filesystem is not block-backed, or the walk cannot resolve one. | vdb; nvme0n1,nvme1n1 |
+| `obi.fs.container.mountpoint` | string | `opt_in` | development | Path at which the container of the process mounts the filesystem the operation went through, read from the process's mount table. | /data |
 | `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+| `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
 
 ## `obi.stat.nfs.client.io`

@@ -79,6 +79,13 @@ const (
 	FeatureStorageNFSErrors
 	FeatureStorageNFSRetransmits
 	FeatureStorageNFSIo
+	// FeatureStorageFSSync enables the storage_fs_sync probes: fentry/fexit
+	// (kprobe fallback) on the syncfs and sync_file_range syscall wrappers,
+	// kprobe/kretprobe on the sync wrapper (step 14). Unlike
+	// FeatureStorageFSDuration/Io/Errors, which only split series
+	// cardinality on an already-running probe pair, this is its own probe
+	// set: disabling it stops the kernel-side work, not just the export.
+	FeatureStorageFSSync
 	// FeatureAll is what "all" and "*" select: every feature except the deprecated
 	// FeatureStorageBlockQueueDepth, which is in no umbrella and is only enabled
 	// when listed by name.
@@ -96,10 +103,12 @@ const (
 const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo | FeatureStorageBlockQueue | FeatureStorageBlockErrors |
 	FeatureStorageBlockFlush | FeatureStorageBlockDiscard
 
-// FeatureStorageFS enables all filesystem metrics. All three derive from the
-// same probe pair, so disabling one does not reduce kernel-side overhead —
-// splitting them controls series cardinality only.
-const FeatureStorageFS = FeatureStorageFSDuration | FeatureStorageFSIo | FeatureStorageFSErrors
+// FeatureStorageFS enables all filesystem metrics. Duration/Io/Errors derive
+// from the same probe pair, so disabling one of those does not reduce
+// kernel-side overhead — splitting them controls series cardinality only.
+// Sync is its own probe set (step 14): the umbrella enables it too, but it
+// can also be disabled on its own without losing read/write/fsync.
+const FeatureStorageFS = FeatureStorageFSDuration | FeatureStorageFSIo | FeatureStorageFSErrors | FeatureStorageFSSync
 
 // FeatureStorageNFS enables all NFS client RPC metrics. They share one
 // program on the sunrpc rpc_stats_latency tracepoint, which runs once per NFS
@@ -141,6 +150,7 @@ var FeatureMapper = map[string]Features{
 	"storage_nfs_errors":               FeatureStorageNFSErrors,
 	"storage_nfs_retransmits":          FeatureStorageNFSRetransmits,
 	"storage_nfs_io":                   FeatureStorageNFSIo,
+	"storage_fs_sync":                  FeatureStorageFSSync,
 	"network":                          FeatureNetwork,
 	"network_inter_zone":               FeatureNetworkInterZone,
 	"network_flow_packets":             FeatureNetworkFlowPackets,
@@ -546,6 +556,10 @@ func (f Features) StorageNFSRetransmits() bool {
 
 func (f Features) StorageNFSIo() bool {
 	return f.any(FeatureStorageNFSIo)
+}
+
+func (f Features) StorageFSSync() bool {
+	return f.any(FeatureStorageFSSync)
 }
 
 func (f Features) NetworkInterZone() bool {

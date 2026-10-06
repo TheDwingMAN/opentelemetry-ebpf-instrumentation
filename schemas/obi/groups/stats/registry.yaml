@@ -80,6 +80,15 @@ groups:
             - id: fdatasync
               value: fdatasync
               stability: development
+            - id: sync
+              value: sync
+              stability: development
+            - id: syncfs
+              value: syncfs
+              stability: development
+            - id: sync_file_range
+              value: sync_file_range
+              stability: development
         stability: development
         brief: Filesystem operation performed.
       # Mirrors the devInfo cache in pkg/internal/statsolly/ebpf/block_stack.go.
@@ -109,3 +118,13 @@ groups:
           comma-joined, at most 8. Omitted when the filesystem is not
           block-backed, or the walk cannot resolve one.
         examples: ["vdb", "nvme0n1,nvme1n1"]
+      # Opt-in with `system.filesystem.mountpoint`, which is the host path
+      # (the kubelet's mount of the volume, as hostmetrics and the kubelet
+      # name it). This one is the path the application sees.
+      - id: obi.fs.container.mountpoint
+        type: string
+        stability: development
+        brief: >
+          Path at which the container of the process mounts the filesystem
+          the operation went through, read from the process's mount table.
+        examples: ["/data"]

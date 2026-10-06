@@ -87,6 +87,14 @@ func (m *MemMap) AddU32(key []byte, cpu, offset int, n uint32) {
 	binary.NativeEndian.PutUint32(v, binary.NativeEndian.Uint32(v)+n)
 }
 
+// SetU32 writes n to the u32 at byte offset of key's value on cpu, creating
+// the key zeroed first: a field a program stores rather than adds to.
+func (m *MemMap) SetU32(key []byte, cpu, offset int, n uint32) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	binary.NativeEndian.PutUint32(m.value(key)[cpu*m.stride+offset:], n)
+}
+
 func (m *MemMap) value(key []byte) []byte {
 	v, ok := m.entries[string(key)]
 	if !ok {

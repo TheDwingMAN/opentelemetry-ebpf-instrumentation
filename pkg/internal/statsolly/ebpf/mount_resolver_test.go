@@ -30,6 +30,8 @@ func TestResolveMountNFS(t *testing.T) {
 		VolumeType: "nfs",
 		Addr:       "10.96.84.126",
 		Source:     "10.96.84.126:/export/pvc-b3befffd",
+		HostPath: "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/" +
+			"kubernetes.io~nfs/pvc-b3befffd-ae0d-4fa0-8cef-4949329d8c3f",
 	}, info)
 }
 

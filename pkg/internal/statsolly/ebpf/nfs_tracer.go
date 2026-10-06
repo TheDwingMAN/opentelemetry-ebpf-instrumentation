@@ -256,13 +256,6 @@ func scaledEntries(n, factor uint32) uint32 {
 	return n * factor
 }
 
-func boolConst(b bool) uint8 {
-	if b {
-		return 1
-	}
-	return 0
-}
-
 // Map returns one of the NFS maps.
 func (l *nfsLoader) Map(name string) *ebpf.Map {
 	l.mu.Lock()

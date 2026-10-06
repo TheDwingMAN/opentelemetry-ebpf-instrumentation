@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/logger"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/statagg"
@@ -85,14 +86,17 @@ type Stats struct {
 	// nfsOwner is whether a pod attribute is selected on an NFS metric
 	// (step 19); nfsCgroupV1 is whether the owner it keys is a tgid
 	// (task->tk_owner) resolved by the pid path, rather than a cgroup v2 id
-	// resolved by nfsCgroupIndex.
+	// resolved by cgroups.
 	nfsOwner, nfsCgroupV1 bool
-	// nfsCgroupIndex resolves an NFS RPC's owner cgroup to its pod; built
-	// only when nfsOwner is set and the host is not cgroup v1, and run for
-	// the agent's lifetime once Run starts it.
-	nfsCgroupIndex *statagg.CgroupIndex
-	// the kernel aggregation maps the exporters read, run with the pipeline
+	// fsAccum is the kernel map the filesystem programs aggregate into, and
+	// fsLayout its histogram layout; nil when they send ring buffer events.
+	fsAccum  statagg.Source
+	fsLayout *statagg.Layout
+	// families are the kernel aggregation families the exporters read, and
+	// cgroups the index their decoration shares (nil until a family needs
+	// it, and on a cgroup v1 host); Run starts both.
 	families []*statagg.Family
+	cgroups  *statagg.CgroupIndex
 	// the running families, which stop waits for before closing their maps
 	familiesRunning sync.WaitGroup
 
@@ -104,6 +108,7 @@ type ebpFetcher interface {
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
 	NFSRPCMap() *ciliumebpf.Map
+	FsAccumMap() *ciliumebpf.Map
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -145,7 +150,8 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		Owner:        nfsOwner,
 		CgroupV1:     nfsCgroupV1Host,
 	}
-	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, nfsCfg)
+	fsAgg, fsLayout := fsAggregation(cfg, alog)
+	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, fsAgg, nfsCfg, ctxInfo.Metrics)
 	if err != nil {
 		return nil, err
 	}
@@ -154,13 +160,23 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	s.nfsLayout = nfsLayout
 	s.nfsOwner = nfsOwner
 	s.nfsCgroupV1 = nfsCgroupV1Host
+	// No map when no filesystem collection could be created: the
+	// filesystem metrics then have nothing to export either way.
+	if m := statsFetcher.FsAccumMap(); m != nil {
+		if s.fsAccum, err = newMapSource(m); err != nil {
+			_ = statsFetcher.Close()
+			return nil, fmt.Errorf("reading the filesystem aggregation map: %w", err)
+		}
+		s.fsLayout = fsLayout
+	}
 	return s, nil
 }
 
 func newFetcher(
-	cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, nfsCfg ebpf.NFSConfig,
+	cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, fsAgg ebpf.FsAggregation,
+	nfsCfg ebpf.NFSConfig, metrics imetrics.Reporter,
 ) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, nfsCfg)
+	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, fsAgg, nfsCfg, metrics)
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests
@@ -204,10 +220,9 @@ func (s *Stats) Run(ctx context.Context) error {
 	s.graph = graph
 
 	s.graph.Start(ctx, swarm.WithCancelTimeout(s.cfg.ShutdownTimeout))
-	s.runFamilies(runCtx)
-	if s.nfsCgroupIndex != nil {
-		go s.nfsCgroupIndex.Run(runCtx)
-	}
+	// After the pipeline is built: the exporters are attached to the
+	// families, so none misses a delta.
+	s.runAggregation(runCtx)
 	s.status = StatusStarted
 
 	alog.Info("Stats agent successfully started")
@@ -220,14 +235,6 @@ func (s *Stats) Run(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// runFamilies runs the kernel aggregation families until ctx is done. The
-// exporters attached to them when the graph was built.
-func (s *Stats) runFamilies(ctx context.Context) {
-	for _, f := range s.families {
-		s.familiesRunning.Go(func() { f.Run(ctx) })
-	}
 }
 
 // stop waits for the families, whose context must be done, to read their

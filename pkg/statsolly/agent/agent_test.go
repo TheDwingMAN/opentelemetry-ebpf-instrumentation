@@ -58,6 +58,7 @@ func (f *closingFetcher) Close() error {
 func (*closingFetcher) StatsEventsMap() *ciliumebpf.Map { return nil }
 func (*closingFetcher) DebugEventsMap() *ciliumebpf.Map { return nil }
 func (*closingFetcher) NFSRPCMap() *ciliumebpf.Map      { return nil }
+func (*closingFetcher) FsAccumMap() *ciliumebpf.Map     { return nil }
 
 // On shutdown, the kernel aggregation families read their maps a last time
 // before the fetcher closes them, and never after.
@@ -83,7 +84,7 @@ func TestStop_FamiliesReadTheirMapsBeforeTheyAreClosed(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	s.graph.Start(ctx)
-	s.runFamilies(ctx)
+	s.runAggregation(ctx)
 	cancel()
 	require.NoError(t, s.stop())
 

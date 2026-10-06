@@ -282,6 +282,9 @@ func getDefinitions(
 			attr.K8sPersistentVolumeName:      true,
 			attr.K8sPersistentVolumeClaimName: true,
 			attr.K8sStorageClassName:          true,
+			// Opt-in: they read the host's mount table and a process's.
+			attr.FsMountpoint:          false,
+			attr.FsContainerMountpoint: false,
 		},
 	}
 

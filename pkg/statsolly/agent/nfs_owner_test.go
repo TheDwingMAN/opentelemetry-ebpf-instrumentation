@@ -87,12 +87,12 @@ func TestNewNFSOwnerDecorateBuildsCgroupIndexOnce(t *testing.T) {
 
 	decorate := s.newNFSOwnerDecorate()
 	require.NotNil(t, decorate)
-	require.NotNil(t, s.nfsCgroupIndex)
-	index := s.nfsCgroupIndex
+	require.NotNil(t, s.cgroups)
+	index := s.cgroups
 
 	decorate = s.newNFSOwnerDecorate()
 	require.NotNil(t, decorate)
-	assert.Same(t, index, s.nfsCgroupIndex, "built once, not on every call")
+	assert.Same(t, index, s.cgroups, "built once, not on every call")
 }
 
 // On a cgroup v1 host the owner is resolved by the pid path, which needs no
@@ -104,5 +104,5 @@ func TestNewNFSOwnerDecorateCgroupV1NeedsNoIndex(t *testing.T) {
 
 	decorate := s.newNFSOwnerDecorate()
 	require.NotNil(t, decorate)
-	assert.Nil(t, s.nfsCgroupIndex)
+	assert.Nil(t, s.cgroups)
 }

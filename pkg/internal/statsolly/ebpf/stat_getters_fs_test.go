@@ -141,10 +141,39 @@ func TestFsOpStrSeparatesFdatasync(t *testing.T) {
 		{CodeFsOpWrite, "write"},
 		{CodeFsOpFsync, "fsync"},
 		{CodeFsOpFdatasync, "fdatasync"},
+		{CodeFsOpSync, "sync"},
+		{CodeFsOpSyncfs, "syncfs"},
+		{CodeFsOpSyncFileRange, "sync_file_range"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			s := &Stat{Type: StatTypeFsIo, FsIo: &FsIo{Fs: uint8(CodeFsNFS), Op: uint8(tc.op)}}
 			assert.Equal(t, tc.want, getter(s).Value.AsString())
 		})
 	}
+}
+
+// The mount paths are left out, not set to "", when the stat has none: a
+// stat on no kubelet volume, a sync(2), a path that is not known.
+func TestFsIoGetters_MountPaths(t *testing.T) {
+	mount := &MountAttrs{PVName: "pvc-1", HostPath: "/var/lib/kubelet/pods/u/volumes/kubernetes.io~csi/pvc-1/mount", ContainerPath: "/data"}
+	onVolume := &Stat{Type: StatTypeFsIo, FsIo: &FsIo{Mount: mount}}
+	hostOnly := &Stat{Type: StatTypeFsIo, FsIo: &FsIo{Mount: &MountAttrs{PVName: "pvc-1", HostPath: "/h"}}}
+	noVolume := &Stat{Type: StatTypeFsIo, FsIo: &FsIo{}}
+
+	host, ok := StatGetters(attr.FsMountpoint)
+	assert.True(t, ok)
+	container, ok := StatGetters(attr.FsContainerMountpoint)
+	assert.True(t, ok)
+
+	assert.Equal(t, mount.HostPath, host(onVolume).Value.AsString())
+	assert.Equal(t, "/data", container(onVolume).Value.AsString())
+	assert.Equal(t, "/h", host(hostOnly).Value.AsString())
+	assert.False(t, container(hostOnly).Valid(), "no container path known")
+	assert.False(t, host(noVolume).Valid())
+	assert.False(t, container(noVolume).Valid())
+	assert.False(t, host(&Stat{}).Valid())
+
+	str, ok := StatStringGetters(attr.FsMountpoint)
+	assert.True(t, ok)
+	assert.Empty(t, str(noVolume), "an empty Prometheus label")
 }

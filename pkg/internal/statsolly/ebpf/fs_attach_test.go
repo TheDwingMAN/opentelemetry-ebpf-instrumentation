@@ -177,6 +177,123 @@ func TestPlanFsAttachSpliceReadResolvedIndependently(t *testing.T) {
 	assert.Empty(t, plans[0].SpliceReadSym)
 }
 
+// The lab cifs.ko set (section 9, step 12): all nine file_operations symbols
+// present, but cache=loose's read_iter and write_iter are static and absent
+// from the module's own BTF, so only that variant falls back to kprobes.
+// Every present variant attaches -- the release's first-present-wins bug
+// this step fixes -- and cifs_fsync, shared by loose and direct, is claimed
+// by loose alone.
+func TestPlanFsAttachCIFSAttachesEveryVariant(t *testing.T) {
+	const (
+		strictRead, strictWrite, strictFsync = "cifs_strict_readv", "cifs_strict_writev", "cifs_strict_fsync"
+		looseRead, looseWrite, sharedFsync   = "cifs_loose_read_iter", "cifs_file_write_iter", "cifs_fsync"
+		directRead, directWrite              = "cifs_direct_readv", "cifs_direct_writev"
+	)
+	// Every symbol the lab's `nm` dump found is probeable, cifs_user_readv
+	// and cifs_user_writev included: planFsAttachWith must still never ask
+	// for them, since they are not in any target's candidate lists.
+	probeable := map[string]bool{
+		strictRead: true, strictWrite: true, strictFsync: true,
+		looseRead: true, looseWrite: true, sharedFsync: true,
+		directRead: true, directWrite: true,
+		"cifs_user_readv": true, "cifs_user_writev": true,
+	}
+	resolve := func(cands []string) (string, bool) {
+		for _, c := range cands {
+			if probeable[c] {
+				return c, true
+			}
+		}
+		return "", false
+	}
+	// Only cache=loose's read_iter is missing from the module's own BTF
+	// (moduleBTFExists is irrelevant here: this is the per-symbol check).
+	capable := func(_, sym string) bool { return sym != looseRead }
+
+	cifsTargets := make([]fsTarget, 0, 3)
+	for _, tgt := range fsTargets {
+		if tgt.Fs == CodeFsCIFS {
+			cifsTargets = append(cifsTargets, tgt)
+		}
+	}
+	require.Len(t, cifsTargets, 3, "strict, loose and direct")
+
+	plans := planFsAttachWith(cifsTargets, capable, resolve)
+	require.Len(t, plans, 3, "every variant attaches, not just the first present")
+
+	byVariant := map[string]fsAttachPlan{}
+	for _, p := range plans {
+		byVariant[p.Variant] = p
+	}
+
+	strict := byVariant["strict"]
+	assert.Equal(t, strictRead, strict.ReadSym)
+	assert.Equal(t, strictWrite, strict.WriteSym)
+	assert.Equal(t, strictFsync, strict.FsyncSym)
+	assert.True(t, strict.UseFentry)
+
+	loose := byVariant["loose"]
+	assert.Equal(t, looseRead, loose.ReadSym)
+	assert.Equal(t, looseWrite, loose.WriteSym)
+	assert.False(t, loose.UseFentry, "cache=loose's read_iter is absent from the module's own BTF")
+	assert.Equal(t, sharedFsync, loose.FsyncSym, "loose claims the shared fsync symbol")
+
+	direct := byVariant["direct"]
+	assert.Equal(t, directRead, direct.ReadSym)
+	assert.Equal(t, directWrite, direct.WriteSym)
+	assert.True(t, direct.UseFentry)
+	assert.Empty(t, direct.FsyncSym, "cifs_fsync is attached once, by loose")
+
+	for _, p := range plans {
+		assert.NotEqual(t, "cifs_user_readv", p.ReadSym, "shared body of strict and direct, never probed")
+		assert.NotEqual(t, "cifs_user_writev", p.WriteSym, "shared body of strict and direct, never probed")
+	}
+}
+
+// dedupeSharedFsync only clears a later plan's FsyncSym when an earlier one
+// already claimed the same symbol; an unrelated clash never happens between
+// different filesystems, whose symbols are never equal, but the rule is
+// symbol-based and not CIFS-specific.
+func TestDedupeSharedFsyncKeepsFirstClaimOnly(t *testing.T) {
+	plans := []fsAttachPlan{
+		{Fs: CodeFsCIFS, Variant: "loose", FsyncSym: "cifs_fsync"},
+		{Fs: CodeFsCIFS, Variant: "direct", FsyncSym: "cifs_fsync"},
+		{Fs: CodeFsNFS, FsyncSym: "nfs_file_fsync"},
+	}
+	dedupeSharedFsync(plans)
+	assert.Equal(t, "cifs_fsync", plans[0].FsyncSym)
+	assert.Empty(t, plans[1].FsyncSym)
+	assert.Equal(t, "nfs_file_fsync", plans[2].FsyncSym, "a different symbol is never cleared")
+}
+
+// fsPlanProbes of the three real CIFS plans together attach cifs_fsync
+// exactly once, through loose's program family, even though loose and
+// direct are independent collections.
+func TestFsPlanProbesCIFSSharedFsyncAttachesOnce(t *testing.T) {
+	cifs := fsProgNamesFor(CodeFsCIFS)
+	loose := fsAttachPlan{
+		Fs: CodeFsCIFS, Variant: "loose", UseFentry: false,
+		ReadSym: "cifs_loose_read_iter", WriteSym: "cifs_file_write_iter", FsyncSym: "cifs_fsync",
+	}
+	direct := fsAttachPlan{
+		Fs: CodeFsCIFS, Variant: "direct", UseFentry: true,
+		ReadSym: "cifs_direct_readv", WriteSym: "cifs_direct_writev",
+	}
+
+	fsyncTargets := 0
+	for _, p := range fsPlanProbes(loose) {
+		if p.prog == cifs.KprobeFsync || p.prog == cifs.KretprobeFsync {
+			fsyncTargets++
+			assert.Equal(t, "cifs_fsync", p.sym)
+		}
+	}
+	for _, p := range fsPlanProbes(direct) {
+		assert.NotEqual(t, cifs.FentryFsync, p.prog, "direct carries no fsync symbol: it is not asked for")
+		assert.NotEqual(t, cifs.FexitFsync, p.prog, "direct carries no fsync symbol: it is not asked for")
+	}
+	assert.Equal(t, 2, fsyncTargets, "one kprobe and one kretprobe, from loose alone")
+}
+
 // Ceph, CIFS and XFS have no dedicated splice_read symbol, so their plans
 // carry none and no splice program is asked for; NFS's is attached through
 // the chosen family only.

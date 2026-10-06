@@ -177,6 +177,10 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.NFSOperationName), nfs4OperationName(s.NFSRPC.Version, s.NFSRPC.StatIdx))
 		}
+	case attr.FsMountpoint:
+		getter = optionalMountAttrGetter(name, func(m *MountAttrs) string { return m.HostPath })
+	case attr.FsContainerMountpoint:
+		getter = optionalMountAttrGetter(name, func(m *MountAttrs) string { return m.ContainerPath })
 	case attr.K8sNodeName:
 		// The agent sees only the processes of its own node, so the value is
 		// the same for every stat and is built once, with the getter.
@@ -196,6 +200,22 @@ func mountAttrGetter(name attr.Name, field func(*MountAttrs) string) attributes.
 			return attribute.String(string(name), "")
 		}
 		return attribute.String(string(name), field(s.FsIo.Mount))
+	}
+}
+
+// optionalMountAttrGetter is mountAttrGetter for an attribute that is left
+// out when there is no value: a mount path is not "unknown" for a stat on no
+// kubelet volume or for a sync(2), it is not there.
+func optionalMountAttrGetter(name attr.Name, field func(*MountAttrs) string) attributes.Getter[*Stat, attribute.KeyValue] {
+	return func(s *Stat) attribute.KeyValue {
+		if s.FsIo == nil || s.FsIo.Mount == nil {
+			return attribute.KeyValue{}
+		}
+		value := field(s.FsIo.Mount)
+		if value == "" {
+			return attribute.KeyValue{}
+		}
+		return attribute.String(string(name), value)
 	}
 }
 
@@ -313,6 +333,12 @@ func fsOpStr(o FsOpCode) string {
 		return string(FsOpFsync)
 	case CodeFsOpFdatasync:
 		return string(FsOpFdatasync)
+	case CodeFsOpSync:
+		return string(FsOpSync)
+	case CodeFsOpSyncfs:
+		return string(FsOpSyncfs)
+	case CodeFsOpSyncFileRange:
+		return string(FsOpSyncFileRange)
 	}
 	return ""
 }

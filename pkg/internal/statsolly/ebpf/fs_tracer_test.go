@@ -41,6 +41,17 @@ func TestFsProgramsLiveInTheirOwnObject(t *testing.T) {
 			}
 		}
 	}
+	// Step 14: the sync syscall set's programs, every fentry/kprobe
+	// combination, live in the same FsIo object.
+	for _, useFentry := range []bool{true, false} {
+		for _, p := range fsSyncPlanProbes(fsSyncPlan{
+			SyncfsSym: "syncfs", UseFentrySyncfs: useFentry,
+			SyncFileRangeSym: "sync_file_range", UseFentrySyncFileRange: useFentry,
+			SyncSym: "sync",
+		}) {
+			named[p.prog] = true
+		}
+	}
 
 	for name := range named {
 		assert.Contains(t, fsIo.Programs, name)
@@ -89,9 +100,10 @@ func fakeFsLoader(t *testing.T, consts map[string]any) (*fsLoader, *[]ebpf.Colle
 	// Every map a filesystem load needs already exists, as after the stats
 	// load, so resolving them creates nothing.
 	sharedMaps := map[string]*ebpf.Map{
-		FsIoMapStatsEvents: {}, FsIoMapDebugEvents: {}, FsIoMapFsStart: {}, FsIoMapFsDevFilter: {},
+		FsIoMapStatsEvents: {}, FsIoMapDebugEvents: {}, FsIoMapFsStart: {}, FsIoMapFsStartTask: {},
+		FsIoMapFsDevFilter: {}, FsIoMapFsDrops: {}, FsIoMapFsIoAccum: {}, FsIoMapFsIoAccumExp: {}, FsIoMapFsAccumZero: {},
 	}
-	l, err := newFsLoader(slog.Default(), &config.EBPFTracer{}, consts, sharedMaps, &sync.Mutex{})
+	l, err := newFsLoader(slog.Default(), &config.EBPFTracer{}, consts, FsAggregation{}, sharedMaps, &sync.Mutex{})
 	require.NoError(t, err)
 	// A load parses the kernel BTF into the process's burst: end it, as the
 	// attacher does, or a later test's startup finds it parsed already.
@@ -134,6 +146,7 @@ func TestFsLoaderConstantsMatchTheStatsCollection(t *testing.T) {
 	consts := statsConstants(
 		&config.EBPFTracer{BpfDebug: true, StatsWakeupDataBytes: 4096},
 		blockLoadPlan{wantQueueDepth: true, emitKinds: 0x03},
+		FsAggregation{Enabled: true, BoundsNs: []uint64{1000, 2000}},
 	)
 
 	stats, err := LoadStats()
@@ -234,6 +247,27 @@ func TestClearFsStarts(t *testing.T) {
 
 	failing := func(uint64) error { return errors.New("EPERM") }
 	assert.Error(t, clearFsStarts(maps.All(starts), failing, CodeFsExt4))
+}
+
+// fs_start has no cache= variant field (2.4, step 12): clearFsStarts filters
+// by FsTypeCode alone, so it cannot tell CIFS's cache=loose and cache=none
+// apart. Closing one variant's fsAttachment -- on an attach failure or a
+// retry -- clears the other's in-flight start too, although its probes are
+// still attached and that call has not returned yet; sized here at the unit
+// level (devdocs/metrics.md documents the residual risk this leaves, since
+// fixing it needs a variant field on fs_start's value, a BPF-side change).
+func TestClearFsStartsCannotDistinguishCIFSVariants(t *testing.T) {
+	starts := map[uint64]FsIoFsStartVal{
+		1: {Fs: uint8(CodeFsCIFS)}, // cache=loose's in-flight read
+		2: {Fs: uint8(CodeFsCIFS)}, // cache=none's own in-flight write
+	}
+	del := func(id uint64) error { delete(starts, id); return nil }
+
+	// cache=none's attachment closes (its own attach failed or is retried);
+	// clearFsStarts, scoped only to CodeFsCIFS, wipes cache=loose's entry 1
+	// too, though cache=loose's probes are untouched.
+	require.NoError(t, clearFsStarts(maps.All(maps.Clone(starts)), del, CodeFsCIFS))
+	assert.Empty(t, starts, "both variants' starts are gone, not only the closing attachment's own")
 }
 
 // The verifier tests load both program families of every filesystem, the

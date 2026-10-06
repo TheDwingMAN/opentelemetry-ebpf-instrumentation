@@ -142,12 +142,14 @@ func (a *Accumulator[L]) link(i int, stat *ebpf.Stat, now time.Time) *seriesCore
 	if s, ok := m.series[key]; ok {
 		return &s.seriesCore
 	}
+	// Exported only from its first count, as a per-event series exists from
+	// its first record: a key can be linked and count nothing into it, such
+	// as a counter that skips zeros.
 	s := &series[L]{key: key, labels: labels, metric: m}
-	s.start, s.updated, s.owner = now, now, s
+	s.start, s.updated, s.owner, s.dead = now, now, s, true
 	if m.def.Kind == KindHistogram {
 		s.buckets = make([]uint64, m.def.Layout.Buckets())
 	}
-	m.series[key] = s
 	return &s.seriesCore
 }
 

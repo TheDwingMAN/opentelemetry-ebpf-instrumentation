@@ -78,14 +78,31 @@ func TestFentryCapableModuleBTF(t *testing.T) {
 	sysKernelBTFDir = dir
 	t.Cleanup(func() { sysKernelBTFDir = old })
 
-	// Module BTF present: fentryCapable must short-circuit on it without
-	// consulting the kernel's own BTF at all.
+	// Module BTF directory present but unparsable (not real BTF data):
+	// fentryCapable assumes capable and lets the load be the final word,
+	// rather than failing every symbol because its own check could not run.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "nfs"), []byte("x"), 0o644))
 	assert.True(t, fentryCapable("nfs", "nfs_file_read"))
 
 	// No module BTF and a symbol that cannot possibly exist in vmlinux BTF
 	// either: must fall through to false rather than panicking or hanging.
 	assert.False(t, fentryCapable("does-not-exist", "no_such_symbol_ever"))
+}
+
+// symbolInSpec decides fentryCapable's answer whenever a module's BTF does
+// parse: the directory existing is not enough, because a static function
+// such as CIFS's cache=loose read_iter can be entirely missing from its own
+// module's BTF even though other functions of the same module are there
+// (2.4, step 12).
+func TestSymbolInSpec(t *testing.T) {
+	present := &btf.Func{Name: "cifs_strict_readv", Type: &btf.FuncProto{Return: &btf.Void{}}}
+	b, err := btf.NewBuilder([]btf.Type{present}, nil)
+	require.NoError(t, err)
+	spec, err := b.Spec()
+	require.NoError(t, err)
+
+	assert.True(t, symbolInSpec(spec, "cifs_strict_readv"))
+	assert.False(t, symbolInSpec(spec, "cifs_loose_read_iter"), "not declared in this spec")
 }
 
 // The raw tracepoints read the device from the request's gendisk, so they

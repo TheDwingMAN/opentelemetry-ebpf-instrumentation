@@ -27,11 +27,16 @@ var (
 )
 
 // fsTarget names the file_operations read/write implementations for one
-// filesystem. Several filesystems expose more than one symbol per operation --
-// CIFS selects between loose and strict variants by the cache= mount option --
-// so candidates are tried in order and the first present one wins.
+// filesystem, or for one cache= variant of a filesystem that exposes several:
+// CIFS has independent vtables for cache=strict, cache=loose and cache=none,
+// and every present one attaches, rather than the first-present-wins choice
+// the release made (2.4, step 12).
 type fsTarget struct {
-	Fs        FsTypeCode
+	Fs FsTypeCode
+	// Variant names a filesystem's cache= variant, empty for every
+	// filesystem with only one. Several variants of one Fs attach side by
+	// side, as independent collections (fsPlanKey tells them apart).
+	Variant   string
 	Module    string
 	ReadSyms  []string
 	WriteSyms []string
@@ -43,6 +48,9 @@ type fsTarget struct {
 	// node, so probing it would fire for container root filesystems too.
 	SpliceReadSyms []string
 }
+
+// Key identifies tgt among the targets of the same Fs.
+func (tgt fsTarget) Key() fsPlanKey { return fsPlanKey{Fs: tgt.Fs, Variant: tgt.Variant} }
 
 var fsTargets = []fsTarget{
 	{
@@ -58,11 +66,29 @@ var fsTargets = []fsTarget{
 		WriteSyms: []string{"ceph_write_iter"},
 		FsyncSyms: []string{"ceph_fsync"},
 	},
+	// CIFS: never cifs_user_readv/cifs_user_writev, the shared body strict
+	// and direct call into -- probing them would count strict's I/O twice
+	// (2.4). cifs_fsync is loose's and direct's shared fsync implementation;
+	// listing it on both and resolving each variant independently would
+	// attach it twice, so dedupeSharedFsync (used by planFsAttachWith)
+	// clears it from every target after the first that claims it.
 	{
-		Fs: CodeFsCIFS, Module: "cifs",
-		ReadSyms:  []string{"cifs_strict_readv", "cifs_loose_read_iter"},
-		WriteSyms: []string{"cifs_strict_writev", "cifs_file_write_iter"},
-		FsyncSyms: []string{"cifs_strict_fsync", "cifs_fsync"},
+		Fs: CodeFsCIFS, Variant: "strict", Module: "cifs",
+		ReadSyms:  []string{"cifs_strict_readv"},
+		WriteSyms: []string{"cifs_strict_writev"},
+		FsyncSyms: []string{"cifs_strict_fsync"},
+	},
+	{
+		Fs: CodeFsCIFS, Variant: "loose", Module: "cifs",
+		ReadSyms:  []string{"cifs_loose_read_iter"},
+		WriteSyms: []string{"cifs_file_write_iter"},
+		FsyncSyms: []string{"cifs_fsync"},
+	},
+	{
+		Fs: CodeFsCIFS, Variant: "direct", Module: "cifs",
+		ReadSyms:  []string{"cifs_direct_readv"},
+		WriteSyms: []string{"cifs_direct_writev"},
+		FsyncSyms: []string{"cifs_fsync"},
 	},
 	{
 		Fs: CodeFsFUSE, Module: "fuse",
@@ -297,17 +323,32 @@ func memberPointsToStruct(spec *btf.Spec, typ, member, target string) bool {
 // A built-in filesystem such as ext4, xfs or btrfs has no
 // /sys/kernel/btf/<module> of its own (moduleBTFExists is false), but its
 // symbols still live in the kernel's own BTF (vmlinux) whenever BTF is
-// enabled at all, so fentry is still valid there.
+// enabled at all, so fentry is still valid there. When the module has its own
+// BTF, the directory existing is not enough: a static function can be
+// missing from it even though other functions of the same module are there
+// -- CIFS's cache=loose read_iter and write_iter are static and absent from
+// the lab's cifs module BTF, while its other eight read/write/fsync symbols
+// are present (2.4, step 12) -- so the symbol is looked up by name. A module
+// BTF that cannot be parsed falls back to assuming capable, as before this
+// per-symbol check existed, and lets the load itself be the final word.
 func fentryCapable(module, sym string) bool {
 	if moduleBTFExists(module) {
-		return true
+		spec, err := kernelBTFCache.Cache().Module(module)
+		if err != nil {
+			return true
+		}
+		return symbolInSpec(spec, sym)
 	}
 
 	spec := kernelBTF()
 	if spec == nil {
 		return false
 	}
+	return symbolInSpec(spec, sym)
+}
 
+// symbolInSpec reports whether spec declares a function named sym.
+func symbolInSpec(spec *btf.Spec, sym string) bool {
 	var fn *btf.Func
 	return spec.TypeByName(sym, &fn) == nil
 }
@@ -381,6 +422,8 @@ func moduleLoaded(module string) bool {
 
 type fsAttachPlan struct {
 	Fs FsTypeCode
+	// Variant is tgt.Variant of the fsTarget the plan was built from.
+	Variant string
 	// Module is the kernel module the filesystem lives in, or is named after
 	// when built in.
 	Module    string
@@ -391,6 +434,33 @@ type fsAttachPlan struct {
 	// SpliceReadSym is empty when the filesystem has no dedicated symbol, or
 	// the symbol is not probeable. Read and write still attach.
 	SpliceReadSym string
+}
+
+// Key identifies the plan's attachment among the attacher's state: one
+// filesystem, or for CIFS one cache= variant of it.
+func (p fsAttachPlan) Key() fsPlanKey { return fsPlanKey{Fs: p.Fs, Variant: p.Variant} }
+
+// fsPlanKey identifies one filesystem attachment. Every filesystem but CIFS
+// has at most one live attachment at a time, keyed by Fs alone (Variant
+// empty); CIFS attaches its cache=strict, cache=loose and cache=none
+// variants side by side, as independent collections that load, fail, retry
+// and fall back to kprobes on their own (2.4, step 12).
+type fsPlanKey struct {
+	Fs      FsTypeCode
+	Variant string
+}
+
+// fsTargetFor returns the fsTarget key was planned from, or a zero fsTarget
+// if none matches: used to look up a plan key's candidate symbols when a
+// sibling claims a shared fsync symbol it did not plan for (2.4, step 12
+// review fix).
+func fsTargetFor(key fsPlanKey) fsTarget {
+	for _, tgt := range fsTargets {
+		if tgt.Key() == key {
+			return tgt
+		}
+	}
+	return fsTarget{}
 }
 
 // planFsAttachWith decides, per filesystem, whether to attach fentry/fexit or
@@ -415,6 +485,7 @@ func planFsAttachWith(
 		spliceReadSym, _ := resolve(tgt.SpliceReadSyms)
 		plans = append(plans, fsAttachPlan{
 			Fs:            tgt.Fs,
+			Variant:       tgt.Variant,
 			Module:        tgt.Module,
 			UseFentry:     fentryCapable(tgt.Module, readSym),
 			ReadSym:       readSym,
@@ -423,7 +494,28 @@ func planFsAttachWith(
 			SpliceReadSym: spliceReadSym,
 		})
 	}
+	dedupeSharedFsync(plans)
 	return plans
+}
+
+// dedupeSharedFsync clears FsyncSym on every plan after the first whose
+// FsyncSym names a function another plan already attaches. CIFS's
+// cache=loose and cache=none variants both call cifs_fsync; it must be
+// probed once, not twice, or every fsync would be counted by both (2.4,
+// step 12).
+func dedupeSharedFsync(plans []fsAttachPlan) {
+	seen := map[string]bool{}
+	for i := range plans {
+		sym := plans[i].FsyncSym
+		if sym == "" {
+			continue
+		}
+		if seen[sym] {
+			plans[i].FsyncSym = ""
+			continue
+		}
+		seen[sym] = true
+	}
 }
 
 func planFsAttach() []fsAttachPlan {

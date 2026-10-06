@@ -417,6 +417,7 @@ func TestStorageFSFeatureParsing(t *testing.T) {
 	assert.True(t, f.StorageFSDuration())
 	assert.True(t, f.StorageFSIo())
 	assert.True(t, f.StorageFSErrors())
+	assert.True(t, f.StorageFSSync())
 	assert.True(t, f.StatMetrics(), "storage_fs rides the stats pipeline")
 
 	var d Features
@@ -424,6 +425,7 @@ func TestStorageFSFeatureParsing(t *testing.T) {
 	assert.True(t, d.StorageFS())
 	assert.False(t, d.StorageFSIo())
 	assert.False(t, d.StorageFSErrors())
+	assert.False(t, d.StorageFSSync())
 
 	var e Features
 	require.NoError(t, yaml.Unmarshal([]byte(`["storage_fs_errors"]`), &e))
@@ -431,6 +433,14 @@ func TestStorageFSFeatureParsing(t *testing.T) {
 	assert.True(t, e.StorageFSErrors())
 	assert.False(t, e.StorageFSDuration())
 	assert.False(t, e.StorageFSIo())
+
+	var s Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_fs_sync"]`), &s))
+	assert.True(t, s.StorageFS(), "storage_fs_sync is in the storage_fs umbrella")
+	assert.True(t, s.StorageFSSync())
+	assert.False(t, s.StorageFSDuration())
+	assert.False(t, s.StorageFSIo())
+	assert.False(t, s.StorageFSErrors())
 }
 
 func TestStorageNFSFeatureParsing(t *testing.T) {

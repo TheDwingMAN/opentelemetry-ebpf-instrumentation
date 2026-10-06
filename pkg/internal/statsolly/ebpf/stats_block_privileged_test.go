@@ -206,7 +206,7 @@ func attachBlockPrograms(t *testing.T, features export.Features) (*StatsFetcher,
 		t.Skip("needs root to load eBPF programs and set up block devices")
 	}
 
-	fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{}, NFSConfig{})
+	fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{}, FsAggregation{}, NFSConfig{}, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 
@@ -263,31 +263,31 @@ func (l *testDisk) sysQueue(name string) string {
 	return filepath.Join(filepath.Dir(l.sysStat), "queue", name)
 }
 
-func newLoopDevice(t *testing.T, size int64) *testDisk {
-	t.Helper()
+func newLoopDevice(tb testing.TB, size int64) *testDisk {
+	tb.Helper()
 
 	control, err := os.OpenFile("/dev/loop-control", os.O_RDWR, 0)
 	if err != nil {
-		t.Skipf("no loop device support: %v", err)
+		tb.Skipf("no loop device support: %v", err)
 	}
 	defer control.Close()
 	minor, err := unix.IoctlRetInt(int(control.Fd()), unix.LOOP_CTL_GET_FREE)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	name := fmt.Sprintf("loop%d", minor)
 	path := filepath.Join("/dev", name)
-	ensureBlockNode(t, path, loopMajor, uint32(minor))
+	ensureBlockNode(tb, path, loopMajor, uint32(minor))
 
-	backing, err := os.Create(filepath.Join(t.TempDir(), "backing"))
-	require.NoError(t, err)
-	t.Cleanup(func() { backing.Close() })
-	require.NoError(t, backing.Truncate(size))
+	backing, err := os.Create(filepath.Join(tb.TempDir(), "backing"))
+	require.NoError(tb, err)
+	tb.Cleanup(func() { backing.Close() })
+	require.NoError(tb, backing.Truncate(size))
 
 	dev, err := os.OpenFile(path, os.O_RDWR, 0)
-	require.NoError(t, err)
-	t.Cleanup(func() { dev.Close() })
-	require.NoError(t, unix.IoctlSetInt(int(dev.Fd()), unix.LOOP_SET_FD, int(backing.Fd())))
-	t.Cleanup(func() { _ = unix.IoctlSetInt(int(dev.Fd()), unix.LOOP_CLR_FD, 0) })
+	require.NoError(tb, err)
+	tb.Cleanup(func() { dev.Close() })
+	require.NoError(tb, unix.IoctlSetInt(int(dev.Fd()), unix.LOOP_SET_FD, int(backing.Fd())))
+	tb.Cleanup(func() { _ = unix.IoctlSetInt(int(dev.Fd()), unix.LOOP_CLR_FD, 0) })
 
 	return &testDisk{
 		path:      path,
@@ -299,14 +299,14 @@ func newLoopDevice(t *testing.T, size int64) *testDisk {
 
 // ensureBlockNode creates the device node when it is missing: a container's
 // /dev only holds the nodes that existed when it started.
-func ensureBlockNode(t *testing.T, path string, major, minor uint32) {
-	t.Helper()
+func ensureBlockNode(tb testing.TB, path string, major, minor uint32) {
+	tb.Helper()
 
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		return
 	}
-	require.NoError(t, unix.Mknod(path, unix.S_IFBLK|0o600, int(unix.Mkdev(major, minor))))
-	t.Cleanup(func() { os.Remove(path) })
+	require.NoError(tb, unix.Mknod(path, unix.S_IFBLK|0o600, int(unix.Mkdev(major, minor))))
+	tb.Cleanup(func() { os.Remove(path) })
 }
 
 func readUints(t *testing.T, path string) []uint64 {

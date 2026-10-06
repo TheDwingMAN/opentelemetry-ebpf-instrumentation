@@ -332,4 +332,12 @@ func TestBPFVerifierWithConstants(t *testing.T) {
 		{"nfs_key_owner", []any{uint8(0), uint8(1)}},
 		{"nfs_cgroup_v1", []any{uint8(0), uint8(1)}},
 	})
+	// Kernel aggregation (explicit and exponential layouts) against the ring
+	// buffer, each with the fentry/fexit starts in task storage or in the
+	// fs_start hash map.
+	forEachCombination(t, "statsolly/FsIoAgg", statsolly.LoadFsIo, []constOption{
+		{"fs_emit_mode", []any{uint8(0), uint8(1)}},
+		{"fs_hist_exp", []any{uint8(0), uint8(1)}},
+		{"fs_task_btf", []any{uint8(0), uint8(1)}},
+	})
 }

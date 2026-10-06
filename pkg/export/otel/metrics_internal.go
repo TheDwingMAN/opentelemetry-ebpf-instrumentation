@@ -53,6 +53,8 @@ type InternalMetricsReporter struct {
 	bpfPacketCount        instrument.Int64Counter
 	bpfIgnoredPacketCount instrument.Int64Counter
 
+	bpfStorageDrops instrument.Int64Counter
+
 	queueCapacityRatio instrument.Float64Gauge
 
 	internalAttrs attr.InternalAttributes
@@ -204,6 +206,15 @@ func NewInternalMetricsReporter(ctx context.Context, ctxInfo *global.ContextInfo
 		return nil, err
 	}
 
+	bpfStorageDrops, err := meter.Int64Counter(
+		internalNames.BpfStorageDrops.OTEL,
+		instrument.WithDescription("Operations the storage eBPF programs could not record, missing from the storage metrics"),
+		instrument.WithUnit(internalNames.BpfStorageDrops.Unit),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	queueCapacityRatio, err := meter.Float64Gauge(
 		internalNames.QueueCapacityRatio.OTEL,
 		instrument.WithDescription("Ratio [0-1] between the unread messages of an internal Go channel and its total capacity"),
@@ -230,6 +241,7 @@ func NewInternalMetricsReporter(ctx context.Context, ctxInfo *global.ContextInfo
 		informerLag:                      informerLag,
 		bpfPacketCount:                   bpfPacketCount,
 		bpfIgnoredPacketCount:            bpfIgnoredPacketCount,
+		bpfStorageDrops:                  bpfStorageDrops,
 		queueCapacityRatio:               queueCapacityRatio,
 		internalAttrs:                    internalAttrs,
 	}, nil
@@ -393,6 +405,10 @@ func (p *InternalMetricsReporter) BPFPacketStats(count, ignored uint64) {
 	p.bpfPacketCount.Add(p.ctx, int64(count-p.totalPackets))
 	p.bpfIgnoredPacketCount.Add(p.ctx, int64(ignored-p.totalIgnoredPackets))
 	p.totalPackets, p.totalIgnoredPackets = count, ignored
+}
+
+func (p *InternalMetricsReporter) BpfStorageDrops(reason string, dropped uint64) {
+	p.bpfStorageDrops.Add(p.ctx, int64(dropped), instrument.WithAttributes(attribute.String(string(attr.BpfDropReason), reason)))
 }
 
 func (p *InternalMetricsReporter) QueueBufferUtilization(subscriber string, ratio float64) {
