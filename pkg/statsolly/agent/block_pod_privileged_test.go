@@ -62,7 +62,7 @@ func TestNewBlockFamilies_DiskIOFollowsThePodCounters(t *testing.T) {
 		require.NoError(t, err)
 		registry, err := statagg.NewRegistry(fs...)
 		require.NoError(t, err, "no metric comes from two families")
-		assert.Nil(t, s.cgroupIndex, "no cgroup hierarchy is walked without Kubernetes metadata")
+		assert.Nil(t, s.cgroups, "no cgroup hierarchy is walked without Kubernetes metadata")
 		return registry
 	}
 	pod := export.FeatureStorageBlock | export.FeatureStorageBlockPod
