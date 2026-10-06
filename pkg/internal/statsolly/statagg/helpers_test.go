@@ -27,6 +27,8 @@ type fakeMap struct {
 	stride  int
 	cpus    int
 	entries map[string][]byte
+	// order caches the sorted keys while no key is added or removed.
+	order [][]byte
 }
 
 func newFakeMap(keySize, stride, cpus int) *fakeMap {
@@ -40,13 +42,17 @@ func (m *fakeMap) CPUs() int        { return m.cpus }
 func (m *fakeMap) ForEach(fn func(key, values []byte)) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	keys := make([]string, 0, len(m.entries))
-	for k := range m.entries {
-		keys = append(keys, k)
+	if len(m.order) != len(m.entries) {
+		m.order = m.order[:0]
+		for k := range m.entries {
+			m.order = append(m.order, []byte(k))
+		}
+		sort.Slice(m.order, func(i, j int) bool { return string(m.order[i]) < string(m.order[j]) })
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		fn([]byte(k), m.entries[k])
+	for _, k := range m.order {
+		if v, ok := m.entries[string(k)]; ok {
+			fn(k, v)
+		}
 	}
 	return nil
 }
