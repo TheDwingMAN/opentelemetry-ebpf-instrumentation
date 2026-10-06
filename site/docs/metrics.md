@@ -1053,6 +1053,111 @@ Ratio [0-1] between the unread messages of an internal Go channel and its total 
 | --- | --- | --- | --- | --- | --- |
 | `subscriber` | string | `required` | development | Name of the pipeline stage consuming the internal queue, as given to msg.SubscriberName when the stage subscribed. Subscribers that do not provide a name fall back to the name of the queue they subscribed to. | discover.CriteriaMatcher; traceAttacher |
 
+## `obi.stat.disk.io`
+
+Count of bytes transferred at the block layer, accumulated per completed disk I/O request and broken down by device and direction.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.operation.duration`
+
+Block-layer service latency per disk I/O request, measured from `block_rq_issue` to `block_rq_complete`, broken down by device and direction.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.operation.errors`
+
+Count of block I/O requests that completed with a non-zero error, broken down by device, direction and errno.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {error} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `error.type` | string | `recommended` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.queue.depth`
+
+Number of block I/O requests still in flight on the device immediately after this request completed, observed per completion and broken down by device.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.queue.duration`
+
+Time a disk I/O request spent queued before being dispatched to the device, measured from `block_rq_insert` to `block_rq_issue`, broken down by device and direction. Requests that blk-mq issues directly, without passing through `block_rq_insert`, are not observed: they have no queue wait to report and recording a zero would understate the distribution.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.fs.io`
+
+Count of bytes transferred through filesystem read and write operations, broken down by filesystem type and operation.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
+| `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
+
+## `obi.stat.fs.operation.duration`
+
+Latency of a single filesystem read or write as the application experiences it, broken down by filesystem type and operation.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
+| `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
+
+## `obi.stat.fs.operation.errors`
+
+Count of filesystem read or write operations that failed, broken down by filesystem type, operation and errno.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {error} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `recommended` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
+| `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
+
 ## `obi.stat.tcp.failed.connections`
 
 Count of TCP connections that failed to establish, broken down by `reason`.
