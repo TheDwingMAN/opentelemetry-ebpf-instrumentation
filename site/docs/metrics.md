@@ -1334,7 +1334,7 @@ Count of bytes transferred through filesystem read and write operations, broken 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
-| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
@@ -1350,7 +1350,7 @@ Latency of a single filesystem read, write, fsync or fdatasync as the applicatio
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
-| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
@@ -1367,7 +1367,7 @@ Count of filesystem read or write operations that failed, broken down by filesys
 | --- | --- | --- | --- | --- | --- |
 | `error.type` | string | `recommended` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
-| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
@@ -1629,7 +1629,7 @@ OBI-emitted rpc.server.call.duration
 | `k8s.daemonset.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a DaemonSet | release_candidate | The name of the DaemonSet. | opentelemetry |
 | `k8s.deployment.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a Deployment | release_candidate | The name of the Deployment. | opentelemetry |
 | `k8s.job.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a Job | release_candidate | The name of the Job. | opentelemetry |
-| `k8s.kind` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.kind` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
 | `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
@@ -1709,7 +1709,7 @@ OBI counterpart of `target.info` for the traces pipeline. Carries the resource a
 | `k8s.daemonset.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a DaemonSet | release_candidate | The name of the DaemonSet. | opentelemetry |
 | `k8s.deployment.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a Deployment | release_candidate | The name of the Deployment. | opentelemetry |
 | `k8s.job.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a Job | release_candidate | The name of the Job. | opentelemetry |
-| `k8s.kind` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.kind` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
 | `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |

@@ -21,7 +21,7 @@ groups:
         type: string
         stability: development
         brief: >
-          Kind of the top-level Kubernetes owner of the decorated Pod
-          (falls back to the direct owner's kind when no top-level owner is
-          resolved). Deliberately never `Pod`, to bound label cardinality.
-        examples: ["Deployment", "StatefulSet"]
+          Kind of the top-level Kubernetes owner of the decorated Pod, or
+          the object's own kind when no owner is resolved (a bare Pod, or
+          a non-Pod object such as a Node).
+        examples: ["Deployment", "StatefulSet", "Pod"]
