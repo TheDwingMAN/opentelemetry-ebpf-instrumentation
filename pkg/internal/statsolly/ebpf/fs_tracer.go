@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"log/slog"
 	"slices"
 	"sync"
@@ -367,12 +368,17 @@ func (l *fsLoader) attach(plan fsAttachPlan) (io.Closer, error) {
 	if err != nil {
 		return nil, err
 	}
-	links, err := attachFsProbes(coll.Programs, plan)
+	l.mu.Lock()
+	starts := l.sharedMaps[FsIoMapFsStart]
+	l.mu.Unlock()
+
+	a := &fsAttachment{coll: coll, clearStarts: func() error { return clearMapFsStarts(starts, plan.Fs) }}
+	a.probes, a.links, err = attachFsProbes(coll.Programs, plan)
 	if err != nil {
-		coll.Close()
+		a.Close()
 		return nil, err
 	}
-	return &fsAttachment{coll: coll, links: links}, nil
+	return a, nil
 }
 
 func (l *fsLoader) load(plan fsAttachPlan) (*ebpf.Collection, error) {
@@ -481,34 +487,91 @@ func moduleBTFBroken(cache *btf.Cache) bool {
 
 // fsAttachment is one filesystem's collection and the links of its probes.
 type fsAttachment struct {
-	coll  *ebpf.Collection
-	links []io.Closer
+	coll *ebpf.Collection
+	// probes[i] is the probe links[i] attached.
+	probes []fsProbe
+	links  []io.Closer
+	// clearStarts deletes the filesystem's fs_start entries.
+	clearStarts func() error
 }
 
-// Close detaches the probes, then unloads the collection.
+// Close detaches the entry probes, then the exit probes, unloads the
+// collection and deletes the fs_start entries the filesystem left. With the
+// entry probes gone first, no call records a start after its exit probe is
+// gone; but a call in flight when its exit probe detaches -- a kretprobe
+// drops its pending returns -- leaves its entry behind, and until that entry
+// goes stale it would make every later filesystem call on the thread count
+// as nested, and report nothing.
 func (a *fsAttachment) Close() error {
 	var errs []error
-	for _, l := range a.links {
-		errs = append(errs, l.Close())
+	for _, exits := range []bool{false, true} {
+		for i, l := range a.links {
+			if a.probes[i].exit == exits {
+				errs = append(errs, l.Close())
+			}
+		}
 	}
 	a.coll.Close()
+	if err := a.clearStarts(); err != nil {
+		errs = append(errs, fmt.Errorf("clearing fs_start: %w", err))
+	}
 	return errors.Join(errs...)
 }
 
-// attachFsProbes attaches plan's probes to the loaded programs. On the first
-// failure it detaches the probes already attached and returns the error.
-func attachFsProbes(programs map[string]*ebpf.Program, plan fsAttachPlan) ([]io.Closer, error) {
+// clearMapFsStarts deletes the entries of fs from the fs_start map m.
+func clearMapFsStarts(m *ebpf.Map, fs FsTypeCode) error {
+	if m == nil {
+		return nil
+	}
+	var (
+		id  uint64
+		val FsIoFsStartVal
+	)
+	it := m.Iterate()
+	entries := func(yield func(uint64, FsIoFsStartVal) bool) {
+		for it.Next(&id, &val) {
+			if !yield(id, val) {
+				return
+			}
+		}
+	}
+	err := clearFsStarts(entries, func(id uint64) error { return m.Delete(id) }, fs)
+	return errors.Join(err, it.Err())
+}
+
+// clearFsStarts deletes, through del, the fs_start entries of fs among
+// entries, which are keyed by pid_tgid. An entry whose call returned in the
+// meantime is already gone, which is no error.
+func clearFsStarts(entries iter.Seq2[uint64, FsIoFsStartVal], del func(uint64) error, fs FsTypeCode) error {
+	var ids []uint64
+	for id, val := range entries {
+		if FsTypeCode(val.Fs) == fs {
+			ids = append(ids, id)
+		}
+	}
+	var errs []error
+	for _, id := range ids {
+		if err := del(id); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// attachFsProbes attaches plan's probes to the loaded programs, and returns
+// the probes it attached and their links. On a failure, those are the ones
+// attached before it, for the caller to close.
+func attachFsProbes(programs map[string]*ebpf.Program, plan fsAttachPlan) ([]fsProbe, []io.Closer, error) {
 	probes := fsPlanProbes(plan)
 	links := make([]io.Closer, 0, len(probes))
-	for _, p := range probes {
+	for i, p := range probes {
 		l, err := attachFsProbe(programs[p.prog], p, plan.UseFentry)
 		if err != nil {
-			closeAll(links)
-			return nil, fmt.Errorf("attaching %s to %s: %w", p.prog, p.sym, err)
+			return probes[:i], links, fmt.Errorf("attaching %s to %s: %w", p.prog, p.sym, err)
 		}
 		links = append(links, l)
 	}
-	return links, nil
+	return probes, links, nil
 }
 
 func attachFsProbe(prog *ebpf.Program, p fsProbe, fentry bool) (link.Link, error) {
