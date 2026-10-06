@@ -162,7 +162,7 @@ Attributes used by OBI's span-metrics emission. The metric names match the outpu
 
 ## `registry.obi.stats`
 
-Attributes carried on OBI's per-connection TCP statistics and filesystem I/O stats. Emitted when the `stats_tcp_rtt`, `stats_tcp_failed_connections`, `stats_tcp_successful_connections` or `storage_fs*` features are enabled (all rolled into the umbrella `stats` feature). Like network-flow metrics, the per-data-point attribute set is configurable via `attributes.select`.
+Attributes carried on OBI's per-connection TCP statistics and filesystem I/O stats. Emitted when the `stats_tcp_rtt`, `stats_tcp_failed_connections`, `stats_tcp_successful_connections` or `storage_fs*` features are enabled (the TCP ones are rolled into the umbrella `stats` feature; `storage_fs*` is opt-in and not part of it). Like network-flow metrics, the per-data-point attribute set is configurable via `attributes.select`.
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
