@@ -400,7 +400,13 @@ func (l *fsLoader) load(plan fsAttachPlan) (*ebpf.Collection, error) {
 	}
 	opts.Programs.KernelTypes = kernel
 	opts.Programs.ExtraRelocationTargets = modules
-	return l.newCollection(spec, opts)
+	coll, err = l.newCollection(spec, opts)
+	if err != nil && plan.UseFentry {
+		// cilium looks the fentry/fexit target up in every loaded module's
+		// BTF, the unparsable one included; kprobes need no such lookup.
+		return nil, fmt.Errorf("%w: a module's BTF cannot be parsed: %w", errFentryUnsupported, err)
+	}
+	return coll, err
 }
 
 // prepare returns the spec and options of a load of plan's programs.

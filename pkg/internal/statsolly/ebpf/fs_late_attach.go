@@ -10,9 +10,12 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
+	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/obi/pkg/config"
 )
@@ -24,8 +27,8 @@ import (
 // of a local filesystem mounted or unmounted since.
 const fsAttachInterval = 30 * time.Second
 
-// fsAttachTries bounds how often a filesystem whose probes fail to load or
-// attach is tried, one tick apart, before it is left alone until OBI
+// fsAttachTries bounds how often in a row a filesystem whose probes fail to
+// load or attach is tried, one tick apart, before it is left alone until OBI
 // restarts. A module still initializing can fail once; a verifier rejection
 // fails every time.
 const fsAttachTries = 3
@@ -57,10 +60,11 @@ type fsAttacher struct {
 	// withPV is the result of the last successful localPVs.
 	withPV   map[FsTypeCode]bool
 	attached map[FsTypeCode]io.Closer
-	// failures counts failed loads and attaches per filesystem.
+	// failures counts the failed loads and attaches of each filesystem since
+	// it last attached.
 	failures map[FsTypeCode]int
-	// noFentry holds the filesystems whose fentry/fexit probes failed, which
-	// use kprobes from then on.
+	// noFentry holds the filesystems whose fentry/fexit probes this kernel
+	// cannot run, which use kprobes from then on.
 	noFentry map[FsTypeCode]bool
 	// fentryFallbacks counts the filesystems moved to kprobes.
 	fentryFallbacks int
@@ -171,20 +175,22 @@ func (a *fsAttacher) refresh() {
 // attach loads and attaches plan. startup is set for the first refresh,
 // whose attaches are logged apart from the later ones.
 func (a *fsAttacher) attach(plan fsAttachPlan, startup bool) {
-	closer, err := a.loadAndAttach(plan)
+	closer, fentry, err := a.loadAndAttach(plan)
 	if err != nil {
 		a.failures[plan.Fs]++
 		if a.failures[plan.Fs] < fsAttachTries {
 			a.log.Warn("filesystem probes failed to load or attach; retrying",
-				"fs", fsTypeStr(plan.Fs), "error", err)
+				"fs", fsTypeStr(plan.Fs), "fentry", fentry, "error", err)
 			return
 		}
 		a.log.Warn("filesystem probes failed to load or attach; disabling this filesystem",
-			"fs", fsTypeStr(plan.Fs), "error", err)
+			"fs", fsTypeStr(plan.Fs), "fentry", fentry, "error", err)
 		return
 	}
 	a.attached[plan.Fs] = closer
-	fentry := plan.UseFentry && !a.noFentry[plan.Fs]
+	// The tries bound failures in a row: a filesystem that attached, detached
+	// and fails later starts afresh.
+	delete(a.failures, plan.Fs)
 	if startup {
 		a.log.Info("filesystem probes attached", "fs", fsTypeStr(plan.Fs), "fentry", fentry)
 		return
@@ -198,24 +204,52 @@ func (a *fsAttacher) attach(plan fsAttachPlan, startup bool) {
 // filesystem whose first kubelet volume was mounted later.
 const lateAttachMessage = "filesystem became probeable after startup; probes attached"
 
-// loadAndAttach attaches plan, moving the filesystem to kprobes when its
-// fentry/fexit probes fail: those need the function's BTF and trampoline
-// support, kprobes neither.
-func (a *fsAttacher) loadAndAttach(plan fsAttachPlan) (io.Closer, error) {
+// loadAndAttach attaches plan, and reports whether it tried fentry/fexit. A
+// filesystem whose fentry/fexit probes this kernel cannot run is moved to
+// kprobes for good: those need the function's BTF and trampoline support,
+// kprobes neither. Any other failure is returned as is, and the next try
+// uses fentry/fexit again.
+func (a *fsAttacher) loadAndAttach(plan fsAttachPlan) (io.Closer, bool, error) {
 	if a.noFentry[plan.Fs] {
 		plan.UseFentry = false
 	}
 	closer, err := a.attachFn(plan)
-	if err == nil || !plan.UseFentry {
-		return closer, err
+	if err == nil || !plan.UseFentry || !fentryUnsupported(err) {
+		return closer, plan.UseFentry, err
 	}
 
 	a.noFentry[plan.Fs] = true
 	a.fentryFallbacks++
-	a.log.Warn("filesystem fentry/fexit probes failed; retrying with kprobes",
+	a.log.Warn("filesystem fentry/fexit probes are not supported here; retrying with kprobes",
 		"fs", fsTypeStr(plan.Fs), "error", err, "filesystems_on_kprobes", a.fentryFallbacks)
 	plan.UseFentry = false
-	return a.attachFn(plan)
+	closer, err = a.attachFn(plan)
+	return closer, false, err
+}
+
+// errFentryUnsupported marks a load failure that rules out fentry/fexit for
+// a filesystem on this kernel, which the kernel's error alone does not tell.
+var errFentryUnsupported = errors.New("fentry/fexit unsupported")
+
+// errnoENOTSUPP is the kernel-internal ENOTSUPP (524), returned when this
+// architecture or kernel cannot build a trampoline for the function. It is
+// not EOPNOTSUPP and x/sys/unix does not name it.
+const errnoENOTSUPP = syscall.Errno(524)
+
+// fentryUnsupported reports whether a failed fentry/fexit load or attach
+// means these programs cannot work for the filesystem's functions on this
+// kernel -- no BTF for the function, no trampoline support, a function the
+// kernel will not trace or whose signature the verifier rejects -- rather
+// than something a later try may not hit, such as memory pressure.
+func fentryUnsupported(err error) bool {
+	var verr *ebpf.VerifierError
+	return errors.Is(err, errFentryUnsupported) ||
+		errors.Is(err, btf.ErrNotFound) ||
+		errors.Is(err, ebpf.ErrNotSupported) ||
+		errors.Is(err, errnoENOTSUPP) ||
+		errors.Is(err, unix.EOPNOTSUPP) ||
+		errors.Is(err, unix.EINVAL) ||
+		errors.As(err, &verr)
 }
 
 func (a *fsAttacher) detach(fs FsTypeCode, closer io.Closer) {
