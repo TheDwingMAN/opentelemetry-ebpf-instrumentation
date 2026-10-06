@@ -110,8 +110,10 @@ func attachedSet(a *fsAttacher) map[FsTypeCode]bool {
 	return set
 }
 
-func refreshN(a *fsAttacher, n int) {
-	for range n {
+// refreshToDetach runs the refreshes that detach a local filesystem gone
+// from every volume.
+func refreshToDetach(a *fsAttacher) {
+	for range fsDetachAfter {
 		a.refresh()
 	}
 }
@@ -208,12 +210,12 @@ func TestFsAttacherAttachesLocalFilesystemsOnDemand(t *testing.T) {
 	n.pvErr = nil
 
 	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
-	refreshN(a, fsDetachAfter)
+	refreshToDetach(a)
 	assert.Equal(t, map[FsTypeCode]bool{CodeFsExt4: true}, attachedSet(a))
 	assert.Zero(t, n.open[CodeFsXFS], "the last xfs volume went away: its probes are detached")
 
 	n.pvs = map[FsTypeCode]bool{CodeFsXFS: true}
-	refreshN(a, fsDetachAfter)
+	refreshToDetach(a)
 	assert.Equal(t, map[FsTypeCode]bool{CodeFsXFS: true}, attachedSet(a), "xfs comes back, ext4 goes")
 	assert.Equal(t, 1, n.open[CodeFsXFS])
 	assert.Zero(t, n.open[CodeFsExt4])
@@ -259,7 +261,7 @@ func TestFsAttacherFallsBackToKprobes(t *testing.T) {
 
 	// Detached and attached again: straight to kprobes.
 	n.pvs = map[FsTypeCode]bool{}
-	refreshN(a, fsDetachAfter)
+	refreshToDetach(a)
 	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
 	a.refresh()
 	assert.Equal(t, attachAttempt{CodeFsExt4, false}, n.attempts[len(n.attempts)-1])
@@ -375,7 +377,7 @@ func TestFsAttacherResetsFailuresOnAttach(t *testing.T) {
 
 	// The volume goes away, comes back, and the filesystem fails again.
 	n.pvs = map[FsTypeCode]bool{}
-	refreshN(a, fsDetachAfter)
+	refreshToDetach(a)
 	require.NotContains(t, a.attached, CodeFsExt4)
 	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
 	n.reject[CodeFsExt4] = true
