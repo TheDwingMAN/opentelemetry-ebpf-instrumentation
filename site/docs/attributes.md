@@ -66,7 +66,7 @@ Attributes carried by OBI's own internal (obi.*) OTLP metrics. Keys are namespac
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
-| `bpf.drop.reason` | string | development | Why an eBPF program could not record an operation. fs_accum_full: the filesystem aggregation map was full, so an operation of a new series was not counted; fs_start_failed: the start of a filesystem operation could not be stored, so the operation was not recorded. | fs_accum_full; fs_start_failed |
+| `bpf.drop.reason` | string | development | Why an eBPF program could not record an operation. fs_accum_full: the filesystem aggregation map was full, so an operation of a new series was not counted; fs_start_failed: the start of a filesystem operation could not be stored, so the operation was not recorded; kretprobe_miss: a kprobe-mode return probe found no start for its operation, so the operation was not recorded. | fs_accum_full; fs_start_failed; kretprobe_miss |
 | `bpf.map.id` | string | development | Identifier of the eBPF map the stats belong to. | 17 |
 | `bpf.map.name` | string | development | Name of the eBPF map. | events; ongoing_http |
 | `bpf.map.type` | string | development | eBPF map type. | hash; lru_hash; perf_event_array |

@@ -114,3 +114,30 @@ flowchart TD
     FLTR --> PROM(Prometheus<br/>metrics<br/>export):::optional
     FLTR --> StatPrinter(Stat Printer):::optional
 ```
+
+### Storage metrics
+
+Storage stats take one of two routes into the same OTEL and Prometheus exporters. Block metrics, and filesystem
+metrics when `ebpf.stats_storage_per_event` is set, use the ring buffer route: each operation is an
+event and goes through the pipeline above. Filesystem and NFS metrics count in kernel maps by default and
+skip the per-event route: a `statagg` family reads the maps and decorates each kernel key once
+(then again every 30 s), running the same stages in the same order with the same `filters.stats`
+and dynamic PID selection, so both routes drop the same series.
+
+```mermaid
+flowchart TD
+    classDef optional stroke-dasharray: 3 3;
+    BLK(eBPF block<br/>ringbuf tracer) --> K8S
+    FSE(eBPF filesystem<br/>per-event tracer):::optional --> K8S
+    K8S(Kubernetes<br/>decorator):::optional --> PID(PID metadata<br/>decorator<br/>PV/PVC lookup):::optional
+    PID --> DYN(Dynamic PID<br/>selector):::optional
+    DYN --> FLTR(Attributes<br/>filter):::optional
+    FLTR --> EXP(OTEL and Prometheus<br/>exporters)
+    FSM(eBPF fs_io_accum<br/>kernel map):::optional --> FAM
+    NFSM(eBPF nfs_rpc_accum<br/>kernel map):::optional --> FAM
+    FAM(statagg family reader):::optional --> DEC(Shared decoration<br/>same stages, per kernel key):::optional
+    CGI(Cgroup index<br/>cgroup v2):::optional -.-> DEC
+    DEC --> EXP
+    PV("PersistentVolume<br/>get (Kube API)"):::optional -.-> PID
+    PV -.-> DEC
+```

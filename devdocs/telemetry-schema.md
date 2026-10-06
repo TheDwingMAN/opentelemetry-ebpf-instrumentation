@@ -113,6 +113,28 @@ section empty once drained.
   is `base2_exponential_bucket_histogram`; those are emitted as native (Prometheus) and
   exponential (OTLP) histograms only, with no classic buckets, at a fixed scale of 2, coarser
   than the schema 3 per-event native histograms had with the default bucket factor.
+- The series identity of the storage metrics shipped in the previous release changes: every `obi.stat.disk.*`
+  series gains `obi.disk.stacked` and, with Kubernetes metadata on, `k8s.node.name`; every
+  `obi.stat.fs.*` series gains `system.device`, `obi.disk.physical_device`, `server.address`
+  (each empty where it does not apply), and with Kubernetes metadata on `k8s.node.name` and
+  `k8s.owner.name`. Recording rules and dashboards that match an exact label set, or join
+  with `on()`/`ignoring()` against these series, need updating. `fs.operation` also gains
+  `fsync`, `fdatasync`, `sync`, `syncfs` and `sync_file_range` (the last three behind
+  `storage_fs_sync`), so a query that sums over `fs_operation` without a filter now includes
+  durability waits.
+- Cache flushes no longer count as writes in `obi.stat.disk.*` (`disk.io.direction="write"`),
+  which drops write counts and latencies on fsync-heavy workloads. They are in the new
+  `obi.stat.disk.flush.duration`. Discards (and secure erases) were ignored and are now in the
+  new `obi.stat.disk.discard.duration` and `obi.stat.disk.discard.io`. Write counts stay below
+  the `/proc/diskstats` write count, which counts empty preflush requests as writes.
+- `obi.stat.disk.queue.depth` is deprecated and no longer part of `storage_block`, `*` or
+  `all`: a configuration that relied on `storage_block_queue` or an umbrella for it must list
+  `storage_block_queue_depth`.
+- `storage_block` now also enables `storage_block_flush` and `storage_block_discard`,
+  `storage_fs` also enables `storage_fs_sync` (its own set of probes), and `*`/`all` also
+  enable the new `storage_nfs*` metrics (`obi.stat.nfs.client.*`), each adding probes and
+  series where a configuration used those umbrellas. List the sub-flags to keep them off.
+
 ## Hosting notes
 
 `site/` is published as static files with no markdown processing, so the generated

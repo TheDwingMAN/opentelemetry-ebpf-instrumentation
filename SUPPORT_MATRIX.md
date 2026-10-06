@@ -263,6 +263,31 @@ OBI currently documents the following GPU execution instrumentation support:
 
 Since the CUDA runtime implements the driver API, launches in a process that maps both libraries would be observed twice; OBI deduplicates them in the eBPF programs by suppressing the driver API call that a runtime API call on the same thread is still executing.
 
+## Storage Metrics
+
+Block, filesystem and NFS client metrics (`obi.stat.disk.*`, `obi.stat.fs.*`,
+`obi.stat.nfs.client.*`) are opt-in through the `storage_block*`, `storage_fs*` and `storage_nfs*`
+metric features. Names, attributes and semantics are in [devdocs/metrics.md](devdocs/metrics.md#storage-metrics).
+
+| Layer | What it measures | Kernel and attach | Limitations |
+|:------|:-----------------|:------------------|:------------|
+| Block | Per-device request latency, bytes, queue wait, errors, flushes and discards | `block_rq_*` raw tracepoints decoded through BTF; classic `tracepoint/block/*` fallback (needs tracefs) when BTF cannot locate a request's disk | Node-wide: no pod or PV attribute. Bio-based dm and md volumes are reported on the physical disk below |
+| Filesystem | Per-operation latency, bytes and errors of read, write, fsync and fdatasync on nfs, ceph, cifs, fuse, ext4, xfs and btrfs; `sync`, `syncfs`, `sync_file_range` with `storage_fs_sync` | `fentry`/`fexit` per filesystem symbol, `kprobe`/`kretprobe` fallback. The in-flight start is kept in task storage (kernel 5.11+) and in a hash map otherwise | `splice_read` is not recorded on ceph, cifs and xfs. Needs `hostPID` to resolve PersistentVolumes |
+| NFS client | RPC latency, errors, retransmits and wire bytes per attempt | `tp_btf` on the sunrpc `rpc_stats_latency` tracepoint, `raw_tracepoint` fallback | Needs sunrpc module BTF (Linux 5.11+, RHEL 9); without it the NFS metrics stay off with one warning. While attached, sunrpc cannot be unloaded |
+
+Kernel notes:
+
+- The tested floor is RHEL 9 (Linux `5.14.0-687.el9` and `5.14.0-749.el9`, which includes task storage
+  for tracing programs and sunrpc module BTF). The general kernel minimum above still applies, but
+  the storage layers have not been validated below it: RHEL 8 (4.18) lacks task storage and sunrpc
+  module BTF, so it takes the hash-map start and has no NFS metrics.
+- Kernel aggregation (filesystem and NFS) resolves a pod from the cgroup id on a cgroup v2 host. On
+  cgroup v1 or hybrid hosts every key's cgroup is the root, so each key is decorated from its
+  sample process instead, and NFS pod attribution uses the submitting thread's tgid.
+- With a kubelet `--cgroup-root` other than `/` or `/kubelet`, cgroup-keyed series carry no pod labels.
+- Persistent volume attribution needs `hostPID: true`, and `get` on `persistentvolumes`
+  (see the [RBAC block](devdocs/metrics.md#kubernetes-rbac-for-volume-attribution)).
+
 ## Explicitly Out Of Scope
 
 The following environments are outside the documented OBI support matrix:
