@@ -122,8 +122,6 @@ type DiskMapTracerConfig struct {
 // fills, and forwards what changed since the previous read as ebpf.Stat records.
 type DiskMapTracer struct {
 	readers []statReader
-	// nil unless the requests in flight are reported
-	pending *pendingReader
 	// nil unless the stacked volumes are measured
 	bios     *bioDevices
 	interval time.Duration
@@ -147,9 +145,8 @@ func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 			cfg.DiskLatencyBounds, devices, containers))
 		bios = newBioDevices("/sys", ebpfDeviceSet{set: cfg.DiskBioDevices})
 	}
-	var pending *pendingReader
 	if cfg.DiskPending {
-		pending = newPendingReader("/proc", devices)
+		readers = append(readers, newPendingReader("/proc", devices))
 	}
 	if cfg.FsSyncAccum != nil {
 		readers = append(readers, newFsSyncReader(ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: cfg.FsSyncAccum},
@@ -162,7 +159,7 @@ func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 	if cfg.NFSIOAccum != nil {
 		readers = append(readers, newNFSIOReader(ebpfAccum[ebpf.StatsNfsIoKeyT, uint64]{accum: cfg.NFSIOAccum}, containers))
 	}
-	return &DiskMapTracer{readers: readers, pending: pending, bios: bios, interval: cfg.Interval}
+	return &DiskMapTracer{readers: readers, bios: bios, interval: cfg.Interval}
 }
 
 func (m *DiskMapTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
@@ -192,15 +189,7 @@ func (m *DiskMapTracer) readStats() []*ebpf.Stat {
 	for _, reader := range m.readers {
 		stats = append(stats, reader.readStats()...)
 	}
-	if m.pending == nil {
-		return stats
-	}
-	for _, stat := range stats {
-		if stat.DiskIO != nil {
-			m.pending.observe(stat.DiskIO)
-		}
-	}
-	return append(stats, m.pending.readStats()...)
+	return stats
 }
 
 // accumReader reads a kernel map of cumulative values and forwards, as stats, what grew since

@@ -16,12 +16,18 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 )
 
-// fakeBlockDevices is a /proc and a /sys root with the block devices and the requests in flight
-// that the kernel reports
+// fakeBlockDevices is a /proc and a /sys root with the block devices, the requests in flight and
+// the completed requests that the kernel reports
 type fakeBlockDevices struct {
 	t                 *testing.T
 	procRoot, sysRoot string
-	diskstats         []string
+	diskstats         []*diskstatsLine
+}
+
+type diskstatsLine struct {
+	numbers, name                   string
+	inFlight                        int
+	completedReads, completedWrites int
 }
 
 func newFakeBlockDevices(t *testing.T) *fakeBlockDevices {
@@ -54,9 +60,20 @@ func (f *fakeBlockDevices) device(dir, numbers, name string, reads, writes int) 
 	byNumbers := filepath.Join(f.sysRoot, "dev", "block")
 	require.NoError(f.t, os.MkdirAll(byNumbers, 0o755))
 	require.NoError(f.t, os.Symlink(dir, filepath.Join(byNumbers, numbers)))
-	major, minor, _ := strings.Cut(numbers, ":")
-	f.diskstats = append(f.diskstats, fmt.Sprintf("%4s %7s %s 10 0 80 5 20 0 160 9 %d 12 14 0 0 0 0 0 0",
-		major, minor, name, reads+writes))
+	f.diskstats = append(f.diskstats, &diskstatsLine{
+		numbers: numbers, name: name, inFlight: reads + writes, completedReads: 10, completedWrites: 20,
+	})
+	f.write()
+}
+
+// complete makes a device report more completed reads and writes
+func (f *fakeBlockDevices) complete(name string, reads, writes int) {
+	for _, line := range f.diskstats {
+		if line.name == name {
+			line.completedReads += reads
+			line.completedWrites += writes
+		}
+	}
 	f.write()
 }
 
@@ -66,7 +83,13 @@ func (f *fakeBlockDevices) removeAll() {
 }
 
 func (f *fakeBlockDevices) write() {
-	require.NoError(f.t, os.WriteFile(filepath.Join(f.procRoot, "diskstats"), []byte(strings.Join(f.diskstats, "\n")+"\n"), 0o644))
+	lines := make([]string, 0, len(f.diskstats))
+	for _, line := range f.diskstats {
+		major, minor, _ := strings.Cut(line.numbers, ":")
+		lines = append(lines, fmt.Sprintf("%4s %7s %s %d 0 80 5 %d 0 160 9 %d 12 14 0 0 0 0 0 0",
+			major, minor, line.name, line.completedReads, line.completedWrites, line.inFlight))
+	}
+	require.NoError(f.t, os.WriteFile(filepath.Join(f.procRoot, "diskstats"), []byte(strings.Join(lines, "\n")+"\n"), 0o644))
 }
 
 func (f *fakeBlockDevices) reader() *pendingReader {
@@ -104,13 +127,20 @@ func TestPendingReaderCountsRequestsInFlight(t *testing.T) {
 }
 
 func TestPendingReaderReportsDevicesThatDidIO(t *testing.T) {
-	r := newFakeBlockDevices(t).reader()
-	// the device completed reads, although no request was in flight at the time of the read
-	r.observe(&ebpf.DiskIO{Device: "nvme0n1", Op: ebpf.CodeDiskOpRead})
-	r.observe(&ebpf.DiskIO{Device: "nvme0n1", Op: ebpf.CodeDiskOpFlush})
+	devices := newFakeBlockDevices(t)
+	devices.disk("259:0", "nvme0n1", 0, 0)
+	devices.partition("nvme0n1", "259:1", "nvme0n1p1", 0, 0)
+	r := devices.reader()
+	assert.Empty(t, r.readStats(), "the I/O completed before the first read is not recent")
 
-	assert.Equal(t, map[string]int64{"nvme0n1/read": 0}, pendingByDevice(r.readStats()),
-		"flushes are not counted")
+	// the device completed reads, although no request was in flight at the time of the read
+	devices.complete("nvme0n1", 3, 0)
+	assert.Equal(t, map[string]int64{"nvme0n1/read": 0}, pendingByDevice(r.readStats()))
+
+	devices.complete("nvme0n1p1", 0, 2)
+	devices.complete("nvme0n1", 0, 2)
+	assert.Equal(t, map[string]int64{"nvme0n1/read": 0, "nvme0n1/write": 0}, pendingByDevice(r.readStats()),
+		"the partitions are reported as their disk, which counts their I/O")
 }
 
 func TestPendingReaderCountsPartitionsOnOlderKernels(t *testing.T) {

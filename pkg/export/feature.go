@@ -89,6 +89,11 @@ const FeatureStatsDisk = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO 
 // FeatureStatsNFS groups the NFS client stat metrics. They are not part of the `stats` aggregate.
 const FeatureStatsNFS = FeatureStatsNFSClientProcedureDuration | FeatureStatsNFSClientIO
 
+// featureStatsDiskRequests are the block I/O stat metrics that the block probes measure, on every
+// block request
+const featureStatsDiskRequests = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations |
+	FeatureStatsDiskOperationTime | FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard
+
 // FeatureMapper stays public so any extension package can add and remove feature
 // definitions before loading them.
 var FeatureMapper = map[string]Features{
@@ -438,9 +443,11 @@ func (f Features) StatsTCPIo() bool {
 	return f.any(FeatureStatsTCPIo)
 }
 
-// StatsDisk reports whether any block I/O stat metric is enabled, which the block probes measure
+// StatsDisk reports whether any block I/O stat metric that the block probes measure is enabled. The
+// pending operations and the disks of the stacked volumes are read from the kernel counters and
+// sysfs, and the stacked volumes are measured only along with one of these metrics.
 func (f Features) StatsDisk() bool {
-	return f.any(FeatureStatsDisk &^ FeatureStatsDiskVolumeDevices)
+	return f.any(featureStatsDiskRequests)
 }
 
 func (f Features) StatsDiskIO() bool {

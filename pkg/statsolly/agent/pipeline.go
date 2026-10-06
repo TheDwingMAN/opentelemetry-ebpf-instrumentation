@@ -194,8 +194,8 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 // branch of the pipeline, and its Kubernetes decorator, is only added then.
 func (s *Stats) storageStatsEnabled() bool {
 	features := s.cfg.Metrics.Features
-	return features.StatsDisk() || features.StatsFsSyncDuration() || features.StatsNFS() ||
-		features.StatsDiskVolumeDevices() || features.StatsDiskPodVolumes()
+	return features.StatsDisk() || features.StatsDiskPendingOperations() || features.StatsFsSyncDuration() ||
+		features.StatsNFS() || features.StatsDiskVolumeDevices() || features.StatsDiskPodVolumes()
 }
 
 // selectsStorageStat tells whether a storage stat belongs to a dynamically selected application: a

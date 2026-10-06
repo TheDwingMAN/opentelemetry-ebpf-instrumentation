@@ -143,12 +143,21 @@ func TestFeatureStatsDiskAggregate(t *testing.T) {
 	assert.True(t, disk.StatsDiskVolumeDevices())
 	assert.False(t, disk.StatsTCPIo(), "the disk aggregate doesn't enable TCP stats")
 
-	for _, feature := range []string{"stats_disk_queue_duration", "stats_disk_flush", "stats_disk_discard", "stats_disk_pending_operations"} {
+	for _, feature := range []string{"stats_disk_queue_duration", "stats_disk_flush", "stats_disk_discard"} {
 		features, err := LoadFeatures([]string{feature})
 		require.NoError(t, err)
 		assert.True(t, features.StatsDisk(), "%s loads the block I/O probes", feature)
 		assert.True(t, features.StatMetrics(), "%s enables the stats pipeline", feature)
 		assert.False(t, features.StatsDiskOperationDuration(), "%s alone doesn't report the request durations", feature)
+	}
+
+	// the pending operations are read from the kernel counters, and the stacked volumes are only
+	// measured along with a metric that the block probes measure
+	for _, feature := range []string{"stats_disk_pending_operations", "stats_disk_stacked_volumes"} {
+		features, err := LoadFeatures([]string{feature})
+		require.NoError(t, err)
+		assert.False(t, features.StatsDisk(), "%s alone loads no block I/O probes", feature)
+		assert.True(t, features.StatMetrics(), "%s enables the stats pipeline", feature)
 	}
 
 	counters, err := LoadFeatures([]string{"stats_disk_io", "stats_disk_operations", "stats_disk_operation_time"})

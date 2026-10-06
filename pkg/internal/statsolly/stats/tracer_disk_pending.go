@@ -4,13 +4,14 @@
 package stats // import "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 
 import (
-	"bufio"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/prometheus/procfs/blockdevice"
 
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 )
@@ -22,42 +23,46 @@ type pendingKey struct {
 }
 
 // pendingReader counts the reads and writes that each device is serving, as the kernel counts
-// them for iostat. Unlike the accumulation readers, it reports every device that did I/O
-// recently, including those that have no request in flight at the time of the read.
+// them for iostat. It reports every device that did I/O recently, including those that have no
+// request in flight at the time of the read. It only reads the counters of the kernel, so it
+// doesn't need the block probes.
 type pendingReader struct {
-	log      *slog.Logger
-	procRoot string
-	devices  *deviceNames
-	idleRead map[pendingKey]int
+	log       *slog.Logger
+	procRoot  string
+	devices   *deviceNames
+	completed map[string]completedIOs
+	idleRead  map[pendingKey]int
 }
 
-// observe tells the reader that a device completed reads or writes, so that it reports the
-// device even if it never finds its requests in flight
-func (p *pendingReader) observe(io *ebpf.DiskIO) {
-	if !io.Op.IsTransfer() {
-		return
-	}
-	p.idleRead[pendingKey{device: io.Device, stacked: io.Stacked, op: io.Op}] = 0
+// completedIOs are the reads and writes that a device completed since it was added
+type completedIOs struct {
+	reads, writes uint64
 }
 
 func newPendingReader(procRoot string, devices *deviceNames) *pendingReader {
 	return &pendingReader{
-		log:      dtlog().With("source", "diskstats"),
-		procRoot: procRoot,
-		devices:  devices,
-		idleRead: map[pendingKey]int{},
+		log:       dtlog().With("source", "diskstats"),
+		procRoot:  procRoot,
+		devices:   devices,
+		completed: map[string]completedIOs{},
+		idleRead:  map[pendingKey]int{},
 	}
 }
 
 func (p *pendingReader) readStats() []*ebpf.Stat {
-	busy, err := devicesInFlight(filepath.Join(p.procRoot, "diskstats"))
+	diskstats, err := p.diskstats()
 	if err != nil {
 		// a partial read would undercount: skip it, the next read reports the current count
 		p.log.Debug("can't read the requests in flight", "error", err)
 		return nil
 	}
+	p.observeCompleted(diskstats)
 	disks := map[string]*diskInFlight{}
-	for _, numbers := range busy {
+	for _, stat := range diskstats {
+		if stat.IOsInProgress == 0 {
+			continue
+		}
+		numbers := devNumbers(stat.MajorNumber, stat.MinorNumber)
 		reads, writes, err := readInflight(filepath.Join(p.devices.sysRoot, "dev", "block", numbers, "inflight"))
 		if err != nil {
 			// removed since
@@ -146,28 +151,49 @@ func (p *pendingReader) diskOf(numbers string) (disk string, partition bool) {
 	return strings.TrimSpace(string(content)), true
 }
 
-// diskstatsInFlightField is the index of the "I/Os currently in progress" field in a line of
-// /proc/diskstats, after the major and minor numbers and the device name
-const diskstatsInFlightField = 11
-
-// devicesInFlight returns the "major:minor" numbers of the block devices and partitions that
-// have requests in flight, from /proc/diskstats
-func devicesInFlight(diskstats string) ([]string, error) {
-	f, err := os.Open(diskstats)
+func (p *pendingReader) diskstats() ([]blockdevice.Diskstats, error) {
+	fs, err := blockdevice.NewFS(p.procRoot, p.devices.sysRoot)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	var busy []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) <= diskstatsInFlightField || fields[diskstatsInFlightField] == "0" {
+	return fs.ProcDiskstats()
+}
+
+// observeCompleted keeps reporting the disks that completed reads or writes since the previous
+// read, even if none is in flight at the time of the reads
+func (p *pendingReader) observeCompleted(diskstats []blockdevice.Diskstats) {
+	present := make(map[string]struct{}, len(diskstats))
+	for _, stat := range diskstats {
+		numbers := devNumbers(stat.MajorNumber, stat.MinorNumber)
+		present[numbers] = struct{}{}
+		current := completedIOs{reads: stat.ReadIOs, writes: stat.WriteIOs}
+		previous, seen := p.completed[numbers]
+		p.completed[numbers] = current
+		if !seen || current == previous {
 			continue
 		}
-		busy = append(busy, fields[0]+":"+fields[1])
+		// the counters of a disk include the I/O of its partitions
+		if disk, partition := p.diskOf(numbers); disk == "" || partition {
+			continue
+		}
+		device := p.devices.name(stat.MajorNumber, stat.MinorNumber)
+		stacked := p.devices.stacked(stat.MajorNumber, stat.MinorNumber)
+		if current.reads != previous.reads {
+			p.idleRead[pendingKey{device: device, stacked: stacked, op: ebpf.CodeDiskOpRead}] = 0
+		}
+		if current.writes != previous.writes {
+			p.idleRead[pendingKey{device: device, stacked: stacked, op: ebpf.CodeDiskOpWrite}] = 0
+		}
 	}
-	return busy, scanner.Err()
+	for numbers := range p.completed {
+		if _, ok := present[numbers]; !ok {
+			delete(p.completed, numbers)
+		}
+	}
+}
+
+func devNumbers(major, minor uint32) string {
+	return strconv.FormatUint(uint64(major), 10) + ":" + strconv.FormatUint(uint64(minor), 10)
 }
 
 // readInflight reads the reads and writes in flight of a block device from its sysfs inflight

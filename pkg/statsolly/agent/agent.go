@@ -79,7 +79,7 @@ type Stats struct {
 
 	// stat metrics
 	rbTracer *stats.RingBufTracer
-	// nil unless block I/O stat metrics are enabled and their probes attached
+	// nil unless storage stat metrics that are read periodically are enabled
 	diskTracer *stats.DiskMapTracer
 
 	// focuses on TCP/UDP stack internals (kprobes/tracepoints)
@@ -222,8 +222,10 @@ func statsAgent(
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
 	var diskTracer *stats.DiskMapTracer
+	// the pending operations are read from the kernel counters, with or without the probes
 	if statsFetcher.DiskIOAccumMap() != nil || statsFetcher.FsSyncAccumMap() != nil ||
-		statsFetcher.NFSProcedureAccumMap() != nil || statsFetcher.NFSIOAccumMap() != nil {
+		statsFetcher.NFSProcedureAccumMap() != nil || statsFetcher.NFSIOAccumMap() != nil ||
+		cfg.Metrics.Features.StatsDiskPendingOperations() {
 		interval := cfg.EBPF.BatchTimeout
 		if interval <= 0 {
 			interval = defaultDiskReadInterval
