@@ -35,9 +35,6 @@ type probe struct {
 	name    string
 	program *ebpf.Program
 	enabled bool
-	// optional probes that can't be attached are skipped, e.g. when the kernel doesn't have the
-	// function
-	optional bool
 	// retprobeMaxActive is how many calls a return probe tracks at once, 0 for the kernel default
 	retprobeMaxActive int
 }
@@ -285,22 +282,11 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 			enabled:           features.StatsFsSyncDuration(),
 			retprobeMaxActive: fsSyncRetprobeMaxActive,
 		},
-		{
-			name:              KprobeDoFsync,
-			program:           objects.ObiStatsKretprobeDoFsync,
-			enabled:           features.StatsFsSyncDuration(),
-			optional:          true,
-			retprobeMaxActive: fsSyncRetprobeMaxActive,
-		},
 	} {
 		if !k.enabled {
 			continue
 		}
 		l, err := attachKretprobe(tlog, k.name, k.program, k.retprobeMaxActive)
-		if err != nil && k.optional {
-			tlog.Debug("skipping optional kretprobe", "function", k.name, "error", err)
-			continue
-		}
 		if err != nil {
 			closeAll(closables)
 			return nil, fmt.Errorf("failed kretprobe attachment %s: %w", k.name, err)
@@ -335,22 +321,12 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 			program: objects.ObiStatsKprobeVfsFsyncRange,
 			enabled: features.StatsFsSyncDuration(),
 		},
-		{
-			name:     KprobeDoFsync,
-			program:  objects.ObiStatsKprobeDoFsync,
-			enabled:  features.StatsFsSyncDuration(),
-			optional: true,
-		},
 	} {
 		if !k.enabled {
 			continue
 		}
 
 		l, err := kprobe.Attach(k.name, k.program, false)
-		if err != nil && k.optional {
-			tlog.Debug("skipping optional kprobe", "function", k.name, "error", err)
-			continue
-		}
 		if err != nil {
 			closeAll(closables)
 			return nil, fmt.Errorf("failed kprobe attachment %s: %w", k.name, err)
@@ -359,6 +335,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 	}
 
 	if features.StatsFsSyncDuration() {
+		closables = append(closables, attachDoFsync(tlog, &objects)...)
 		closables = append(closables, attachSyncSyscalls(tlog, &objects)...)
 	}
 
@@ -485,20 +462,39 @@ func attachSyncSyscalls(log *slog.Logger, objects *StatsObjects) []io.Closer {
 		{KprobeSysSyncFileRange, objects.ObiStatsKprobeSysSyncFileRange},
 		{KprobeSysSync, objects.ObiStatsKprobeSysSync},
 	} {
-		ret, err := attachKretprobe(log, syscall.name, objects.ObiStatsKretprobeSysFsSync, fsSyncRetprobeMaxActive)
+		links, err := attachFsSyncPair(log, syscall.name, syscall.entry, objects.ObiStatsKretprobeSysFsSync)
 		if err != nil {
 			log.Debug("skipping sync system call", "syscall", syscall.name, "error", err)
 			continue
 		}
-		entry, err := kprobe.Attach(syscall.name, syscall.entry, false)
-		if err != nil {
-			ret.Close()
-			log.Debug("skipping sync system call", "syscall", syscall.name, "error", err)
-			continue
-		}
-		closables = append(closables, ret, entry)
+		closables = append(closables, links...)
 	}
 	return closables
+}
+
+// attachDoFsync attaches the probes of do_fsync, when the kernel has it as a function of its own
+func attachDoFsync(log *slog.Logger, objects *StatsObjects) []io.Closer {
+	links, err := attachFsSyncPair(log, KprobeDoFsync, objects.ObiStatsKprobeDoFsync, objects.ObiStatsKretprobeDoFsync)
+	if err != nil {
+		log.Debug("skipping optional file sync function", "function", KprobeDoFsync, "error", err)
+		return nil
+	}
+	return links
+}
+
+// attachFsSyncPair attaches the return probe of a file sync function, then its entry probe, or
+// neither: a sync started without its return probe would never be completed
+func attachFsSyncPair(log *slog.Logger, symbol string, entry, ret *ebpf.Program) ([]io.Closer, error) {
+	retLink, err := attachKretprobe(log, symbol, ret, fsSyncRetprobeMaxActive)
+	if err != nil {
+		return nil, err
+	}
+	entryLink, err := kprobe.Attach(symbol, entry, false)
+	if err != nil {
+		retLink.Close()
+		return nil, err
+	}
+	return []io.Closer{retLink, entryLink}, nil
 }
 
 // attachKretprobe attaches a return probe that tracks up to maxActive calls at once. That needs
