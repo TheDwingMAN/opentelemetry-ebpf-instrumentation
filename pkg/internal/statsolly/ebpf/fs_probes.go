@@ -280,16 +280,12 @@ func kernelBTF() *btf.Spec {
 	return spec
 }
 
-// blockRawTracepointCapable reports whether the block raw tracepoints can
-// decode a request on this kernel. They read the device from the request's
-// gendisk, which is struct request.rq_disk before 5.15 and
+// blockRawTracepointCapableWith reports whether the block raw tracepoints can
+// decode a request on a kernel with this BTF. They read the device from the
+// request's gendisk, which is struct request.rq_disk before 5.15 and
 // struct request_queue.disk from there on; a kernel whose BTF shows neither,
 // or has no usable BTF at all as on RHEL8, takes the classic tracepoints
 // instead, and those need tracefs mounted in.
-func blockRawTracepointCapable() bool {
-	return blockRawTracepointCapableWith(kernelBTF())
-}
-
 func blockRawTracepointCapableWith(spec *btf.Spec) bool {
 	if spec == nil {
 		return false

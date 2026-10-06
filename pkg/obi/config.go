@@ -226,6 +226,10 @@ var DefaultConfig = Config{
 		},
 		BPFFSPath:      "/sys/fs/bpf/",
 		InstrumentCuda: config.CudaModeAuto,
+		StorageAggregation: config.StorageAggregation{
+			BlockMapsBudgetBytes:    8 << 20,
+			BlockPodMapsBudgetBytes: 8 << 20,
+		},
 	},
 	CloudMetadata: transform.CloudMetadataConfig{
 		RefreshInterval: 30 * time.Second,
@@ -765,7 +769,10 @@ func (e ConfigError) Error() string {
 
 // Validate validates a standalone OBI configuration.
 func (c *Config) Validate() error {
-	return c.validate(validationContext{checkCiliumCompatibility: tcmanager.EnsureCiliumCompatibility})
+	return c.validate(validationContext{
+		checkCiliumCompatibility: tcmanager.EnsureCiliumCompatibility,
+		checkBlockPod:            hostBlockPodUnsupported,
+	})
 }
 
 // ValidateStatic validates a standalone OBI configuration without inspecting
@@ -781,8 +788,13 @@ func (c *Config) ValidateForReceiver() error {
 		hostTracesSink:           true,
 		hostMetricsSink:          true,
 		checkCiliumCompatibility: tcmanager.EnsureCiliumCompatibility,
+		checkBlockPod:            hostBlockPodUnsupported,
 	})
 }
+
+// hostBlockPodUnsupported checks this host's cgroup hierarchy for
+// storage_block_pod.
+func hostBlockPodUnsupported() string { return blockPodUnsupported(blockPodCgroupRoots) }
 
 // ValidateStaticForReceiver validates a Collector receiver configuration
 // without inspecting host state.
@@ -794,6 +806,9 @@ type validationContext struct {
 	hostTracesSink           bool
 	hostMetricsSink          bool
 	checkCiliumCompatibility func(config.TCBackend) error
+	// checkBlockPod returns why storage_block_pod can't attribute block I/O
+	// on this host, or "". Nil skips the check (static validation).
+	checkBlockPod func() string
 }
 
 //nolint:cyclop
@@ -890,6 +905,8 @@ func (c *Config) validate(context validationContext) error {
 				" stat_nfs_client_rpc_duration_histogram buckets must have at most 32 bounds")
 		}
 	}
+	c.warnStorageBlockVolumesAlone()
+	c.disableBlockPodIfUnsupported(context.checkBlockPod)
 
 	if !c.TracePrinter.Valid() {
 		return ConfigError(fmt.Sprintf("invalid value for trace_printer: '%s'", c.TracePrinter))
@@ -1014,6 +1031,18 @@ func (c *Config) warnDeprecatedMetricsFeatures() {
 		}
 		slog.Warn("metrics feature is deprecated and will be removed in a future release",
 			"feature", deprecated.Name, "use", deprecated.Replacement)
+	}
+}
+
+// warnStorageBlockVolumesAlone reports storage_block_volumes enabled without
+// any block metric: the flag adds the stacked volumes (LVM, md, device-mapper)
+// to the storage_block metrics as devices of their own and is no metric
+// itself, so alone it measures nothing.
+func (c *Config) warnStorageBlockVolumesAlone() {
+	if f := c.Metrics.Features; f.StorageBlockVolumes() && !f.StorageBlock() {
+		slog.Warn("storage_block_volumes adds stacked volumes to the storage_block metrics and none of them is"+
+			" enabled; it has no effect. Enable storage_block, or the storage_block_* metrics wanted, next to it",
+			"feature", "storage_block_volumes")
 	}
 }
 

@@ -1028,6 +1028,10 @@
           "default": 4096,
           "x-env-var": "OTEL_EBPF_STATS_WAKEUP_DATA_BYTES"
         },
+        "storage_aggregation": {
+          "$ref": "#/$defs/StorageAggregation",
+          "description": "How the storage metrics are counted in the kernel."
+        },
         "track_request_headers": {
           "type": "boolean",
           "description": "Enables the kprobes based HTTP request tracking to start tracking the request headers to process any 'Traceparent' fields.",
@@ -1176,7 +1180,10 @@
               "storage_block_errors",
               "storage_block_flush",
               "storage_block_io",
+              "storage_block_pending",
+              "storage_block_pod",
               "storage_block_queue",
+              "storage_block_volumes",
               "storage_fs",
               "storage_fs_duration",
               "storage_fs_errors",
@@ -3165,6 +3172,36 @@
       },
       "type": "object",
       "description": "TODO: see if there is a way to merge common fields with NetworkConfig"
+    },
+    "StorageAggregation": {
+      "properties": {
+        "block_maps_budget_bytes": {
+          "type": "integer",
+          "description": "Caps the memory of the block aggregation maps, which the kernel allocates up front, once per possible CPU, and charges to OBI's memory limit. A node whose devices need more keys than fit drops the completions of the keys that do not, and counts the drops.",
+          "default": 8388608,
+          "x-env-var": "OTEL_EBPF_STORAGE_AGGREGATION_BLOCK_MAPS_BUDGET_BYTES"
+        },
+        "block_pod_maps_budget_bytes": {
+          "type": "integer",
+          "description": "Caps the memory of the map that counts block reads and writes per cgroup for storage_block_pod, allocated up front once per possible CPU, as the block aggregation maps are. It is counted in the kernel even when Disabled is set: the pod-attributed counters have no per-event path.",
+          "default": 8388608,
+          "x-env-var": "OTEL_EBPF_STORAGE_AGGREGATION_BLOCK_POD_MAPS_BUDGET_BYTES"
+        },
+        "disabled": {
+          "type": "boolean",
+          "description": "Sends an event per block request to userspace instead, as earlier releases did: the same metrics, at a userspace cost that grows with the request rate. For comparisons and debugging.",
+          "default": false,
+          "x-env-var": "OTEL_EBPF_STORAGE_AGGREGATION_DISABLED"
+        },
+        "exponential_histograms": {
+          "type": "boolean",
+          "description": "Counts the storage histograms in base-2 exponential buckets at a fixed scale of 2, exported as Prometheus native histograms and OTLP exponential histograms, instead of the configured explicit buckets. Also chosen when the OTLP exporter's histogram_aggregation is base2_exponential_bucket_histogram.",
+          "default": false,
+          "x-env-var": "OTEL_EBPF_STORAGE_AGGREGATION_EXPONENTIAL_HISTOGRAMS"
+        }
+      },
+      "type": "object",
+      "description": "StorageAggregation configures the kernel aggregation of the storage metrics: the eBPF programs count block requests in per-CPU kernel maps, which OBI reads, instead of sending an event per request to userspace. Block requests are still sent one by one when the deprecated obi.stat.disk.queue.depth metric or print_stats is enabled, or when the enabled block histograms' buckets in the enabled exporters have more than 32 distinct bounds together."
     },
     "SvcMetricsConfig": {
       "properties": {

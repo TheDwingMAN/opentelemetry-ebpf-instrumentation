@@ -130,10 +130,15 @@ section empty once drained.
 - `obi.stat.disk.queue.depth` is deprecated and no longer part of `storage_block`, `*` or
   `all`: a configuration that relied on `storage_block_queue` or an umbrella for it must list
   `storage_block_queue_depth`.
-- `storage_block` now also enables `storage_block_flush` and `storage_block_discard`,
-  `storage_fs` also enables `storage_fs_sync` (its own set of probes), and `*`/`all` also
-  enable the new `storage_nfs*` metrics (`obi.stat.nfs.client.*`), each adding probes and
-  series where a configuration used those umbrellas. List the sub-flags to keep them off.
+- `storage_block` now also enables `storage_block_flush`, `storage_block_discard` and
+  `storage_block_pending` (`obi.stat.disk.pending_operations`), `storage_fs` also enables
+  `storage_fs_sync` (its own set of probes), and `*`/`all` also enable the new `storage_nfs*`
+  metrics (`obi.stat.nfs.client.*`), each adding probes and series where a configuration used
+  those umbrellas. List the sub-flags to keep them off.
+- The block metrics (`obi.stat.disk.*`) are now counted in the kernel by default, which
+  brings the kernel-aggregated histogram change above to them, and their OTLP histograms no
+  longer carry `min` and `max`: the kernel does not track them.
+  `ebpf.storage_aggregation.disabled: true` restores the per-event path, and with it both.
 
 ## Hosting notes
 

@@ -266,6 +266,10 @@ discovery:
 			},
 			BPFFSPath:      "/sys/fs/bpf/",
 			InstrumentCuda: config.CudaModeAuto,
+			StorageAggregation: config.StorageAggregation{
+				BlockMapsBudgetBytes:    8 << 20,
+				BlockPodMapsBudgetBytes: 8 << 20,
+			},
 		},
 		NetworkFlows: nc,
 		Stats:        sc,
@@ -990,6 +994,40 @@ discovery:
 		})
 		assert.Contains(t, logs, "feature=application_span")
 		assert.Contains(t, logs, "use=application_span_otel")
+	})
+}
+
+// storage_block_volumes adds devices to the block metrics. Without one of
+// them it does nothing, and says so once at startup instead of staying silent.
+func TestConfigValidate_StorageBlockVolumesAloneWarning(t *testing.T) {
+	validateWithFeatures := func(t *testing.T, features string) string {
+		t.Helper()
+		var logs bytes.Buffer
+		restore := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		t.Cleanup(func() { slog.SetDefault(restore) })
+
+		require.NoError(t, loadConfig(t, envMap{
+			"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "localhost:1234",
+			"OTEL_EBPF_EXECUTABLE_PATH":           "foo",
+			"OTEL_EBPF_METRICS_FEATURES":          features,
+		}).Validate())
+		return logs.String()
+	}
+
+	t.Run("alone", func(t *testing.T) {
+		logs := validateWithFeatures(t, "application,storage_block_volumes")
+		assert.Contains(t, logs, "feature=storage_block_volumes")
+		assert.Contains(t, logs, "it has no effect")
+	})
+	t.Run("with the umbrella", func(t *testing.T) {
+		assert.NotContains(t, validateWithFeatures(t, "storage_block,storage_block_volumes"), "storage_block_volumes")
+	})
+	t.Run("with one block metric", func(t *testing.T) {
+		assert.NotContains(t, validateWithFeatures(t, "storage_block_io,storage_block_volumes"), "storage_block_volumes")
+	})
+	t.Run("off", func(t *testing.T) {
+		assert.NotContains(t, validateWithFeatures(t, "storage_block"), "storage_block_volumes")
 	})
 }
 

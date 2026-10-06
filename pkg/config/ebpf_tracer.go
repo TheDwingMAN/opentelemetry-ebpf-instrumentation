@@ -33,6 +33,37 @@ const (
 	StrContextPropagationTCP      = "tcp"
 )
 
+// StorageAggregation configures the kernel aggregation of the storage
+// metrics: the eBPF programs count block requests in per-CPU kernel maps,
+// which OBI reads, instead of sending an event per request to userspace.
+// Block requests are still sent one by one when the deprecated
+// obi.stat.disk.queue.depth metric or print_stats is enabled, or when the
+// enabled block histograms' buckets in the enabled exporters have more than
+// 32 distinct bounds together.
+type StorageAggregation struct {
+	// Disabled sends an event per block request to userspace instead, as
+	// earlier releases did: the same metrics, at a userspace cost that grows
+	// with the request rate. For comparisons and debugging.
+	Disabled bool `yaml:"disabled" env:"OTEL_EBPF_STORAGE_AGGREGATION_DISABLED" validate:"boolean"`
+	// ExponentialHistograms counts the storage histograms in base-2
+	// exponential buckets at a fixed scale of 2, exported as Prometheus
+	// native histograms and OTLP exponential histograms, instead of the
+	// configured explicit buckets. Also chosen when the OTLP exporter's
+	// histogram_aggregation is base2_exponential_bucket_histogram.
+	ExponentialHistograms bool `yaml:"exponential_histograms" env:"OTEL_EBPF_STORAGE_AGGREGATION_EXPONENTIAL_HISTOGRAMS" validate:"boolean"`
+	// BlockMapsBudgetBytes caps the memory of the block aggregation maps,
+	// which the kernel allocates up front, once per possible CPU, and charges
+	// to OBI's memory limit. A node whose devices need more keys than fit
+	// drops the completions of the keys that do not, and counts the drops.
+	BlockMapsBudgetBytes int `yaml:"block_maps_budget_bytes" env:"OTEL_EBPF_STORAGE_AGGREGATION_BLOCK_MAPS_BUDGET_BYTES" validate:"gt=0"`
+	// BlockPodMapsBudgetBytes caps the memory of the map that counts block
+	// reads and writes per cgroup for storage_block_pod, allocated up front
+	// once per possible CPU, as the block aggregation maps are. It is
+	// counted in the kernel even when Disabled is set: the pod-attributed
+	// counters have no per-event path.
+	BlockPodMapsBudgetBytes int `yaml:"block_pod_maps_budget_bytes" env:"OTEL_EBPF_STORAGE_AGGREGATION_BLOCK_POD_MAPS_BUDGET_BYTES" validate:"gt=0"`
+}
+
 type MapsConfig struct {
 	// GlobalScaleFactor scales map sizes in powers of two:
 	//   > 0: grows size (2x per step)
@@ -199,6 +230,9 @@ type EBPFTracer struct {
 
 	// eBPF map configurations
 	MapsConfig MapsConfig `yaml:"maps_config"`
+
+	// How the storage metrics are counted in the kernel.
+	StorageAggregation StorageAggregation `yaml:"storage_aggregation"`
 
 	// Disables uprobe_multi support for testing. This option is intentionally environment-only.
 	DisableUprobeMulti bool `yaml:"-" json:"-" env:"OTEL_EBPF_DEBUG_DISABLE_UPROBE_MULTI"`

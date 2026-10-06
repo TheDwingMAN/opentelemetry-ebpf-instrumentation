@@ -404,7 +404,15 @@ groups:
       `/proc/diskstats`, except that diskstats also counts as a write an empty
       preflush write (0 bytes, such as a dm-thin metadata commit or a flush
       passed through a loop device), counted here only as the flush issued for
-      it, and a secure erase, counted here as a discard.
+      it, and a secure erase, counted here as a discard. With the
+      `storage_block_volumes` feature, a bio-based stacked volume (an LVM
+      logical volume, an md array, a dm-crypt device) is a device of its own
+      in every `obi.stat.disk.*` metric, measured per bio from
+      `block_bio_queue` to `block_bio_complete`: the end-to-end time of the
+      bio as it was submitted to the volume, counted once however its driver
+      splits it. `/proc/diskstats` of device-mapper and md devices counts the
+      fragments instead, so compare bytes, which match, rather than operation
+      counts.
     attributes:
       - ref: system.device
         requirement_level: recommended
@@ -415,6 +423,8 @@ groups:
       - ref: k8s.node.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: obi.disk.partition
+        requirement_level: opt_in
 
   # Companion to the latency histogram above: the volume of data moved by the
   # same block requests. Shares the `storage_block` feature gate and attribute
@@ -437,6 +447,9 @@ groups:
     brief: >
       Count of bytes transferred at the block layer, accumulated per completed
       disk read or write request and broken down by device and direction.
+      With `storage_block_pod`, also by the pod the I/O is charged to (see
+      `obi.stat.disk.operations`); I/O charged to no pod is a series without
+      pod attributes.
     attributes:
       - ref: system.device
         requirement_level: recommended
@@ -447,12 +460,26 @@ groups:
       - ref: k8s.node.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: obi.disk.partition
+        requirement_level: opt_in
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: with storage_block_pod, if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level:
+          recommended: with storage_block_pod, if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: with storage_block_pod, if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
 
   # Companion to the service-time histogram above, but for the other half of a
-  # request's lifetime: how long it waited before being dispatched. Requires
-  # the `block_rq_insert` tracepoint in addition to `block_rq_issue` /
-  # `block_rq_complete`, gated separately as `storage_block_queue` since it is
-  # extra kernel-side overhead the base duration/io metrics don't pay.
+  # request's lifetime: how long it waited before being dispatched. Read from
+  # the request's accounting start at `block_rq_issue`, so it needs no extra
+  # tracepoint; gated separately as `storage_block_queue`.
   - id: metric.obi.obi.stat.disk.queue.duration
     type: metric
     metric_name: obi.stat.disk.queue.duration
@@ -460,11 +487,16 @@ groups:
     unit: "s"
     stability: development
     brief: >
-      Time a disk read or write request spent queued before being dispatched
-      to the device, measured from `block_rq_insert` to `block_rq_issue`,
-      broken down by device and direction. Requests that blk-mq issues directly, without
-      passing through `block_rq_insert`, are not observed: they have no queue
-      wait to report and recording a zero would understate the distribution.
+      Time a disk read or write request spent queued, from the request's
+      accounting start (`start_time_ns`, set after the tag or scheduler-tag
+      allocation and shared by all requests of a plug batch) to dispatch to
+      the driver. Nothing is recorded for a device with `queue/iostats=0`, for
+      the data write of a flush sequence (PREFLUSH or FUA on a device without
+      FUA), nor on a kernel whose BTF has no `enum rqf_flags` or that uses the
+      classic block tracepoints (OBI logs a warning at start), so the count
+      can be lower than `obi.stat.disk.operation.duration`'s. A stacked volume
+      measured with `storage_block_volumes` has no queue wait of its own: what
+      its bios wait for is part of their operation duration.
     attributes:
       - ref: system.device
         requirement_level: recommended
@@ -475,6 +507,8 @@ groups:
       - ref: k8s.node.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: obi.disk.partition
+        requirement_level: opt_in
 
   # Queue depth, not queue latency: the count of requests still in flight on
   # the device immediately after this one completed. Observed once per
@@ -532,6 +566,8 @@ groups:
       - ref: k8s.node.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: obi.disk.partition
+        requirement_level: opt_in
 
   # Cache flushes (REQ_OP_FLUSH): what fsync and fdatasync wait for at the
   # device. A flush moves no data, so it has no direction and is not counted
@@ -549,7 +585,11 @@ groups:
     brief: >
       Block-layer service time of cache flush requests, measured from
       `block_rq_issue` to `block_rq_complete`, broken down by device. The
-      count matches the flushes in `/proc/diskstats`.
+      count matches the flushes in `/proc/diskstats`. On a stacked volume
+      measured with `storage_block_volumes`, a flush is the empty preflush
+      write submitted to the volume; `/proc/diskstats` never counts it as a
+      flush there (device-mapper counts it as a write of 0 bytes, md not at
+      all).
     attributes:
       - ref: system.device
         requirement_level: recommended
@@ -587,6 +627,8 @@ groups:
       - ref: k8s.node.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: obi.disk.partition
+        requirement_level: opt_in
 
   - id: metric.obi.obi.stat.disk.discard.io
     type: metric
@@ -605,6 +647,130 @@ groups:
       - ref: k8s.node.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: obi.disk.partition
+        requirement_level: opt_in
+
+  # Point-in-time count of requests still in flight on the device, from a
+  # userspace batch snapshot of the kernel's in-flight map taken once per
+  # collection (D10), rather than a counter the issue/complete path updates:
+  # unlike the deprecated `obi.stat.disk.queue.depth`, it costs nothing in
+  # the hot path. Gated by its own `storage_block_pending` feature, inside
+  # the `storage_block` umbrella. Named after the OTel Collector hostmetrics
+  # receiver's `system.disk.pending_operations`; not in upstream semconv.
+  # disk.io.direction does not apply to a flush or discard entry (a
+  # point-in-time snapshot has no direction for them), so it defaults off.
+  - id: metric.obi.obi.stat.disk.pending_operations
+    type: metric
+    metric_name: obi.stat.disk.pending_operations
+    instrument: updowncounter
+    unit: "{operation}"
+    stability: development
+    brief: >
+      Count of block I/O requests still in flight on the device right now,
+      from a snapshot of the kernel's in-flight map taken once per
+      collection, broken down by device. A device with no request in flight
+      reports 0 until it has gone idle past the metric's reporting interval.
+      With `storage_block_volumes`, the bios in flight on a stacked volume are
+      its pending operations.
+    attributes:
+      - ref: system.device
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: opt_in
+      - ref: obi.disk.stacked
+        requirement_level: recommended
+      - ref: obi.disk.partition
+        requirement_level: opt_in
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+
+  # Pod attribution of block I/O, behind the opt-in `storage_block_pod`
+  # (spec 2.3): counted in the kernel per cgroup the request's bio is charged
+  # to (its blkcg), never per task, so I/O issued by kernel threads on a
+  # pod's behalf keeps the pod. Read/write only, no histograms per pod.
+  # Requires cgroup v2 with the io controller.
+  - id: metric.obi.obi.stat.disk.operations
+    type: metric
+    metric_name: obi.stat.disk.operations
+    instrument: counter
+    unit: "{operation}"
+    stability: development
+    brief: >
+      Count of completed block read and write requests, broken down by
+      device, direction and the pod the I/O is charged to. Reads and direct
+      I/O are charged to the submitting container; buffered writes, whether
+      flushed by the kernel or by fsync, to the cgroup that owns the file's
+      writeback domain: normally the container that created the file, then
+      the dominant writer after some writeback rounds, then the pod or QoS
+      slice once the container is removed. I/O charged to no pod (kernel
+      threads such as the ext4 journal, system services) is a series without
+      pod attributes, so the series of a device and direction add up to all
+      of its reads or writes.
+    attributes:
+      - ref: system.device
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
+
+  # The time counterpart of obi.stat.disk.operations, with the semantics of
+  # semconv's system.disk.operation_time (diskstats fields 7 and 11). A
+  # counter in seconds, not a histogram: per-pod histograms would multiply
+  # the series by the buckets.
+  - id: metric.obi.obi.stat.disk.operation_time
+    type: metric
+    metric_name: obi.stat.disk.operation_time
+    instrument: counter
+    unit: "s"
+    stability: development
+    brief: >
+      Time spent on the block reads and writes of obi.stat.disk.operations,
+      summed: from the request's block-layer accounting start to its
+      completion, or from its issue to the driver when the device does not
+      account it (queue/iostats=0) or for a write in a flush sequence; a
+      stacked volume's bio from its submission. Broken down by device,
+      direction and the pod the I/O is charged to.
+    attributes:
+      - ref: system.device
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
 
   # Filesystem stats. Emitted when the `storage_fs` feature is enabled.
   # Probes attach to each of the seven supported filesystems' (nfs, ceph,

@@ -125,6 +125,20 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.Bool(string(attr.DiskStacked), blockStack(dev).stacked)
 		}
+	case attr.DiskPartition:
+		// "" for whole-disk I/O, flush requests and an unresolved partition
+		// alike (never the disk's own device name): deviceName always
+		// resolves to a name, so a 0 part_dev must be caught first.
+		getter = func(s *Stat) attribute.KeyValue {
+			var partDev uint32
+			if s.BlockIo != nil {
+				partDev = s.BlockIo.PartDev
+			}
+			if partDev == 0 {
+				return attribute.String(string(attr.DiskPartition), "")
+			}
+			return attribute.String(string(attr.DiskPartition), deviceName(partDev))
+		}
 	case attr.FsType:
 		getter = func(s *Stat) attribute.KeyValue {
 			if s.FsIo == nil {

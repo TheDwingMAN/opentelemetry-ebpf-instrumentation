@@ -701,9 +701,12 @@ var (
 		Unit:    "By",
 		Type:    InstrumentCounter,
 	})
-	// Time a read or write request spent queued before being dispatched to
-	// the device: block_rq_insert -> block_rq_issue. Requests that never
-	// passed through block_rq_insert are not recorded.
+	// Time a read or write request spent queued: from rq->start_time_ns (set
+	// after the tag or scheduler-tag allocation, shared by all requests of a
+	// plug batch) to block_rq_issue, the dispatch to the driver. Nothing is
+	// recorded for a device with queue/iostats=0, for the data write of a
+	// flush sequence, nor on a kernel without enum rqf_flags in its BTF or
+	// using the classic block tracepoints.
 	StatDiskQueueDuration = metric(Name{
 		Section: "obi.stat.disk.queue.duration",
 		OTEL:    "obi.stat.disk.queue.duration",
@@ -757,6 +760,41 @@ var (
 		Section: "obi.stat.disk.discard.io",
 		OTEL:    "obi.stat.disk.discard.io",
 		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
+	// Count of block I/O requests still in flight on the device, from a
+	// userspace snapshot of the in-flight map rather than a per-request
+	// counter (unlike the deprecated queue.depth, this costs nothing on the
+	// issue/complete path). Named after the hostmetrics receiver's
+	// system.disk.pending_operations; not in semconv.
+	StatDiskPendingOperations = metric(Name{
+		Section: "obi.stat.disk.pending_operations",
+		OTEL:    "obi.stat.disk.pending_operations",
+		Unit:    "{operation}",
+		Type:    InstrumentUpDownCounter,
+	})
+	// Count of completed block reads and writes per device and direction,
+	// charged to the cgroup (pod, container) that owns the I/O: the
+	// submitter for reads and direct I/O, the owner of the file's writeback
+	// domain for buffered writes. Counted in the kernel per cgroup
+	// (storage_block_pod); I/O charged to no pod is a series without pod
+	// attributes, so the series of a device and direction add up to its
+	// node-level count.
+	StatDiskOperations = metric(Name{
+		Section: "obi.stat.disk.operations",
+		OTEL:    "obi.stat.disk.operations",
+		Unit:    "{operation}",
+		Type:    InstrumentCounter,
+	})
+	// Time spent on the block reads and writes of obi.stat.disk.operations,
+	// summed: from the request's block-layer accounting start (when valid,
+	// as for queue.duration) to its completion, else from its issue. The
+	// semantics of semconv system.disk.operation_time and of diskstats
+	// fields 7 and 11.
+	StatDiskOperationTime = metric(Name{
+		Section: "obi.stat.disk.operation_time",
+		OTEL:    "obi.stat.disk.operation_time",
+		Unit:    "s",
 		Type:    InstrumentCounter,
 	})
 	// Latency of a single filesystem read or write as the application
@@ -846,6 +884,9 @@ var StatMetrics = []Name{
 	StatDiskFlushDuration,
 	StatDiskDiscardDuration,
 	StatDiskDiscardIO,
+	StatDiskPendingOperations,
+	StatDiskOperations,
+	StatDiskOperationTime,
 	StatFsOperationDuration,
 	StatFsIO,
 	StatFsOperationErrors,

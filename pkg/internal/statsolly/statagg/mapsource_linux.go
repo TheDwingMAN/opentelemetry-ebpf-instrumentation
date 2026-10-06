@@ -49,10 +49,10 @@ type MapSource struct {
 }
 
 // perCPUMap reports whether a map of type typ holds a value per CPU. It
-// rejects the map types a Reader cannot read: an LRU map evicts keys by
-// itself, and a key evicted and created again between two polls counts
-// from zero while the Reader diffs it against the totals it had, so the
-// delta of each word would wrap around to a huge count.
+// rejects the map types a delta-aggregation Reader cannot read: an LRU map
+// evicts keys by itself, and a key evicted and created again between two
+// polls counts from zero while the Reader diffs it against the totals it
+// had, so the delta of each word would wrap around to a huge count.
 func perCPUMap(typ cebpf.MapType) (bool, error) {
 	switch typ {
 	case cebpf.PerCPUHash, cebpf.PerCPUArray:
@@ -66,18 +66,52 @@ func perCPUMap(typ cebpf.MapType) (bool, error) {
 	}
 }
 
-// NewMapSource reads m, a hash or array map, per CPU or not.
+// snapshotMapType reports whether a map of type typ holds a value per CPU,
+// for a Source polled once per read with no delta taken (unlike perCPUMap's
+// callers). An LRU map is fine here: the key it evicts mid-flight is merely
+// undercounted for that one poll, the tradeoff an LRU-keyed in-flight map
+// (e.g. blk_rq_inflight_sector) already documents at its definition.
+func snapshotMapType(typ cebpf.MapType) (bool, error) {
+	switch typ {
+	case cebpf.PerCPUHash, cebpf.PerCPUArray, cebpf.LRUCPUHash:
+		return true, nil
+	case cebpf.Hash, cebpf.Array, cebpf.LRUHash:
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s map: not an aggregation map type", typ)
+	}
+}
+
+// NewMapSource reads m, a hash or array map, per CPU or not, for a Reader
+// that diffs successive polls against each other: it rejects an LRU map
+// (see perCPUMap).
 func NewMapSource(m *cebpf.Map) (*MapSource, error) {
+	perCPU, err := perCPUMap(m.Type())
+	if err != nil {
+		return nil, err
+	}
+	return newMapSource(m, perCPU)
+}
+
+// NewSnapshotSource reads m like NewMapSource, but for a caller that takes
+// no delta between polls, such as PendingReader over the live in-flight
+// map: it accepts an LRU map as well as a hash or array map (see
+// snapshotMapType).
+func NewSnapshotSource(m *cebpf.Map) (*MapSource, error) {
+	perCPU, err := snapshotMapType(m.Type())
+	if err != nil {
+		return nil, err
+	}
+	return newMapSource(m, perCPU)
+}
+
+func newMapSource(m *cebpf.Map, perCPU bool) (*MapSource, error) {
 	s := &MapSource{
 		m:         m,
 		keySize:   int(m.KeySize()),
 		valueSize: int(m.ValueSize()),
 		stride:    int(m.ValueSize()),
 		cpus:      1,
-	}
-	perCPU, err := perCPUMap(m.Type())
-	if err != nil {
-		return nil, err
 	}
 	if perCPU {
 		cpus, err := cebpf.PossibleCPU()

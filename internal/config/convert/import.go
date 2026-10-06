@@ -30,7 +30,13 @@ var v2NetworkMetricsFeatureMask = export.FeatureNetwork |
 	export.FeatureNetworkInterZone |
 	export.FeatureNetworkFlowPackets
 
-var v2StatsMetricsFeatureMask = export.FeatureStats
+// v2StatsMetricsFeatureMask is every bit capture.network.stats.features
+// sets, so that a v2 list replaces the base config's stats and storage
+// flags rather than adding to them.
+var v2StatsMetricsFeatureMask = export.FeatureStats |
+	export.FeatureStorageBlock | export.FeatureStorageBlockQueueDepth | export.FeatureStorageBlockVolumes |
+	export.FeatureStorageBlockPod |
+	export.FeatureStorageFS
 
 // V2ToRuntime converts a config v2 extension shape into an OBI runtime
 // configuration.
@@ -2515,9 +2521,24 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsTCPRetransmits
 		case statsFeatureTCPIo:
 			out |= export.FeatureStatsTCPIo
+		default:
+			out |= storageStatsFeature(feature)
 		}
 	}
 	return out
+}
+
+// storageStatsFeature returns the flags of a storage family or umbrella of
+// capture.network.stats.features, 0 for an unknown name.
+func storageStatsFeature(name string) export.Features {
+	for _, families := range [][]storageStatsFamily{storageStatsFamilies, storageStatsUmbrellas} {
+		for _, f := range families {
+			if f.name == name {
+				return f.feature
+			}
+		}
+	}
+	return 0
 }
 
 func signalEnabled(enablement schema.ProtocolEnablement, signal string) bool {

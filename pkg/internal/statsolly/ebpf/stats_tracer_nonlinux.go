@@ -25,7 +25,8 @@ type NFSConfig struct {
 }
 
 func NewStatsFetcher(
-	_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig, _ FsAggregation, _ NFSConfig, _ imetrics.Reporter,
+	_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig, _ FsAggregation, _ NFSConfig,
+	_ *BlockAggregation, _ imetrics.Reporter,
 ) (*StatsFetcher, error) {
 	return nil, nil
 }
@@ -48,5 +49,17 @@ func (m *StatsFetcher) NFSRPCMap() *ciliumebpf.Map {
 }
 
 func (m *StatsFetcher) FsAccumMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) BlockAggregation() *BlockAggMaps {
+	return nil
+}
+
+func (m *StatsFetcher) KernelDropsMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) BlockPrograms() map[string]*ciliumebpf.Program {
 	return nil
 }

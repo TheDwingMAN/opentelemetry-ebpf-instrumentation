@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -51,12 +53,6 @@ const (
 	progObiStatsKprobeTCPSendmsg                          = "obi_stats_kprobe_tcp_sendmsg"
 	progObiStatsKretprobeTCPSendmsg                       = "obi_stats_kretprobe_tcp_sendmsg"
 	progObiStatsKprobeTCPCleanupRbuf                      = "obi_stats_kprobe_tcp_cleanup_rbuf"
-	progObiStatsTpBlockRqInsert                           = "obi_stats_tp_block_rq_insert"
-	progObiStatsTpBlockRqIssue                            = "obi_stats_tp_block_rq_issue"
-	progObiStatsTpBlockRqComplete                         = "obi_stats_tp_block_rq_complete"
-	progObiStatsRawTpBlockRqInsert                        = "obi_stats_raw_tp_block_rq_insert"
-	progObiStatsRawTpBlockRqIssue                         = "obi_stats_raw_tp_block_rq_issue"
-	progObiStatsRawTpBlockRqComplete                      = "obi_stats_raw_tp_block_rq_complete"
 )
 
 // Hook point names, grouped by attach type.
@@ -68,13 +64,12 @@ const (
 
 	// Tracepoints: group/name, are validated by TestTracepointConstantFormat
 	TracepointInetSockSetState = "sock/inet_sock_set_state"
-	TracepointBlockRqInsert    = "block/block_rq_insert"
 	TracepointBlockRqIssue     = "block/block_rq_issue"
 	TracepointBlockRqComplete  = "block/block_rq_complete"
 	// The same three events as raw tracepoints, attached by name without
-	// tracefs. Preferred whenever the kernel BTF lets the programs decode a
-	// request; the classic tracepoints remain for kernels where it does not.
-	RawTracepointBlockRqInsert   = "block_rq_insert"
+	// tracefs (raw_tp and tp_btf). Preferred whenever the kernel BTF lets the
+	// programs decode a request; the classic tracepoints remain for kernels
+	// where it does not.
 	RawTracepointBlockRqIssue    = "block_rq_issue"
 	RawTracepointBlockRqComplete = "block_rq_complete"
 
@@ -83,7 +78,7 @@ const (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -type blk_io_op -type block_io_t -type fs_io_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -type blk_io_op -type block_io_t -type fs_io_t -type stats_drop -type blk_emit -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -93,15 +88,24 @@ type StatsFetcher struct {
 	// fsAccum is the filesystem aggregation map in use, nil when the
 	// filesystem programs emit ring buffer events.
 	fsAccum *ebpf.Map
+
+	blockAgg      *BlockAggMaps
+	blockPrograms map[string]*ebpf.Program
+	// blockVolumes is the bio collection of storage_block_volumes, nil when
+	// it is off or could not be loaded.
+	blockVolumes *blockVolumes
 }
 
 func tlog() *slog.Logger {
 	return slog.With("component", "ebpf.StatFetcher")
 }
 
+// NewStatsFetcher loads and attaches the stats programs. With blockAgg, the
+// block programs count completed requests in kernel maps (BlockAggregation)
+// instead of sending events; nil keeps an event per request.
 func NewStatsFetcher(
 	cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, fsAgg FsAggregation,
-	nfsCfg NFSConfig, metrics imetrics.Reporter,
+	nfsCfg NFSConfig, blockAgg *BlockAggregation, metrics imetrics.Reporter,
 ) (*StatsFetcher, error) {
 	tlog := tlog()
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -151,16 +155,40 @@ func NewStatsFetcher(
 	defer kernelBTFCache.Release()
 
 	storageBlock := features.StorageBlock()
-	storage := planStorage(storageBlock)
-	useRawBlock := storage.useRawBlock
-	toDisable = append(toDisable, storage.toDisable...)
-	blockLoad := planBlockLoad(storageBlock, useRawBlock, features.StorageBlockQueueDepth(), func() uint32 {
+	storage := planStorage(storageBlock, kernelBTF(), tlog)
+	wantQueue := features.StorageBlockQueue()
+	if reason := blockQueueUnsupported(storageBlock, storage, kernelBTF()); wantQueue && reason != "" {
+		tlog.Warn("obi.stat.disk.queue.duration is enabled but can't be recorded on this kernel: "+reason+
+			"; the metric will have no series", "feature", "storage_block_queue")
+		wantQueue = false
+	}
+	blockLoad := planBlockLoad(storageBlock, storage, wantQueue, features.StorageBlockQueueDepth(), func() uint32 {
 		return blockInflightEntries(sysBlockDevicesDir)
 	})
 	blockLoad.emitKinds = blockEmitKinds(*features)
 	if !features.StorageFS() {
 		fsAgg = FsAggregation{}
 	}
+	blockLoad.wantPart = storageBlock && blockWantPartition(attrSel)
+	if !storageBlock || len(storage.stages) == 0 || blockLoad.wantQueueDepth {
+		// queue.depth is per event only: its caller never asks for both.
+		blockAgg = nil
+	}
+	// The bios of stacked volumes are counted in the same maps, under the
+	// volume's device: the maps are sized for the volumes there are now.
+	wantVolumes := storageBlock && len(storage.stages) > 0 && features.StorageBlockVolumes()
+	volumeDevices := 0
+	if wantVolumes {
+		volumeDevices = blockVolumeDevices(sysBlockDevicesDir, blockLoad.wantPart)
+	}
+	requestDevices := blockRequestDevices(sysBlockDevicesDir, blockLoad.wantPart)
+	blockLoad.agg = planBlockAgg(blockAgg, wantQueue, blockLoad.emitKinds, requestDevices,
+		volumeDevices, possibleCPUs(), blockLoad.wantPart, blockLoad.mapEntries, tlog)
+	// The pod counters (storage_block_pod) are counted in the kernel in
+	// either emit mode: they have no per-event path.
+	blockLoad.wantCgroup = storageBlock && len(storage.stages) > 0 && features.StorageBlockPod()
+	planBlockCgroup(blockLoad.wantCgroup, requestDevices+volumeDevices, possibleCPUs(),
+		cfg.MapsConfig.GlobalScaleFactor, uint64(cfg.StorageAggregation.BlockPodMapsBudgetBytes), blockLoad.mapEntries, tlog)
 	consts := statsConstants(cfg, blockLoad, fsAgg)
 
 	sharedMaps := map[string]*ebpf.Map{}
@@ -169,7 +197,7 @@ func NewStatsFetcher(
 		objects = StatsObjects{}
 		return loadStatsObjects(cfg, blockLoad, consts, toDisable, &objects, sharedMaps, &mu, kernelBTFCache.Cache())
 	}
-	storageBlock, err = loadWithStorageFallback(load, toDisable, storageBlock, tlog)
+	blockStage, err := loadWithBlockFallback(load, toDisable, storage.stages, tlog)
 	if err != nil {
 		return nil, err
 	}
@@ -269,9 +297,47 @@ func NewStatsFetcher(
 
 	// block tracepoints: best-effort. A kernel where the block tracepoints
 	// cannot be attached must not take down the rest of the stats agent.
-	if storageBlock {
-		closables = append(closables, attachBlockProbes(&objects, useRawBlock, tlog)...)
-		closables = append(closables, startBlockRecursionPoll(&objects, metrics))
+	blockAttached := blockAttachNone
+	var attachedBlockPrograms map[string]*ebpf.Program
+	if blockStage < len(storage.stages) {
+		programs := blockPrograms(&objects.StatsPrograms)
+		var links []io.Closer
+		links, blockAttached = attachBlockSets(storage.stages[blockStage].sets,
+			func(set blockProgramSet) ([]io.Closer, error) { return attachBlockProgramSet(programs, set) }, tlog)
+		closables = append(closables, links...)
+		attachedBlockPrograms = attachedPrograms(storage.stages[blockStage], blockAttached, programs)
+	}
+
+	// bios of stacked volumes: best-effort, a collection of its own. They
+	// are counted where the requests are, so without the block programs
+	// there is nowhere to report them.
+	var volumes *blockVolumes
+	switch {
+	case !features.StorageBlockVolumes():
+	case blockAttached == blockAttachNone:
+		tlog.Warn("storage_block_volumes is enabled but the block programs are not attached (it adds stacked volumes"+
+			" to the storage_block metrics, and needs one of them enabled); stacked volumes are not measured",
+			"feature", "storage_block_volumes")
+	default:
+		var err error
+		volumes, err = startBlockVolumes(tlog, cfg, consts, blockLoad.mapEntries, sharedMaps, &mu,
+			kernelBTF(), kernelBTFCache.Cache())
+		if err != nil {
+			tlog.Warn("the bios of stacked volumes can't be measured on this kernel; LVM, md and other"+
+				" device-mapper volumes have no series of their own, and their I/O is measured on the disks below",
+				"feature", "storage_block_volumes", "error", err)
+			break
+		}
+		closables = append(closables, volumes)
+		if attachedBlockPrograms == nil {
+			attachedBlockPrograms = map[string]*ebpf.Program{}
+		}
+		maps.Copy(attachedBlockPrograms, volumes.programs)
+	}
+	// Every block program attached, the bio ones included, reports its
+	// recursion misses.
+	if len(attachedBlockPrograms) > 0 {
+		closables = append(closables, startBlockRecursionPoll(attachedBlockPrograms, metrics))
 	}
 
 	// NFS client RPCs: best-effort, as a collection of its own that attaches
@@ -324,16 +390,94 @@ func NewStatsFetcher(
 		closables = append(closables, l)
 	}
 
-	tlog.Info("stats eBPF programs loaded", "duration", time.Since(start), "kernel_btf_parse", btfParse.kernel,
-		"module_btf_parse", btfParse.modules, "btf_modules", btfParse.moduleCount)
+	if blockLoad.wantCgroup && blockAttached == blockAttachClassic {
+		tlog.Warn("storage_block_pod is enabled but the block programs run on the classic tracepoints, which"+
+			" carry no request: obi.stat.disk.operations, operation_time and disk.io have no pod attributes",
+			"feature", "storage_block_pod")
+	}
 
-	return &StatsFetcher{
-		log:       tlog,
-		objects:   &objects,
-		closables: closables,
-		nfs:       nfs,
-		fsAccum:   fsAccum,
-	}, nil
+	tlog.Info("stats eBPF programs loaded", "duration", time.Since(start), "kernel_btf_parse", btfParse.kernel,
+		"module_btf_parse", btfParse.modules, "btf_modules", btfParse.moduleCount, "block", blockAttached)
+
+	fetcher := &StatsFetcher{
+		log:           tlog,
+		objects:       &objects,
+		closables:     closables,
+		nfs:           nfs,
+		fsAccum:       fsAccum,
+		blockAgg:      blockAggMaps(blockLoad, blockAttached, &objects.StatsMaps),
+		blockPrograms: attachedBlockPrograms,
+		blockVolumes:  volumes,
+	}
+	if volumes != nil && fetcher.blockAgg != nil {
+		fetcher.blockAgg.PendingBios = volumes.objects.BlkBioInflight
+	}
+	return fetcher, nil
+}
+
+// blockAggMaps returns the maps the attached block programs count or track
+// requests in, or nil when no block program is attached. Service and Queue,
+// where completions are aggregated, stay nil when the programs send events
+// instead (agg == nil): Pending and Cgroup are independent of that choice,
+// since the in-flight map is populated on every attach variant and the pod
+// counters are always counted in the kernel.
+func blockAggMaps(load blockLoadPlan, attached blockAttach, loaded *StatsMaps) *BlockAggMaps {
+	if attached == blockAttachNone {
+		return nil
+	}
+	out := &BlockAggMaps{Pending: blockPendingMap(attached, loaded)}
+	if load.wantCgroup {
+		out.Cgroup = loaded.BlkCgAgg
+	}
+	plan := load.agg
+	if plan.agg == nil {
+		return out
+	}
+	byName := map[string]*ebpf.Map{
+		StatsMapBlkAgg: loaded.BlkAgg, StatsMapBlkQ_agg: loaded.BlkQ_agg,
+		StatsMapBlkAggExp: loaded.BlkAggExp, StatsMapBlkQ_aggExp: loaded.BlkQ_aggExp,
+	}
+	out.Service = byName[plan.maps.service]
+	if plan.queue {
+		out.Queue = byName[plan.maps.queue]
+	}
+	return out
+}
+
+// blockPendingMap is the in-flight map the attached variant keeps live:
+// blk_rq_inflight_sector, (dev, sector)-keyed, for the classic tracepoints;
+// blk_rq_inflight, request-pointer-keyed, for the raw_tp and tp_btf variants
+// (planBlockLoad sizes only the live one; the other is a 1-entry stub).
+func blockPendingMap(attached blockAttach, loaded *StatsMaps) *ebpf.Map {
+	if attached == blockAttachClassic {
+		return loaded.BlkRqInflightSector
+	}
+	return loaded.BlkRqInflight
+}
+
+// attachedPrograms returns the programs of the set of stage that attached.
+func attachedPrograms(stage blockLoadStage, attached blockAttach, programs map[string]*ebpf.Program) map[string]*ebpf.Program {
+	for _, set := range stage.sets {
+		if set.attach != attached {
+			continue
+		}
+		out := map[string]*ebpf.Program{}
+		for _, name := range set.programs() {
+			if p := programs[name]; p != nil {
+				out[name] = p
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// possibleCPUs is the number of copies of every value of a per-CPU map.
+func possibleCPUs() int {
+	if n, err := ebpf.PossibleCPU(); err == nil {
+		return n
+	}
+	return runtime.NumCPU()
 }
 
 func closeAll(closables []io.Closer) {
@@ -383,43 +527,48 @@ func (m *StatsFetcher) FsAccumMap() *ebpf.Map {
 	return m.fsAccum
 }
 
-// storagePlan is what the block programs need done to the stats spec before
-// load on this kernel: the programs to stub out and which block tracepoint
-// family was kept. The filesystem programs are not in the stats spec; they
-// load as collections of their own (fs_tracer.go).
-type storagePlan struct {
-	toDisable   []string
-	useRawBlock bool
+// BlockAggregation returns the maps the block programs count completed
+// requests in, or nil when they send an event per request.
+func (m *StatsFetcher) BlockAggregation() *BlockAggMaps {
+	return m.blockAgg
 }
 
-func planStorage(block bool) storagePlan {
-	var plan storagePlan
+// KernelDropsMap returns the per-CPU counters of what the stats programs
+// could not count because a map was full, indexed as KernelDropReasons.
+func (m *StatsFetcher) KernelDropsMap() *ebpf.Map {
+	return m.objects.StatsDrops
+}
 
-	// Both block families are compiled in; only one is loaded. Raw tracepoints
-	// need no tracefs mount but must be able to decode struct request through
-	// BTF, so the choice is made here, before load, like the fentry/kprobe
-	// choice for filesystems.
-	plan.useRawBlock = block && blockRawTracepointCapable()
-	switch {
-	case !block:
-		plan.toDisable = append(plan.toDisable, allBlockProgramNames()...)
-	case plan.useRawBlock:
-		plan.toDisable = append(plan.toDisable, blockTracepointPrograms()...)
-	default:
-		plan.toDisable = append(plan.toDisable, blockRawTracepointPrograms()...)
-	}
-	return plan
+// BlockPrograms returns the attached block programs, by name.
+func (m *StatsFetcher) BlockPrograms() map[string]*ebpf.Program {
+	return m.blockPrograms
 }
 
 // PrepareStorageSpec applies to spec what the stats loaders apply before
 // loading with every storage metric enabled, for the verifier tests. On the
 // stats spec it stubs out the block tracepoint family this kernel does not
-// use. On the filesystem spec it keeps both program families of every
+// use (its tp_btf and raw_tp programs, in the variant its tracepoint
+// prototypes take, or the classic ones). On the bio spec of stacked volumes
+// it does the same, and stubs every program out on a kernel where the loader
+// does not load them. On the filesystem spec it keeps both program families of every
 // filesystem, the kprobe fallback included, whatever this kernel would plan:
 // see verifierFsProbes.
 func PrepareStorageSpec(spec *ebpf.CollectionSpec) error {
 	if spec.Programs[progObiStatsRawTpBlockRqIssue] != nil {
-		if err := fixupSpec(spec, planStorage(true).toDisable); err != nil {
+		plan := planStorage(true, kernelBTF(), slog.Default())
+		if err := fixupSpec(spec, plan.firstLoadDisable()); err != nil {
+			return err
+		}
+	}
+	if spec.Programs[progObiStatsRawTpBlockBioQueue] != nil {
+		// The bio spec: its tp_btf and raw_tp programs in the variant this
+		// kernel's block_bio_queue takes, or none on a kernel the loader
+		// does not load them on.
+		var keep []string
+		if layout, reason := blockVolumesUnsupported(kernelBTF()); reason == "" {
+			keep = bioLoadStages(layout)[0].programs()
+		}
+		if err := fixupSpec(spec, programsNotIn(allBioProgramNames(), keep)); err != nil {
 			return err
 		}
 	}
@@ -433,11 +582,8 @@ func PrepareStorageSpec(spec *ebpf.CollectionSpec) error {
 // the main one and each filesystem's. A collection is given the ones it
 // declares (specConstants), so the values never differ between collections.
 func statsConstants(cfg *config.EBPFTracer, blockLoad blockLoadPlan, fsAgg FsAggregation) map[string]any {
-	var wantQueueDepth uint8
-	if blockLoad.wantQueueDepth {
-		wantQueueDepth = 1
-	}
-	return map[string]any{
+	wantQueueDepth := boolConst(blockLoad.wantQueueDepth)
+	consts := map[string]any{
 		"g_bpf_debug":             cfg.BpfDebug,
 		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
 		"blk_want_queue_depth":    wantQueueDepth,
@@ -445,7 +591,13 @@ func statsConstants(cfg *config.EBPFTracer, blockLoad blockLoadPlan, fsAgg FsAgg
 		"fs_emit_mode":            fsEmitMode(fsAgg),
 		"fs_hist_exp":             boolConst(fsAgg.Enabled && fsAgg.Exponential),
 		"fs_bounds_ns":            fsKernelBounds(fsAgg.BoundsNs),
+		"blk_complete_errno":      boolConst(blockLoad.completeErrno),
+		"blk_want_queue":          boolConst(blockLoad.wantQueue),
+		"blk_want_part":           boolConst(blockLoad.wantPart),
+		"blk_want_cgroup":         boolConst(blockLoad.wantCgroup),
 	}
+	maps.Copy(consts, blockLoad.agg.constants())
+	return consts
 }
 
 func boolConst(b bool) uint8 {
@@ -519,18 +671,6 @@ func loadStatsObjects(
 	return nil
 }
 
-func blockTracepointPrograms() []string {
-	return []string{progObiStatsTpBlockRqInsert, progObiStatsTpBlockRqIssue, progObiStatsTpBlockRqComplete}
-}
-
-func blockRawTracepointPrograms() []string {
-	return []string{progObiStatsRawTpBlockRqInsert, progObiStatsRawTpBlockRqIssue, progObiStatsRawTpBlockRqComplete}
-}
-
-func allBlockProgramNames() []string {
-	return append(blockTracepointPrograms(), blockRawTracepointPrograms()...)
-}
-
 // sysBlockDevicesDir lists every block device, with its request queue
 // settings under queue/ and one directory per hardware queue under mq/.
 const sysBlockDevicesDir = "/sys/block"
@@ -550,9 +690,22 @@ const (
 type blockLoadPlan struct {
 	mapEntries     map[string]uint32
 	wantQueueDepth bool
+	// wantQueue is blk_want_queue: the queue wait is measured.
+	wantQueue bool
+	// completeErrno is blk_complete_errno.
+	completeErrno bool
+	// wantPart is blk_want_part: obi.disk.partition is selected on a disk
+	// metric that carries it, so the partition is read at issue (1.2, 2.1).
+	// Unlike wantQueue it comes from attributes.select, not a feature flag.
+	wantPart bool
+	// wantCgroup is blk_want_cgroup: storage_block_pod counts reads and
+	// writes per cgroup in blk_cg_agg.
+	wantCgroup bool
 	// emitKinds is blk_emit_kinds: one bit per enum blk_io_op whose
 	// completions reach userspace.
 	emitKinds uint8
+	// agg is how completions are counted in kernel maps, if they are.
+	agg blockAggPlan
 }
 
 // blockEmitKinds returns the kinds of block request the enabled metrics use.
@@ -572,29 +725,62 @@ func blockEmitKinds(features export.Features) uint8 {
 	return kinds
 }
 
+// blockPartitionMetrics is every disk metric whose attribute set can carry
+// obi.disk.partition (1.1): it is opt-in there, not gated by its own feature
+// flag.
+var blockPartitionMetrics = []attributes.Name{
+	attributes.StatDiskOperationDuration,
+	attributes.StatDiskIO,
+	attributes.StatDiskQueueDuration,
+	attributes.StatDiskOperationErrors,
+	attributes.StatDiskDiscardDuration,
+	attributes.StatDiskDiscardIO,
+	attributes.StatDiskPendingOperations,
+}
+
+// blockWantPartition reports whether attributes.select picked
+// obi.disk.partition on any metric that carries it, so blk_want_part (and
+// the 2-3 extra reads per completion it gates) is paid for only when asked
+// for, never unconditionally in the aggregation key (2.0, 2.1).
+func blockWantPartition(attrSel *attributes.AttrSelector) bool {
+	for _, m := range blockPartitionMetrics {
+		if slices.Contains(attrSel.For(m), attr.DiskPartition) {
+			return true
+		}
+	}
+	return false
+}
+
 // planBlockLoad sizes the block maps for the programs that will run: the
-// in-flight map of the tracepoint family in use, from inflightEntries for the
-// raw family, and one entry for every map nothing touches, so the idle
-// family, a disabled storage_block and a disabled queue depth cost no memory.
-func planBlockLoad(block, useRaw, queueDepth bool, inflightEntries func() uint32) blockLoadPlan {
+// request-keyed in-flight map, from inflightEntries, when the BTF-decoding
+// programs can run, the (dev, sector) one for the classic tracepoints, the
+// map nothing touches at one entry, so the idle family, a disabled
+// storage_block and queue depth cost no memory. Both request-keyed families (tp_btf,
+// raw_tp) share the request-keyed maps.
+func planBlockLoad(block bool, storage storagePlan, queue, queueDepth bool, inflightEntries func() uint32) blockLoadPlan {
 	entries := map[string]uint32{}
-	if !block {
-		for _, name := range []string{StatsMapBlkRqInflight, StatsMapBlkRqInflightSector, StatsMapBlkInsert, StatsMapBlkDevState} {
+	if !block || len(storage.stages) == 0 {
+		for _, name := range []string{StatsMapBlkRqInflight, StatsMapBlkRqInflightSector, StatsMapBlkDevState} {
 			entries[name] = unusedMapEntries
 		}
 		return blockLoadPlan{mapEntries: entries}
 	}
 
-	if useRaw {
+	if storage.stages[0].sets[0].attach == blockAttachClassic {
+		entries[StatsMapBlkRqInflight] = unusedMapEntries
+	} else {
 		entries[StatsMapBlkRqInflight] = inflightEntries()
 		entries[StatsMapBlkRqInflightSector] = unusedMapEntries
-	} else {
-		entries[StatsMapBlkRqInflight] = unusedMapEntries
 	}
 	if !queueDepth {
 		entries[StatsMapBlkDevState] = unusedMapEntries
 	}
-	return blockLoadPlan{mapEntries: entries, wantQueueDepth: queueDepth}
+	return blockLoadPlan{
+		mapEntries:     entries,
+		wantQueueDepth: queueDepth,
+		wantQueue:      queue,
+		completeErrno:  storage.layout.completeErrno,
+	}
 }
 
 // blockInflightEntries sizes the request-keyed in-flight map: at most
@@ -638,19 +824,11 @@ func setMapEntries(spec *ebpf.CollectionSpec, entries map[string]uint32) error {
 	return nil
 }
 
-// startBlockRecursionPoll reports the block programs' recursion misses to
-// metrics every fsAttachInterval until the returned closer is closed. Block
-// has no refresh loop of its own, so this one only reads the counters, which
-// cost nothing per event.
-func startBlockRecursionPoll(objects *StatsObjects, metrics imetrics.Reporter) io.Closer {
-	progs := map[string]*ebpf.Program{
-		progObiStatsTpBlockRqComplete:    objects.ObiStatsTpBlockRqComplete,
-		progObiStatsTpBlockRqInsert:      objects.ObiStatsTpBlockRqInsert,
-		progObiStatsTpBlockRqIssue:       objects.ObiStatsTpBlockRqIssue,
-		progObiStatsRawTpBlockRqComplete: objects.ObiStatsRawTpBlockRqComplete,
-		progObiStatsRawTpBlockRqInsert:   objects.ObiStatsRawTpBlockRqInsert,
-		progObiStatsRawTpBlockRqIssue:    objects.ObiStatsRawTpBlockRqIssue,
-	}
+// startBlockRecursionPoll reports the recursion misses of progs, the block
+// programs that attached, to metrics every fsAttachInterval until the
+// returned closer is closed. Block has no refresh loop of its own, so this
+// one only reads the counters, which cost nothing per event.
+func startBlockRecursionPoll(progs map[string]*ebpf.Program, metrics imetrics.Reporter) io.Closer {
 	p := &blockRecursionPoll{stop: make(chan struct{}), stopped: make(chan struct{})}
 	go func() {
 		defer close(p.stopped)
@@ -675,81 +853,6 @@ func (p *blockRecursionPoll) Close() error {
 	close(p.stop)
 	<-p.stopped
 	return nil
-}
-
-// attachBlockProbes attaches one block family. On any failure it detaches
-// what it managed and returns nothing: block metrics are then off, and the
-// rest of the agent keeps running.
-func attachBlockProbes(objects *StatsObjects, useRaw bool, log *slog.Logger) []io.Closer {
-	var links []io.Closer
-	fail := func(name string, err error) []io.Closer {
-		log.Warn("failed block tracepoint attachment; disabling storage block metrics",
-			"tracepoint", name, "raw", useRaw, "error", err)
-		closeAll(links)
-		return nil
-	}
-
-	// Completion attaches first: a request issued before the issue program
-	// attached has no in-flight entry and its completion is ignored, while
-	// issue attached first would leave behind the entries of requests that
-	// complete before the completion program attaches.
-	if useRaw {
-		for _, t := range []struct {
-			name    string
-			program *ebpf.Program
-		}{
-			{RawTracepointBlockRqComplete, objects.ObiStatsRawTpBlockRqComplete},
-			{RawTracepointBlockRqInsert, objects.ObiStatsRawTpBlockRqInsert},
-			{RawTracepointBlockRqIssue, objects.ObiStatsRawTpBlockRqIssue},
-		} {
-			l, err := link.AttachRawTracepoint(link.RawTracepointOptions{Name: t.name, Program: t.program})
-			if err != nil {
-				return fail(t.name, err)
-			}
-			links = append(links, l)
-		}
-		return links
-	}
-
-	for _, t := range []struct {
-		name    string
-		program *ebpf.Program
-	}{
-		{TracepointBlockRqComplete, objects.ObiStatsTpBlockRqComplete},
-		{TracepointBlockRqInsert, objects.ObiStatsTpBlockRqInsert},
-		{TracepointBlockRqIssue, objects.ObiStatsTpBlockRqIssue},
-	} {
-		group, tp, _ := strings.Cut(t.name, "/")
-		l, err := link.Tracepoint(group, tp, t.program, nil)
-		if err != nil {
-			return fail(t.name, err)
-		}
-		links = append(links, l)
-	}
-	return links
-}
-
-// loadWithStorageFallback loads the stats spec and, when a kernel
-// incompatibility fails the whole load with storage block metrics enabled,
-// retries once with the block tracepoints stubbed out. It returns whether
-// storage block metrics remain enabled. The filesystem programs are not part
-// of this load, so a filesystem the kernel rejects can never take block or
-// TCP metrics down with it.
-func loadWithStorageFallback(
-	load func(toDisable []string) error,
-	toDisable []string,
-	storageBlock bool,
-	log *slog.Logger,
-) (blockOK bool, err error) {
-	err = load(toDisable)
-	if err == nil || !storageBlock {
-		return storageBlock, err
-	}
-
-	log.Warn("loading stats eBPF spec failed with storage block metrics enabled;"+
-		" disabling storage block metrics and retrying (likely kernel incompatibility)", "error", err)
-	toDisable = append(slices.Clone(toDisable), allBlockProgramNames()...)
-	return false, load(toDisable)
 }
 
 // fixupSpec replaces disabled programs with no-op stubs before loading,

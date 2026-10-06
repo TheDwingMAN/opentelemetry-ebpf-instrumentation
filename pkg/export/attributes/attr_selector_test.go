@@ -202,6 +202,10 @@ func TestDefault_StatDiskNodeName(t *testing.T) {
 	assert.Contains(t, p.For(StatDiskOperationDuration), attr.K8sNodeName)
 	assert.Contains(t, p.For(StatDiskIO), attr.K8sNodeName)
 	assert.Contains(t, p.For(StatDiskQueueDepth), attr.K8sNodeName)
+	assert.Contains(t, p.For(StatDiskPendingOperations), attr.K8sNodeName)
+	assert.Contains(t, p.For(StatDiskPendingOperations), attr.DiskStacked)
+	assert.Contains(t, p.For(StatDiskOperations), attr.K8sNodeName)
+	assert.Contains(t, p.For(StatDiskOperationTime), attr.DiskStacked)
 }
 
 func TestFor_KubeDisabled_StatDiskOmitsNodeName(t *testing.T) {
@@ -417,4 +421,58 @@ func TestTracesGenAIToolCallAttributes(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, p.For(Traces), attr.GenAIToolCallArguments)
 	assert.NotContains(t, p.For(Traces), attr.GenAIToolCallResult)
+}
+
+// A Section with an underscore of its own is selected by its own name, in
+// any notation: the selection keys are normalized (underscores to dots, unit
+// and aggregation suffixes removed), so the Section is matched normalized
+// too.
+func TestFor_SectionWithUnderscore(t *testing.T) {
+	for _, name := range []Section{
+		"obi.stat.disk.pending_operations",
+		"obi_stat_disk_pending_operations",
+		"obi.stat.disk.pending_*",
+	} {
+		t.Run(string(name), func(t *testing.T) {
+			sel := Selection{name: InclusionLists{Include: []string{"disk.io.direction"}}}
+			sel.Normalize()
+			p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: sel})
+			require.NoError(t, err)
+			assert.Equal(t, []attr.Name{attr.DiskIODirection}, p.For(StatDiskPendingOperations))
+			assert.Contains(t, p.For(StatDiskIO), attr.DiskDevice, "another metric is untouched")
+		})
+	}
+}
+
+// storage_block_pod (D11): the pod counters carry namespace, pod and owner by
+// default, container and kind on request; obi.stat.disk.io gets the same pod
+// attributes only when the flag counts it per cgroup.
+func TestDefault_BlockPodAttributes(t *testing.T) {
+	pod, err := NewAttrSelector(GroupKubernetes|GroupStatsBlockPod, &SelectorConfig{})
+	require.NoError(t, err)
+	podDefaults := []attr.Name{
+		attr.DiskIODirection, attr.K8sNamespaceName, attr.K8sOwnerName, attr.K8sPodName, attr.DiskDevice,
+		attr.DiskStacked, attr.K8sNodeName,
+	}
+	for _, m := range []Name{StatDiskOperations, StatDiskOperationTime, StatDiskIO} {
+		assert.ElementsMatch(t, podDefaults, pod.For(m), m.OTEL)
+	}
+
+	noPod, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []attr.Name{attr.DiskIODirection, attr.DiskDevice, attr.DiskStacked, attr.K8sNodeName},
+		noPod.For(StatDiskIO),
+		"without storage_block_pod, disk.io has no pod attributes")
+
+	noKube, err := NewAttrSelector(GroupStatsBlockPod, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []attr.Name{attr.DiskIODirection, attr.DiskDevice, attr.DiskStacked}, noKube.For(StatDiskOperations),
+		"without Kubernetes metadata, the pod counters are per device and direction")
+
+	sel := Selection{"obi_stat_disk_operations_total": InclusionLists{Include: []string{"k8s.container.name", "k8s.kind"}}}
+	sel.Normalize()
+	optIn, err := NewAttrSelector(GroupKubernetes|GroupStatsBlockPod, &SelectorConfig{SelectionCfg: sel})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{attr.K8sContainerName, attr.K8sKind}, optIn.For(StatDiskOperations))
+	assert.NotContains(t, optIn.For(StatDiskOperations), attr.DiskPartition, "the pod counters are per device")
 }

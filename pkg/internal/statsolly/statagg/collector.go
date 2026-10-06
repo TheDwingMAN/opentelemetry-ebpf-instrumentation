@@ -160,6 +160,9 @@ func (o *promMetric) metric(def *Metric, s *series[[]string]) (prometheus.Metric
 			float64(s.value), s.start, s.labels...)
 	case KindUpDownCounter:
 		return prometheus.NewConstMetric(o.desc, prometheus.GaugeValue, float64(int64(s.value)), s.labels...)
+	case KindDurationCounter:
+		return prometheus.NewConstMetricWithCreatedTimestamp(o.desc, prometheus.CounterValue,
+			time.Duration(s.value).Seconds(), s.start, s.labels...)
 	}
 	sumSeconds := time.Duration(s.sumNs).Seconds()
 	if def.Layout.Kind == LayoutExponential {

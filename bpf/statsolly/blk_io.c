@@ -5,32 +5,33 @@
 #include <bpfcore/vmlinux.h>
 #include <bpfcore/bpf_helpers.h>
 #include <bpfcore/bpf_core_read.h>
+#include <bpfcore/bpf_tracing.h>
 
 #include <logger/bpf_dbg.h>
 
 #include <statsolly/types.h>
 #include <statsolly/blk_helpers.h>
-#include <statsolly/maps/stats_events.h>
+#include <statsolly/blk_cgroup.h>
+#include <statsolly/blk_record.h>
 #include <statsolly/maps/blk_rq_inflight.h>
-#include <statsolly/maps/blk_dev_state.h>
+#include <statsolly/maps/blk_q_agg.h>
+#include <statsolly/hist.h>
+
+// The block request programs: a request enters blk_rq_inflight at
+// block_rq_issue and leaves it at its final block_rq_complete. What they
+// share with the bio programs of stacked volumes is in blk_record.h.
 
 enum { k_blk_bytes_per_sector = 512 };
 
-// Set by userspace when the deprecated obi.stat.disk.queue.depth metric is
-// enabled. When 0 the per-device in-flight counter, the only shared
-// read-modify-write on the block path, is dead code to the verifier.
-volatile const u8 blk_want_queue_depth;
+// Set by userspace when obi.stat.disk.queue.duration is enabled. When 0 the
+// issue does not read the request's accounting start. There is no insert
+// program: the queue interval is start_time_ns -> issue, read at issue.
+volatile const u8 blk_want_queue;
 
-// The kinds of request whose completions reach userspace, one bit per enum
-// blk_req_kind, set by userspace from the enabled metrics. The others end here,
-// after their in-flight entry is released, without a ring buffer event.
-volatile const u8 blk_emit_kinds;
-
-// A request's kind is sent to userspace as the event's op.
-_Static_assert((int)blk_req_read == (int)blk_op_read && (int)blk_req_write == (int)blk_op_write &&
-                   (int)blk_req_flush == (int)blk_op_flush &&
-                   (int)blk_req_discard == (int)blk_op_discard,
-               "enum blk_req_kind must match enum blk_io_op");
+// blk_agg_zero (blk_record.h) is the zeroed value a new key of the queue maps
+// starts from, too.
+_Static_assert(sizeof(struct blk_agg_exp_val) >= sizeof(struct blk_queue_agg_exp_val),
+               "blk_agg_zero must cover every aggregation value");
 
 // Newer kernels renamed the completion tracepoint context struct
 // (trace_event_raw_block_rq_complete -> ..._completion). CO-RE flavor: only
@@ -48,137 +49,101 @@ struct trace_event_raw_block_rq_completion___x {
     unsigned char _pad[4];
 } __attribute__((preserve_access_index));
 
-// REQ_OP_* is an enum in BTF: enum req_opf, which bpfcore/vmlinux.h carries,
-// renamed enum req_op in Linux 6.0 and on RHEL 9. The zone operations have
-// been renumbered along the way, so REQ_OP_ZONE_APPEND is resolved by CO-RE
-// from whichever of the two this kernel has.
-enum req_op___new {
-    REQ_OP_ZONE_APPEND___new = 7,
+// The request flags that say whether rq->start_time_ns is fresh. enum rqf_flags
+// is in BTF on kernels that define the flags as bit positions (RHEL 9, Linux
+// 5.14+); it is absent on RHEL 8 and older, where there are only macros. Both
+// values are bit positions, resolved by CO-RE, so a kernel that renumbers them
+// is followed and one without the enum reads as mask 0: no queue time.
+enum rqf_flags___x {
+    __RQF_FLUSH_SEQ___x = 1,
+    __RQF_IO_STAT___x = 8,
 };
 
-static __always_inline u32 blk_req_op_zone_append(void) {
-    if (bpf_core_enum_value_exists(enum req_op___new, REQ_OP_ZONE_APPEND___new)) {
-        return bpf_core_enum_value(enum req_op___new, REQ_OP_ZONE_APPEND___new);
+static __always_inline u32 blk_rqf_io_stat_mask(void) {
+    if (bpf_core_enum_value_exists(enum rqf_flags___x, __RQF_IO_STAT___x)) {
+        return 1U << bpf_core_enum_value(enum rqf_flags___x, __RQF_IO_STAT___x);
     }
-    if (bpf_core_enum_value_exists(enum req_opf, REQ_OP_ZONE_APPEND)) {
-        return bpf_core_enum_value(enum req_opf, REQ_OP_ZONE_APPEND);
-    }
-    return k_req_op_absent;
+    return 0;
 }
 
-// Self-evicting scratch map for in-flight request queue-wait timing
-// (insert -> issue): entries whose issue never arrives (merges, requeues,
-// splits, error paths) would otherwise orphan and fill a plain HASH;
-// LRU_HASH evicts the least-recently-used entry instead of failing writes
-// once full.
-struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 1 << 16);
-    __type(key, struct blk_rq_key);
-    __type(value, u64); // insert timestamp (ns)
-    __uint(pinning, OBI_PIN_INTERNAL);
-} blk_insert SEC(".maps");
-
-static __always_inline struct blk_dev_state *blk_dev_state_get(const u32 dev) {
-    struct blk_dev_state *const existing = bpf_map_lookup_elem(&blk_dev_state, &dev);
-    if (existing) {
-        return existing;
+static __always_inline u32 blk_rqf_flush_seq_mask(void) {
+    if (bpf_core_enum_value_exists(enum rqf_flags___x, __RQF_FLUSH_SEQ___x)) {
+        return 1U << bpf_core_enum_value(enum rqf_flags___x, __RQF_FLUSH_SEQ___x);
     }
-
-    const struct blk_dev_state empty = {};
-    bpf_map_update_elem(&blk_dev_state, &dev, &empty, BPF_NOEXIST);
-    return bpf_map_lookup_elem(&blk_dev_state, &dev);
+    return 0;
 }
 
-// Issue and completion of one request can run on different CPUs, and a
-// completion in interrupt context can interrupt an issue on the same CPU, so
-// the shared counter is only ever changed atomically.
-static __always_inline void blk_queue_depth_inc(const u32 dev) {
-    if (!blk_want_queue_depth) {
-        return;
-    }
-
-    struct blk_dev_state *const st = blk_dev_state_get(dev);
-    if (!st) {
-        return;
-    }
-    __sync_fetch_and_add(&st->inflight, 1);
+// Whether the issue reads the request's accounting start: queue.duration is
+// measured from it, and obi.stat.disk.operation_time (storage_block_pod) from
+// it when it is valid.
+static __always_inline bool blk_want_start(void) {
+    return blk_want_queue || blk_want_cgroup;
 }
 
-// Returns the requests still in flight on dev after this completion, for the
-// ring buffer event.
-static __always_inline u32 blk_queue_depth_dec(const u32 dev) {
-    if (!blk_want_queue_depth) {
+// blk_rq_start reads the accounting start of a request with the valid-start
+// rule of blk_helpers.h: 0 when nothing measures from it, the flags are
+// unknown or say the field is stale.
+static __always_inline u64 blk_rq_start(const u32 rq_flags, const u64 start_ns) {
+    if (!blk_want_start()) {
         return 0;
     }
-
-    struct blk_dev_state *const st = blk_dev_state_get(dev);
-    if (!st) {
-        return 0;
-    }
-    __sync_fetch_and_add(&st->inflight, -1);
-    // Decrements pair with increments, but the counter is shared and a pairing
-    // this program cannot see (a completion racing an issue on another CPU)
-    // must not turn an idle device into 2^32-1 in the histogram.
-    const s64 inflight = (s64)st->inflight;
-    return inflight > 0 ? (u32)inflight : 0;
-}
-
-static __always_inline void blk_on_insert(const u32 dev, const u64 sector) {
-    struct blk_rq_key key = {};
-    key.dev = dev;
-    key.sector = sector;
-
-    const u64 now = bpf_ktime_get_ns();
-    bpf_map_update_elem(&blk_insert, &key, &now, BPF_ANY);
-}
-
-// Time since block_rq_insert, taken at issue: the request's start sector
-// still names it then, while a partial completion advances it.
-static __always_inline u64 blk_queue_wait(const u32 dev, const u64 sector, const u64 issue_ns) {
-    struct blk_rq_key key = {};
-    key.dev = dev;
-    key.sector = sector;
-
-    const u64 *const insert_ns = bpf_map_lookup_elem(&blk_insert, &key);
-    if (!insert_ns) {
-        return 0;
-    }
-    const u64 queue_ns = issue_ns - *insert_ns;
-    bpf_map_delete_elem(&blk_insert, &key);
-    return queue_ns;
+    return blk_start_if_valid(rq_flags, blk_rqf_io_stat_mask(), blk_rqf_flush_seq_mask(), start_ns);
 }
 
 static __always_inline void blk_on_issue(void *const inflight_map,
                                          const void *const key,
                                          const u32 dev,
-                                         const u64 sector,
-                                         const enum blk_req_kind kind) {
+                                         const u32 part_dev,
+                                         const u64 start_ns,
+                                         const enum blk_req_kind kind,
+                                         const u64 cgid) {
     struct blk_rq_inflight issued = {};
     issued.issue_ns = bpf_ktime_get_ns();
-    issued.queue_ns = blk_queue_wait(dev, sector, issued.issue_ns);
+    issued.queue_ns = blk_queue_ns(start_ns, issued.issue_ns);
+    issued.cgid = cgid;
     issued.dev = dev;
+    issued.part_dev = part_dev;
     issued.kind = kind;
 
-    if (bpf_map_update_elem(inflight_map, key, &issued, BPF_NOEXIST) == 0) {
-        blk_queue_depth_inc(dev);
+    blk_inflight_begin(inflight_map, key, &issued, false, k_stats_drop_blk_inflight);
+}
+
+static __always_inline void blk_agg_queue(const struct blk_agg_key *const key, const u64 queue_ns) {
+    if (blk_hist_exp) {
+        struct blk_queue_agg_exp_val *const v =
+            blk_agg_lookup_or_init(&blk_q_agg_exp, key, k_stats_drop_blk_queue_agg);
+        if (!v) {
+            return;
+        }
+        blk_agg_add(&v->queue_sum_ns, queue_ns);
+        stat_hist_exp_add(v->queue_bkt, stat_hist_exp_idx(blk_exp_bounds_ns, queue_ns));
         return;
     }
 
-    // Issued again while its entry is still present: not a new request in
-    // flight, so the queue depth does not change, unless a request struct
-    // reused after a missed completion moved the entry to another disk of the
-    // same tag set. Its count then moves too, so the stale issue does not hold
-    // the old disk up forever and the final completion does not take the new
-    // one below zero.
-    struct blk_rq_inflight *const cur = bpf_map_lookup_elem(inflight_map, key);
-    if (!cur) {
+    struct blk_queue_agg_val *const v =
+        blk_agg_lookup_or_init(&blk_q_agg, key, k_stats_drop_blk_queue_agg);
+    if (!v) {
         return;
     }
-    const u32 prev_dev = blk_rq_reissue(cur, &issued);
-    if (prev_dev != dev) {
-        blk_queue_depth_dec(prev_dev);
-        blk_queue_depth_inc(dev);
+    blk_agg_add(&v->queue_sum_ns, queue_ns);
+    stat_hist_add(v->queue_bkt, stat_hist_idx(blk_bounds_ns, queue_ns));
+}
+
+// blk_aggregate counts a completed request in the kernel maps, as the
+// per-event exporters would count its event: service time and bytes for every
+// kind, the queue wait for reads and writes that have one (a queue wait of 0
+// means the request has no valid accounting start, and the exporters skip it
+// too). The queue wait is read for operation_time too, but counted only when
+// queue.duration is on: its map has one entry otherwise.
+static __always_inline void blk_aggregate(const struct blk_rq_inflight *const rq,
+                                          const u64 bytes,
+                                          const u64 svc_ns,
+                                          const int error) {
+    const struct blk_agg_key key = blk_agg_key_of(rq, error);
+    blk_agg_service(&key, bytes, svc_ns);
+
+    if (blk_want_queue && rq->queue_ns != 0 && blk_kind_is_read_write(rq->kind)) {
+        blk_agg_queue(&key, rq->queue_ns);
     }
 }
 
@@ -187,65 +152,41 @@ static __always_inline void blk_on_complete(void *const inflight_map,
                                             const u32 nr_bytes,
                                             const bool final,
                                             const int error) {
-    struct blk_rq_inflight *const cur = bpf_map_lookup_elem(inflight_map, key);
-    if (!cur) {
-        // Issued before this program attached, or already ended. On a device
-        // without FUA, a write in a flush sequence (PREFLUSH or FUA) completes
-        // twice: with its bytes, which ends it here, then with none once the
-        // flush machinery's post-flush is done. The flushes themselves are
-        // requests of their own.
+    struct blk_done done;
+    if (!blk_inflight_end(inflight_map, key, nr_bytes, final, &done)) {
         return;
     }
-
-    if (!final) {
-        cur->bytes_done += nr_bytes;
+    if (blk_emit_mode == k_blk_emit_agg) {
+        blk_aggregate(&done.op, done.bytes, done.svc_ns, error);
         return;
     }
-
-    const u64 now = bpf_ktime_get_ns();
-
-    // Copy before deleting: a deleted element can be handed to another CPU.
-    const struct blk_rq_inflight rq = *cur;
-    if (bpf_map_delete_elem(inflight_map, key) != 0) {
-        // Another completion with the same classic (dev, sector) key won.
-        return;
-    }
-    const u32 inflight = blk_queue_depth_dec(rq.dev);
-
-    if (!blk_kind_emitted(blk_emit_kinds, rq.kind)) {
-        return;
-    }
-
-    block_io_t *const se = bpf_ringbuf_reserve(&stats_events, sizeof(*se), 0);
-    if (!se) {
-        bpf_d_printk("block_io: stats_events ring buffer full, dropping event");
-        return;
-    }
-    se->flags = k_stat_type_block_io;
-    se->op = (enum blk_io_op)rq.kind;
-    se->_pad[0] = 0;
-    se->_pad[1] = 0;
-    se->dev = rq.dev;
-    se->latency_ns = now - rq.issue_ns;
-    se->queue_ns = rq.queue_ns;
-    se->bytes = rq.bytes_done + nr_bytes;
-    se->error = error;
-    se->inflight = inflight;
-    se->part_dev = 0;
-    __builtin_memset(se->_pad2, 0, sizeof(se->_pad2));
-    bpf_ringbuf_submit(se, stats_events_flags());
+    blk_emit_event(&done, error);
 }
 
-// The raw tracepoint's first argument is the request itself. Its device is
-// taken the way the classic tracepoint takes it, from the request's gendisk
-// (disk_devt: MKDEV(major, first_minor)), so both attach modes name the whole
-// disk rather than the partition, and a flush request, which has no
-// partition, still names its disk. Kernels before 5.15 keep the gendisk on the
-// request (rq_disk); since 5.15, and on RHEL 9 which backports it, it lives on
-// the queue. Which one exists is decided at load time by CO-RE, and the
-// untaken branch is dead code to the verifier.
-enum { k_minorbits = 20 }; // MINORBITS: dev_t is major << 20 | minor
+// Load-time constant: block_rq_complete passes an int errno rather than a
+// blk_status_t (kernels before 5.16), as the loader reads from the
+// tracepoint's BTF prototype.
+volatile const u8 blk_complete_errno;
 
+// The request tracepoints are attached in one of three ways. tp_btf, the
+// default, reads the request with direct loads, which the verifier types
+// from BTF; raw_tp, its fallback when a tp_btf program cannot be loaded or
+// attached, reads it through bpf_probe_read_kernel (BPF_CORE_READ), about a
+// quarter slower per run. Both key requests by pointer. The classic
+// tracepoints, for kernels whose BTF cannot decode a request, see only
+// (dev, sector). Kernels before 5.11 (unless backported, as in 5.10.137 and
+// RHEL 8.6) pass the request queue before the request to block_rq_issue; the
+// _legacy programs take that shape, and the loader picks the variant the
+// tracepoint's BTF prototype has.
+//
+// The device is the request's gendisk (disk_devt: MKDEV(major, first_minor)),
+// as the classic tracepoint names it, so every attach mode names the whole
+// disk rather than the partition, and a flush request, which has no
+// partition, still names its disk. Kernels before 5.15 keep the gendisk on
+// the request (rq_disk); since 5.15, and on RHEL 9 which backports it, it
+// lives on the queue. Which one exists is decided at load time by CO-RE, and
+// the untaken branch is dead code to the verifier.
+// blk_rq_dev reads the device through bpf_probe_read_kernel, for raw_tp.
 static __always_inline u32 blk_rq_dev(const struct request *const rq) {
     struct gendisk *disk = NULL;
     if (bpf_core_field_exists(struct request_queue, disk)) {
@@ -256,21 +197,168 @@ static __always_inline u32 blk_rq_dev(const struct request *const rq) {
     if (!disk) {
         return 0;
     }
-    return ((u32)BPF_CORE_READ(disk, major) << k_minorbits) | (u32)BPF_CORE_READ(disk, first_minor);
+    return blk_disk_devt(BPF_CORE_READ(disk, major), BPF_CORE_READ(disk, first_minor));
 }
 
-SEC("tracepoint/block/block_rq_insert")
-int obi_stats_tp_block_rq_insert(struct trace_event_raw_block_rq *ctx) {
-    blk_on_insert(BPF_CORE_READ(ctx, dev), BPF_CORE_READ(ctx, sector));
+// blk_rq_dev_btf reads the device with direct loads, for tp_btf.
+static __always_inline u32 blk_rq_dev_btf(const struct request *const rq) {
+    struct gendisk *disk = NULL;
+    if (bpf_core_field_exists(struct request_queue, disk)) {
+        disk = rq->q->disk;
+    } else {
+        disk = rq->rq_disk;
+    }
+    if (!disk) {
+        return 0;
+    }
+    return blk_disk_devt(disk->major, disk->first_minor);
+}
+
+// blk_rq_part_dev_btf resolves a request's partition dev_t with direct
+// loads, when obi.disk.partition is selected (revision 4, from v2
+// request_partition, bpf/statsolly/tp_blk.c:54-75, read-order swapped): the
+// first bio's block_device (5.12+; bi_bdev is always set and unchanged by
+// the kernel's partition-to-whole-disk remap, S0-b) when the request has
+// one, else rq->part's (flushes have no bio; rq->part has been a struct
+// block_device * since Linux 5.11). blk_part_dev zeroes whole-disk I/O and
+// an unresolved partition alike. RHEL 8's hd_struct flavor (rq->part as
+// struct hd_struct *, partno only) is not handled: take it only if RHEL 8
+// becomes a target.
+static __always_inline u32 blk_rq_part_dev_btf(const struct request *const rq, const u32 dev) {
+    if (!blk_want_part) {
+        return 0;
+    }
+    struct bio *const bio = rq->bio;
+    u32 pdev = 0;
+    if (bio && bpf_core_field_exists(bio->bi_bdev)) {
+        pdev = bio->bi_bdev->bd_dev;
+    } else {
+        struct block_device *const part = rq->part;
+        if (part) {
+            pdev = part->bd_dev;
+        }
+    }
+    return blk_part_dev(pdev, dev);
+}
+
+// blk_rq_part_dev reads the same partition through bpf_probe_read_kernel,
+// for raw_tp.
+static __always_inline u32 blk_rq_part_dev(const struct request *const rq, const u32 dev) {
+    if (!blk_want_part) {
+        return 0;
+    }
+    struct bio *const bio = BPF_CORE_READ(rq, bio);
+    u32 pdev = 0;
+    if (bio && bpf_core_field_exists(bio->bi_bdev)) {
+        pdev = BPF_CORE_READ(bio, bi_bdev, bd_dev);
+    } else {
+        struct block_device *const part = BPF_CORE_READ(rq, part);
+        if (part) {
+            pdev = BPF_CORE_READ(part, bd_dev);
+        }
+    }
+    return blk_part_dev(pdev, dev);
+}
+
+static __always_inline enum blk_req_kind blk_rq_kind(const u32 cmd_flags) {
+    return blk_kind_from_cmd_flags(cmd_flags, blk_req_op_zone_append());
+}
+
+// Whether the issue of a request of kind reads the cgroup it is charged to:
+// only the pod counters use it, and they count reads and writes only.
+static __always_inline bool blk_want_cgid(const enum blk_req_kind kind) {
+    return blk_want_cgroup && blk_kind_is_read_write(kind);
+}
+
+static __always_inline void
+blk_rq_complete(const u64 rq, const u32 data_len, const u64 error_arg, const u32 nr_bytes) {
+    const int error = blk_complete_error(error_arg, blk_complete_errno);
+    blk_on_complete(
+        &blk_rq_inflight, &rq, nr_bytes, blk_rq_final_chunk(nr_bytes, data_len, error), error);
+}
+
+// tp_btf programs: block_rq_issue(rq) and its legacy (q, rq) shape; block_rq_complete(rq, error, nr_bytes), whose error is a
+// blk_status_t or an int errno (blk_complete_errno).
+
+static __always_inline void blk_tp_btf_issue(const struct request *const rq) {
+    const u64 key = (u64)rq;
+    const u32 dev = blk_rq_dev_btf(rq);
+    const enum blk_req_kind kind = blk_rq_kind(rq->cmd_flags);
+    blk_on_issue(&blk_rq_inflight,
+                 &key,
+                 dev,
+                 blk_rq_part_dev_btf(rq, dev),
+                 blk_rq_start(rq->rq_flags, rq->start_time_ns),
+                 kind,
+                 blk_want_cgid(kind) ? blk_bio_cgid_btf(rq->bio) : 0);
+}
+
+SEC("tp_btf/block_rq_issue")
+int BPF_PROG(obi_stats_tp_btf_block_rq_issue, struct request *rq) {
+    blk_tp_btf_issue(rq);
     return 0;
 }
 
-SEC("raw_tp/block_rq_insert")
-int obi_stats_raw_tp_block_rq_insert(struct bpf_raw_tracepoint_args *ctx) {
+SEC("tp_btf/block_rq_issue")
+int BPF_PROG(obi_stats_tp_btf_block_rq_issue_legacy, struct request_queue *q, struct request *rq) {
+    blk_tp_btf_issue(rq);
+    return 0;
+}
+
+SEC("tp_btf/block_rq_complete")
+int BPF_PROG(obi_stats_tp_btf_block_rq_complete,
+             struct request *rq,
+             unsigned long long error,
+             unsigned int nr_bytes) {
+    blk_rq_complete((u64)rq, rq->__data_len, error, nr_bytes);
+    return 0;
+}
+
+// raw_tp programs: the same tracepoints, the request read through
+// BPF_CORE_READ.
+
+// blk_raw_tp_start reads the accounting start through bpf_probe_read_kernel
+// only when something measures from it.
+static __always_inline u64 blk_raw_tp_start(const struct request *const rq) {
+    if (!blk_want_start()) {
+        return 0;
+    }
+    return blk_rq_start(BPF_CORE_READ(rq, rq_flags), BPF_CORE_READ(rq, start_time_ns));
+}
+
+static __always_inline void blk_raw_tp_issue(const struct request *const rq) {
+    const u64 key = (u64)rq;
+    const u32 dev = blk_rq_dev(rq);
+    const enum blk_req_kind kind = blk_rq_kind(BPF_CORE_READ(rq, cmd_flags));
+    blk_on_issue(&blk_rq_inflight,
+                 &key,
+                 dev,
+                 blk_rq_part_dev(rq, dev),
+                 blk_raw_tp_start(rq),
+                 kind,
+                 blk_want_cgid(kind) ? blk_bio_cgid(BPF_CORE_READ(rq, bio)) : 0);
+}
+
+SEC("raw_tp/block_rq_issue")
+int obi_stats_raw_tp_block_rq_issue(struct bpf_raw_tracepoint_args *ctx) {
+    blk_raw_tp_issue((const struct request *)ctx->args[0]);
+    return 0;
+}
+
+SEC("raw_tp/block_rq_issue")
+int obi_stats_raw_tp_block_rq_issue_legacy(struct bpf_raw_tracepoint_args *ctx) {
+    blk_raw_tp_issue((const struct request *)ctx->args[1]);
+    return 0;
+}
+
+SEC("raw_tp/block_rq_complete")
+int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     const struct request *const rq = (const struct request *)ctx->args[0];
-    blk_on_insert(blk_rq_dev(rq), BPF_CORE_READ(rq, __sector));
+    blk_rq_complete((u64)rq, BPF_CORE_READ(rq, __data_len), ctx->args[1], (u32)ctx->args[2]);
     return 0;
 }
+
+// Classic tracepoints.
 
 // The classic tracepoint names a request only by (dev, sector), and a flush
 // has no sector (the tracepoint reports 0), so every flush on a disk has the
@@ -285,30 +373,22 @@ int obi_stats_tp_block_rq_issue(struct trace_event_raw_block_rq *ctx) {
     key.dev = BPF_CORE_READ(ctx, dev);
     key.sector = BPF_CORE_READ(ctx, sector);
 
+    // The classic tracepoint carries no request pointer, so there is no bio
+    // or rq->part to read: every event it reports names the whole disk, and
+    // no cgroup.
     blk_on_issue(&blk_rq_inflight_sector,
                  &key,
                  key.dev,
-                 key.sector,
-                 blk_kind_from_rwbs(BPF_CORE_READ(ctx, rwbs[0]), BPF_CORE_READ(ctx, rwbs[1])));
-    return 0;
-}
-
-// block_rq_issue(struct request *rq)
-SEC("raw_tp/block_rq_issue")
-int obi_stats_raw_tp_block_rq_issue(struct bpf_raw_tracepoint_args *ctx) {
-    const struct request *const rq = (const struct request *)ctx->args[0];
-    const u64 key = (u64)rq;
-
-    blk_on_issue(&blk_rq_inflight,
-                 &key,
-                 blk_rq_dev(rq),
-                 BPF_CORE_READ(rq, __sector),
-                 blk_kind_from_cmd_flags(BPF_CORE_READ(rq, cmd_flags), blk_req_op_zone_append()));
+                 0,
+                 0, // the classic tracepoint carries no request: no start time, no queue time
+                 blk_kind_from_rwbs(BPF_CORE_READ(ctx, rwbs[0]), BPF_CORE_READ(ctx, rwbs[1])),
+                 0);
     return 0;
 }
 
 // The classic tracepoint reports neither the request nor what is left of it,
-// so every completion it matches ends its request.
+// so every completion it matches ends its request. Its error field is an
+// errno on every kernel.
 SEC("tracepoint/block/block_rq_complete")
 int obi_stats_tp_block_rq_complete(void *ctx) {
     struct blk_rq_key key = {};
@@ -330,21 +410,5 @@ int obi_stats_tp_block_rq_complete(void *ctx) {
     }
 
     blk_on_complete(&blk_rq_inflight_sector, &key, nr_sector * k_blk_bytes_per_sector, true, error);
-    return 0;
-}
-
-// block_rq_complete(struct request *rq, blk_status_t error, unsigned int nr_bytes)
-SEC("raw_tp/block_rq_complete")
-int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
-    const struct request *const rq = (const struct request *)ctx->args[0];
-    const u8 status = (u8)ctx->args[1];
-    const u32 nr_bytes = (u32)ctx->args[2];
-    const u64 key = (u64)rq;
-
-    blk_on_complete(&blk_rq_inflight,
-                    &key,
-                    nr_bytes,
-                    blk_rq_final_chunk(nr_bytes, BPF_CORE_READ(rq, __data_len), status),
-                    blk_status_to_errno(status));
     return 0;
 }

@@ -485,6 +485,69 @@ func TestFeatureUndefined(t *testing.T) {
 	})
 }
 
+// storage_block_volumes is opt-in: its bio programs run for every bio
+// submitted on the node, so the storage_block umbrella leaves it out. It
+// adds devices to the block metrics and is no metric of its own: alone it
+// starts neither the block probes nor the stats pipeline.
+func TestStorageBlockVolumesFeatureParsing(t *testing.T) {
+	umbrella := mustLoadFeatures(t, "storage_block")
+	assert.False(t, umbrella.StorageBlockVolumes(), "the umbrella does not opt in")
+
+	alone := mustLoadFeatures(t, "storage_block_volumes")
+	assert.True(t, alone.StorageBlockVolumes())
+	assert.False(t, alone.StorageBlock(), "no block metric is enabled")
+	assert.False(t, alone.StatMetrics(), "nothing to export")
+	assert.Empty(t, alone.DeprecatedEnabled())
+
+	both := mustLoadFeatures(t, "storage_block", "storage_block_volumes")
+	assert.True(t, both.StorageBlockVolumes())
+	assert.True(t, both.StorageBlock())
+	assert.False(t, both.StorageBlockQueueDepth())
+
+	out, err := yaml.Marshal(struct {
+		Features Features `yaml:"features"`
+	}{both})
+	require.NoError(t, err)
+	assert.Equal(t, "features:\n    - storage_block\n    - storage_block_volumes\n", string(out))
+
+	// The wildcards select every feature that is not deprecated, this one
+	// included.
+	for _, wildcard := range []string{"*", "all"} {
+		assert.True(t, mustLoadFeatures(t, wildcard).StorageBlockVolumes(), wildcard)
+	}
+}
+
+// storage_block_pod is opt-in: it adds a cgroup read per issue, a map update
+// per completion and per-pod series, so the storage_block umbrella leaves it
+// out. Unlike storage_block_volumes it enables metrics of its own
+// (operations, operation_time), so alone it starts the block probes and the
+// stats pipeline.
+func TestStorageBlockPodFeatureParsing(t *testing.T) {
+	umbrella := mustLoadFeatures(t, "storage_block")
+	assert.False(t, umbrella.StorageBlockPod(), "the umbrella does not opt in")
+
+	alone := mustLoadFeatures(t, "storage_block_pod")
+	assert.True(t, alone.StorageBlockPod())
+	assert.True(t, alone.StorageBlock(), "the pod counters need the block probes")
+	assert.True(t, alone.StatMetrics(), "the pod counters are exported")
+	assert.False(t, alone.StorageBlockReadWrite(), "no read/write event reaches userspace for them")
+	assert.Empty(t, alone.DeprecatedEnabled())
+
+	both := mustLoadFeatures(t, "storage_block", "storage_block_pod")
+	assert.True(t, both.StorageBlockPod())
+	assert.False(t, both.StorageBlockVolumes())
+
+	out, err := yaml.Marshal(struct {
+		Features Features `yaml:"features"`
+	}{both})
+	require.NoError(t, err)
+	assert.Equal(t, "features:\n    - storage_block\n    - storage_block_pod\n", string(out))
+
+	for _, wildcard := range []string{"*", "all"} {
+		assert.True(t, mustLoadFeatures(t, wildcard).StorageBlockPod(), wildcard)
+	}
+}
+
 func TestFeatureMarshalYAML(t *testing.T) {
 	type doc struct {
 		Features Features `yaml:"features"`

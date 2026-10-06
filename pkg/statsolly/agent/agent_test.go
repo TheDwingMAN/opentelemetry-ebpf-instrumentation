@@ -55,10 +55,12 @@ func (f *closingFetcher) Close() error {
 	return nil
 }
 
-func (*closingFetcher) StatsEventsMap() *ciliumebpf.Map { return nil }
-func (*closingFetcher) DebugEventsMap() *ciliumebpf.Map { return nil }
-func (*closingFetcher) NFSRPCMap() *ciliumebpf.Map      { return nil }
-func (*closingFetcher) FsAccumMap() *ciliumebpf.Map     { return nil }
+func (*closingFetcher) StatsEventsMap() *ciliumebpf.Map      { return nil }
+func (*closingFetcher) DebugEventsMap() *ciliumebpf.Map      { return nil }
+func (*closingFetcher) NFSRPCMap() *ciliumebpf.Map           { return nil }
+func (*closingFetcher) FsAccumMap() *ciliumebpf.Map          { return nil }
+func (*closingFetcher) BlockAggregation() *ebpf.BlockAggMaps { return nil }
+func (*closingFetcher) KernelDropsMap() *ciliumebpf.Map      { return nil }
 
 // On shutdown, the kernel aggregation families read their maps a last time
 // before the fetcher closes them, and never after.

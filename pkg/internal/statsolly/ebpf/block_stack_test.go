@@ -356,12 +356,6 @@ func TestBlockStackCacheFollowsMinorReuse(t *testing.T) {
 	assert.Equal(t, []string{"reused"}, info.physical)
 }
 
-// devT builds the kernel dev_t encoding (major<<20 | minor) a test fixture's
-// major:minor pair maps to.
-func devT(major, minor uint32) uint32 {
-	return major<<devMinorBits | minor
-}
-
 // resetBlockStackCache clears the device-model cache for the duration of a
 // test, the block_stack.go counterpart of resetDevNameCache.
 func resetBlockStackCache(t *testing.T) {

@@ -52,6 +52,11 @@ type StatMetricsConfig struct {
 	// emitted by a statagg Producer instead of per-event instruments. Nil
 	// exports every metric per event.
 	Aggregated *statagg.Registry
+	// PendingSnapshot, when non-nil, is called once per collection to fill
+	// obi.stat.disk.pending_operations: a userspace snapshot has no events
+	// and no delta, so it is reported through an async instrument's
+	// callback rather than the per-event or Aggregated paths.
+	PendingSnapshot func() ([]ebpf.PendingPoint, error)
 }
 
 func (mc *StatMetricsConfig) Enabled() bool {
@@ -443,6 +448,24 @@ func newStatMetricsExporter(
 		nme.diskDiscardIOBytes = newStorageExpirer[metric2.Int64Counter, int64](ctx, discardIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StorageBlockPending() && cfg.PendingSnapshot != nil {
+		log := log.With("metricFamily", "StorageBlockPending")
+
+		attrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatDiskPendingOperations))
+
+		_, err := ebpfEvents.Int64ObservableUpDownCounter(
+			attributes.StatDiskPendingOperations.OTEL,
+			metric2.WithUnit(attributes.StatDiskPendingOperations.Unit),
+			metric2.WithInt64Callback(pendingCallback(cfg.PendingSnapshot, storageProjection(attrs))),
+		)
+		if err != nil {
+			log.Error("creating disk pending operations counter", "error", err)
+			return nil, err
+		}
+	}
+
 	if cfg.CommonCfg.Features.StorageFSDuration() && !cfg.Aggregated.Handles(attributes.StatFsOperationDuration) {
 		log := log.With("metricFamily", "StorageFSDuration")
 
@@ -576,7 +599,7 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				diskIOBytes, attrs := me.diskIOBytes.ForRecord(v)
 				diskIOBytes.Add(ctx, int64(v.BlockIo.Bytes), metric2.WithAttributeSet(attrs))
 			}
-			// QueueNs == 0 means no block_rq_insert record matched this
+			// QueueNs == 0 means no valid accounting start matched this
 			// request (e.g. blk-mq issued it directly): there is no queue
 			// wait to observe, and a genuine 0ns queue wait is not
 			// observable in practice.
@@ -676,6 +699,10 @@ func aggregatableStats(f export.Features) []aggregatableStat {
 		{name: attributes.StatDiskFlushDuration, enabled: f.StorageBlockFlush()},
 		{name: attributes.StatDiskDiscardDuration, enabled: f.StorageBlockDiscard()},
 		{name: attributes.StatDiskDiscardIO, enabled: f.StorageBlockDiscard()},
+		// Kernel-aggregated only: blk_cg_agg counts them, in either block
+		// emit mode.
+		{name: attributes.StatDiskOperations, enabled: f.StorageBlockPod()},
+		{name: attributes.StatDiskOperationTime, enabled: f.StorageBlockPod()},
 		{name: attributes.StatFsOperationDuration, enabled: f.StorageFSDuration(), description: fsOperationDurationDescription},
 		{name: attributes.StatFsIO, enabled: f.StorageFSIo()},
 		{name: attributes.StatFsOperationErrors, enabled: f.StorageFSErrors()},
@@ -716,5 +743,33 @@ func storageProjection(attrs []attributes.Field[*ebpf.Stat, attribute.KeyValue])
 	return func(s *ebpf.Stat) (string, attribute.Set) {
 		set, values := recordAttributes(s, attrs, true)
 		return statagg.SeriesKey(values), set
+	}
+}
+
+// pendingCallback turns one pending_operations snapshot into one
+// observation per series, grouping by project's key first: an attribute
+// selection can collapse several raw keys onto one series (e.g. several
+// request kinds when disk.io.direction is not selected), and the SDK
+// rejects two observations with the same attributes from one callback, so
+// they are summed rather than observed twice.
+func pendingCallback(
+	snapshot func() ([]ebpf.PendingPoint, error), project statagg.Projection[attribute.Set],
+) metric2.Int64Callback {
+	return func(_ context.Context, o metric2.Int64Observer) error {
+		series, err := snapshot()
+		if err != nil {
+			return err
+		}
+		sums := map[string]int64{}
+		sets := map[string]attribute.Set{}
+		for _, s := range series {
+			key, set := project(s.Stat)
+			sums[key] += int64(s.Value)
+			sets[key] = set
+		}
+		for key, sum := range sums {
+			o.Observe(sum, metric2.WithAttributeSet(sets[key]))
+		}
+		return nil
 	}
 }

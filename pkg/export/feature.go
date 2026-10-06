@@ -86,6 +86,25 @@ const (
 	// cardinality on an already-running probe pair, this is its own probe
 	// set: disabling it stops the kernel-side work, not just the export.
 	FeatureStorageFSSync
+	// FeatureStorageBlockPending emits obi.stat.disk.pending_operations, a
+	// userspace snapshot of the in-flight map taken at each collection: no
+	// hot-path cost, unlike FeatureStorageBlockQueueDepth.
+	FeatureStorageBlockPending
+	// FeatureStorageBlockVolumes adds the bio-based stacked volumes (LVM
+	// logical volumes, md arrays, dm-crypt and other device-mapper devices)
+	// to the block metrics, under their own device. It is in no umbrella:
+	// its two programs run for every bio submitted on the node, on top of
+	// the request programs. It enables no metric by itself: it needs one of
+	// the storage_block metrics.
+	FeatureStorageBlockVolumes
+	// FeatureStorageBlockPod counts block reads and writes per cgroup they are
+	// charged to, in the kernel: obi.stat.disk.operations and
+	// obi.stat.disk.operation_time, and the Kubernetes pod attributes of
+	// obi.stat.disk.io. It is in no umbrella: it adds a cgroup read at every
+	// issue and a map update at every completion of a read or write, and
+	// per-pod series. It needs cgroup v2 with the io controller; elsewhere
+	// configuration validation turns it off with a warning.
+	FeatureStorageBlockPod
 	// FeatureAll is what "all" and "*" select: every feature except the deprecated
 	// FeatureStorageBlockQueueDepth, which is in no umbrella and is only enabled
 	// when listed by name.
@@ -93,7 +112,7 @@ const (
 )
 
 // FeatureStorageBlock enables all block-layer storage metrics.
-// Note: the block tracepoints (block_rq_insert, block_rq_issue,
+// Note: the block tracepoints (block_rq_issue and
 // block_rq_complete) attach together whenever any storage_block* bit is set,
 // and every request pays for them. Disabling duration/io/queue/errors only
 // reduces series cardinality: their read and write events are delivered as
@@ -101,7 +120,7 @@ const (
 // storage_block_flush or storage_block_discard their completions end in the
 // kernel, without a ring buffer event.
 const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo | FeatureStorageBlockQueue | FeatureStorageBlockErrors |
-	FeatureStorageBlockFlush | FeatureStorageBlockDiscard
+	FeatureStorageBlockFlush | FeatureStorageBlockDiscard | FeatureStorageBlockPending
 
 // FeatureStorageFS enables all filesystem metrics. Duration/Io/Errors derive
 // from the same probe pair, so disabling one of those does not reduce
@@ -141,6 +160,9 @@ var FeatureMapper = map[string]Features{
 	"storage_block_flush":              FeatureStorageBlockFlush,
 	"storage_block_discard":            FeatureStorageBlockDiscard,
 	"storage_block_queue_depth":        FeatureStorageBlockQueueDepth,
+	"storage_block_pending":            FeatureStorageBlockPending,
+	"storage_block_volumes":            FeatureStorageBlockVolumes,
+	"storage_block_pod":                FeatureStorageBlockPod,
 	"storage_fs":                       FeatureStorageFS,
 	"storage_fs_duration":              FeatureStorageFSDuration,
 	"storage_fs_io":                    FeatureStorageFSIo,
@@ -453,7 +475,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStorageBlock | FeatureStorageBlockQueueDepth | FeatureStorageFS | FeatureStorageNFS)
+	return f.any(FeatureStats | FeatureStorageBlock | FeatureStorageBlockQueueDepth | FeatureStorageBlockPod | FeatureStorageFS | FeatureStorageNFS)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -478,9 +500,10 @@ func (f Features) StatsTCPIo() bool {
 
 // StorageBlock reports whether any block-layer storage metric is enabled. It
 // gates the shared setup (eBPF probes, ring buffer) that every block metric
-// needs, including the deprecated queue depth outside the umbrella.
+// needs, including the deprecated queue depth and the pod counters outside
+// the umbrella.
 func (f Features) StorageBlock() bool {
-	return f.any(FeatureStorageBlock | FeatureStorageBlockQueueDepth)
+	return f.any(FeatureStorageBlock | FeatureStorageBlockQueueDepth | FeatureStorageBlockPod)
 }
 
 func (f Features) StorageBlockDuration() bool {
@@ -516,6 +539,27 @@ func (f Features) StorageBlockFlush() bool {
 
 func (f Features) StorageBlockDiscard() bool {
 	return f.any(FeatureStorageBlockDiscard)
+}
+
+// StorageBlockPending reports whether obi.stat.disk.pending_operations is
+// enabled: a userspace snapshot of the in-flight map, with no cost on the
+// issue/complete path.
+func (f Features) StorageBlockPending() bool {
+	return f.any(FeatureStorageBlockPending)
+}
+
+// StorageBlockVolumes reports whether bio-based stacked volumes are measured
+// too. It adds devices to the enabled block metrics and is no metric of its
+// own, so StorageBlock and StatMetrics do not count it.
+func (f Features) StorageBlockVolumes() bool {
+	return f.any(FeatureStorageBlockVolumes)
+}
+
+// StorageBlockPod reports whether block reads and writes are counted per
+// cgroup: obi.stat.disk.operations, obi.stat.disk.operation_time and the pod
+// attributes of obi.stat.disk.io.
+func (f Features) StorageBlockPod() bool {
+	return f.any(FeatureStorageBlockPod)
 }
 
 // StorageFS reports whether any filesystem metric is enabled. It gates

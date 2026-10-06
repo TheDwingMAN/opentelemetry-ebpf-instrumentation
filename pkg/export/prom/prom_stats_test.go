@@ -238,8 +238,8 @@ func TestStatsReporterRecordsDiskOperationErrors(t *testing.T) {
 	assert.InEpsilon(t, 1.0, opErrors.GetCounter().GetValue(), 0)
 }
 
-// blockIoNoQueueStat is a block completion whose request bypassed
-// block_rq_insert (e.g. blk-mq issued it directly): QueueNs is 0, so there is
+// blockIoNoQueueStat is a block completion whose request has no valid
+// accounting start (e.g. queue/iostats=0): QueueNs is 0, so there is
 // no queue wait for the queue duration histogram to observe, while the other
 // disk metrics observe normally.
 func blockIoNoQueueStat() *ebpf.Stat {
@@ -256,7 +256,7 @@ func blockIoNoQueueStat() *ebpf.Stat {
 }
 
 // TestStatsReporterSkipsQueueDurationForZeroQueueNs asserts the A9 ruling:
-// QueueNs == 0 means no block_rq_insert record matched this completion (e.g.
+// QueueNs == 0 means no valid accounting start matched this completion (e.g.
 // blk-mq issued it directly), so the queue duration histogram must not
 // observe it, while the operation duration histogram -- which doesn't depend
 // on QueueNs -- still does.

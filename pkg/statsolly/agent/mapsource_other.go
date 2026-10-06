@@ -16,3 +16,7 @@ import (
 func newMapSource(*ciliumebpf.Map) (statagg.Source, error) {
 	return nil, errors.New("kernel aggregation maps are only read on Linux")
 }
+
+func newSnapshotSource(*ciliumebpf.Map) (statagg.Source, error) {
+	return nil, errors.New("kernel aggregation maps are only read on Linux")
+}

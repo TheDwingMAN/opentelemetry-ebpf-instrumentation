@@ -24,6 +24,7 @@ func TestReadBlockIoIntoStat(t *testing.T) {
 		Bytes:     4096,
 		Error:     -2,
 		Inflight:  3,
+		PartDev:   0x800011,
 	}
 	raw := (*[unsafe.Sizeof(ev)]byte)(unsafe.Pointer(&ev))[:]
 
@@ -38,4 +39,5 @@ func TestReadBlockIoIntoStat(t *testing.T) {
 	assert.Equal(t, uint64(4096), stat.BlockIo.Bytes)
 	assert.Equal(t, int32(-2), stat.BlockIo.Error)
 	assert.Equal(t, uint32(3), stat.BlockIo.Inflight)
+	assert.Equal(t, uint32(0x800011), stat.BlockIo.PartDev)
 }

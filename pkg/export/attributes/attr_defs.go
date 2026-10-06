@@ -38,6 +38,9 @@ const (
 	GroupNetGeoIP
 	GroupStats
 	GroupStatsKube
+	// GroupStatsBlockPod is set when storage_block_pod counts block I/O per
+	// cgroup: obi.stat.disk.io then carries the pod attributes.
+	GroupStatsBlockPod
 )
 
 func (e *AttrGroups) Has(groups AttrGroups) bool {
@@ -55,6 +58,7 @@ func getDefinitions(
 	extraGroupAttributes GroupAttributes,
 ) map[Section]AttrReportGroup {
 	kubeEnabled := groups.Has(GroupKubernetes)
+	blockPodEnabled := groups.Has(GroupStatsBlockPod)
 	containerEnabled := groups.Has(GroupContainer)
 	promEnabled := groups.Has(GroupPrometheus)
 	ifaceDirEnabled := groups.Has(GroupNetIfaceDirection)
@@ -157,6 +161,39 @@ func getDefinitions(
 			attr.DiskStacked: true,
 		},
 	}
+
+	// pending_operations is a point-in-time snapshot across every kind of
+	// request: direction only applies to the read/write entries (flush and
+	// discard have none), so, unlike the other disk metrics, it defaults
+	// off and is opt-in. The node and stacked labels are on, as on every
+	// disk metric.
+	statsDiskPendingAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&statsNodeNameAttributes},
+		Attributes: map[attr.Name]Default{
+			attr.DiskDevice:      true,
+			attr.DiskIODirection: false,
+			attr.DiskStacked:     true,
+		},
+	}
+
+	// pod attribution of block reads and writes (storage_block_pod), only
+	// relevant when kubernetes metadata is enabled. Container and kind are
+	// opt-in to bound the series count (D11); the owner follows the network
+	// decorator's rule (the pod's top owner, else the pod).
+	statsDiskPodAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sNamespaceName: true,
+			attr.K8sPodName:       true,
+			attr.K8sOwnerName:     true,
+			attr.K8sContainerName: false,
+			attr.K8sKind:          false,
+		},
+	}
+	// obi.stat.disk.io carries them only when storage_block_pod counts it per
+	// cgroup.
+	statsDiskIOPodAttributes := statsDiskPodAttributes
+	statsDiskIOPodAttributes.Disabled = !kubeEnabled || !blockPodEnabled
 
 	// attributes to be reported exclusively for network metrics when
 	// kubernetes metadata is enabled
@@ -1040,16 +1077,22 @@ func getDefinitions(
 			},
 		},
 		StatDiskOperationDuration.Section: {
-			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
-			Attributes: map[attr.Name]Default{},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.DiskPartition: false,
+			},
 		},
 		StatDiskIO.Section: {
-			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
-			Attributes: map[attr.Name]Default{},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskIOPodAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.DiskPartition: false,
+			},
 		},
 		StatDiskQueueDuration.Section: {
-			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
-			Attributes: map[attr.Name]Default{},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.DiskPartition: false,
+			},
 		},
 		StatDiskQueueDepth.Section: {
 			SubGroups:  []*AttrReportGroup{&statsDiskDeviceAttributes},
@@ -1058,7 +1101,8 @@ func getDefinitions(
 		StatDiskOperationErrors.Section: {
 			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
 			Attributes: map[attr.Name]Default{
-				attr.ErrorType: true,
+				attr.ErrorType:     true,
+				attr.DiskPartition: false,
 			},
 		},
 		StatDiskFlushDuration.Section: {
@@ -1070,11 +1114,29 @@ func getDefinitions(
 		StatDiskDiscardDuration.Section: {
 			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes},
 			Attributes: map[attr.Name]Default{
-				attr.ErrorType: true,
+				attr.ErrorType:     true,
+				attr.DiskPartition: false,
 			},
 		},
 		StatDiskDiscardIO.Section: {
-			SubGroups:  []*AttrReportGroup{&statsDiskDeviceAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.DiskPartition: false,
+			},
+		},
+		StatDiskPendingOperations.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskPendingAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.DiskPartition: false,
+			},
+		},
+		// No obi.disk.partition: the pod counters are per device.
+		StatDiskOperations.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskPodAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskOperationTime.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskPodAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
 		StatFsOperationDuration.Section: {

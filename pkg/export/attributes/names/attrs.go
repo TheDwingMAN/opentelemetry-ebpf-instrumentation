@@ -401,6 +401,7 @@ const (
 	DiskIODirection           = Name("disk.io.direction")
 	DiskStacked               = Name("obi.disk.stacked")
 	DiskPhysicalDevice        = Name("obi.disk.physical_device")
+	DiskPartition             = Name("obi.disk.partition")
 	FsType                    = Name("system.filesystem.type")
 	FsOperation               = Name("fs.operation")
 	// NFSOperationName is the NFSv4 operation of an NFS client RPC, whose

@@ -35,6 +35,12 @@ const obiMetricsEndpoint = "http://localhost:8999/metrics"
 // from them. A unit-suffix or type mismatch would show up on one path only.
 var diskExportPaths = []string{"otel", "prometheus"}
 
+// diskNativeExportPath is where the exponential-layout suite checks the
+// histograms: OBI's endpoint exposes them as native histograms, which still
+// carry a _count and _sum. On the OTLP path they are exponential histograms,
+// whose conversion is up to the collector's Prometheus exporter.
+var diskNativeExportPath = []string{"prometheus"}
+
 // waitForDiskMetricsPipeline blocks until both export paths are actually
 // carrying disk metrics.
 //
@@ -47,9 +53,9 @@ var diskExportPaths = []string{"otel", "prometheus"}
 // on a pipeline that is still coming up and then fails on an empty result --
 // which looks like "OBI is not collecting disk metrics" when collection is in
 // fact working fine. Uses the same 2-minute budget as waitForTestComponents.
-func waitForDiskMetricsPipeline(t *testing.T) {
+func waitForDiskMetricsPipeline(t *testing.T, paths []string) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
-	for _, path := range diskExportPaths {
+	for _, path := range paths {
 		require.EventuallyWithT(t, func(ct *assert.CollectT) {
 			results, err := pq.Query(
 				fmt.Sprintf(`obi_stat_disk_operation_duration_seconds_count{exported=%q}`, path))
@@ -66,23 +72,25 @@ func waitForDiskMetricsPipeline(t *testing.T) {
 // block_rq_issue/complete tracepoints are node-wide, so this captures the
 // diskload workload's I/O (and any other host block I/O) -- a non-empty
 // response with a positive count is sufficient.
-func testDiskMetricsOpDuration(t *testing.T) {
-	pq := promtest.Client{HostPort: prometheusHostPort}
-	for _, path := range diskExportPaths {
-		t.Run(path, func(t *testing.T) {
-			require.EventuallyWithT(t, func(ct *assert.CollectT) {
-				results, err := pq.Query(
-					fmt.Sprintf(`obi_stat_disk_operation_duration_seconds_count{exported=%q}`, path))
-				require.NoError(ct, err)
-				enoughPromResults(ct, results)
-				assert.Positive(ct, totalPromCount(ct, results))
+func testDiskMetricsOpDuration(paths []string) func(t *testing.T) {
+	return func(t *testing.T) {
+		pq := promtest.Client{HostPort: prometheusHostPort}
+		for _, path := range paths {
+			t.Run(path, func(t *testing.T) {
+				require.EventuallyWithT(t, func(ct *assert.CollectT) {
+					results, err := pq.Query(
+						fmt.Sprintf(`obi_stat_disk_operation_duration_seconds_count{exported=%q}`, path))
+					require.NoError(ct, err)
+					enoughPromResults(ct, results)
+					assert.Positive(ct, totalPromCount(ct, results))
 
-				for _, res := range results {
-					assert.Contains(ct, []string{"read", "write"}, res.Metric["disk_io_direction"])
-					assert.NotEmpty(ct, res.Metric["system_device"])
-				}
-			}, testTimeout, 100*time.Millisecond)
-		})
+					for _, res := range results {
+						assert.Contains(ct, []string{"read", "write"}, res.Metric["disk_io_direction"])
+						assert.NotEmpty(ct, res.Metric["system_device"])
+					}
+				}, testTimeout, 100*time.Millisecond)
+			})
+		}
 	}
 }
 
@@ -91,19 +99,21 @@ func testDiskMetricsOpDuration(t *testing.T) {
 // `conv=fdatasync`, so the "write" series is the deterministic one to gate on
 // (reads depend on cache misses / O_DIRECT, which are best-effort in a
 // container — see docker-compose-disk-metrics.yml).
-func testDiskMetricsOpDurationWrite(t *testing.T) {
-	pq := promtest.Client{HostPort: prometheusHostPort}
-	for _, path := range diskExportPaths {
-		t.Run(path, func(t *testing.T) {
-			require.EventuallyWithT(t, func(ct *assert.CollectT) {
-				results, err := pq.Query(fmt.Sprintf(
-					`obi_stat_disk_operation_duration_seconds_count{exported=%q,disk_io_direction="write"}`, path))
-				require.NoError(ct, err)
-				enoughPromResults(ct, results)
-				assert.Positive(ct, totalPromCount(ct, results))
-				assert.NotEmpty(ct, results[0].Metric["system_device"])
-			}, testTimeout, 100*time.Millisecond)
-		})
+func testDiskMetricsOpDurationWrite(paths []string) func(t *testing.T) {
+	return func(t *testing.T) {
+		pq := promtest.Client{HostPort: prometheusHostPort}
+		for _, path := range paths {
+			t.Run(path, func(t *testing.T) {
+				require.EventuallyWithT(t, func(ct *assert.CollectT) {
+					results, err := pq.Query(fmt.Sprintf(
+						`obi_stat_disk_operation_duration_seconds_count{exported=%q,disk_io_direction="write"}`, path))
+					require.NoError(ct, err)
+					enoughPromResults(ct, results)
+					assert.Positive(ct, totalPromCount(ct, results))
+					assert.NotEmpty(ct, results[0].Metric["system_device"])
+				}, testTimeout, 100*time.Millisecond)
+			})
+		}
 	}
 }
 
@@ -112,23 +122,25 @@ func testDiskMetricsOpDurationWrite(t *testing.T) {
 // the same device/direction labels. This is the disk *usage* (volume) signal:
 // latency tells you how slow each request was, this tells you how much data
 // actually moved.
-func testDiskMetricsIOBytes(t *testing.T) {
-	pq := promtest.Client{HostPort: prometheusHostPort}
-	for _, path := range diskExportPaths {
-		t.Run(path, func(t *testing.T) {
-			require.EventuallyWithT(t, func(ct *assert.CollectT) {
-				results, err := pq.Query(
-					fmt.Sprintf(`obi_stat_disk_io_bytes_total{exported=%q}`, path))
-				require.NoError(ct, err)
-				enoughPromResults(ct, results)
-				assert.Positive(ct, totalPromValue(ct, results))
+func testDiskMetricsIOBytes(paths []string) func(t *testing.T) {
+	return func(t *testing.T) {
+		pq := promtest.Client{HostPort: prometheusHostPort}
+		for _, path := range paths {
+			t.Run(path, func(t *testing.T) {
+				require.EventuallyWithT(t, func(ct *assert.CollectT) {
+					results, err := pq.Query(
+						fmt.Sprintf(`obi_stat_disk_io_bytes_total{exported=%q}`, path))
+					require.NoError(ct, err)
+					enoughPromResults(ct, results)
+					assert.Positive(ct, totalPromValue(ct, results))
 
-				for _, res := range results {
-					assert.Contains(ct, []string{"read", "write"}, res.Metric["disk_io_direction"])
-					assert.NotEmpty(ct, res.Metric["system_device"])
-				}
-			}, testTimeout, 100*time.Millisecond)
-		})
+					for _, res := range results {
+						assert.Contains(ct, []string{"read", "write"}, res.Metric["disk_io_direction"])
+						assert.NotEmpty(ct, res.Metric["system_device"])
+					}
+				}, testTimeout, 100*time.Millisecond)
+			})
+		}
 	}
 }
 
@@ -142,21 +154,23 @@ func testDiskMetricsIOBytes(t *testing.T) {
 // The floor is deliberately far below one loop iteration: block tracepoints are
 // node-wide so the value also includes unrelated host I/O, and we only need to
 // prove real volume is being accumulated rather than assert an exact figure.
-func testDiskMetricsIOBytesWriteVolume(t *testing.T) {
-	const minWrittenBytes = 4 * 1024 * 1024
+func testDiskMetricsIOBytesWriteVolume(paths []string) func(t *testing.T) {
+	return func(t *testing.T) {
+		const minWrittenBytes = 4 * 1024 * 1024
 
-	pq := promtest.Client{HostPort: prometheusHostPort}
-	for _, path := range diskExportPaths {
-		t.Run(path, func(t *testing.T) {
-			require.EventuallyWithT(t, func(ct *assert.CollectT) {
-				results, err := pq.Query(fmt.Sprintf(
-					`obi_stat_disk_io_bytes_total{exported=%q,disk_io_direction="write"}`, path))
-				require.NoError(ct, err)
-				enoughPromResults(ct, results)
-				assert.NotEmpty(ct, results[0].Metric["system_device"])
-				assert.Greater(ct, totalPromValue(ct, results), float64(minWrittenBytes))
-			}, testTimeout, 100*time.Millisecond)
-		})
+		pq := promtest.Client{HostPort: prometheusHostPort}
+		for _, path := range paths {
+			t.Run(path, func(t *testing.T) {
+				require.EventuallyWithT(t, func(ct *assert.CollectT) {
+					results, err := pq.Query(fmt.Sprintf(
+						`obi_stat_disk_io_bytes_total{exported=%q,disk_io_direction="write"}`, path))
+					require.NoError(ct, err)
+					enoughPromResults(ct, results)
+					assert.NotEmpty(ct, results[0].Metric["system_device"])
+					assert.Greater(ct, totalPromValue(ct, results), float64(minWrittenBytes))
+				}, testTimeout, 100*time.Millisecond)
+			})
+		}
 	}
 }
 
@@ -187,43 +201,45 @@ func diskHasWriteBackCache(device string) bool {
 // so the count is required to be positive across the written-to disks that
 // have one; when the runner has none, there is no flush to observe and the
 // subtest is skipped.
-func testDiskMetricsFlushDuration(t *testing.T) {
-	pq := promtest.Client{HostPort: prometheusHostPort}
-	for _, path := range diskExportPaths {
-		t.Run(path, func(t *testing.T) {
-			var writeBack []string
-			require.EventuallyWithT(t, func(ct *assert.CollectT) {
-				writes, err := pq.Query(fmt.Sprintf(
-					`obi_stat_disk_operation_duration_seconds_count{exported=%q,disk_io_direction="write"}`, path))
-				require.NoError(ct, err)
-				enoughPromResults(ct, writes)
+func testDiskMetricsFlushDuration(paths []string) func(t *testing.T) {
+	return func(t *testing.T) {
+		pq := promtest.Client{HostPort: prometheusHostPort}
+		for _, path := range paths {
+			t.Run(path, func(t *testing.T) {
+				var writeBack []string
+				require.EventuallyWithT(t, func(ct *assert.CollectT) {
+					writes, err := pq.Query(fmt.Sprintf(
+						`obi_stat_disk_operation_duration_seconds_count{exported=%q,disk_io_direction="write"}`, path))
+					require.NoError(ct, err)
+					enoughPromResults(ct, writes)
 
-				writeBack = writeBack[:0]
-				for _, res := range writes {
-					if device := res.Metric["system_device"]; diskHasWriteBackCache(device) {
-						writeBack = append(writeBack, regexp.QuoteMeta(device))
+					writeBack = writeBack[:0]
+					for _, res := range writes {
+						if device := res.Metric["system_device"]; diskHasWriteBackCache(device) {
+							writeBack = append(writeBack, regexp.QuoteMeta(device))
+						}
 					}
-				}
+					if len(writeBack) == 0 {
+						return
+					}
+
+					flushes, err := pq.Query(fmt.Sprintf(
+						`obi_stat_disk_flush_duration_seconds_count{exported=%q,system_device=~%q}`,
+						path, strings.Join(writeBack, "|")))
+					require.NoError(ct, err)
+					enoughPromResults(ct, flushes)
+					assert.Positive(ct, totalPromCount(ct, flushes))
+
+					for _, res := range flushes {
+						assert.Empty(ct, res.Metric["disk_io_direction"])
+					}
+				}, testTimeout, 100*time.Millisecond)
+
 				if len(writeBack) == 0 {
-					return
+					t.Skip("no written-to disk has a write-back cache, so none is sent flushes")
 				}
-
-				flushes, err := pq.Query(fmt.Sprintf(
-					`obi_stat_disk_flush_duration_seconds_count{exported=%q,system_device=~%q}`,
-					path, strings.Join(writeBack, "|")))
-				require.NoError(ct, err)
-				enoughPromResults(ct, flushes)
-				assert.Positive(ct, totalPromCount(ct, flushes))
-
-				for _, res := range flushes {
-					assert.Empty(ct, res.Metric["disk_io_direction"])
-				}
-			}, testTimeout, 100*time.Millisecond)
-
-			if len(writeBack) == 0 {
-				t.Skip("no written-to disk has a write-back cache, so none is sent flushes")
-			}
-		})
+			})
+		}
 	}
 }
 

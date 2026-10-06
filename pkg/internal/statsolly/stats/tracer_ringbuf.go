@@ -183,6 +183,7 @@ func readBlockIoIntoStat(record *ringbuf.Record) (ebpf.Stat, error) {
 			Bytes:     event.Bytes,
 			Error:     event.Error,
 			Inflight:  event.Inflight,
+			PartDev:   event.PartDev,
 		},
 	}, nil
 }

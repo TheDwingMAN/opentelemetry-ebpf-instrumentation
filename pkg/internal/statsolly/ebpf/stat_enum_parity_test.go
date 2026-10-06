@@ -47,7 +47,12 @@ func registryMembers(t *testing.T, attrID string) map[string]bool {
 	var reg struct {
 		Groups []struct {
 			Attributes []struct {
-				ID   string    `yaml:"id"`
+				ID string `yaml:"id"`
+				// Type is a node, not a fixed struct: an enum attribute's
+				// type is a mapping with members, but a plain attribute's
+				// (such as obi.disk.partition) is the bare scalar "string",
+				// and a single fixed struct for every attribute in the file
+				// would fail to decode the latter.
 				Type yaml.Node `yaml:"type"`
 			} `yaml:"attributes"`
 		} `yaml:"groups"`

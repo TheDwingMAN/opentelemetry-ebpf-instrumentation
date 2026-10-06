@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"slices"
 	"sort"
 	"strings"
@@ -352,4 +353,58 @@ func nativeBuckets(spans []*dto.BucketSpan, deltas []int64) []string {
 		}
 	}
 	return out
+}
+
+// BlockEvents is a deterministic stream of block completions on two disks:
+// every kind, some failures, latencies from 1us to 10s, and values exactly
+// on and next to each bound. avoid, when set, keeps latencies at least 2 ns
+// away from its bounds: exponential boundaries are rounded to whole
+// nanoseconds, so a value within 1 ns of one may land a bucket off.
+func BlockEvents(n int, bounds []uint64, avoid bool) []*ebpf.Stat {
+	rnd := rand.New(rand.NewPCG(11, 12))
+	devs := []uint32{252 << 20, 252<<20 | 16}
+	kinds := []ebpf.BlockOpCode{ebpf.CodeBlockRead, ebpf.CodeBlockWrite, ebpf.CodeBlockFlush, ebpf.CodeBlockDiscard}
+	latency := func() uint64 {
+		for {
+			v := uint64(math.Pow(10, 3+rnd.Float64()*7))
+			if !avoid || !nearBound(bounds, v) {
+				return v
+			}
+		}
+	}
+	var events []*ebpf.Stat
+	for i := range n {
+		op := kinds[rnd.IntN(len(kinds))]
+		var errno int32
+		if rnd.IntN(10) == 0 {
+			errno = []int32{-5, -61, -110}[rnd.IntN(3)]
+		}
+		var queue uint64
+		if rnd.IntN(3) > 0 {
+			queue = latency()
+		}
+		lat := latency()
+		if !avoid && i < 2*len(bounds) {
+			// On a bound, then one above it.
+			lat = bounds[i/2] + uint64(i%2)
+		}
+		events = append(events, &ebpf.Stat{Type: ebpf.StatTypeBlockIo, BlockIo: &ebpf.BlockIo{
+			Dev: devs[rnd.IntN(len(devs))], Op: uint8(op), Error: errno,
+			Bytes: uint64(rnd.IntN(64)+1) * 4096, LatencyNs: lat, QueueNs: queue,
+		}})
+	}
+	return events
+}
+
+func nearBound(bounds []uint64, v uint64) bool {
+	i := sort.Search(len(bounds), func(i int) bool { return bounds[i] >= v })
+	for _, j := range []int{i - 1, i} {
+		if j >= 0 && j < len(bounds) {
+			d := int64(bounds[j]) - int64(v)
+			if d >= -2 && d <= 2 {
+				return true
+			}
+		}
+	}
+	return false
 }

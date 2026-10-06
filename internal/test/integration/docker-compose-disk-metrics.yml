@@ -56,6 +56,10 @@ services:
       # a program the kernel rejects fails the whole collection, which is how
       # a disabled-program regression once took the entire pipeline down.
       OTEL_EBPF_METRICS_FEATURES: "storage_block,storage_fs"
+      # Block requests are counted in kernel maps by default; the suites
+      # also run with an event per request and with exponential buckets.
+      OTEL_EBPF_STORAGE_AGGREGATION_DISABLED: "${OTEL_EBPF_STORAGE_AGGREGATION_DISABLED:-false}"
+      OTEL_EBPF_STORAGE_AGGREGATION_EXPONENTIAL_HISTOGRAMS: "${OTEL_EBPF_STORAGE_AGGREGATION_EXPONENTIAL_HISTOGRAMS:-false}"
       OTEL_EBPF_PROTOCOL_DEBUG_PRINT: "true"
       OTEL_EBPF_PROMETHEUS_PORT: "8999"
     depends_on:

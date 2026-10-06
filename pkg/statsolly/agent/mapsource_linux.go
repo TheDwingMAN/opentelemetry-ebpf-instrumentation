@@ -12,3 +12,7 @@ import (
 )
 
 func newMapSource(m *ciliumebpf.Map) (statagg.Source, error) { return statagg.NewMapSource(m) }
+
+func newSnapshotSource(m *ciliumebpf.Map) (statagg.Source, error) {
+	return statagg.NewSnapshotSource(m)
+}

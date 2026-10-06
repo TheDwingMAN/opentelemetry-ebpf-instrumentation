@@ -55,6 +55,10 @@ const (
 	// KindHistogram is a duration histogram in seconds, from a nanosecond
 	// sum word and kernel buckets.
 	KindHistogram
+	// KindDurationCounter is a monotonic sum of time in seconds, from a
+	// Value in nanoseconds: OTel Sum[float64], Prometheus counter (e.g. a
+	// semconv operation_time).
+	KindDurationCounter
 )
 
 // Metric is how a metric is read from the keys of a kernel map.
@@ -103,7 +107,7 @@ type Variant struct {
 func (m *Metric) validate(layout ValueLayout) error {
 	words := layout.Counters + layout.Buckets
 	switch m.Kind {
-	case KindCounter, KindUpDownCounter:
+	case KindCounter, KindUpDownCounter, KindDurationCounter:
 		if len(m.Variants) > 0 {
 			if m.Kind != KindCounter {
 				return fmt.Errorf("metric %s: variants need a counter", m.Name.OTEL)

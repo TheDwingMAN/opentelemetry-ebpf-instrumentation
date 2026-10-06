@@ -268,11 +268,6 @@ func readDevFile(dir string) (uint32, bool) {
 	return parseDevT(strings.TrimSpace(string(content)))
 }
 
-func isDir(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && fi.IsDir()
-}
-
 // nonEmptyDir tells whether path is a directory sysfs populated with at
 // least one entry, matching v2's isStacked slaves/ check.
 func nonEmptyDir(path string) bool {

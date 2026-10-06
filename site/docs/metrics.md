@@ -983,6 +983,18 @@ Number of entries in the eBPF map.
 | `bpf.map.name` | string | `required` | development | Name of the eBPF map. | events; ongoing_http |
 | `bpf.map.type` | string | `required` | development | eBPF map type. | hash; lru_hash; perf_event_array |
 
+## `obi.bpf.map.insert.failures`
+
+Inserts into an eBPF map that failed because the map was full: what its programs could not count, so the metrics the map feeds undercount by as much.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {insert} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `bpf.map.name` | string | `required` | development | Name of the eBPF map. | events; ongoing_http |
+
 ## `obi.bpf.map.max_entries`
 
 Maximum number of entries the eBPF map can hold.
@@ -1343,6 +1355,7 @@ Block-layer service time of discard and secure erase requests, measured from `bl
 | --- | --- | --- | --- | --- | --- |
 | `error.type` | string | `conditionally_required`: if the discard failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1357,12 +1370,13 @@ Count of bytes released by discard and secure erase requests that completed succ
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.flush.duration`
 
-Block-layer service time of cache flush requests, measured from `block_rq_issue` to `block_rq_complete`, broken down by device. The count matches the flushes in `/proc/diskstats`.
+Block-layer service time of cache flush requests, measured from `block_rq_issue` to `block_rq_complete`, broken down by device. The count matches the flushes in `/proc/diskstats`. On a stacked volume measured with `storage_block_volumes`, a flush is the empty preflush write submitted to the volume; `/proc/diskstats` never counts it as a flush there (device-mapper counts it as a write of 0 bytes, md not at all).
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1377,7 +1391,7 @@ Block-layer service time of cache flush requests, measured from `block_rq_issue`
 
 ## `obi.stat.disk.io`
 
-Count of bytes transferred at the block layer, accumulated per completed disk read or write request and broken down by device and direction.
+Count of bytes transferred at the block layer, accumulated per completed disk read or write request and broken down by device and direction. With `storage_block_pod`, also by the pod the I/O is charged to (see `obi.stat.disk.operations`); I/O charged to no pod is a series without pod attributes.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1386,13 +1400,19 @@ Count of bytes transferred at the block layer, accumulated per completed disk re
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
+| `k8s.namespace.name` | string | `recommended`: with storage_block_pod, if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `recommended`: with storage_block_pod, if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `recommended`: with storage_block_pod, if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.operation.duration`
 
-Block-layer service latency per disk read or write request, measured from `block_rq_issue` to `block_rq_complete`, broken down by device and direction. Flush and discard requests are not included: they have metrics of their own. The write count matches the writes in `/proc/diskstats`, except that diskstats also counts as a write an empty preflush write (0 bytes, such as a dm-thin metadata commit or a flush passed through a loop device), counted here only as the flush issued for it, and a secure erase, counted here as a discard.
+Block-layer service latency per disk read or write request, measured from `block_rq_issue` to `block_rq_complete`, broken down by device and direction. Flush and discard requests are not included: they have metrics of their own. The write count matches the writes in `/proc/diskstats`, except that diskstats also counts as a write an empty preflush write (0 bytes, such as a dm-thin metadata commit or a flush passed through a loop device), counted here only as the flush issued for it, and a secure erase, counted here as a discard. With the `storage_block_volumes` feature, a bio-based stacked volume (an LVM logical volume, an md array, a dm-crypt device) is a device of its own in every `obi.stat.disk.*` metric, measured per bio from `block_bio_queue` to `block_bio_complete`: the end-to-end time of the bio as it was submitted to the volume, counted once however its driver splits it. `/proc/diskstats` of device-mapper and md devices counts the fragments instead, so compare bytes, which match, rather than operation counts.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1402,6 +1422,7 @@ Block-layer service latency per disk read or write request, measured from `block
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1418,6 +1439,63 @@ Count of block read and write requests that completed with a non-zero error, bro
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
 | `error.type` | string | `recommended` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.operation_time`
+
+Time spent on the block reads and writes of obi.stat.disk.operations, summed: from the request's block-layer accounting start to its completion, or from its issue to the driver when the device does not account it (queue/iostats=0) or for a write in a flush sequence; a stacked volume's bio from its submission. Broken down by device, direction and the pod the I/O is charged to.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.operations`
+
+Count of completed block read and write requests, broken down by device, direction and the pod the I/O is charged to. Reads and direct I/O are charged to the submitting container; buffered writes, whether flushed by the kernel or by fsync, to the cgroup that owns the file's writeback domain: normally the container that created the file, then the dominant writer after some writeback rounds, then the pod or QoS slice once the container is removed. I/O charged to no pod (kernel threads such as the ext4 journal, system services) is a series without pod attributes, so the series of a device and direction add up to all of its reads or writes.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.pending_operations`
+
+Count of block I/O requests still in flight on the device right now, from a snapshot of the kernel's in-flight map taken once per collection, broken down by device. A device with no request in flight reports 0 until it has gone idle past the metric's reporting interval. With `storage_block_volumes`, the bios in flight on a stacked volume are its pending operations.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| updowncounter | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `opt_in` | development | The disk IO operation direction. | read |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1439,7 +1517,7 @@ Number of block I/O requests still in flight on the device immediately after thi
 
 ## `obi.stat.disk.queue.duration`
 
-Time a disk read or write request spent queued before being dispatched to the device, measured from `block_rq_insert` to `block_rq_issue`, broken down by device and direction. Requests that blk-mq issues directly, without passing through `block_rq_insert`, are not observed: they have no queue wait to report and recording a zero would understate the distribution.
+Time a disk read or write request spent queued, from the request's accounting start (`start_time_ns`, set after the tag or scheduler-tag allocation and shared by all requests of a plug batch) to dispatch to the driver. Nothing is recorded for a device with `queue/iostats=0`, for the data write of a flush sequence (PREFLUSH or FUA on a device without FUA), nor on a kernel whose BTF has no `enum rqf_flags` or that uses the classic block tracepoints (OBI logs a warning at start), so the count can be lower than `obi.stat.disk.operation.duration`'s. A stacked volume measured with `storage_block_volumes` has no queue wait of its own: what its bios wait for is part of their operation duration.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1449,6 +1527,7 @@ Time a disk read or write request spent queued before being dispatched to the de
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 

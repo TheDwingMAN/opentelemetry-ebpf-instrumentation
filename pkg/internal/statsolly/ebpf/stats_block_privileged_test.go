@@ -6,6 +6,7 @@
 package ebpf
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -201,12 +202,22 @@ func TestBlockMediumErrorPartialCompletion(t *testing.T) {
 // does, with the given metrics features.
 func attachBlockPrograms(t *testing.T, features export.Features) (*StatsFetcher, *ringbuf.Reader) {
 	t.Helper()
+	return attachBlockProgramsSelected(t, features, &attributes.SelectorConfig{})
+}
+
+// attachBlockProgramsSelected is attachBlockPrograms with an explicit
+// attribute selection, for opt-in attributes such as obi.disk.partition
+// (step 13) that need attributes.select to turn blk_want_part on.
+func attachBlockProgramsSelected(
+	t *testing.T, features export.Features, selectorCfg *attributes.SelectorConfig,
+) (*StatsFetcher, *ringbuf.Reader) {
+	t.Helper()
 
 	if os.Geteuid() != 0 {
 		t.Skip("needs root to load eBPF programs and set up block devices")
 	}
 
-	fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{}, FsAggregation{}, NFSConfig{}, nil)
+	fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, selectorCfg, FsAggregation{}, NFSConfig{}, nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 
@@ -289,12 +300,17 @@ func newLoopDevice(tb testing.TB, size int64) *testDisk {
 	require.NoError(tb, unix.IoctlSetInt(int(dev.Fd()), unix.LOOP_SET_FD, int(backing.Fd())))
 	tb.Cleanup(func() { _ = unix.IoctlSetInt(int(dev.Fd()), unix.LOOP_CLR_FD, 0) })
 
-	return &testDisk{
+	loop := &testDisk{
 		path:      path,
 		sysStat:   filepath.Join("/sys/block", name, "stat"),
 		sysInfl:   filepath.Join("/sys/block", name, "inflight"),
 		kernelDev: loopMajor<<kernelMinorBit | uint32(minor),
 	}
+	// A loop device outlives its backing file, and its queue settings with
+	// it: an earlier run that stopped while queue/iostats was 0 would leave
+	// this one without accounting starts, and without queue times.
+	require.NoError(tb, os.WriteFile(loop.sysQueue("iostats"), []byte("1"), 0))
+	return loop
 }
 
 // ensureBlockNode creates the device node when it is missing: a container's
@@ -574,4 +590,206 @@ func readDirect(t *testing.T, path string, offset int64) {
 
 	_, err = f.ReadAt(buf, offset)
 	require.Error(t, err, "the read straddling the medium error range fails")
+}
+
+// TestBlockPartitionOnLoopDevice (step 13, disposable lab check, spec 2.1):
+// with obi.disk.partition selected, a write to one partition of a
+// partitioned loop device is reported with that partition's device name and
+// exact byte count, while a write to the whole device (bypassing the
+// partition) carries no partition label.
+func TestBlockPartitionOnLoopDevice(t *testing.T) {
+	sel := &attributes.SelectorConfig{SelectionCfg: attributes.Selection{
+		"obi.stat.disk.io": attributes.InclusionLists{Include: []string{"*"}},
+	}}
+	fetcher, reader := attachBlockProgramsSelected(t, export.FeatureStorageBlock, sel)
+	_ = fetcher
+
+	diskPath, partPath, partDev := attachPartitionedLoopDevice(t)
+	diskDev := blockDevFromSysName(t, filepath.Base(diskPath))
+
+	events := collectPartitionEvents(t, reader, diskDev)
+
+	writeDirectAt(t, partPath, 0, loopBlockBytes)
+	require.Eventually(t, func() bool { return events.writes() > 0 }, 5*time.Second, 50*time.Millisecond,
+		"the partition write never reached the ring buffer")
+	seen := events.snapshot()
+	assert.Equal(t, uint64(1), seen.writes, "one write event for the partition write")
+	assert.Equal(t, uint64(loopBlockBytes), seen.writeBytes)
+	assert.Equal(t, partDev, seen.lastWritePartDev,
+		"obi.disk.partition names the partition the write targeted")
+
+	events.reset()
+	writeDirectAt(t, diskPath, int64(2*loopBlockBytes), loopBlockBytes)
+	require.Eventually(t, func() bool { return events.writes() > 0 }, 5*time.Second, 50*time.Millisecond,
+		"the whole-disk write never reached the ring buffer")
+	seen = events.snapshot()
+	assert.Zero(t, seen.lastWritePartDev, "whole-disk I/O has no partition label")
+}
+
+// attachLoopDeviceTo is v2's helper (tracer_disk_privileged_test.go:587-612),
+// taken as is: it attaches a new loop device to backing and keeps it locked
+// (flock LOCK_EX) so udev never probes it while the test does its own I/O
+// (https://systemd.io/BLOCK_DEVICE_LOCKING/).
+func attachLoopDeviceTo(t *testing.T, backing *os.File) (string, *os.File) {
+	t.Helper()
+
+	control, err := os.OpenFile("/dev/loop-control", os.O_RDWR, 0)
+	require.NoError(t, err)
+	defer control.Close()
+	minor, err := unix.IoctlRetInt(int(control.Fd()), unix.LOOP_CTL_GET_FREE)
+	require.NoError(t, err)
+
+	path := fmt.Sprintf("/dev/loop%d", minor)
+	ensureBlockNode(t, path, loopMajor, uint32(minor))
+	loop, err := os.OpenFile(path, os.O_RDWR, 0)
+	require.NoError(t, err)
+	require.NoError(t, unix.Flock(int(loop.Fd()), unix.LOCK_EX))
+	require.NoError(t, unix.IoctlSetInt(int(loop.Fd()), unix.LOOP_SET_FD, int(backing.Fd())))
+	t.Cleanup(func() {
+		_ = unix.IoctlSetInt(int(loop.Fd()), unix.LOOP_CLR_FD, 0)
+		loop.Close()
+	})
+	return path, loop
+}
+
+// attachPartitionedLoopDevice is v2's helper (tracer_disk_privileged_test.go:
+// 614-646), taken as is: a loop device over a sparse file with a one-entry
+// DOS partition table. Returns the disk's and the partition's /dev paths and
+// the partition's dev_t.
+func attachPartitionedLoopDevice(t *testing.T) (diskPath, partPath string, partDev uint32) {
+	t.Helper()
+	const (
+		sectorSize     = 512
+		firstSector    = 2048
+		partitionBytes = 32 << 20
+	)
+	mbr := make([]byte, sectorSize)
+	entry := mbr[446:462]
+	entry[4] = 0x83 // Linux
+	binary.LittleEndian.PutUint32(entry[8:], firstSector)
+	binary.LittleEndian.PutUint32(entry[12:], partitionBytes/sectorSize)
+	mbr[510], mbr[511] = 0x55, 0xaa
+
+	backing, err := os.Create(filepath.Join(t.TempDir(), "disk.img"))
+	require.NoError(t, err)
+	t.Cleanup(func() { backing.Close() })
+	require.NoError(t, backing.Truncate(firstSector*sectorSize+partitionBytes))
+	_, err = backing.WriteAt(mbr, 0)
+	require.NoError(t, err)
+
+	diskPath, loop := attachLoopDeviceTo(t, backing)
+	require.NoError(t, unix.IoctlLoopSetStatus64(int(loop.Fd()), &unix.LoopInfo64{Flags: unix.LO_FLAGS_PARTSCAN}))
+	name := filepath.Base(diskPath) + "p1"
+	for start := time.Now(); ; time.Sleep(50 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join("/sys/class/block", name)); err == nil {
+			break
+		}
+		if time.Since(start) > 5*time.Second {
+			t.Skip("the kernel doesn't read the partition table (CONFIG_MSDOS_PARTITION may not be set)")
+		}
+	}
+	partDev = blockDevFromSysName(t, name)
+	partPath = filepath.Join("/dev", name)
+	ensureBlockNode(t, partPath, partDev>>kernelMinorBit, partDev&(1<<kernelMinorBit-1))
+	return diskPath, partPath, partDev
+}
+
+// blockDevFromSysName reads a block device's dev_t from
+// /sys/class/block/<name>/dev ("major:minor").
+func blockDevFromSysName(t *testing.T, name string) uint32 {
+	t.Helper()
+
+	numbers := strings.Split(strings.TrimSpace(readString(t, filepath.Join("/sys/class/block", name, "dev"))), ":")
+	require.Len(t, numbers, 2)
+	major, err := strconv.ParseUint(numbers[0], 10, 32)
+	require.NoError(t, err)
+	minor, err := strconv.ParseUint(numbers[1], 10, 32)
+	require.NoError(t, err)
+	return uint32(major)<<kernelMinorBit | uint32(minor)
+}
+
+// writeDirectAt writes one O_DIRECT block of n bytes at offset.
+func writeDirectAt(t *testing.T, path string, offset int64, n int) {
+	t.Helper()
+
+	f, err := os.OpenFile(path, os.O_WRONLY|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+
+	buf, err := unix.Mmap(-1, 0, n, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+	require.NoError(t, err)
+	defer func() { _ = unix.Munmap(buf) }()
+	for i := range buf {
+		buf[i] = byte(i)
+	}
+	_, err = f.WriteAt(buf, offset)
+	require.NoError(t, err)
+}
+
+// partitionEventCounts is collectBlockEvents narrowed to what
+// TestBlockPartitionOnLoopDevice needs: the write count, bytes and the last
+// write's partition.
+type partitionEventCounts struct {
+	writes, writeBytes uint64
+	lastWritePartDev   uint32
+}
+
+type partitionEvents struct {
+	mu   sync.Mutex
+	seen partitionEventCounts
+}
+
+func (e *partitionEvents) writes() uint64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.seen.writes
+}
+
+func (e *partitionEvents) snapshot() partitionEventCounts {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.seen
+}
+
+func (e *partitionEvents) reset() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.seen = partitionEventCounts{}
+}
+
+// collectPartitionEvents is collectBlockEvents, narrowed to write
+// completions on dev (the whole disk, as every block tracepoint names it)
+// and their partition.
+func collectPartitionEvents(t *testing.T, reader *ringbuf.Reader, dev uint32) *partitionEvents {
+	t.Helper()
+
+	events := &partitionEvents{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var record ringbuf.Record
+		for {
+			if err := reader.ReadInto(&record); err != nil {
+				return
+			}
+			if len(record.RawSample) < int(unsafe.Sizeof(StatsBlockIo{})) ||
+				StatType(record.RawSample[0]) != StatTypeBlockIo {
+				continue
+			}
+			event := (*StatsBlockIo)(unsafe.Pointer(&record.RawSample[0]))
+			if event.Dev != dev || StatsBlkIoOp(event.Op) != StatsBlkIoOpBlkOpWrite {
+				continue
+			}
+			events.mu.Lock()
+			events.seen.writes++
+			events.seen.writeBytes += event.Bytes
+			events.seen.lastWritePartDev = event.PartDev
+			events.mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		reader.Close()
+		<-done
+	})
+	return events
 }

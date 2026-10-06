@@ -172,6 +172,7 @@ Attributes carried on OBI's per-connection TCP statistics and filesystem I/O sta
 | --- | --- | --- | --- | --- |
 | `fs.operation` | enum | development | Filesystem operation performed. | read; write; fsync; fdatasync; sync; syncfs; sync_file_range |
 | `network.tcp.handshake.role` | enum | development | Role of the local endpoint in the TCP three-way handshake (`client` initiated the SYN, `server` was awaiting it). | client; server; unknown |
+| `obi.disk.partition` | string | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
 | `obi.disk.physical_device` | string | development | Physical disk(s) behind a filesystem's block device: sorted, comma-joined, at most 8. Omitted when the filesystem is not block-backed, or the walk cannot resolve one. | vdb; nvme0n1,nvme1n1 |
 | `obi.disk.stacked` | boolean | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `obi.fs.container.mountpoint` | string | development | Path at which the container of the process mounts the filesystem the operation went through, read from the process's mount table. | /data |

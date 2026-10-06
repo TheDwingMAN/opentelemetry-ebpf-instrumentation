@@ -37,6 +37,7 @@ func TestInternalPrometheusNames(t *testing.T) {
 		{internal.BpfNetworkPackets, "obi_bpf_network_packets_total"},
 		{internal.BpfStorageDrops, "obi_bpf_storage_dropped_operations_total"},
 		{internal.BpfStorageRecursionMisses, "obi_bpf_storage_program_recursion_misses_total"},
+		{internal.BpfMapInsertFailures, "obi_bpf_map_insert_failures_total"},
 		{internal.QueueCapacityRatio, "obi_queue_capacity_ratio"},
 	}
 
@@ -80,6 +81,7 @@ func TestInternalMetricsAllDeclared(t *testing.T) {
 		"BpfNetworkPackets":         internal.BpfNetworkPackets,
 		"BpfStorageDrops":           internal.BpfStorageDrops,
 		"BpfStorageRecursionMisses": internal.BpfStorageRecursionMisses,
+		"BpfMapInsertFailures":      internal.BpfMapInsertFailures,
 		"QueueCapacityRatio":        internal.QueueCapacityRatio,
 	} {
 		t.Run(name, func(t *testing.T) {

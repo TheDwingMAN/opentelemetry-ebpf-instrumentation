@@ -52,6 +52,11 @@ type Source interface {
 type ValueLayout struct {
 	Counters int
 	Buckets  int
+	// Monotonic declares that every counter word only grows. A total below
+	// the previous poll's then means the key was deleted and created again
+	// behind the Reader's back, and all of its values are new: without it,
+	// the difference would wrap to nearly 2^64.
+	Monotonic bool
 }
 
 func (l ValueLayout) size() int { return l.Counters*counterSize + l.Buckets*bucketSize }
@@ -188,6 +193,9 @@ func (r *Reader) keyBytes(k *kernelKey) []byte {
 // prev. It reports whether anything changed.
 func (r *Reader) diff(prev, values []byte) bool {
 	r.sum(values)
+	if r.layout.Monotonic && r.restarted(prev) {
+		clear(prev)
+	}
 	changed := false
 	for w := range r.layout.Counters {
 		at := w * counterSize
@@ -211,6 +219,17 @@ func (r *Reader) diff(prev, values []byte) bool {
 		}
 	}
 	return changed
+}
+
+// restarted reports whether a counter total of r.totals is below its
+// previous value in prev.
+func (r *Reader) restarted(prev []byte) bool {
+	for w := range r.layout.Counters {
+		if r.totals[w] < binary.NativeEndian.Uint64(prev[w*counterSize:]) {
+			return true
+		}
+	}
+	return false
 }
 
 // sum sets r.totals to the words of values summed across CPUs; bucket words

@@ -90,14 +90,18 @@ func (incl Selection) Normalize() {
 // This would include "glob-like" entries.
 // They are returned from more to less broad scope (for example, for a metric named foo_bar
 // it could return the inclusion lists defined with keys "*", "foo_*" and "foo_bar", in that order).
+// The keys are normalized (Normalize), so they are matched against the metric's Section
+// normalized the same way: a Section with an underscore of its own, such as
+// obi.stat.disk.operation_time, is otherwise never matched by its own name.
 func (incl Selection) Matching(metricName Name) []InclusionLists {
 	if incl == nil {
 		return nil
 	}
 
+	section := string(normalizeMetric(metricName.Section))
 	var matchingMetricGlobs []Section
 	for glob := range incl {
-		if ok, _ := path.Match(string(glob), string(metricName.Section)); ok {
+		if ok, _ := path.Match(string(glob), section); ok {
 			matchingMetricGlobs = append(matchingMetricGlobs, glob)
 		}
 	}

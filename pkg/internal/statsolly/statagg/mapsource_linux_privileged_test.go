@@ -7,6 +7,7 @@ package statagg
 
 import (
 	"encoding/binary"
+	"strconv"
 	"testing"
 	"time"
 
@@ -134,5 +135,85 @@ func TestMapSource_RejectsLRUMaps(t *testing.T) {
 	for _, typ := range []cebpf.MapType{cebpf.LRUHash, cebpf.LRUCPUHash} {
 		_, err := NewMapSource(newTestMap(t, typ, 8))
 		assert.Error(t, err, typ)
+	}
+}
+
+// NewSnapshotSource is the path a snapshot caller (PendingReader, over the
+// classic-tracepoint fallback's LRU_HASH-keyed blk_rq_inflight_sector) must
+// use instead of NewMapSource, which TestMapSource_RejectsLRUMaps checks
+// rejects these same map types.
+func TestMapSource_SnapshotSourceAcceptsLRUHash(t *testing.T) {
+	m := newTestMap(t, cebpf.LRUHash, 8)
+	require.NoError(t, m.Put(mapKey(1), blkAggValue{Bytes: 42}))
+
+	src, err := NewSnapshotSource(m)
+	require.NoError(t, err)
+
+	var seen int
+	require.NoError(t, src.ForEach(func(_, values []byte) {
+		seen++
+		assert.Equal(t, uint64(42), binary.NativeEndian.Uint64(values))
+	}))
+	assert.Equal(t, 1, seen)
+}
+
+func TestMapSource_SnapshotSourceAcceptsLRUCPUHash(t *testing.T) {
+	m := newTestMap(t, cebpf.LRUCPUHash, 8)
+	src, err := NewSnapshotSource(m)
+	require.NoError(t, err)
+	vals := make([]blkAggValue, src.CPUs())
+	vals[0].Bytes = 7
+	require.NoError(t, m.Put(mapKey(1), vals))
+
+	var seen int
+	require.NoError(t, src.ForEach(func(_, _ []byte) { seen++ }))
+	assert.Equal(t, 1, seen)
+}
+
+// A poll of a real blk_agg-shaped per-CPU map where every key changed on
+// every CPU: the batch lookup syscalls and the per-CPU sums. 184 keys is
+// what the block plan sizes for 6 disks and 4 kinds of request, with room for
+// errnos and later disks.
+func BenchmarkMapSource_BlkAgg(b *testing.B) {
+	for _, keys := range []uint32{64, 184} {
+		b.Run(strconv.Itoa(int(keys)), func(b *testing.B) {
+			m, err := cebpf.NewMap(&cebpf.MapSpec{
+				Type: cebpf.PerCPUHash, KeySize: testKeySize, ValueSize: blkAggValueSize, MaxEntries: keys,
+			})
+			require.NoError(b, err)
+			b.Cleanup(func() { m.Close() })
+			src, err := NewMapSource(m)
+			require.NoError(b, err)
+			r, err := NewReader(src, ValueLayout{Counters: 2, Buckets: 33, Monotonic: true})
+			require.NoError(b, err)
+
+			vals := make([]blkAggValue, src.CPUs())
+			put := func(n uint64) {
+				for cpu := range vals {
+					vals[cpu].Bytes, vals[cpu].SumNs, vals[cpu].Bkt[cpu%33] = 4096*n, 200_000*n, uint32(n)
+				}
+				for i := range keys {
+					require.NoError(b, m.Put(mapKey(i), vals))
+				}
+			}
+			visited := 0
+			visit := func(*kernelKey, Delta, []byte) { visited++ }
+			put(1)
+			require.NoError(b, r.Poll(time.Now(), visit))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := range b.N {
+				b.StopTimer()
+				put(uint64(i + 2))
+				visited = 0
+				b.StartTimer()
+				if err := r.Poll(time.Now(), visit); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			require.Equal(b, int(keys), visited)
+			b.ReportMetric(float64(src.CPUs()), "cpus")
+		})
 	}
 }

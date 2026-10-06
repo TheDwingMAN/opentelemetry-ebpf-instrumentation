@@ -32,6 +32,7 @@ type InternalMetrics struct {
 	BpfNetworkPackets         Name
 	BpfStorageDrops           Name
 	BpfStorageRecursionMisses Name
+	BpfMapInsertFailures      Name
 	QueueCapacityRatio        Name
 }
 
@@ -110,6 +111,11 @@ func NewInternalMetrics(prefix string) InternalMetrics {
 		BpfStorageRecursionMisses: metric(Name{
 			OTEL: prefix + ".bpf.storage.program.recursion.misses",
 			Unit: "{execution}",
+			Type: InstrumentCounter,
+		}),
+		BpfMapInsertFailures: metric(Name{
+			OTEL: prefix + ".bpf.map.insert.failures",
+			Unit: "{insert}",
 			Type: InstrumentCounter,
 		}),
 		QueueCapacityRatio: metric(Name{

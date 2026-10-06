@@ -100,6 +100,9 @@ type Stats struct {
 	cgroups  *statagg.CgroupIndex
 	// the running families, which stop waits for before closing their maps
 	familiesRunning sync.WaitGroup
+	// blockLayout is the kernel histogram layout of the block aggregation
+	// maps, nil when block completions are sent as events.
+	blockLayout *statagg.Layout
 
 	status Status
 }
@@ -110,6 +113,8 @@ type ebpFetcher interface {
 	DebugEventsMap() *ciliumebpf.Map
 	NFSRPCMap() *ciliumebpf.Map
 	FsAccumMap() *ciliumebpf.Map
+	BlockAggregation() *ebpf.BlockAggMaps
+	KernelDropsMap() *ciliumebpf.Map
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -152,7 +157,8 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		CgroupV1:     nfsCgroupV1Host,
 	}
 	fsAgg, fsLayout := fsAggregation(cfg, alog)
-	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, fsAgg, nfsCfg, ctxInfo.Metrics)
+	blockAgg, blockLayout := blockAggregation(cfg, alog)
+	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, fsAgg, nfsCfg, blockAgg, ctxInfo.Metrics)
 	if err != nil {
 		return nil, err
 	}
@@ -161,6 +167,7 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	s.nfsLayout = nfsLayout
 	s.nfsOwner = nfsOwner
 	s.nfsCgroupV1 = nfsCgroupV1Host
+	s.blockLayout = blockLayout
 	// No map when no filesystem collection could be created: the
 	// filesystem metrics then have nothing to export either way.
 	if m := statsFetcher.FsAccumMap(); m != nil {
@@ -175,9 +182,9 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 
 func newFetcher(
 	cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, fsAgg ebpf.FsAggregation,
-	nfsCfg ebpf.NFSConfig, metrics imetrics.Reporter,
+	nfsCfg ebpf.NFSConfig, blockAgg *ebpf.BlockAggregation, metrics imetrics.Reporter,
 ) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, fsAgg, nfsCfg, metrics)
+	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, fsAgg, nfsCfg, blockAgg, metrics)
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests

@@ -30,6 +30,8 @@ const (
 	helpDiskFlushDuration     = "measures the service time of block cache flush requests, from issue to completion, in seconds"
 	helpDiskDiscardDuration   = "measures the service time of block discard and secure erase requests, from issue to completion, in seconds"
 	helpDiskDiscardIO         = "count of bytes released by block discard and secure erase requests that completed successfully"
+	helpDiskOperations        = "count of completed block read and write requests, by the pod the I/O is charged to"
+	helpDiskOperationTime     = "time spent on block read and write requests from their accounting start, in seconds, by the pod the I/O is charged to"
 	helpFsOperationDuration   = "filesystem read, write and sync latency in seconds, as the application sees it; buffered writes end once the data is in the page cache"
 	helpFsIO                  = "count of bytes transferred at the filesystem layer"
 	helpFsOperationErrors     = "counts filesystem I/O operations that failed, broken down by errno"
@@ -50,6 +52,11 @@ type StatsPrometheusConfig struct {
 	// collected by a statagg Collector instead of per-event metric vectors.
 	// Nil exports every metric per event.
 	Aggregated *statagg.Registry
+	// PendingSnapshot, when non-nil, is called on every scrape to fill
+	// obi.stat.disk.pending_operations: a userspace snapshot has no events
+	// to observe, so it is collected by its own prometheus.Collector
+	// instead of the per-event or Aggregated paths.
+	PendingSnapshot func() ([]ebpf.PendingPoint, error)
 }
 
 // Enabled returns whether the node needs to be activated
@@ -451,6 +458,12 @@ func newStatsReporter(
 		register = append(register, mr.nfsClientIO)
 	}
 
+	if cfg.CommonCfg.Features.StorageBlockPending() && cfg.PendingSnapshot != nil {
+		log.Debug("registering stat disk pending operations metric")
+
+		register = append(register, newPendingCollector(cfg, provider))
+	}
+
 	if cfg.Aggregated != nil {
 		aggregated, err := aggregatedStatsCollector(cfg, provider)
 		if err != nil {
@@ -554,7 +567,7 @@ func (r *statMetricsReporter) observeDiskIOBytes(stat *ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observeDiskQueueDuration(stat *ebpf.Stat) {
-	// QueueNs == 0 means no block_rq_insert record matched this request (e.g.
+	// QueueNs == 0 means no valid accounting start matched this request (e.g.
 	// blk-mq issued it directly): there is no queue wait to observe, and a
 	// genuine 0ns queue wait is not observable in practice.
 	if r.diskQueueDuration == nil || !stat.BlockIo.IsReadWrite() || stat.BlockIo.QueueNs == 0 {
@@ -683,6 +696,10 @@ func aggregatableStats(cfg *StatsPrometheusConfig) []aggregatableStat {
 		{attributes.StatDiskFlushDuration, f.StorageBlockFlush(), helpDiskFlushDuration, b.StatDiskOperationDurationHistogram},
 		{attributes.StatDiskDiscardDuration, f.StorageBlockDiscard(), helpDiskDiscardDuration, b.StatDiskOperationDurationHistogram},
 		{attributes.StatDiskDiscardIO, f.StorageBlockDiscard(), helpDiskDiscardIO, nil},
+		// Kernel-aggregated only: blk_cg_agg counts them, in either block
+		// emit mode.
+		{attributes.StatDiskOperations, f.StorageBlockPod(), helpDiskOperations, nil},
+		{attributes.StatDiskOperationTime, f.StorageBlockPod(), helpDiskOperationTime, nil},
 		{attributes.StatFsOperationDuration, f.StorageFSDuration(), helpFsOperationDuration, b.StatFsOperationDurationHistogram},
 		{attributes.StatFsIO, f.StorageFSIo(), helpFsIO, nil},
 		{attributes.StatFsOperationErrors, f.StorageFSErrors(), helpFsOperationErrors, nil},

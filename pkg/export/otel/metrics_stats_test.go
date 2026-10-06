@@ -257,7 +257,7 @@ func TestStatMetricsExporter_DiskQueueAndErrorMetrics(t *testing.T) {
 }
 
 // TestStatMetricsExporter_DiskQueueDurationSkipsZeroQueueNs covers the A9
-// ruling: QueueNs == 0 means no block_rq_insert record matched this
+// ruling: QueueNs == 0 means no valid accounting start matched this
 // completion (e.g. blk-mq issued it directly), so the queue duration
 // histogram must not observe it, while the operation duration histogram --
 // which doesn't depend on QueueNs -- still does.
@@ -295,8 +295,8 @@ func TestStatMetricsExporter_DiskQueueDurationSkipsZeroQueueNs(t *testing.T) {
 
 	go otelExporter(ctx)
 
-	// WHEN it receives a block I/O completion whose request bypassed
-	// block_rq_insert (QueueNs == 0)
+	// WHEN it receives a block I/O completion that has no valid
+	// accounting start (QueueNs == 0, e.g. queue/iostats=0)
 	stats.Send([]*ebpf.Stat{
 		{
 			Type: ebpf.StatTypeBlockIo,

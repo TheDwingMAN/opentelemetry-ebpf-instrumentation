@@ -436,6 +436,21 @@ groups:
       - ref: bpf.map.name
         requirement_level: required
 
+  # Kernel counters of the stats programs, reported as totals.
+  - id: metric.obi.obi.bpf.map.insert.failures
+    type: metric
+    metric_name: obi.bpf.map.insert.failures
+    instrument: counter
+    unit: "{insert}"
+    stability: development
+    brief: >
+      Inserts into an eBPF map that failed because the map was full: what its
+      programs could not count, so the metrics the map feeds undercount by as
+      much.
+    attributes:
+      - ref: bpf.map.name
+        requirement_level: required
+
   # --- Network packet accounting (netolly) -------------------------------
   - id: metric.obi.obi.bpf.network.packets
     type: metric

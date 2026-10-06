@@ -194,6 +194,18 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		return nil, err
 	}
 
+	// pending_operations takes no delta, so it is not a statagg Family: each
+	// exporter gets its own snapshot function, with its own Reader,
+	// decorator and TTL, rather than share one through aggregated.
+	otelPending, err := s.newPendingSnapshot(ctx, s.cfg.OTELMetrics.TTL)
+	if err != nil {
+		return nil, fmt.Errorf("block pending (otel): %w", err)
+	}
+	promPending, err := s.newPendingSnapshot(ctx, s.cfg.Prometheus.TTL)
+	if err != nil {
+		return nil, fmt.Errorf("block pending (prometheus): %w", err)
+	}
+
 	dynamicDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "dynamicDecoratedStats")
 	swi.Add(dynamicpid.MetadataDecoratorProviderFor(s.aggDeps.dynamicAttrs, statAttrs, decoratedStats, dynamicDecoratedStats),
 		swarm.WithID("DynamicPIDMetadataDecorator"))
@@ -211,17 +223,19 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	// Not all the nodes are mandatory here. Is the responsibility of each Provider function to decide
 	// whether each node is going to be instantiated or just ignored.
 	swi.Add(otel.StatMetricsExporterProvider(s.ctxInfo, &otel.StatMetricsConfig{
-		Metrics:     &s.cfg.OTELMetrics,
-		SelectorCfg: selectorCfg,
-		CommonCfg:   &s.cfg.Metrics,
-		Aggregated:  aggregated,
+		Metrics:         &s.cfg.OTELMetrics,
+		SelectorCfg:     selectorCfg,
+		CommonCfg:       &s.cfg.Metrics,
+		Aggregated:      aggregated,
+		PendingSnapshot: otelPending,
 	}, filteredStats), swarm.WithID("OTelExporter"))
 
 	swi.Add(prom.StatsPrometheusEndpoint(s.ctxInfo, &prom.StatsPrometheusConfig{
-		Config:      &s.cfg.Prometheus,
-		SelectorCfg: selectorCfg,
-		CommonCfg:   &s.cfg.Metrics,
-		Aggregated:  aggregated,
+		Config:          &s.cfg.Prometheus,
+		SelectorCfg:     selectorCfg,
+		CommonCfg:       &s.cfg.Metrics,
+		Aggregated:      aggregated,
+		PendingSnapshot: promPending,
 	}, filteredStats), swarm.WithID("PrometheusExporter"))
 
 	swi.Add(swarm.DirectInstance(export.StatPrinterProvider(s.cfg.Stats.Print, filteredStats)),

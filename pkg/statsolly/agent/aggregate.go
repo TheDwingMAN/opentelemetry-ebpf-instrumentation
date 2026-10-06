@@ -108,14 +108,14 @@ func (s *Stats) cgroupIndex() *statagg.CgroupIndex {
 // s.aggDeps.
 func (s *Stats) buildAggregation(ctx context.Context) (*statagg.Registry, error) {
 	var families []*statagg.Family
-	for _, build := range [...]func(context.Context) (*statagg.Family, error){s.fsFamily, s.nfsFamily} {
-		family, err := build(ctx)
+	for _, build := range [...]func(context.Context) ([]*statagg.Family, error){
+		oneFamily(s.fsFamily), oneFamily(s.nfsFamily), s.newBlockFamilies,
+	} {
+		built, err := build(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if family != nil {
-			families = append(families, family)
-		}
+		families = append(families, built...)
 	}
 	if len(families) == 0 {
 		return nil, nil
@@ -126,6 +126,18 @@ func (s *Stats) buildAggregation(ctx context.Context) (*statagg.Registry, error)
 	}
 	s.families = families
 	return registry, nil
+}
+
+// oneFamily adapts a builder of at most one family to buildAggregation's
+// list.
+func oneFamily(build func(context.Context) (*statagg.Family, error)) func(context.Context) ([]*statagg.Family, error) {
+	return func(ctx context.Context) ([]*statagg.Family, error) {
+		family, err := build(ctx)
+		if err != nil || family == nil {
+			return nil, err
+		}
+		return []*statagg.Family{family}, nil
+	}
 }
 
 // nfsFamily returns the family of the NFS client RPC map, nil when the
@@ -145,14 +157,21 @@ func (s *Stats) nfsFamily(ctx context.Context) (*statagg.Family, error) {
 	return stats.NewNFSRPCFamily(src, s.nfsLayout, s.cfg.Metrics.Features, decorate)
 }
 
-// runAggregation reads the kernel aggregation maps until ctx is done; stop
-// waits for the last read. The exporters must be attached, which building
-// the pipeline does.
+// runAggregation reads the kernel aggregation maps, and the kernel counters
+// of the stats programs, until ctx is done; stop waits for the last read.
+// The exporters must be attached, which building the pipeline does.
 func (s *Stats) runAggregation(ctx context.Context) {
 	if s.cgroups != nil {
 		go s.cgroups.Run(ctx)
 	}
 	for _, f := range s.families {
 		s.familiesRunning.Go(func() { f.Run(ctx) })
+	}
+	if s.fetcher == nil {
+		return
+	}
+	if drops := s.fetcher.KernelDropsMap(); drops != nil {
+		counters := stats.NewKernelCounters(drops, s.ctxInfo.Metrics)
+		s.familiesRunning.Go(func() { counters.Run(ctx) })
 	}
 }

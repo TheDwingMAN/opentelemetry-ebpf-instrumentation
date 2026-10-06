@@ -111,6 +111,29 @@ func TestPrometheusReporterBpfStorageRecursionMisses(t *testing.T) {
 	assert.Equal(t, map[string]float64{"obi_stats_tp_block_rq_issue": 5, "obi_stats_kprobe_nfs_read": 1}, got)
 }
 
+// The kernel counters are reported as totals; the counters add what each
+// total counted since the previous one, and a total that went back to a lower
+// value (a recreated map or program) counts from zero again.
+func TestPrometheusReporterKernelCounterTotals(t *testing.T) {
+	reporter := NewPrometheusReporter(&InternalMetricsConfig{}, nil, prometheus.NewRegistry())
+	value := func(c *totalCounterVec, label string) float64 {
+		var m dto.Metric
+		require.NoError(t, c.vec.WithLabelValues(label).Write(&m))
+		return m.GetCounter().GetValue()
+	}
+
+	reporter.BpfMapInsertFailures("blk_agg", 0)
+	reporter.BpfMapInsertFailures("blk_agg", 5)
+	reporter.BpfMapInsertFailures("blk_rq_inflight", 2)
+	reporter.BpfMapInsertFailures("blk_agg", 12)
+	assert.InDelta(t, 12, value(reporter.bpfMapInsertFailures, "blk_agg"), 0)
+	assert.InDelta(t, 2, value(reporter.bpfMapInsertFailures, "blk_rq_inflight"), 0)
+
+	reporter.BpfMapInsertFailures("blk_agg", 3)
+	assert.InDelta(t, 15, value(reporter.bpfMapInsertFailures, "blk_agg"), 0, "a lower total restarted from zero")
+
+}
+
 type noopEmbeddingReporter struct {
 	NoopReporter
 }

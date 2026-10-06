@@ -100,6 +100,25 @@ func TestBlockIoKinds(t *testing.T) {
 	assert.False(t, none.IsDiscard())
 }
 
+// TestBlockIoPartitionGetter covers obi.disk.partition: resolved to a name
+// when set, omitted ("") for whole-disk I/O (PartDev 0) and for a Stat with
+// no block I/O event.
+func TestBlockIoPartitionGetter(t *testing.T) {
+	withSysBlockDir(t, t.TempDir())
+
+	partGetter, ok := StatStringGetters(attr.DiskPartition)
+	assert.True(t, ok)
+
+	wholeDisk := &Stat{Type: StatTypeBlockIo, BlockIo: &BlockIo{Dev: 0x800010, PartDev: 0}}
+	assert.Empty(t, partGetter(wholeDisk), "whole-disk I/O has no partition")
+
+	onPartition := &Stat{Type: StatTypeBlockIo, BlockIo: &BlockIo{Dev: 0x800010, PartDev: 0x800011}}
+	assert.Equal(t, "8:17", partGetter(onPartition), "falls back to maj:min like deviceName")
+
+	notBlockIo := &Stat{Type: StatTypeTCPRtt, TCPRtt: &TCPRtt{}}
+	assert.Empty(t, partGetter(notBlockIo), "a stat with no block I/O event has no partition")
+}
+
 // Flushes and discards have no direction.
 func TestBlockIoDirectionOfFlushAndDiscard(t *testing.T) {
 	opGetter, ok := StatStringGetters(attr.DiskIODirection)

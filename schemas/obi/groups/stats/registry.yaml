@@ -128,3 +128,17 @@ groups:
           Path at which the container of the process mounts the filesystem
           the operation went through, read from the process's mount table.
         examples: ["/data"]
+      # Mirrors `BlockIo.PartDev` (via `deviceName`) in
+      # `pkg/internal/statsolly/ebpf/stat.go`. Opt-in (`attributes.select`):
+      # read at `block_rq_issue` from the request's first bio, falling back
+      # to its `rq->part` when it has none, only when selected on a disk
+      # metric that carries it.
+      - id: obi.disk.partition
+        type: string
+        stability: development
+        brief: >
+          Sysfs name of the partition a block I/O request targeted, when the
+          request named a partition rather than the whole disk. Omitted for
+          whole-disk I/O, for flush requests (which have no partition) and
+          for a request whose partition could not be resolved.
+        examples: ["nvme0n1p1", "sda1", "dm-4"]

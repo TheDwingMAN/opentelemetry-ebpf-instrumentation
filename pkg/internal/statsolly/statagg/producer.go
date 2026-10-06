@@ -153,6 +153,8 @@ func (o *otelMetric) produce(m *accMetric[attribute.Set], now time.Time) (metric
 		data, _ = o.exponential(m, now)
 	case m.def.Kind == KindHistogram:
 		data, _ = o.histogram(m, now)
+	case m.def.Kind == KindDurationCounter:
+		data, _ = o.seconds(m, now)
 	default:
 		data, _ = o.sum(m, now)
 	}
@@ -219,6 +221,24 @@ func (o *otelMetric) sum(m *accMetric[attribute.Set], now time.Time) (metricdata
 		Temporality: o.temporality,
 		IsMonotonic: m.def.Kind == KindCounter,
 	}, true
+}
+
+// seconds emits a KindDurationCounter, whose series count nanoseconds.
+func (o *otelMetric) seconds(m *accMetric[attribute.Set], now time.Time) (metricdata.Aggregation, bool) {
+	points := make([]metricdata.DataPoint[float64], 0, len(m.series))
+	for _, s := range m.series {
+		e, start, ok := o.emitted(s, now)
+		if !ok {
+			continue
+		}
+		points = append(points, metricdata.DataPoint[float64]{
+			Attributes: s.labels, StartTime: start, Time: now, Value: time.Duration(e.value).Seconds(),
+		})
+	}
+	if len(points) == 0 {
+		return nil, false
+	}
+	return metricdata.Sum[float64]{DataPoints: points, Temporality: o.temporality, IsMonotonic: true}, true
 }
 
 func (o *otelMetric) histogram(m *accMetric[attribute.Set], now time.Time) (metricdata.Aggregation, bool) {

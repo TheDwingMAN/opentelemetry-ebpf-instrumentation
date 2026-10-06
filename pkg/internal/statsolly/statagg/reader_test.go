@@ -208,3 +208,66 @@ func TestReader_KeysReturnedTwiceAreReadOnce(t *testing.T) {
 	assert.Equal(t, uint64(5), got[0].delta[0], "what it counted during the walk comes with the next poll")
 	assert.Equal(t, start.Add(time.Second), r.keys["dup1"].changed)
 }
+
+// A monotonic key deleted and created again between two polls, with as many
+// completions as before but faster ones: its latency sum went down while its
+// bucket count went up. All of its values are new, and the sum does not wrap
+// (the v2 branch's TestDiskReaderRestartsWhenOnlyTheLatencySumDecreased).
+func TestReader_MonotonicKeyRecreatedWithSmallerWords(t *testing.T) {
+	m := newFakeMap(4, readerStride, 2)
+	layout := readerLayout
+	layout.Monotonic = true
+	r, err := NewReader(m, layout)
+	require.NoError(t, err)
+	k := []byte("wrk1")
+
+	m.addU64(k, 0, 1, 900_000)
+	m.addU32(k, 0, 0, 2)
+	got := pollAll(t, r)
+	require.Len(t, got, 1)
+	assert.Equal(t, []uint64{0, 900_000, 2, 0, 0}, got[0].delta)
+
+	delete(m.entries, string(k))
+	m.addU64(k, 1, 1, 100_000)
+	m.addU32(k, 1, 0, 3)
+	got = pollAll(t, r)
+	require.Len(t, got, 1)
+	assert.Equal(t, []uint64{0, 100_000, 3, 0, 0}, got[0].delta, "counted from zero again")
+
+	// And from there on, deltas as usual.
+	m.addU64(k, 0, 1, 50)
+	m.addU32(k, 0, 1, 1)
+	got = pollAll(t, r)
+	require.Len(t, got, 1)
+	assert.Equal(t, []uint64{0, 50, 0, 1, 0}, got[0].delta)
+}
+
+// A poll can read a key between two of a completion's adds: the sum or the
+// bytes already counted, the bucket not yet. That change alone is forwarded,
+// and the bucket follows in the next poll, so nothing is lost or counted
+// twice (the v2 branch compared whole values and lost such growth).
+func TestReader_ForwardsASumOnlyChange(t *testing.T) {
+	m := newFakeMap(4, readerStride, 2)
+	layout := readerLayout
+	layout.Monotonic = true
+	r, err := NewReader(m, layout)
+	require.NoError(t, err)
+	k := []byte("torn")
+
+	m.addU64(k, 0, 0, 4096)
+	m.addU64(k, 0, 1, 1000)
+	m.addU32(k, 0, 2, 1)
+	pollAll(t, r)
+
+	// Torn: bytes and sum of the next completion, not its bucket.
+	m.addU64(k, 1, 0, 8192)
+	m.addU64(k, 1, 1, 2000)
+	got := pollAll(t, r)
+	require.Len(t, got, 1)
+	assert.Equal(t, []uint64{8192, 2000, 0, 0, 0}, got[0].delta, "a sum-only change is forwarded")
+
+	m.addU32(k, 1, 2, 1)
+	got = pollAll(t, r)
+	require.Len(t, got, 1)
+	assert.Equal(t, []uint64{0, 0, 0, 0, 1}, got[0].delta, "its bucket arrives in the next poll")
+}

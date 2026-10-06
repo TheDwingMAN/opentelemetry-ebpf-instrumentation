@@ -75,7 +75,7 @@ func TestFsAccumFamilyReadsTheKernelMap(t *testing.T) {
 	require.NoError(t, err)
 	features := export.FeatureStorageFS
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
-		ebpf.FsAggregation{Enabled: true, BoundsNs: layout.KernelBounds()}, ebpf.NFSConfig{}, nil)
+		ebpf.FsAggregation{Enabled: true, BoundsNs: layout.KernelBounds()}, ebpf.NFSConfig{}, nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 	require.NotNil(t, fetcher.FsAccumMap(), "the aggregation map exists in AGG mode")

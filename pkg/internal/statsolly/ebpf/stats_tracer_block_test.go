@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/obi/pkg/export"
+	"go.opentelemetry.io/obi/pkg/export/attributes"
 )
 
 // StatsBlockIo is maintained by hand; the bpf2go type is generated from
@@ -37,33 +38,41 @@ func TestPlanBlockLoad(t *testing.T) {
 	const sysfsEntries = 5000
 	sysfs := func() uint32 { return sysfsEntries }
 	noSysfs := func() uint32 {
-		t.Fatal("sysfs must only be read for the raw tracepoints")
+		t.Fatal("sysfs must only be read for the request-keyed programs")
 		return 0
 	}
+	requestKeyed := storagePlan{
+		stages: []blockLoadStage{{sets: []blockProgramSet{
+			tpBtfBlockPrograms(blockTracepointLayout{}), rawTpBlockPrograms(blockTracepointLayout{}),
+		}}},
+		layout: blockTracepointLayout{completeErrno: true},
+	}
+	classic := storagePlan{stages: []blockLoadStage{{sets: []blockProgramSet{classicBlockPrograms()}}}}
 
 	t.Run("block off: every block map shrinks", func(t *testing.T) {
-		plan := planBlockLoad(false, false, false, noSysfs)
+		plan := planBlockLoad(false, storagePlan{}, false, false, noSysfs)
 		assert.Equal(t, map[string]uint32{
 			StatsMapBlkRqInflight:       unusedMapEntries,
 			StatsMapBlkRqInflightSector: unusedMapEntries,
-			StatsMapBlkInsert:           unusedMapEntries,
 			StatsMapBlkDevState:         unusedMapEntries,
 		}, plan.mapEntries)
 		assert.False(t, plan.wantQueueDepth)
 	})
 
-	t.Run("raw tracepoints: request map sized from sysfs, sector map idle", func(t *testing.T) {
-		plan := planBlockLoad(true, true, false, sysfs)
+	t.Run("request-keyed programs: request map sized from sysfs, sector map idle", func(t *testing.T) {
+		plan := planBlockLoad(true, requestKeyed, true, false, sysfs)
 		assert.Equal(t, map[string]uint32{
 			StatsMapBlkRqInflight:       sysfsEntries,
 			StatsMapBlkRqInflightSector: unusedMapEntries,
 			StatsMapBlkDevState:         unusedMapEntries,
 		}, plan.mapEntries)
 		assert.False(t, plan.wantQueueDepth)
+		assert.True(t, plan.wantQueue)
+		assert.True(t, plan.completeErrno, "the errno layout reaches the constants")
 	})
 
 	t.Run("classic tracepoints: request map idle, sector map keeps its size", func(t *testing.T) {
-		plan := planBlockLoad(true, false, false, noSysfs)
+		plan := planBlockLoad(true, classic, true, false, noSysfs)
 		assert.Equal(t, map[string]uint32{
 			StatsMapBlkRqInflight: unusedMapEntries,
 			StatsMapBlkDevState:   unusedMapEntries,
@@ -71,7 +80,7 @@ func TestPlanBlockLoad(t *testing.T) {
 	})
 
 	t.Run("queue depth keeps the per-device counter map", func(t *testing.T) {
-		plan := planBlockLoad(true, true, true, sysfs)
+		plan := planBlockLoad(true, requestKeyed, true, true, sysfs)
 		assert.NotContains(t, plan.mapEntries, StatsMapBlkDevState)
 		assert.True(t, plan.wantQueueDepth)
 	})
@@ -79,10 +88,12 @@ func TestPlanBlockLoad(t *testing.T) {
 
 // Every map the plan sizes must exist in the collection, or every load fails.
 func TestBlockLoadPlanMapsExist(t *testing.T) {
+	requestKeyed := storagePlan{stages: []blockLoadStage{{sets: []blockProgramSet{rawTpBlockPrograms(blockTracepointLayout{})}}}}
+	classic := storagePlan{stages: []blockLoadStage{{sets: []blockProgramSet{classicBlockPrograms()}}}}
 	for _, plan := range []blockLoadPlan{
-		planBlockLoad(false, false, false, nil),
-		planBlockLoad(true, true, false, func() uint32 { return minBlockInflightEntries }),
-		planBlockLoad(true, false, false, nil),
+		planBlockLoad(false, storagePlan{}, false, false, nil),
+		planBlockLoad(true, requestKeyed, false, false, func() uint32 { return minBlockInflightEntries }),
+		planBlockLoad(true, classic, false, false, nil),
 	} {
 		spec, err := LoadStats()
 		require.NoError(t, err)
@@ -170,4 +181,34 @@ func TestBlockEmitKinds(t *testing.T) {
 	} {
 		assert.Equal(t, tc.want, blockEmitKinds(tc.features), "features %b", tc.features)
 	}
+}
+
+// blockWantPartition derives blk_want_part from attributes.select: on by
+// default, nothing in disk's statsDiskAttributes selects obi.disk.partition
+// (it is opt-in), and selecting it on just one of its metrics is enough.
+func TestBlockWantPartition(t *testing.T) {
+	selector := func(t *testing.T, sel attributes.Selection) *attributes.AttrSelector {
+		t.Helper()
+		p, err := attributes.NewAttrSelector(attributes.UndefinedGroup, &attributes.SelectorConfig{SelectionCfg: sel})
+		require.NoError(t, err)
+		return p
+	}
+
+	t.Run("default attribute set never selects it", func(t *testing.T) {
+		assert.False(t, blockWantPartition(selector(t, nil)))
+	})
+
+	t.Run("selected on one metric is enough", func(t *testing.T) {
+		sel := attributes.Selection{
+			"obi.stat.disk.io": attributes.InclusionLists{Include: []string{"obi.disk.partition"}},
+		}
+		assert.True(t, blockWantPartition(selector(t, sel)))
+	})
+
+	t.Run("selected on a metric that does not carry it changes nothing", func(t *testing.T) {
+		sel := attributes.Selection{
+			"obi.stat.disk.queue.depth": attributes.InclusionLists{Include: []string{"obi.disk.partition"}},
+		}
+		assert.False(t, blockWantPartition(selector(t, sel)))
+	})
 }

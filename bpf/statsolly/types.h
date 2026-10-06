@@ -71,6 +71,35 @@ typedef struct block_io {
 // Force struct into the ELF for automatic creation of Golang struct
 const block_io_t *unused_block_io __attribute__((unused));
 
+// Why a stats program could not count something: the index of its counter in
+// the stats_drops map (maps/stats_drops.h).
+enum stats_drop : u8 {
+    // blk_rq_inflight was full at an issue: the request goes unmeasured.
+    k_stats_drop_blk_inflight = 0,
+    // blk_agg or blk_agg_exp was full at a completion.
+    k_stats_drop_blk_agg = 1,
+    // blk_q_agg or blk_q_agg_exp was full at a completion.
+    k_stats_drop_blk_queue_agg = 2,
+    // blk_bio_inflight was full when a bio was queued on a tracked volume: the
+    // bio goes unmeasured.
+    k_stats_drop_blk_bio_inflight = 3,
+    // blk_cg_agg was full at the completion of a read or write
+    // (storage_block_pod): its pod counters miss it.
+    k_stats_drop_blk_cg_agg = 4,
+    k_stats_drop_max = 16,
+};
+
+// How block completions reach userspace, a load-time constant.
+enum blk_emit : u8 {
+    // One ring buffer event per completed request.
+    k_blk_emit_ringbuf = 0,
+    // Counted in the blk_agg maps, which userspace reads.
+    k_blk_emit_agg = 1,
+};
+
+const enum stats_drop *unused_stats_drop __attribute__((unused));
+const enum blk_emit *unused_blk_emit __attribute__((unused));
+
 enum fs_type : u8 {
     fs_type_unknown = 0,
     fs_type_nfs = 1,

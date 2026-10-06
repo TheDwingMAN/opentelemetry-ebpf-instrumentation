@@ -183,6 +183,19 @@ type Stat struct {
 	CommonAttrs pipe.CommonAttrs
 }
 
+// PendingPoint is one decorated obi.stat.disk.pending_operations
+// observation: Stat carries the attributes an exporter's getters read (the
+// same minimal Stat blockStat builds for the aggregated block metrics),
+// Value the live count a userspace snapshot of the in-flight map gave it, or
+// 0 for a device recently active but idle right now. It lives here, rather
+// than next to the Reader that builds it (pkg/internal/statsolly/stats), so
+// an exporter package can take a snapshot function of this type without
+// importing that package back.
+type PendingPoint struct {
+	Stat  *Stat
+	Value uint64
+}
+
 type TCPRtt struct {
 	SrttUs uint32 `json:"srtt_us"`
 	Role   uint8  `json:"role"`
@@ -211,6 +224,10 @@ type BlockIo struct {
 	Bytes     uint64 `json:"bytes"`
 	Error     int32  `json:"error"`
 	Inflight  uint32 `json:"inflight"`
+	// PartDev is the partition's dev_t, read only when obi.disk.partition is
+	// selected; 0 for whole-disk I/O, flush requests and an unresolved
+	// partition alike.
+	PartDev uint32 `json:"part_dev"`
 }
 
 // IsReadWrite reports whether b is a read or a write request: the only ones

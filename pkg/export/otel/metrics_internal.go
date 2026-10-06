@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -55,6 +56,7 @@ type InternalMetricsReporter struct {
 
 	bpfStorageDrops           instrument.Int64Counter
 	bpfStorageRecursionMisses instrument.Int64Counter
+	bpfMapInsertFailures      *totalCounter
 
 	queueCapacityRatio instrument.Float64Gauge
 
@@ -225,6 +227,15 @@ func NewInternalMetricsReporter(ctx context.Context, ctxInfo *global.ContextInfo
 		return nil, err
 	}
 
+	bpfMapInsertFailures, err := meter.Int64Counter(
+		internalNames.BpfMapInsertFailures.OTEL,
+		instrument.WithDescription("Inserts into a BPF map that failed because the map was full: what its programs could not count"),
+		instrument.WithUnit(internalNames.BpfMapInsertFailures.Unit),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	queueCapacityRatio, err := meter.Float64Gauge(
 		internalNames.QueueCapacityRatio.OTEL,
 		instrument.WithDescription("Ratio [0-1] between the unread messages of an internal Go channel and its total capacity"),
@@ -253,6 +264,7 @@ func NewInternalMetricsReporter(ctx context.Context, ctxInfo *global.ContextInfo
 		bpfIgnoredPacketCount:            bpfIgnoredPacketCount,
 		bpfStorageDrops:                  bpfStorageDrops,
 		bpfStorageRecursionMisses:        bpfStorageRecursionMisses,
+		bpfMapInsertFailures:             newTotalCounter(ctx, bpfMapInsertFailures, string(attr.BpfMapName)),
 		queueCapacityRatio:               queueCapacityRatio,
 		internalAttrs:                    internalAttrs,
 	}, nil
@@ -424,6 +436,38 @@ func (p *InternalMetricsReporter) BpfStorageDrops(reason string, dropped uint64)
 
 func (p *InternalMetricsReporter) BpfStorageRecursionMisses(program string, misses uint64) {
 	p.bpfStorageRecursionMisses.Add(p.ctx, int64(misses), instrument.WithAttributes(attribute.String(string(attr.BpfProbeName), program)))
+}
+
+func (p *InternalMetricsReporter) BpfMapInsertFailures(mapName string, total uint64) {
+	p.bpfMapInsertFailures.set(mapName, total)
+}
+
+// totalCounter is a counter, with one attribute, fed with the totals of a
+// counter kept elsewhere (a kernel counter) rather than with increments.
+type totalCounter struct {
+	ctx     context.Context
+	counter instrument.Int64Counter
+	key     string
+	mu      sync.Mutex
+	last    map[string]uint64
+}
+
+func newTotalCounter(ctx context.Context, counter instrument.Int64Counter, key string) *totalCounter {
+	return &totalCounter{ctx: ctx, counter: counter, key: key, last: map[string]uint64{}}
+}
+
+// set adds what total counted since the previous call. A total below the
+// previous one restarted from zero (its map or program was recreated), so all
+// of it is new.
+func (c *totalCounter) set(value string, total uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	last := c.last[value]
+	if total < last {
+		last = 0
+	}
+	c.counter.Add(c.ctx, int64(total-last), sanitizedAttributes(attribute.String(c.key, value)))
+	c.last[value] = total
 }
 
 func (p *InternalMetricsReporter) QueueBufferUtilization(subscriber string, ratio float64) {
