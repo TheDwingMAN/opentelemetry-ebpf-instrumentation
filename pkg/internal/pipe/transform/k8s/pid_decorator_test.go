@@ -297,3 +297,70 @@ func TestPIDMetadataDecorator_SharedVolumeKeepsVolumeButNotPod(t *testing.T) {
 	assert.Equal(t, "obi-nfs", got[0].Metadata[attr.K8sStorageClassName])
 	assert.Equal(t, "vol-ns", got[0].Metadata[attr.K8sNamespaceName], "the claim's namespace is still certain")
 }
+
+// With storage metrics alone nothing registers processes in the Store, so a
+// process on a shared volume, where the mount cannot name the pod, is still
+// attributed through its cgroup.
+func TestPIDMetadataDecorator_UntrackedPIDResolvedFromCgroup(t *testing.T) {
+	originalInfoForPID := kube.InfoForPID
+	defer func() { kube.InfoForPID = originalInfoForPID }()
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	store := newPIDTestStore(t)
+	const hostPID = app.PID(4321)
+
+	reads := 0
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		reads++
+		if pid == hostPID {
+			return container.Info{ContainerID: "cid-writer", PIDNamespace: 7000}, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	for _, podMeta := range []*informer.ObjectMeta{
+		{
+			Name: "first-mounter", Namespace: "vol-ns", Kind: "Pod",
+			Pod: &informer.PodInfo{Uid: "pod-uid-1"},
+		},
+		{
+			Name: "writer", Namespace: "vol-ns", Kind: "Pod",
+			Pod: &informer.PodInfo{
+				Uid:        "pod-uid-2",
+				Containers: []*informer.ContainerInfo{{Id: "cid-writer", Name: "io"}},
+			},
+		},
+	} {
+		require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
+	}
+	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-1", PVName: "pvc-shared", VolumeType: "nfs", Shared: true}, true
+	}
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	// Two items from the same process: the cgroup is read once.
+	input.Send([]*pidTestItem{
+		{pidNs: 7000, hostPID: uint32(hostPID), sDev: 42, hasPID: true},
+		{pidNs: 7000, hostPID: uint32(hostPID), sDev: 42, hasPID: true},
+	})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 2)
+	for _, item := range got {
+		assert.Equal(t, "writer", item.Metadata[attr.K8sPodName])
+		assert.Equal(t, "vol-ns", item.Metadata[attr.K8sNamespaceName])
+		assert.Equal(t, "io", item.Metadata[attr.K8sContainerName])
+		assert.Equal(t, "pvc-shared", item.Metadata[attr.K8sPersistentVolumeName])
+	}
+	assert.Equal(t, 1, reads, "the container ID is cached per PID")
+}
