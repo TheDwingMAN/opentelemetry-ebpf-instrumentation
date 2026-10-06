@@ -427,7 +427,10 @@ func TestNFSStats(t *testing.T) {
 func TestPodVolumeStats(t *testing.T) {
 	volumes := make(chan []*ebpf.Stat, 10)
 	defaultPodVolumesTracer := newPodVolumesTracer
-	t.Cleanup(func() { newPodVolumesTracer = defaultPodVolumesTracer })
+	t.Cleanup(func() {
+		newPodVolumesTracer = defaultPodVolumesTracer
+		close(volumes)
+	})
 	newPodVolumesTracer = func(_ context.Context, _ *Stats, out *msg.Queue[[]*ebpf.Stat]) (swarm.RunFunc, error) {
 		return func(ctx context.Context) {
 			defer out.MarkCloseable()
@@ -464,7 +467,10 @@ func TestPodVolumeStats(t *testing.T) {
 func fakeDiskVolumesTracer(t *testing.T) chan<- []*ebpf.Stat {
 	volumes := make(chan []*ebpf.Stat, 10)
 	defaultDiskVolumesTracer := newDiskVolumesTracer
-	t.Cleanup(func() { newDiskVolumesTracer = defaultDiskVolumesTracer })
+	t.Cleanup(func() {
+		newDiskVolumesTracer = defaultDiskVolumesTracer
+		close(volumes)
+	})
 	newDiskVolumesTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 		return func(ctx context.Context) {
 			defer out.MarkCloseable()
@@ -589,7 +595,10 @@ func startDiskPipeline(t *testing.T, features export.Features, configure ...func
 
 	diskEvents := make(chan []*ebpf.Stat, 10)
 	defaultDiskTracer := newDiskTracer
-	t.Cleanup(func() { newDiskTracer = defaultDiskTracer })
+	t.Cleanup(func() {
+		newDiskTracer = defaultDiskTracer
+		close(diskEvents)
+	})
 	newDiskTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 		return func(ctx context.Context) {
 			defer out.MarkCloseable()
@@ -599,7 +608,11 @@ func startDiskPipeline(t *testing.T, features export.Features, configure ...func
 		}
 	}
 	ringBuf := make(chan []*ebpf.Stat)
-	t.Cleanup(func() { close(ringBuf) })
+	defaultRingBufTracer := newRingBufTracer
+	t.Cleanup(func() {
+		newRingBufTracer = defaultRingBufTracer
+		close(ringBuf)
+	})
 	newRingBufTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 		return func(ctx context.Context) {
 			defer out.MarkCloseable()
