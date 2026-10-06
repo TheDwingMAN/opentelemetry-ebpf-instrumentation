@@ -6,7 +6,6 @@ package statagg // import "go.opentelemetry.io/obi/pkg/internal/statsolly/statag
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -23,8 +22,8 @@ import (
 const (
 	// DefaultCgroupScanInterval is the period of the background scan.
 	DefaultCgroupScanInterval = 30 * time.Second
-	// DefaultCgroupRescanInterval rate-limits the scans that a lookup of an
-	// unknown cgroup id triggers.
+	// DefaultCgroupRescanInterval rate-limits the background scans that a
+	// lookup of an unknown cgroup id asks for.
 	DefaultCgroupRescanInterval = time.Second
 	// DefaultCgroupTombstoneTTL is how long a removed cgroup keeps its pod.
 	// Its id keeps showing up on new I/O after removal (writeback of the
@@ -32,6 +31,10 @@ const (
 	// removal), so this covers dirty_expire and that lag with margin.
 	DefaultCgroupTombstoneTTL = 10 * time.Minute
 )
+
+// rootCgroupID is the id of the cgroup v2 root, which holds kernel threads
+// (the issuers of most writeback, S0-d): no pod. Id 0 is no cgroup at all.
+const rootCgroupID = 1
 
 // The cgroup v2 hierarchy, as seen from the host or, when OBI's /sys is not
 // the host's, through PID 1's root.
@@ -72,19 +75,24 @@ type CgroupIdentity struct {
 // scope is the identity a directory passes down to its children.
 type scope struct {
 	CgroupIdentity
-	podOnly  bool
-	cgroupfs bool
+	// inKubepods is set under the kubelet's top-level cgroup: outside, no
+	// directory names a pod.
+	inKubepods bool
+	podOnly    bool
+	cgroupfs   bool
 }
 
 // child returns the identity of directory name under s.
 func (s scope) child(name string) scope {
 	switch {
+	case !s.inKubepods:
+		return s
 	case s.PodUID == "":
 		if m := systemdPodPattern.FindStringSubmatch(name); m != nil {
-			return scope{CgroupIdentity: CgroupIdentity{PodUID: strings.ReplaceAll(m[1], "_", "-")}}
+			return scope{CgroupIdentity: CgroupIdentity{PodUID: strings.ReplaceAll(m[1], "_", "-")}, inKubepods: true}
 		}
 		if m := cgroupfsPodPattern.FindStringSubmatch(name); m != nil {
-			return scope{CgroupIdentity: CgroupIdentity{PodUID: m[1]}, cgroupfs: true}
+			return scope{CgroupIdentity: CgroupIdentity{PodUID: m[1]}, inKubepods: true, cgroupfs: true}
 		}
 		return s
 	case s.ContainerID != "" || s.podOnly:
@@ -116,6 +124,18 @@ type cgroupEntry struct {
 // A cgroup's id is the inode of its directory, the value of
 // bpf_get_current_cgroup_id() and of a blkcg's kn->id (S0-d), so no file is
 // opened to read it. Removed cgroups are kept as tombstones for TombstoneTTL.
+//
+// Only Run and Scan walk the hierarchy: Lookup never does, so the families
+// that call it while their lock holds up scrapes are never slowed down by a
+// walk. An id Lookup does not know asks Run for a rescan and is answered
+// again once a scan that started after the question completed.
+//
+// The index walks the whole hierarchy of the first root that has the
+// kubelet's cgroup, so ids outside it (system.slice, user sessions) are
+// known to have no pod without a rescan. A node with no kubelet cgroup has no
+// pod anywhere: its scans complete with every id known to have none, and a
+// kubelet cgroup that appears later is found by the next scan.
+//
 // It is safe for concurrent use.
 type CgroupIndex struct {
 	roots          []string
@@ -124,6 +144,10 @@ type CgroupIndex struct {
 	tombstoneTTL   time.Duration
 	clock          func() time.Time
 	log            *slog.Logger
+	// walk returns the identity of every cgroup; a field for tests.
+	walk func() (map[uint64]CgroupIdentity, error)
+	// rescan asks Run for a scan; it holds at most one request.
+	rescan chan struct{}
 
 	// scanMu serializes scans; mu guards the fields below.
 	scanMu sync.Mutex
@@ -138,6 +162,8 @@ type CgroupIndex struct {
 	// completed (scans run one at a time).
 	started int
 	scans   int
+	// noKubepods is set while the last scan found no kubelet cgroup.
+	noKubepods bool
 }
 
 type askedID struct {
@@ -158,7 +184,7 @@ func WithCgroupClock(clock func() time.Time) CgroupIndexOption {
 	return func(x *CgroupIndex) { x.clock = clock }
 }
 
-// NewCgroupIndex returns an empty index; Scan or Run fill it.
+// NewCgroupIndex returns an empty index; Run fills it and keeps it current.
 func NewCgroupIndex(opts ...CgroupIndexOption) *CgroupIndex {
 	x := &CgroupIndex{
 		roots:          defaultCgroupRoots,
@@ -167,17 +193,20 @@ func NewCgroupIndex(opts ...CgroupIndexOption) *CgroupIndex {
 		tombstoneTTL:   DefaultCgroupTombstoneTTL,
 		clock:          time.Now,
 		log:            slog.With("component", "statagg.CgroupIndex"),
+		rescan:         make(chan struct{}, 1),
 		ids:            map[uint64]*cgroupEntry{},
 		asked:          map[uint64]askedID{},
 	}
+	x.walk = x.walkRoots
 	for _, opt := range opts {
 		opt(x)
 	}
 	return x
 }
 
-// Run scans the cgroup hierarchy now and every scan interval until ctx is
-// done.
+// Run scans the cgroup hierarchy now, every scan interval, and when a lookup
+// of an unknown id asks for it, until ctx is done. Without Run, an unknown
+// id stays unknown (final=false).
 func (x *CgroupIndex) Run(ctx context.Context) {
 	ticker := time.NewTicker(x.scanInterval)
 	defer ticker.Stop()
@@ -189,71 +218,69 @@ func (x *CgroupIndex) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-x.rescan:
 		}
 	}
 }
 
 // Lookup returns what the index knows of cgroup id: the identity of a live
-// cgroup, or of a removed one while its tombstone lasts. An id the index
-// does not know triggers a rescan, at most one per rescan interval. final is
-// false when the answer may still change: the id is unknown and no scan has
-// looked for it yet. An id that a scan made after the first lookup did not
-// find has, finally, no pod.
+// cgroup, or of a removed one while its tombstone lasts. It never walks the
+// hierarchy. An id the index does not know asks Run for a rescan, at most
+// one per rescan interval, and final is false until a scan that started
+// after the first lookup completes: an id that scan did not find has,
+// finally, no pod. Ids 0 and 1 (the root cgroup) have no pod.
 func (x *CgroupIndex) Lookup(id uint64) (identity CgroupIdentity, final bool) {
-	if identity, known, final := x.lookup(id); known || final {
-		return identity, final
+	if id <= rootCgroupID {
+		return CgroupIdentity{}, true
 	}
-	x.mu.Lock()
-	now := x.clock()
-	rescan := now.Sub(x.lastRescan) >= x.rescanInterval
-	if rescan {
-		x.lastRescan = now
-	}
-	x.mu.Unlock()
-	if !rescan {
-		return CgroupIdentity{}, false
-	}
-	if err := x.Scan(); err != nil {
-		x.log.Debug("can't rescan the cgroup hierarchy", "error", err)
-		return CgroupIdentity{}, false
-	}
-	identity, _, final = x.lookup(id)
-	return identity, final
-}
-
-func (x *CgroupIndex) lookup(id uint64) (identity CgroupIdentity, known, final bool) {
 	x.mu.RLock()
-	e, ok := x.ids[id]
+	e, known := x.ids[id]
 	asked, wasAsked := x.asked[id]
 	scans := x.scans
 	x.mu.RUnlock()
-	if ok {
-		return e.CgroupIdentity, true, true
+	switch {
+	case known:
+		return e.CgroupIdentity, true
+	case wasAsked && scans > asked.scans:
+		return CgroupIdentity{}, true
 	}
-	if wasAsked {
-		return CgroupIdentity{}, false, scans > asked.scans
-	}
+
 	x.mu.Lock()
-	if _, ok := x.asked[id]; !ok {
-		x.asked[id] = askedID{at: x.clock(), scans: x.started}
+	defer x.mu.Unlock()
+	// A scan may have completed since the read lock.
+	if e, known := x.ids[id]; known {
+		return e.CgroupIdentity, true
 	}
-	x.mu.Unlock()
-	return CgroupIdentity{}, false, false
+	now := x.clock()
+	if asked, wasAsked := x.asked[id]; !wasAsked {
+		x.asked[id] = askedID{at: now, scans: x.started}
+	} else if x.scans > asked.scans {
+		return CgroupIdentity{}, true
+	}
+	if now.Sub(x.lastRescan) >= x.rescanInterval {
+		x.lastRescan = now
+		select {
+		case x.rescan <- struct{}{}:
+		default: // a rescan is pending already
+		}
+	}
+	return CgroupIdentity{}, false
 }
 
-// Tombstoned reports whether id is a removed cgroup whose tombstone lasts: a
-// kernel key of that cgroup must not be deleted yet, or the next I/O charged
-// to it would create the key again with no labels.
+// Tombstoned reports whether id is a removed cgroup of a pod whose tombstone
+// lasts: a kernel key of that cgroup must not be deleted yet, or the next I/O
+// charged to it would create the key again with no labels.
 func (x *CgroupIndex) Tombstoned(id uint64) bool {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	e, ok := x.ids[id]
-	return ok && !e.removed.IsZero()
+	return ok && !e.removed.IsZero() && e.PodUID != ""
 }
 
-// Scan walks every level of the kubelet's cgroups and updates the index:
-// new cgroups are added, missing ones become tombstones, and tombstones and
-// unknown ids older than the tombstone TTL are forgotten.
+// Scan walks the cgroup hierarchy and updates the index: new cgroups are
+// added, missing ones become tombstones, and tombstones and unknown ids
+// older than the tombstone TTL are forgotten. Run calls it; it blocks for
+// the whole walk.
 func (x *CgroupIndex) Scan() error {
 	x.scanMu.Lock()
 	defer x.scanMu.Unlock()
@@ -295,30 +322,75 @@ func (x *CgroupIndex) Scan() error {
 	return nil
 }
 
-// walk returns the identity of every directory under the kubelet's
-// top-level cgroup, keyed by inode.
-func (x *CgroupIndex) walk() (map[uint64]CgroupIdentity, error) {
-	for _, root := range x.roots {
-		for _, top := range kubepodsDirs {
-			dir := filepath.Join(root, top)
-			info, err := os.Stat(dir)
-			if err != nil || !info.IsDir() {
-				continue
-			}
-			found := map[uint64]CgroupIdentity{}
-			if err := walkCgroup(dir, info, scope{}, found); err != nil {
-				return nil, err
-			}
-			return found, nil
-		}
+// walkRoots returns the identity of every directory of the first cgroup
+// root that has the kubelet's cgroup, keyed by inode: everything outside the
+// kubelet's cgroup has no pod. With no kubelet cgroup under any root, every
+// directory of the first root that exists has no pod, and with no root at
+// all the result is empty: either way the scan is complete.
+func (x *CgroupIndex) walkRoots() (map[uint64]CgroupIdentity, error) {
+	root, top := x.kubepodsRoot()
+	x.logNoKubepods(root, top)
+	found := map[uint64]CgroupIdentity{}
+	if root == "" {
+		return found, nil
 	}
-	return nil, fmt.Errorf("no kubepods cgroup under %v", x.roots)
+	info, err := os.Stat(root)
+	if err != nil {
+		// Unmounted since kubepodsRoot: nothing to walk.
+		return found, nil
+	}
+	kubepods := ""
+	if top != "" {
+		kubepods = filepath.Join(root, top)
+	}
+	if err := walkCgroup(root, info, scope{}, kubepods, found); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
-func walkCgroup(dir string, info fs.FileInfo, s scope, found map[uint64]CgroupIdentity) error {
+// kubepodsRoot returns the first root with a kubelet cgroup and that
+// cgroup's name, or else the first root that is a directory and "".
+func (x *CgroupIndex) kubepodsRoot() (root, top string) {
+	for _, r := range x.roots {
+		for _, t := range kubepodsDirs {
+			if isDir(filepath.Join(r, t)) {
+				return r, t
+			}
+		}
+	}
+	for _, r := range x.roots {
+		if isDir(r) {
+			return r, ""
+		}
+	}
+	return "", ""
+}
+
+func (x *CgroupIndex) logNoKubepods(root, top string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	missing := top == ""
+	if missing && !x.noKubepods {
+		x.log.Debug("no kubepods cgroup: no cgroup has a pod until the kubelet creates it", "roots", x.roots, "walked", root)
+	}
+	x.noKubepods = missing
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// walkCgroup records dir and its descendants in found; kubepods is the path
+// of the kubelet's cgroup, from which on directory names identify pods.
+func walkCgroup(dir string, info fs.FileInfo, s scope, kubepods string, found map[uint64]CgroupIdentity) error {
 	ino, ok := dirIno(info)
 	if !ok {
 		return errors.New("cgroup directory inodes are not available on this platform")
+	}
+	if !s.inKubepods && kubepods != "" && dir == kubepods {
+		s = scope{inKubepods: true}
 	}
 	found[ino] = s.CgroupIdentity
 
@@ -335,7 +407,7 @@ func walkCgroup(dir string, info fs.FileInfo, s scope, found map[uint64]CgroupId
 		if err != nil {
 			continue
 		}
-		if err := walkCgroup(filepath.Join(dir, e.Name()), childInfo, s.child(e.Name()), found); err != nil {
+		if err := walkCgroup(filepath.Join(dir, e.Name()), childInfo, s.child(e.Name()), kubepods, found); err != nil {
 			return err
 		}
 	}

@@ -6,9 +6,11 @@
 package statagg
 
 import (
+	"context"
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -88,16 +90,32 @@ var cgroupfsFixture = []cgroupFixture{
 	},
 }
 
-// makeTree creates the fixture's directories under a fresh root, plus a
-// system.slice outside kubepods, and returns the root.
+// Cgroups outside kubepods that makeTree creates.
+var outsideKubepods = []string{"system.slice", "system.slice/crio.service", "user.slice/user-1000.slice/session-3.scope"}
+
+// makeTree creates the fixture's directories under a fresh root, plus
+// system and user slices outside kubepods, and returns the root.
 func makeTree(t *testing.T, fixture []cgroupFixture) string {
 	t.Helper()
 	root := t.TempDir()
 	for _, f := range fixture {
 		require.NoError(t, os.MkdirAll(filepath.Join(root, f.path), 0o755))
 	}
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "system.slice/crio.service"), 0o755))
+	for _, dir := range outsideKubepods {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, dir), 0o755))
+	}
 	return root
+}
+
+// rescanAsked reports whether a lookup asked Run for a rescan, and takes
+// the request.
+func rescanAsked(x *CgroupIndex) bool {
+	select {
+	case <-x.rescan:
+		return true
+	default:
+		return false
+	}
 }
 
 func inoOf(t *testing.T, path string) uint64 {
@@ -119,23 +137,79 @@ func TestCgroupIndex_EveryLevelResolves(t *testing.T) {
 				assert.Equal(t, f.want, got, f.path)
 			}
 
-			// Outside kubepods: never indexed, so no pod, once a scan
-			// looked for it.
-			got, final := x.Lookup(inoOf(t, filepath.Join(root, "system.slice/crio.service")))
-			assert.True(t, final)
-			assert.Equal(t, CgroupIdentity{}, got)
+			// Outside kubepods, and the root: known to have no pod,
+			// without a rescan.
+			for _, dir := range append([]string{"."}, outsideKubepods...) {
+				got, final := x.Lookup(inoOf(t, filepath.Join(root, dir)))
+				assert.True(t, final, dir)
+				assert.Equal(t, CgroupIdentity{}, got, dir)
+			}
+			assert.False(t, rescanAsked(x), "no lookup asked for a rescan")
 		})
 	}
 }
 
+func TestCgroupIndex_RootAndNoCgroupNeedNoScan(t *testing.T) {
+	x := NewCgroupIndex(WithCgroupRoots(t.TempDir()))
+	for _, id := range []uint64{0, rootCgroupID} {
+		got, final := x.Lookup(id)
+		assert.True(t, final, "id %d", id)
+		assert.Equal(t, CgroupIdentity{}, got)
+	}
+	assert.False(t, rescanAsked(x))
+	assert.Empty(t, x.asked)
+}
+
 func TestCgroupIndex_FallsBackToTheHostRoot(t *testing.T) {
+	// OBI's own cgroup namespace: a hierarchy without kubepods.
+	own := makeTree(t, nil)
 	root := makeTree(t, crioFixture)
-	x := NewCgroupIndex(WithCgroupRoots(filepath.Join(t.TempDir(), "no-kubepods"), root))
+	x := NewCgroupIndex(WithCgroupRoots(filepath.Join(t.TempDir(), "missing"), own, root))
 	require.NoError(t, x.Scan())
 	got, _ := x.Lookup(inoOf(t, filepath.Join(root, bestEffortPod)))
 	assert.Equal(t, bestEffortUID, got.PodUID)
+}
 
-	require.Error(t, NewCgroupIndex(WithCgroupRoots(t.TempDir())).Scan(), "no kubepods anywhere")
+// A node without Kubernetes, or before the kubelet creates its cgroup:
+// every scan completes, so unknown ids become final without a pod and stop
+// asking for rescans, and a kubelet cgroup created later is found.
+func TestCgroupIndex_NoKubepods(t *testing.T) {
+	root := makeTree(t, nil)
+	x := NewCgroupIndex(WithCgroupRoots(root))
+	require.NoError(t, x.Scan())
+
+	got, final := x.Lookup(inoOf(t, filepath.Join(root, "system.slice/crio.service")))
+	assert.True(t, final, "walked although there is no kubepods")
+	assert.Equal(t, CgroupIdentity{}, got)
+
+	const unknown = 1 << 40
+	_, final = x.Lookup(unknown)
+	assert.False(t, final)
+	require.True(t, rescanAsked(x))
+	require.NoError(t, x.Scan())
+	got, final = x.Lookup(unknown)
+	assert.True(t, final, "the scan completed without kubepods: no pod")
+	assert.Equal(t, CgroupIdentity{}, got)
+	assert.False(t, rescanAsked(x), "and no more rescans")
+
+	// The kubelet starts.
+	for _, f := range crioFixture {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, f.path), 0o755))
+	}
+	require.NoError(t, x.Scan())
+	got, final = x.Lookup(inoOf(t, filepath.Join(root, burstablePod)))
+	assert.True(t, final)
+	assert.Equal(t, burstableUID, got.PodUID)
+}
+
+func TestCgroupIndex_NoCgroupHierarchy(t *testing.T) {
+	x := NewCgroupIndex(WithCgroupRoots(filepath.Join(t.TempDir(), "missing")))
+	require.NoError(t, x.Scan(), "nothing to walk is a complete scan")
+	_, final := x.Lookup(1 << 40)
+	assert.False(t, final)
+	require.NoError(t, x.Scan())
+	_, final = x.Lookup(1 << 40)
+	assert.True(t, final)
 }
 
 func TestCgroupIndex_TombstonesLastTenMinutes(t *testing.T) {
@@ -165,12 +239,36 @@ func TestCgroupIndex_TombstonesLastTenMinutes(t *testing.T) {
 	clock.Advance(2 * time.Second)
 	require.NoError(t, x.Scan())
 	assert.False(t, x.Tombstoned(leaf))
+	_, final = x.Lookup(leaf)
+	assert.False(t, final, "forgotten: unknown until a rescan")
+	require.True(t, rescanAsked(x))
+	require.NoError(t, x.Scan())
 	got, final = x.Lookup(leaf)
 	assert.True(t, final)
 	assert.Equal(t, CgroupIdentity{}, got, "an expired tombstone has no pod")
 }
 
-func TestCgroupIndex_UnknownIDTriggersRateLimitedRescan(t *testing.T) {
+// Only a pod's cgroups hold their keys back: a removed cgroup outside
+// kubepods has no labels to lose.
+func TestCgroupIndex_NoTombstoneWithoutAPod(t *testing.T) {
+	root := makeTree(t, crioFixture)
+	x := NewCgroupIndex(WithCgroupRoots(root))
+	require.NoError(t, x.Scan())
+	service := filepath.Join(root, "system.slice/crio.service")
+	qos := filepath.Join(root, "kubepods.slice/kubepods-besteffort.slice")
+	ids := []uint64{inoOf(t, service), inoOf(t, qos)}
+	require.NoError(t, os.Remove(service))
+	require.NoError(t, os.RemoveAll(qos))
+	require.NoError(t, x.Scan())
+	for _, id := range ids {
+		got, final := x.Lookup(id)
+		assert.True(t, final)
+		assert.Equal(t, CgroupIdentity{}, got)
+		assert.False(t, x.Tombstoned(id))
+	}
+}
+
+func TestCgroupIndex_UnknownIDAsksForARateLimitedRescan(t *testing.T) {
 	root := makeTree(t, crioFixture)
 	clock := newFakeClock()
 	x := NewCgroupIndex(WithCgroupRoots(root), WithCgroupClock(clock.Now))
@@ -184,22 +282,32 @@ func TestCgroupIndex_UnknownIDTriggersRateLimitedRescan(t *testing.T) {
 	}
 	first := newScope("1111111111111111111111111111111111111111111111111111111111111111")
 	got, final := x.Lookup(first)
-	assert.True(t, final)
-	assert.Equal(t, "1111111111111111111111111111111111111111111111111111111111111111", got.ContainerID,
-		"a container created after the last scan is found by a rescan")
-	assert.Equal(t, 2, x.scans)
+	assert.False(t, final, "created after the last scan: ask again later")
+	assert.Equal(t, CgroupIdentity{}, got)
+	assert.Equal(t, 1, x.scans, "the lookup did not scan")
+	require.True(t, rescanAsked(x), "it asked Run for a rescan")
 
 	second := newScope("2222222222222222222222222222222222222222222222222222222222222222")
-	got, final = x.Lookup(second)
-	assert.False(t, final, "within a second of the last rescan: no scan, ask again later")
-	assert.Equal(t, CgroupIdentity{}, got)
-	assert.Equal(t, 2, x.scans)
+	_, final = x.Lookup(second)
+	assert.False(t, final)
+	assert.False(t, rescanAsked(x), "within a second of the last request: no other")
 
+	// Run's rescan.
+	require.NoError(t, x.Scan())
+	for id, ctr := range map[uint64]string{
+		first:  "1111111111111111111111111111111111111111111111111111111111111111",
+		second: "2222222222222222222222222222222222222222222222222222222222222222",
+	} {
+		got, final = x.Lookup(id)
+		assert.True(t, final)
+		assert.Equal(t, CgroupIdentity{PodUID: bestEffortUID, ContainerID: ctr}, got)
+	}
+
+	third := newScope("3333333333333333333333333333333333333333333333333333333333333333")
 	clock.Advance(DefaultCgroupRescanInterval)
-	got, final = x.Lookup(second)
-	assert.True(t, final)
-	assert.Equal(t, bestEffortUID, got.PodUID)
-	assert.Equal(t, 3, x.scans)
+	_, final = x.Lookup(third)
+	assert.False(t, final)
+	assert.True(t, rescanAsked(x), "a second later: another request")
 }
 
 func TestCgroupIndex_NeverSeenID(t *testing.T) {
@@ -210,15 +318,97 @@ func TestCgroupIndex_NeverSeenID(t *testing.T) {
 
 	// A cgroup that lived only between two scans.
 	const gone = 1 << 40
+	_, final := x.Lookup(gone)
+	assert.False(t, final)
+	require.True(t, rescanAsked(x))
+	require.NoError(t, x.Scan())
+
 	got, final := x.Lookup(gone)
 	assert.True(t, final, "the rescan did not find it: final, without a pod")
 	assert.Equal(t, CgroupIdentity{}, got)
-
-	scans := x.scans
-	got, final = x.Lookup(gone)
+	clock.Advance(time.Minute)
+	_, final = x.Lookup(gone)
 	assert.True(t, final)
-	assert.Equal(t, CgroupIdentity{}, got)
-	assert.Equal(t, scans, x.scans, "an id known to be gone triggers no more rescans")
+	assert.False(t, rescanAsked(x), "an id known to be gone asks for no more rescans")
+}
+
+// A scan that started before the first lookup of an id may have read the
+// hierarchy before the cgroup existed: only a later one makes it final.
+func TestCgroupIndex_ScanRunningAtTheLookupIsNotEnough(t *testing.T) {
+	root := makeTree(t, crioFixture)
+	x := NewCgroupIndex(WithCgroupRoots(root))
+	walking, release := make(chan struct{}), make(chan struct{})
+	x.walk = func() (map[uint64]CgroupIdentity, error) {
+		close(walking)
+		<-release
+		return x.walkRoots()
+	}
+	done := make(chan error)
+	go func() { done <- x.Scan() }()
+	<-walking
+
+	const gone = 1 << 40
+	_, final := x.Lookup(gone)
+	assert.False(t, final)
+	close(release)
+	require.NoError(t, <-done)
+	_, final = x.Lookup(gone)
+	assert.False(t, final, "that scan started before the lookup")
+
+	x.walk = x.walkRoots
+	require.NoError(t, x.Scan())
+	_, final = x.Lookup(gone)
+	assert.True(t, final)
+}
+
+// Lookups run under a family's lock, which scrapes wait on: however long a
+// walk takes, no lookup waits for it, and Run answers them once it is done.
+func TestCgroupIndex_LookupNeverWaitsForAWalk(t *testing.T) {
+	root := makeTree(t, crioFixture)
+	x := NewCgroupIndex(WithCgroupRoots(root))
+	leaf := inoOf(t, filepath.Join(root, bestEffortPod, "crio-"+bestEffortCtr+".scope/container"))
+	var walks atomic.Int32
+	release := make(chan struct{})
+	x.walk = func() (map[uint64]CgroupIdentity, error) {
+		walks.Add(1)
+		<-release
+		return x.walkRoots()
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	ran := make(chan struct{})
+	go func() { defer close(ran); x.Run(ctx) }()
+	defer func() {
+		cancel()
+		// Run may be blocked in a walk.
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		<-ran
+	}()
+	require.Eventually(t, func() bool { return walks.Load() == 1 }, 5*time.Second, time.Millisecond)
+
+	lookups := make(chan struct{})
+	go func() {
+		defer close(lookups)
+		for i := range 1000 {
+			_, final := x.Lookup(leaf)
+			assert.False(t, final, "the first scan is still walking")
+			x.Lookup(uint64(1<<41 + i))
+		}
+	}()
+	select {
+	case <-lookups:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a lookup waited for the walk")
+	}
+
+	close(release)
+	require.Eventually(t, func() bool {
+		got, final := x.Lookup(leaf)
+		return final && got.ContainerID == bestEffortCtr
+	}, 5*time.Second, time.Millisecond, "Run's scans answer the lookups")
 }
 
 // Step 21 deletes a cgroup's kernel keys only when they are idle and the
