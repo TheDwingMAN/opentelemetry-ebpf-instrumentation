@@ -127,6 +127,61 @@ To add a new metric, follow these guidelines:
 
 12. Register the metric in the schema registry: add a `metric.*` entry in [schemas/obi/groups/stats.yaml](../schemas/obi/groups/stats.yaml).
 
+### Storage metrics
+
+Storage metrics have two independent layers: block-layer I/O from the `block_rq_*` tracepoints ([bpf/statsolly/blk_io.c](../bpf/statsolly/blk_io.c)), and filesystem-layer I/O from `file_operations` probes on nfs/ceph/cifs/fuse/ext4/xfs/btrfs ([bpf/statsolly/fs_io.c](../bpf/statsolly/fs_io.c)).
+
+| Metric (OTel / Prometheus) | Instrument | Unit | Attributes | Feature flag |
+|---|---|---|---|---|
+| `obi.stat.disk.operation.duration` / `obi_stat_disk_operation_duration_seconds` | histogram | `s` | `system.device`, `disk.io.direction` | `storage_block_duration` |
+| `obi.stat.disk.io` / `obi_stat_disk_io_bytes_total` | counter | `By` | `system.device`, `disk.io.direction` | `storage_block_io` |
+| `obi.stat.disk.queue.duration` / `obi_stat_disk_queue_duration_seconds` | histogram | `s` | `system.device`, `disk.io.direction` | `storage_block_queue` |
+| `obi.stat.disk.queue.depth` / `obi_stat_disk_queue_depth` | histogram | `{operation}` | `system.device` | `storage_block_queue` |
+| `obi.stat.disk.operation.errors` / `obi_stat_disk_operation_errors_total` | counter | `{error}` | `system.device`, `disk.io.direction`, `error.type` | `storage_block_errors` |
+| `obi.stat.fs.operation.duration` / `obi_stat_fs_operation_duration_seconds` | histogram | `s` | `system.filesystem.type`, `fs.operation`, + pod/PV/PVC/storage-class (below) | `storage_fs_duration` |
+| `obi.stat.fs.io` / `obi_stat_fs_io_bytes_total` | counter | `By` | `system.filesystem.type`, `fs.operation`, + pod/PV/PVC/storage-class (below) | `storage_fs_io` |
+| `obi.stat.fs.operation.errors` / `obi_stat_fs_operation_errors_total` | counter | `{error}` | `system.filesystem.type`, `fs.operation`, `error.type`, + pod/PV/PVC/storage-class (below) | `storage_fs_errors` |
+
+`storage_block` and `storage_fs` are umbrella flags that enable every sub-metric of their layer at once; there is no single umbrella flag covering both layers ([pkg/export/feature.go](../pkg/export/feature.go)). `fs.operation` is `read`, `write` or `fsync`. `disk.io.direction` is `read` or `write` (a block-layer discard folds into `read`). `system.filesystem.type` is one of `nfs`, `ceph`, `cifs`, `fuse`, `ext4`, `xfs`, `btrfs`, identified by which probe fired, not by inspecting the event.
+
+`obi.stat.disk.queue.duration` shares its bucket boundaries with `obi.stat.disk.operation.duration` (`Buckets.StatDiskOperationDurationHistogram`); `obi.stat.disk.queue.depth` and `obi.stat.fs.operation.duration` each have their own (`Buckets.StatDiskQueueDepthHistogram`, `Buckets.StatFsOperationDurationHistogram`) — see [pkg/export/bucket.go](../pkg/export/bucket.go).
+
+#### Node-wide vs pod-attributed
+
+Block metrics come from the request-queue tracepoints (`block_rq_insert`/`block_rq_issue`/`block_rq_complete`), which see the device and the request but not the process that issued it. They are node-wide: no pod, namespace, or PV/PVC attribute is ever attached, only `system.device` and `disk.io.direction`.
+
+Filesystem metrics come from probes on each filesystem's own `file_operations` read/write/fsync implementation, which runs in the calling process's context, so they carry the same `k8s.pod.name` / `k8s.namespace.name` / `k8s.container.name` (plus owner, node and cluster) attributes AppO11y metrics use, plus `k8s.persistentvolume.name`, `k8s.persistentvolumeclaim.name` and `k8s.storageclass.name` once the filesystem's superblock device resolves to a kubelet volume mount (`statsFsAttributes`, `statsFsKubeAttributes` in [pkg/export/attributes/attr_defs.go](../pkg/export/attributes/attr_defs.go)). All Kubernetes attributes, including the PV/PVC/storage-class ones, are disabled when Kubernetes metadata is off.
+
+Capacity and usage (bytes used/free/total on a volume) are out of scope here on purpose: join kubelet's own `kubelet_volume_stats_*` metrics on `k8s.persistentvolumeclaim.name` for that.
+
+#### Device-mapper coverage
+
+Block metrics attach to the request-queue tracepoints, which see the underlying physical device, not any layer stacked on top of it. For LVM, LVM-S, or dm-crypt-backed volumes, `obi.stat.disk.*` reports against the physical device (`sda`, `nvme0n1`, …), never the `dm-N` device on top of it. Those volumes are still observed per pod/PVC, but only at the filesystem layer — ext4/xfs/btrfs mounted on the logical volume, through the PV-mount allowlist described next.
+
+#### Filesystem coverage and the PV-mount allowlist
+
+Probes attach to each filesystem implementation's own read/write/fsync symbols (`nfs_file_read`, `ceph_read_iter`, `cifs_strict_readv`/`cifs_loose_read_iter`, `fuse_file_read_iter`, `ext4_file_read_iter`, `xfs_file_read_iter`, `btrfs_file_read_iter`, and their write/fsync counterparts — `fsTargets` in [pkg/internal/statsolly/ebpf/fs_probes.go](../pkg/internal/statsolly/ebpf/fs_probes.go)) rather than one generic VFS hook, so a node not using a given filesystem pays nothing for it. Detection is per filesystem, so a node can have `nfs` loaded and not `ceph`.
+
+`ext4`, `xfs` and `btrfs` back the node's own root filesystem and every container's writable layer, in addition to PersistentVolumes, so those three are also gated through an allowlist (`fs_dev_filter`, [pkg/internal/statsolly/ebpf/fs_dev_filter.go](../pkg/internal/statsolly/ebpf/fs_dev_filter.go)): only a device that is both one of those three filesystems *and* actually backs a kubelet volume mount is allowed to record events. The allowlist is reconciled against the node's current kubelet volume mounts every 30 seconds. NFS, Ceph, CIFS and FUSE are not filtered this way, since they're never used for a node's own root or container writable layer.
+
+#### Filesystem program naming
+
+The general StatsO11y convention above (`obi_stats_{probe_type}_{kernel_func}[_{purpose}]`) names a program after the specific kernel function it hooks. Filesystem probes can't follow that literally, because the actual symbol to attach (e.g. `cifs_strict_readv` vs `cifs_loose_read_iter`) is chosen per node at load time, not at compile time. Instead, each filesystem's read/write/fsync programs are compiled once against a placeholder `SEC("fentry/obi_dummy_fs_read")` (etc.) attach point and named by filesystem and operation instead of by kernel function — `obi_stats_fentry_nfs_read`, `obi_stats_kprobe_cifs_write`, and so on ([bpf/statsolly/fs_io.c](../bpf/statsolly/fs_io.c)). The real attach target is set from Go at load time (`planFsToDisable` / `setFsAttachTargets` in [stats_tracer.go](../pkg/internal/statsolly/ebpf/stats_tracer.go)).
+
+#### fentry vs kprobe attach
+
+Per filesystem and per symbol, OBI prefers `fentry`/`fexit` over classic `kprobe`/`kretprobe`. `fentry` is used when either the module exposes its own BTF under `/sys/kernel/btf/<module>`, or — for the built-in filesystems (ext4/xfs/btrfs), which have no module BTF of their own — the symbol resolves in the kernel's own (vmlinux) BTF. When neither is true, OBI falls back to kprobe/kretprobe; this is the path exercised on RHEL8-family kernels (4.18 + eBPF backports), which lack `CONFIG_DEBUG_INFO_BTF_MODULES` (`fentryCapable` in [pkg/internal/statsolly/ebpf/fs_probes.go](../pkg/internal/statsolly/ebpf/fs_probes.go)).
+
+#### Runtime requirements
+
+- **tracefs** (`/sys/kernel/tracing`) must be mounted and readable inside the container, not merely present on the node — both the block tracepoints and the kprobe fallback path for filesystem probes need it.
+- **`/var/lib/kubelet` mounted with `mountPropagation: HostToContainer`** into the OBI container. Without it, `procfs.GetMounts()` only sees the agent's own mount namespace, no kubelet volume mount is ever visible, and filesystem metrics carry no pod/PV/PVC/storage-class attribution. When Kubernetes metadata and `storage_fs` are both enabled, OBI checks this once at pipeline startup and logs a warning if no kubelet volume mount is visible:
+
+  > no kubelet volume mounts visible; persistent volume attribution needs /var/lib/kubelet mounted with mountPropagation: HostToContainer
+
+  (`WarnIfNoKubeletVolumeMounts` in [pkg/internal/statsolly/ebpf/mount_resolver.go](../pkg/internal/statsolly/ebpf/mount_resolver.go), called from `buildPipeline` in [pkg/statsolly/agent/pipeline.go](../pkg/statsolly/agent/pipeline.go).)
+- **OpenShift** needs the `privileged` SCC bound to the DaemonSet's ServiceAccount; the official Helm chart does not grant it automatically.
+
 ### Known limitations
 
 #### `src.port` may be reported as `0`

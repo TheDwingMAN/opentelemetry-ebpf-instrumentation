@@ -4,6 +4,7 @@
 package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
+	"log/slog"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -164,4 +165,22 @@ func mountServer(source string) string {
 		return source[:idx]
 	}
 	return source
+}
+
+// WarnIfNoKubeletVolumeMounts scans the current mount table once and warns if
+// no mount point looks like a kubelet volume mount. This is the operator-facing
+// signal for the most common storage-metrics misconfiguration: the container
+// not having /var/lib/kubelet mounted with mountPropagation: HostToContainer,
+// which silently prevents persistent volume attribution from ever working.
+func WarnIfNoKubeletVolumeMounts(log *slog.Logger) {
+	mounts, err := scanMounts()
+	if err == nil {
+		for _, m := range mounts {
+			if kubeletVolumeRe.MatchString(m.MountPoint) {
+				return
+			}
+		}
+	}
+
+	log.Warn("no kubelet volume mounts visible; persistent volume attribution needs /var/lib/kubelet mounted with mountPropagation: HostToContainer")
 }
