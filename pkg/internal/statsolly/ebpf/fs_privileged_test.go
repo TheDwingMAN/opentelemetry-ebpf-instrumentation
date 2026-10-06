@@ -80,7 +80,8 @@ func TestFailingFilesystemKeepsBlockAndOtherFilesystems(t *testing.T) {
 }
 
 // ext4, xfs and btrfs attach only while a kubelet volume of their type is
-// mounted, including one mounted after startup, and detach when it goes away.
+// mounted, including one mounted after startup, and detach once it has been
+// gone for fsDetachAfter refreshes.
 func TestLocalFilesystemsAttachOnlyWithAVolume(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("needs root to load eBPF programs and mount filesystems")
@@ -115,6 +116,8 @@ func TestLocalFilesystemsAttachOnlyWithAVolume(t *testing.T) {
 	}
 
 	ext4.unmount(t)
+	a.refresh()
+	assertLocalAttached(t, a, want...) // detached only after fsDetachAfter refreshes
 	a.refresh()
 	assertLocalAttached(t, a, want[1:]...)
 	var allowed uint8

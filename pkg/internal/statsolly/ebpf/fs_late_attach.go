@@ -33,12 +33,19 @@ const fsAttachInterval = 30 * time.Second
 // fails every time.
 const fsAttachTries = 3
 
+// fsDetachAfter is how many refreshes in a row must find no kubelet volume
+// of a local filesystem before its probes detach. A volume that is unmounted
+// and mounted again within a tick, as when a pod is rescheduled on the node
+// or a StatefulSet pod restarts, then keeps its probes instead of paying a
+// detach and a load for each move.
+const fsDetachAfter = 2
+
 // fsAttacher attaches the probes of each filesystem, as a collection of its
 // own, while the filesystem is worth probing:
 //   - a network filesystem (nfs, ceph, cifs, fuse) from the moment its module
 //     is loaded;
 //   - a local filesystem (ext4, xfs, btrfs) only while a kubelet volume of
-//     that type is mounted. These also hold the node's root filesystem and
+//     that type is mounted, and until fsDetachAfter refreshes have found none. These also hold the node's root filesystem and
 //     every container's writable layer, whose I/O fs_dev_filter keeps out of
 //     the metrics; without a volume their probes would only add a trampoline
 //     to each read and write of the node's own services.
@@ -58,8 +65,11 @@ type fsAttacher struct {
 	// filesystem: one built into the kernel may have no /sys/module entry.
 	started bool
 	// withPV is the result of the last successful localPVs.
-	withPV   map[FsTypeCode]bool
-	attached map[FsTypeCode]io.Closer
+	withPV map[FsTypeCode]bool
+	// withoutPV counts, per local filesystem, the successful localPVs in a
+	// row that found no volume of it.
+	withoutPV map[FsTypeCode]int
+	attached  map[FsTypeCode]io.Closer
 	// failures counts the failed loads and attaches of each filesystem since
 	// it last attached.
 	failures map[FsTypeCode]int
@@ -82,6 +92,7 @@ func newFsAttacher(
 		plan:         planFsTargets,
 		moduleLoaded: moduleLoaded,
 		localPVs:     localPVs,
+		withoutPV:    map[FsTypeCode]int{},
 		attached:     map[FsTypeCode]io.Closer{},
 		failures:     map[FsTypeCode]int{},
 		noFentry:     map[FsTypeCode]bool{},
@@ -136,21 +147,28 @@ func (a *fsAttacher) run() {
 	}
 }
 
-// refresh detaches the local filesystems no kubelet volume uses any more,
-// and attaches every filesystem worth probing that is not attached yet.
+// refresh detaches the local filesystems no kubelet volume has used for
+// fsDetachAfter refreshes, and attaches every filesystem worth probing that is not attached yet.
 func (a *fsAttacher) refresh() {
 	startup := !a.started
 	if withPV, err := a.localPVs(); err != nil {
 		a.log.Debug("scanning kubelet volume mounts failed", "error", err)
 	} else {
 		a.withPV = withPV
+		for _, tgt := range fsTargets {
+			if withPV[tgt.Fs] {
+				delete(a.withoutPV, tgt.Fs)
+			} else if isLocalFs(tgt.Fs) {
+				a.withoutPV[tgt.Fs]++
+			}
+		}
 	}
 
 	var pending []fsTarget
 	for _, tgt := range fsTargets {
 		closer, attached := a.attached[tgt.Fs]
 		switch {
-		case attached && isLocalFs(tgt.Fs) && !a.withPV[tgt.Fs]:
+		case attached && isLocalFs(tgt.Fs) && a.withoutPV[tgt.Fs] >= fsDetachAfter:
 			a.detach(tgt.Fs, closer)
 		case attached, a.failures[tgt.Fs] >= fsAttachTries:
 		case isLocalFs(tgt.Fs):
