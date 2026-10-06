@@ -173,3 +173,38 @@ func TestReader_LayoutMustFitTheValue(t *testing.T) {
 	_, err := NewReader(newFakeMap(4, 16, 1), ValueLayout{Counters: 2, Buckets: 1})
 	require.Error(t, err)
 }
+
+// restartingMap returns its keys twice per walk, as MapSource does when a
+// batch lookup restarts with a larger batch, counting more in between.
+type restartingMap struct {
+	*fakeMap
+	between func()
+}
+
+func (m restartingMap) ForEach(fn func(key, values []byte)) error {
+	if err := m.fakeMap.ForEach(fn); err != nil {
+		return err
+	}
+	m.between()
+	return m.fakeMap.ForEach(fn)
+}
+
+func TestReader_KeysReturnedTwiceAreReadOnce(t *testing.T) {
+	fm := newFakeMap(4, readerStride, 2)
+	k := []byte("dup1")
+	fm.addU64(k, 0, 0, 10)
+	m := restartingMap{fakeMap: fm, between: func() { fm.addU64(k, 1, 0, 5) }}
+	r, err := NewReader(m, readerLayout)
+	require.NoError(t, err)
+
+	start := time.Now()
+	got := pollAt(t, r, start)
+	require.Len(t, got, 1, "visited once per poll")
+	assert.Equal(t, uint64(10), got[0].delta[0])
+
+	m.between = func() {}
+	got = pollAt(t, r, start.Add(time.Second))
+	require.Len(t, got, 1)
+	assert.Equal(t, uint64(5), got[0].delta[0], "what it counted during the walk comes with the next poll")
+	assert.Equal(t, start.Add(time.Second), r.keys["dup1"].changed)
+}

@@ -130,11 +130,16 @@ func NewReader(src Source, layout ValueLayout) (*Reader, error) {
 // Poll reads the whole map and calls visit for every key that counted
 // something since the previous poll, with what it counted. The Delta is only
 // valid during the call. A key that left the map without the Reader deleting
-// it is forgotten, so if it comes back it counts from zero again.
+// it is forgotten, so if it comes back it counts from zero again. A key the
+// source returns twice in one walk (a batch walk that restarts) is read the
+// first time only: what it counted in between is in the next poll.
 func (r *Reader) Poll(now time.Time, visit func(k *kernelKey, d Delta, values []byte)) error {
 	r.gen++
 	err := r.src.ForEach(func(key, values []byte) {
 		k, ok := r.keys[string(key)]
+		if ok && k.seen == r.gen {
+			return
+		}
 		if !ok {
 			// A key enters the map zeroed, so all of its first values are new.
 			k = &kernelKey{key: string(key), prev: make([]byte, r.layout.size()), changed: now}

@@ -74,35 +74,50 @@ func TestMapSource_PerCPUHash(t *testing.T) {
 }
 
 func TestMapSource_ManyBatches(t *testing.T) {
-	for _, typ := range []cebpf.MapType{cebpf.PerCPUHash, cebpf.Hash} {
-		t.Run(typ.String(), func(t *testing.T) {
-			m := newTestMap(t, typ, 512)
-			src, err := NewMapSource(m)
-			require.NoError(t, err)
-			src.resize(minBatchKeys)
-			r, err := NewReader(src, ValueLayout{Counters: 2, Buckets: 33})
-			require.NoError(t, err)
+	// A batch of one key is smaller than the hash buckets that hold two:
+	// the walk restarts with larger batches, returning keys again.
+	for name, batch := range map[string]int{"batches": minBatchKeys, "restarts": 1} {
+		for _, typ := range []cebpf.MapType{cebpf.PerCPUHash, cebpf.Hash} {
+			t.Run(name+"/"+typ.String(), func(t *testing.T) {
+				testManyBatches(t, typ, batch)
+			})
+		}
+	}
+}
 
-			const keys = 300
-			for i := range uint32(keys) {
-				if typ == cebpf.Hash {
-					require.NoError(t, m.Put(mapKey(i), blkAggValue{Bytes: uint64(i) + 1}))
-					continue
-				}
-				vals := make([]blkAggValue, src.CPUs())
-				vals[0].Bytes = uint64(i) + 1
-				require.NoError(t, m.Put(mapKey(i), vals))
-			}
+func testManyBatches(t *testing.T, typ cebpf.MapType, batch int) {
+	t.Helper()
+	m := newTestMap(t, typ, 512)
+	src, err := NewMapSource(m)
+	require.NoError(t, err)
+	src.resize(batch)
+	r, err := NewReader(src, ValueLayout{Counters: 2, Buckets: 33})
+	require.NoError(t, err)
 
-			var total uint64
-			seen := map[string]bool{}
-			require.NoError(t, r.Poll(time.Now(), func(k *kernelKey, d Delta, _ []byte) {
-				seen[k.key] = true
-				total += d.Counter(0)
-			}))
-			assert.Len(t, seen, keys)
-			assert.Equal(t, uint64(keys*(keys+1)/2), total)
-		})
+	const keys = 300
+	for i := range uint32(keys) {
+		if typ == cebpf.Hash {
+			require.NoError(t, m.Put(mapKey(i), blkAggValue{Bytes: uint64(i) + 1}))
+			continue
+		}
+		vals := make([]blkAggValue, src.CPUs())
+		vals[0].Bytes = uint64(i) + 1
+		require.NoError(t, m.Put(mapKey(i), vals))
+	}
+
+	var total uint64
+	seen := map[string]int{}
+	require.NoError(t, r.Poll(time.Now(), func(k *kernelKey, d Delta, _ []byte) {
+		seen[k.key]++
+		total += d.Counter(0)
+	}))
+	assert.Len(t, seen, keys)
+	for _, n := range seen {
+		require.Equal(t, 1, n, "every key visited once")
+	}
+	assert.Equal(t, uint64(keys*(keys+1)/2), total)
+	if batch == 1 {
+		assert.Greater(t, src.batch, 1, "the walk restarted")
 	}
 }
 
