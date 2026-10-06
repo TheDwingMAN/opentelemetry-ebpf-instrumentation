@@ -897,6 +897,7 @@ int BPF_PROG(obi_stats_fentry_nfs_splice_read, struct file *in) {
 }
 
 SEC("fexit/obi_dummy_fs_splice_read")
+// NOLINTBEGIN(readability-non-const-parameter)
 int BPF_PROG(obi_stats_fexit_nfs_splice_read,
              struct file *in,
              loff_t *ppos,
@@ -904,6 +905,7 @@ int BPF_PROG(obi_stats_fexit_nfs_splice_read,
              size_t len,
              unsigned int flags,
              long ret) {
+    // NOLINTEND(readability-non-const-parameter)
     (void)ctx;
     (void)in;
     (void)ppos;
@@ -937,6 +939,7 @@ int BPF_PROG(obi_stats_fentry_fuse_splice_read, struct file *in) {
 }
 
 SEC("fexit/obi_dummy_fs_splice_read")
+// NOLINTBEGIN(readability-non-const-parameter)
 int BPF_PROG(obi_stats_fexit_fuse_splice_read,
              struct file *in,
              loff_t *ppos,
@@ -944,6 +947,7 @@ int BPF_PROG(obi_stats_fexit_fuse_splice_read,
              size_t len,
              unsigned int flags,
              long ret) {
+    // NOLINTEND(readability-non-const-parameter)
     (void)ctx;
     (void)in;
     (void)ppos;
@@ -977,6 +981,7 @@ int BPF_PROG(obi_stats_fentry_ext4_splice_read, struct file *in) {
 }
 
 SEC("fexit/obi_dummy_fs_splice_read")
+// NOLINTBEGIN(readability-non-const-parameter)
 int BPF_PROG(obi_stats_fexit_ext4_splice_read,
              struct file *in,
              loff_t *ppos,
@@ -984,6 +989,7 @@ int BPF_PROG(obi_stats_fexit_ext4_splice_read,
              size_t len,
              unsigned int flags,
              long ret) {
+    // NOLINTEND(readability-non-const-parameter)
     (void)ctx;
     (void)in;
     (void)ppos;
@@ -1017,6 +1023,7 @@ int BPF_PROG(obi_stats_fentry_btrfs_splice_read, struct file *in) {
 }
 
 SEC("fexit/obi_dummy_fs_splice_read")
+// NOLINTBEGIN(readability-non-const-parameter)
 int BPF_PROG(obi_stats_fexit_btrfs_splice_read,
              struct file *in,
              loff_t *ppos,
@@ -1024,6 +1031,7 @@ int BPF_PROG(obi_stats_fexit_btrfs_splice_read,
              size_t len,
              unsigned int flags,
              long ret) {
+    // NOLINTEND(readability-non-const-parameter)
     (void)ctx;
     (void)in;
     (void)ppos;
