@@ -685,8 +685,9 @@ var (
 		Type:    InstrumentCounter,
 	})
 	StatDiskOperationTime = metric(Name{
+		// normalized like the attributes.select keys, which have their underscores replaced by dots
 		Section: "obi.stat.disk.operation.time",
-		OTEL:    "obi.stat.disk.operation.time",
+		OTEL:    "obi.stat.disk.operation_time",
 		Unit:    "s",
 		Type:    InstrumentCounter,
 	})

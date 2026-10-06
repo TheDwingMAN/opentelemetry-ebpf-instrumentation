@@ -496,9 +496,9 @@ groups:
         requirement_level:
           conditionally_required: if the block I/O request failed
 
-  - id: metric.obi.obi.stat.disk.operation.time
+  - id: metric.obi.obi.stat.disk.operation_time
     type: metric
-    metric_name: obi.stat.disk.operation.time
+    metric_name: obi.stat.disk.operation_time
     instrument: counter
     unit: "s"
     stability: development

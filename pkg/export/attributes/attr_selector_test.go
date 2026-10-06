@@ -265,6 +265,22 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 	assert.Equal(t, []attr.Name{attr.DiskIODirection, attr.DiskStacked, attr.SystemDevice}, p.For(StatDiskIO))
 }
 
+func TestStatDiskOperationTimeSelection(t *testing.T) {
+	// the attributes.select keys are normalized: the former name, obi.stat.disk.operation.time,
+	// still selects the metric
+	for _, key := range []Section{
+		"obi.stat.disk.operation_time",
+		"obi.stat.disk.operation.time",
+		"obi_stat_disk_operation_time_seconds_total",
+	} {
+		selection := Selection{key: InclusionLists{Include: []string{"k8s.pod.name"}}}
+		selection.Normalize()
+		p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: selection})
+		require.NoError(t, err)
+		assert.Equal(t, []attr.Name{attr.K8sPodName}, p.For(StatDiskOperationTime), key)
+	}
+}
+
 func TestDefault_StatFsSyncDuration(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)

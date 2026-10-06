@@ -1422,7 +1422,7 @@ Duration of block I/O requests, from their issue to the device until their compl
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
-## `obi.stat.disk.operation.time`
+## `obi.stat.disk.operation_time`
 
 Sum of the durations of the completed block I/O requests, from their issue to the device until their completion, per block device, direction and workload the I/O is charged to.
 
