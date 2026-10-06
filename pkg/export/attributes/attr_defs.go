@@ -1191,6 +1191,23 @@ func AllAttributeNames(
 	return names
 }
 
+// SectionAttributeNames returns a set with all the attribute names that the metrics of the given
+// sections can report
+func SectionAttributeNames(
+	extraGroupAttributesCfg map[string][]attr.Name,
+	sections ...Section,
+) map[attr.Name]struct{} {
+	// -1 to enable all the metric group flags
+	definitions := getDefinitions(-1, NewGroupAttributes(extraGroupAttributesCfg))
+	names := map[attr.Name]struct{}{}
+	for _, section := range sections {
+		if definition, ok := definitions[section]; ok {
+			maps.Copy(names, definition.All())
+		}
+	}
+	return names
+}
+
 // DBResponseErrorAttr returns a database response error attribute if the attribute is selected, nil otherwise.
 // When the attribute is not selected, it is simply omitted — consistent with how other optional
 // attributes (e.g. db.query.text) behave.
