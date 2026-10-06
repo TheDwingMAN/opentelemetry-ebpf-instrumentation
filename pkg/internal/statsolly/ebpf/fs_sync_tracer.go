@@ -17,6 +17,7 @@ import (
 	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	ebpfconvenience "go.opentelemetry.io/obi/pkg/internal/ebpf/convenience"
 )
 
@@ -289,6 +290,13 @@ type fsSyncAttachment struct {
 	// hashStarts is set when some attached program keeps its start in the
 	// fs_start hash map, which fsAttacher.maintain must then sweep.
 	hashStarts bool
+	// recMiss keeps the recursion misses coll's programs last reported.
+	recMiss recursionMisses
+}
+
+// pollRecursionMisses reports the recursion misses of the sync programs.
+func (a *fsSyncAttachment) pollRecursionMisses(metrics imetrics.Reporter) {
+	a.recMiss.poll(a.coll.Programs, metrics)
 }
 
 // syncKeepsHashStarts reports whether any syscall of plan keeps its start

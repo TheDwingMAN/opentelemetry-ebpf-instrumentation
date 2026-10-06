@@ -107,6 +107,11 @@ type Reporter interface {
 	// could not record for reason (a full map, a start that could not be
 	// stored), which their metrics are then missing.
 	BpfStorageDrops(reason string, dropped uint64)
+	// BpfStorageRecursionMisses adds misses to the executions the kernel
+	// skipped of the named storage eBPF program because another eBPF program
+	// was already running on the CPU (bpf_prog_info.recursion_misses): each
+	// one is an event the program never saw.
+	BpfStorageRecursionMisses(program string, misses uint64)
 	// QueueBufferUtilization shows the ratio [0-1] between the unread messages of an internal Go channel
 	// and its total capacity
 	QueueBufferUtilization(subscriber string, ratio float64)
@@ -147,4 +152,5 @@ func (n NoopReporter) BpfInternalMetricsScrapeInterval() time.Duration          
 func (n NoopReporter) InformerLag(_ float64)                                                   {}
 func (n NoopReporter) BPFPacketStats(_, _ uint64)                                              {}
 func (n NoopReporter) BpfStorageDrops(_ string, _ uint64)                                      {}
+func (n NoopReporter) BpfStorageRecursionMisses(_ string, _ uint64)                            {}
 func (n NoopReporter) QueueBufferUtilization(_ string, _ float64)                              {}

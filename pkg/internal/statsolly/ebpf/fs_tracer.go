@@ -21,6 +21,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/obi/pkg/config"
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	ebpfconvenience "go.opentelemetry.io/obi/pkg/internal/ebpf/convenience"
 )
 
@@ -643,6 +644,13 @@ type fsAttachment struct {
 	// only for kretprobe-mode exit links (pollMissedKretprobes). nil until
 	// the first poll.
 	missed []uint64
+	// recMiss keeps the recursion misses coll's programs last reported.
+	recMiss recursionMisses
+}
+
+// pollRecursionMisses reports the recursion misses of the filesystem's programs.
+func (a *fsAttachment) pollRecursionMisses(metrics imetrics.Reporter) {
+	a.recMiss.poll(a.coll.Programs, metrics)
 }
 
 // pollMissedKretprobes reports the kretprobe misses (kprobe nmissed) this

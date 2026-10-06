@@ -19,6 +19,7 @@ import (
 
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/export"
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	ebpfconvenience "go.opentelemetry.io/obi/pkg/internal/ebpf/convenience"
 )
 
@@ -353,8 +354,14 @@ func PrepareNFSSpec(spec *ebpf.CollectionSpec) bool {
 }
 
 type nfsAttachment struct {
-	coll *ebpf.Collection
-	link link.Link
+	coll    *ebpf.Collection
+	link    link.Link
+	recMiss recursionMisses
+}
+
+// pollRecursionMisses reports the recursion misses of the NFS program.
+func (a *nfsAttachment) pollRecursionMisses(metrics imetrics.Reporter) {
+	a.recMiss.poll(a.coll.Programs, metrics)
 }
 
 func (a *nfsAttachment) Close() error {
@@ -384,6 +391,9 @@ type nfsAttacher struct {
 	endBurst func()
 	// checkDrops reads the attempts the kernel could not count.
 	checkDrops func()
+	// metrics receives the recursion misses of the attached programs; nil
+	// reports nothing.
+	metrics imetrics.Reporter
 
 	// started is false until the first refresh, which tries whether or not
 	// sunrpc has a /sys/module entry.
@@ -421,6 +431,20 @@ func (a *nfsAttacher) run() {
 		case <-ticker.C:
 			a.refresh()
 			a.checkDrops()
+			a.logRecursionMisses()
+		}
+	}
+}
+
+// logRecursionMisses reports the recursion misses of the attached programs
+// as the obi.bpf.storage.program.recursion.misses internal metric.
+func (a *nfsAttacher) logRecursionMisses() {
+	if a.metrics == nil {
+		return
+	}
+	for _, closer := range []io.Closer{a.attached, a.beginAttached} {
+		if r, ok := closer.(recursionMissReporter); ok {
+			r.pollRecursionMisses(a.metrics)
 		}
 	}
 }
@@ -560,7 +584,7 @@ func (n *nfsRPC) Close() error { return n.attacher.Close() }
 
 // startNFS creates the NFS maps, attaches the NFS program if sunrpc is
 // there, and keeps looking for sunrpc every nfsAttachInterval until closed.
-func startNFS(log *slog.Logger, cfg *config.EBPFTracer, features export.Features, nfs NFSConfig) (*nfsRPC, error) {
+func startNFS(log *slog.Logger, cfg *config.EBPFTracer, features export.Features, nfs NFSConfig, metrics imetrics.Reporter) (*nfsRPC, error) {
 	loader, err := newNFSLoader(log, cfg, features, nfs)
 	if err != nil {
 		return nil, err
@@ -594,6 +618,7 @@ func startNFS(log *slog.Logger, cfg *config.EBPFTracer, features export.Features
 		moduleLoaded: moduleLoaded,
 		endBurst:     loader.btf.Release,
 		checkDrops:   func() { drops.check(); ownerMisses.check() },
+		metrics:      metrics,
 		stop:         make(chan struct{}),
 		stopped:      make(chan struct{}),
 	}

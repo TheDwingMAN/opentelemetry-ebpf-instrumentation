@@ -489,6 +489,20 @@ func (a *fsAttacher) maintain() {
 	}
 	a.logDrops()
 	a.logMissedKretprobes()
+	a.logRecursionMisses()
+}
+
+// logRecursionMisses reports the recursion misses of every attached program
+// as the obi.bpf.storage.program.recursion.misses internal metric.
+func (a *fsAttacher) logRecursionMisses() {
+	for _, closer := range a.attached {
+		if r, ok := closer.(recursionMissReporter); ok {
+			r.pollRecursionMisses(a.metrics)
+		}
+	}
+	if r, ok := a.syncCloser.(recursionMissReporter); ok {
+		r.pollRecursionMisses(a.metrics)
+	}
 }
 
 // kretprobeMissReporter is implemented by an attachment that keeps

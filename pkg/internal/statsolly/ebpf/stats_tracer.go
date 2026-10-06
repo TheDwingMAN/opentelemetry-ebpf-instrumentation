@@ -271,6 +271,7 @@ func NewStatsFetcher(
 	// cannot be attached must not take down the rest of the stats agent.
 	if storageBlock {
 		closables = append(closables, attachBlockProbes(&objects, useRawBlock, tlog)...)
+		closables = append(closables, startBlockRecursionPoll(&objects, metrics))
 	}
 
 	// NFS client RPCs: best-effort, as a collection of its own that attaches
@@ -278,7 +279,7 @@ func NewStatsFetcher(
 	// pass ends the startup BTF burst this one shares.
 	var nfs *nfsRPC
 	if features.StorageNFS() {
-		nfs, err = startNFS(tlog, cfg, *features, nfsCfg)
+		nfs, err = startNFS(tlog, cfg, *features, nfsCfg, metrics)
 		if err != nil {
 			tlog.Warn("NFS programs cannot be loaded; disabling the NFS client RPC metrics", "error", err)
 		} else {
@@ -634,6 +635,45 @@ func setMapEntries(spec *ebpf.CollectionSpec, entries map[string]uint32) error {
 		}
 		m.MaxEntries = n
 	}
+	return nil
+}
+
+// startBlockRecursionPoll reports the block programs' recursion misses to
+// metrics every fsAttachInterval until the returned closer is closed. Block
+// has no refresh loop of its own, so this one only reads the counters, which
+// cost nothing per event.
+func startBlockRecursionPoll(objects *StatsObjects, metrics imetrics.Reporter) io.Closer {
+	progs := map[string]*ebpf.Program{
+		progObiStatsTpBlockRqComplete:    objects.ObiStatsTpBlockRqComplete,
+		progObiStatsTpBlockRqInsert:      objects.ObiStatsTpBlockRqInsert,
+		progObiStatsTpBlockRqIssue:       objects.ObiStatsTpBlockRqIssue,
+		progObiStatsRawTpBlockRqComplete: objects.ObiStatsRawTpBlockRqComplete,
+		progObiStatsRawTpBlockRqInsert:   objects.ObiStatsRawTpBlockRqInsert,
+		progObiStatsRawTpBlockRqIssue:    objects.ObiStatsRawTpBlockRqIssue,
+	}
+	p := &blockRecursionPoll{stop: make(chan struct{}), stopped: make(chan struct{})}
+	go func() {
+		defer close(p.stopped)
+		var misses recursionMisses
+		ticker := time.NewTicker(fsAttachInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-p.stop:
+				return
+			case <-ticker.C:
+				misses.poll(progs, metrics)
+			}
+		}
+	}()
+	return p
+}
+
+type blockRecursionPoll struct{ stop, stopped chan struct{} }
+
+func (p *blockRecursionPoll) Close() error {
+	close(p.stop)
+	<-p.stopped
 	return nil
 }
 

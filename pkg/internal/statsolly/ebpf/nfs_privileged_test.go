@@ -47,7 +47,7 @@ func TestNFSAttachesAtStartup(t *testing.T) {
 	defer kernelBTFCache.Release()
 
 	nfs, err := startNFS(slog.Default(), &config.EBPFTracer{}, export.FeatureStorageNFS,
-		NFSConfig{KernelBounds: explicitKernelBounds()})
+		NFSConfig{KernelBounds: explicitKernelBounds()}, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, nfs.Close()) })
 
@@ -115,7 +115,7 @@ func TestNFSAttachesBeginAtStartupWhenOwnerIsWanted(t *testing.T) {
 	defer kernelBTFCache.Release()
 
 	nfs, err := startNFS(slog.Default(), &config.EBPFTracer{}, export.FeatureStorageNFS,
-		NFSConfig{KernelBounds: explicitKernelBounds(), Owner: true})
+		NFSConfig{KernelBounds: explicitKernelBounds(), Owner: true}, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, nfs.Close()) })
 

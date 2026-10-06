@@ -1043,6 +1043,18 @@ Operations the storage eBPF programs could not record, which the storage metrics
 | --- | --- | --- | --- | --- | --- |
 | `bpf.drop.reason` | string | `required` | development | Why an eBPF program could not record an operation. fs_accum_full: the filesystem aggregation map was full, so an operation of a new series was not counted; fs_start_failed: the start of a filesystem operation could not be stored, so the operation was not recorded. | fs_accum_full; fs_start_failed |
 
+## `obi.bpf.storage.program.recursion.misses`
+
+Executions the kernel skipped of a storage eBPF program because another eBPF program was already running on the CPU (bpf_prog_info.recursion_misses, Linux 5.12+). Each one is an event the program never saw, so the storage metrics miss it.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {execution} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `bpf.probe.name` | string | `required` | development | Name of the eBPF probe. | kprobe_tcp_sendmsg |
+
 ## `obi.ebpf.tracer.flushes`
 
 Length of the groups of traces flushed from the eBPF tracer to the next pipeline stage.

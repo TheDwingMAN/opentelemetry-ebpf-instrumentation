@@ -176,6 +176,36 @@ func TestInternalMetricsReporterBpfStorageDrops(t *testing.T) {
 	assert.Equal(t, int64(5), records[0].IntVal)
 }
 
+func TestInternalMetricsReporterBpfStorageRecursionMisses(t *testing.T) {
+	metricRecords := make(chan collector.MetricRecord, 16)
+	mcfg := &otelcfg.MetricsConfig{
+		Interval:        10 * time.Millisecond,
+		MetricsConsumer: testMetricsConsumer(metricRecords),
+	}
+	ctxInfo := &global.ContextInfo{
+		NodeMeta:            metadata.NodeMeta{HostID: "test-host"},
+		OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: mcfg},
+	}
+
+	reporter, err := NewInternalMetricsReporter(
+		t.Context(),
+		ctxInfo,
+		mcfg,
+		&imetrics.InternalMetricsConfig{BpfMetricScrapeInterval: time.Millisecond},
+	)
+	require.NoError(t, err)
+
+	reporter.BpfStorageRecursionMisses("obi_stats_tp_block_rq_issue", 4)
+
+	records := readMetricsByName(t, metricRecords, time.Second,
+		attr.VendorPrefix+".bpf.storage.program.recursion.misses",
+	)
+	require.Len(t, records, 1)
+	assert.Equal(t, "obi_stats_tp_block_rq_issue", records[0].Attributes["bpf.probe.name"])
+	assert.Equal(t, "{execution}", records[0].Unit)
+	assert.Equal(t, int64(4), records[0].IntVal)
+}
+
 // A process basename comes straight off the filesystem, where Linux permits invalid UTF-8. The
 // internal metrics build their datapoint attributes directly, so without sanitization such a
 // name poisons every internal-metrics export batch for as long as the series stays aggregated.

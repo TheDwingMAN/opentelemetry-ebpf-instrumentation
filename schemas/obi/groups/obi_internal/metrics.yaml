@@ -470,6 +470,21 @@ groups:
       - ref: bpf.drop.reason
         requirement_level: required
 
+  - id: metric.obi.obi.bpf.storage.program.recursion.misses
+    type: metric
+    metric_name: obi.bpf.storage.program.recursion.misses
+    instrument: counter
+    unit: "{execution}"
+    stability: development
+    brief: >
+      Executions the kernel skipped of a storage eBPF program because another
+      eBPF program was already running on the CPU
+      (bpf_prog_info.recursion_misses, Linux 5.12+). Each one is an event the
+      program never saw, so the storage metrics miss it.
+    attributes:
+      - ref: bpf.probe.name
+        requirement_level: required
+
   # --- Kubernetes informer ------------------------------------------------
   - id: metric.obi.obi.kube.cache.forward.lag
     type: metric

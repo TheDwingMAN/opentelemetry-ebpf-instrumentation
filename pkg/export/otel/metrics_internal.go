@@ -53,7 +53,8 @@ type InternalMetricsReporter struct {
 	bpfPacketCount        instrument.Int64Counter
 	bpfIgnoredPacketCount instrument.Int64Counter
 
-	bpfStorageDrops instrument.Int64Counter
+	bpfStorageDrops           instrument.Int64Counter
+	bpfStorageRecursionMisses instrument.Int64Counter
 
 	queueCapacityRatio instrument.Float64Gauge
 
@@ -215,6 +216,15 @@ func NewInternalMetricsReporter(ctx context.Context, ctxInfo *global.ContextInfo
 		return nil, err
 	}
 
+	bpfStorageRecursionMisses, err := meter.Int64Counter(
+		internalNames.BpfStorageRecursionMisses.OTEL,
+		instrument.WithDescription("Executions the kernel skipped of a storage eBPF program because another eBPF program was already running on the CPU"),
+		instrument.WithUnit(internalNames.BpfStorageRecursionMisses.Unit),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	queueCapacityRatio, err := meter.Float64Gauge(
 		internalNames.QueueCapacityRatio.OTEL,
 		instrument.WithDescription("Ratio [0-1] between the unread messages of an internal Go channel and its total capacity"),
@@ -242,6 +252,7 @@ func NewInternalMetricsReporter(ctx context.Context, ctxInfo *global.ContextInfo
 		bpfPacketCount:                   bpfPacketCount,
 		bpfIgnoredPacketCount:            bpfIgnoredPacketCount,
 		bpfStorageDrops:                  bpfStorageDrops,
+		bpfStorageRecursionMisses:        bpfStorageRecursionMisses,
 		queueCapacityRatio:               queueCapacityRatio,
 		internalAttrs:                    internalAttrs,
 	}, nil
@@ -409,6 +420,10 @@ func (p *InternalMetricsReporter) BPFPacketStats(count, ignored uint64) {
 
 func (p *InternalMetricsReporter) BpfStorageDrops(reason string, dropped uint64) {
 	p.bpfStorageDrops.Add(p.ctx, int64(dropped), instrument.WithAttributes(attribute.String(string(attr.BpfDropReason), reason)))
+}
+
+func (p *InternalMetricsReporter) BpfStorageRecursionMisses(program string, misses uint64) {
+	p.bpfStorageRecursionMisses.Add(p.ctx, int64(misses), instrument.WithAttributes(attribute.String(string(attr.BpfProbeName), program)))
 }
 
 func (p *InternalMetricsReporter) QueueBufferUtilization(subscriber string, ratio float64) {
