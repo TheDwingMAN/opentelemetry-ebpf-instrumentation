@@ -70,7 +70,8 @@ const (
 	FeatureStatsNFSClientIO
 	FeatureStatsDiskPodVolumes
 	FeatureStatsDiskVolumeDevices
-	FeatureAll = Features(^uint(0)) // all bits to 1
+	// FeatureAll enables all the features but the storage stat ones, which must be named
+	FeatureAll = Features(^uint(0)) &^ featureStatsStorage
 )
 
 // FeatureStats enables all TCP stat metrics, including TCP IO.
@@ -93,6 +94,11 @@ const FeatureStatsNFS = FeatureStatsNFSClientProcedureDuration | FeatureStatsNFS
 // block request
 const featureStatsDiskRequests = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations |
 	FeatureStatsDiskOperationTime | FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard
+
+// featureStatsStorage are the storage stat features, which `all` and `*` don't enable: their probes
+// fire on every block request, file sync or NFS RPC, and the pod volumes need to watch the
+// PersistentVolumes of the cluster, so they have to be named.
+const featureStatsStorage = FeatureStatsDisk | FeatureStatsFsSyncDuration | FeatureStatsNFS | FeatureStatsDiskPodVolumes
 
 // FeatureMapper stays public so any extension package can add and remove feature
 // definitions before loading them.

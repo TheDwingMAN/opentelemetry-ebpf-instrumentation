@@ -65,8 +65,26 @@ func TestFeatureStatsDiskIsOptIn(t *testing.T) {
 	assert.True(t, disk.StatsDiskOperationDuration())
 	assert.False(t, disk.StatsTCPRtt())
 	assert.True(t, disk.StatMetrics(), "a disk-only selection must still enable the stats pipeline")
+}
 
-	assert.True(t, FeatureAll.StatsDiskOperationDuration())
+// The storage stats must be named: their probes fire on every block request, file sync or NFS RPC,
+// and the pod volumes watch the PersistentVolumes of the cluster
+func TestFeatureAllDoesntEnableStorageStats(t *testing.T) {
+	for _, name := range []string{"all", "*"} {
+		all, err := LoadFeatures([]string{name})
+		require.NoError(t, err)
+		assert.True(t, all.StatsTCPIo(), "%s enables the TCP stats", name)
+		assert.False(t, all.StatsDisk(), name)
+		assert.False(t, all.StatsDiskPendingOperations(), name)
+		assert.False(t, all.StatsDiskVolumeDevices(), name)
+		assert.False(t, all.StatsFsSyncDuration(), name)
+		assert.False(t, all.StatsNFS(), name)
+		assert.False(t, all.StatsDiskPodVolumes(), name)
+	}
+
+	allAndDisk, err := LoadFeatures([]string{"all", "stats_disk"})
+	require.NoError(t, err)
+	assert.True(t, allAndDisk.StatsDiskOperationDuration(), "they can be named along with all")
 }
 
 func TestFeatureStatsFsSyncIsOptIn(t *testing.T) {
