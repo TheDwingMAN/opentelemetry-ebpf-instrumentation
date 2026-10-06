@@ -5,6 +5,7 @@ package statagg
 
 import (
 	"context"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -22,9 +23,7 @@ const benchCPUs = 4
 
 func benchFamily(b *testing.B, keys int) (*testFamily, [][]byte) {
 	b.Helper()
-	tf := newTestFamily(b, benchCPUs, diskBounds, func(c *Config) {
-		c.Deletable = func([]byte, int) bool { return false }
-	})
+	tf := newTestFamily(b, benchCPUs, diskBounds, neverDelete)
 	ks := make([][]byte, keys)
 	for i := range ks {
 		ks[i] = blkKey(uint32(i), ebpf.CodeBlockRead, 0)
@@ -32,6 +31,9 @@ func benchFamily(b *testing.B, keys int) (*testFamily, [][]byte) {
 	}
 	return tf, ks
 }
+
+// neverDelete keeps every key in the map, so benchmarks poll the same keys.
+func neverDelete(c *Config) { c.Deletable = func([]byte, int) bool { return false } }
 
 func perKey(b *testing.B, keys int) {
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(keys), "ns/key")
@@ -139,6 +141,90 @@ func BenchmarkCollect(b *testing.B) {
 				}
 			}
 			perKey(b, keys)
+		})
+	}
+}
+
+// Many-CPU benchmarks: a per-CPU map holds a copy of every value per possible
+// CPU, so what the Reader keeps per key, and what a poll reads, grow with the
+// CPU count. Every key has counted on every CPU, the worst case. retained-B/key
+// is the heap the first poll leaves behind per key (Reader state, decorations,
+// both exporters' series), without the map itself.
+
+var cpuBenchSizes = []struct{ cpus, keys int }{{64, 1_000}, {64, 9_000}, {128, 1_000}, {128, 9_000}}
+
+func benchFamilyCPUs(b *testing.B, cpus, keys int) (*testFamily, [][]byte) {
+	b.Helper()
+	tf := newTestFamily(b, cpus, diskBounds, neverDelete)
+	ks := make([][]byte, keys)
+	for i := range ks {
+		ks[i] = blkKey(uint32(i), ebpf.CodeBlockRead, 0)
+		for cpu := range cpus {
+			record(tf.m, tf.layout, ks[i], cpu, 4096, 200_000)
+		}
+	}
+	tf.otelProducer(b, cumulative, 0)
+	tf.promCollector(b, diskBounds, 0)
+	return tf, ks
+}
+
+// firstPoll polls tf once and returns a function that reports the heap the
+// poll retained, to call after the timed loop (ResetTimer drops metrics).
+func firstPoll(b *testing.B, tf *testFamily, keys int) (report func()) {
+	b.Helper()
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	tf.family.poll(tf.clock.Now())
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	retained := float64(after.HeapAlloc) - float64(before.HeapAlloc)
+	return func() {
+		b.ReportMetric(retained/float64(keys), "retained-B/key")
+		b.ReportMetric(retained/(1<<20), "retained-MiB")
+	}
+}
+
+func cpuBenchName(cpus, keys int) string {
+	return "cpus=" + strconv.Itoa(cpus) + "/keys=" + strconv.Itoa(keys)
+}
+
+func BenchmarkPollCPUs_Unchanged(b *testing.B) {
+	for _, s := range cpuBenchSizes {
+		b.Run(cpuBenchName(s.cpus, s.keys), func(b *testing.B) {
+			tf, _ := benchFamilyCPUs(b, s.cpus, s.keys)
+			report := firstPoll(b, tf, s.keys)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				tf.clock.Advance(time.Second)
+				tf.family.poll(tf.clock.Now())
+			}
+			perKey(b, s.keys)
+			report()
+		})
+	}
+}
+
+// Every key counted one more request on one CPU since the last poll.
+func BenchmarkPollCPUs_AllChanged(b *testing.B) {
+	for _, s := range cpuBenchSizes {
+		b.Run(cpuBenchName(s.cpus, s.keys), func(b *testing.B) {
+			tf, ks := benchFamilyCPUs(b, s.cpus, s.keys)
+			report := firstPoll(b, tf, s.keys)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for n := range b.N {
+				b.StopTimer()
+				for i, k := range ks {
+					record(tf.m, tf.layout, k, (i+n)%s.cpus, 4096, 200_000)
+				}
+				tf.clock.Advance(time.Second)
+				b.StartTimer()
+				tf.family.poll(tf.clock.Now())
+			}
+			perKey(b, s.keys)
+			report()
 		})
 	}
 }
