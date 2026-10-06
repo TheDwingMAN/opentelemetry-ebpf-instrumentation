@@ -61,6 +61,24 @@ func TestNFSOwnerWantedIgnoresOtherAttributes(t *testing.T) {
 	assert.False(t, nfsOwnerWanted(sel))
 }
 
+// The agent decides whether to attach the NFS owner program with the
+// exporters' attribute groups: with Kubernetes metadata on, a selected pod
+// attribute must turn it on. Without the Kubernetes group the pod attributes
+// do not exist, which is why a selector built without it never wanted them.
+func TestNFSOwnerForUsesTheExportersAttributeGroups(t *testing.T) {
+	selected := &attributes.SelectorConfig{SelectionCfg: attributes.Selection{
+		attributes.StatNFSClientRPCDuration.Section: attributes.InclusionLists{Include: []string{"k8s.pod.name"}},
+	}}
+
+	wanted, err := nfsOwnerFor(attributes.GroupKubernetes|attributes.GroupPrometheus, selected)
+	require.NoError(t, err)
+	assert.True(t, wanted, "Kubernetes metadata on, pod name selected")
+
+	wanted, err = nfsOwnerFor(attributes.UndefinedGroup, selected)
+	require.NoError(t, err)
+	assert.False(t, wanted, "no Kubernetes metadata: no pod attribute to want")
+}
+
 func newNFSOwnerDecorateTestStore(t *testing.T) *kube.Store {
 	t.Helper()
 	n := meta.NewBaseNotifier(slog.Default())

@@ -4,6 +4,7 @@
 package agent // import "go.opentelemetry.io/obi/pkg/statsolly/agent"
 
 import (
+	"fmt"
 	"os"
 	"slices"
 
@@ -23,6 +24,17 @@ var nfsOwnerAttrs = []attr.Name{attr.K8sNamespaceName, attr.K8sPodName, attr.K8s
 var nfsOwnerMetrics = []attributes.Name{
 	attributes.StatNFSClientRPCDuration, attributes.StatNFSClientRPCErrors,
 	attributes.StatNFSClientRPCRetransmits, attributes.StatNFSClientIO,
+}
+
+// nfsOwnerFor reports whether a pod attribute is selected on any NFS metric,
+// with the attribute groups the exporters select with: the NFS pod attributes
+// belong to the Kubernetes group, so a selector without it never has them.
+func nfsOwnerFor(groups attributes.AttrGroups, selectorCfg *attributes.SelectorConfig) (bool, error) {
+	attrSel, err := attributes.NewAttrSelector(groups, selectorCfg)
+	if err != nil {
+		return false, fmt.Errorf("creating attr selector: %w", err)
+	}
+	return nfsOwnerWanted(attrSel), nil
 }
 
 // nfsOwnerWanted reports whether a pod attribute is selected on any NFS

@@ -142,13 +142,10 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	if err != nil {
 		return nil, fmt.Errorf("NFS client RPC histogram: %w", err)
 	}
-	// UndefinedGroup: the NFS owner attributes (the pod trio, k8s.owner.name)
-	// are direct metric attributes, not a group.
-	attrSel, err := attributes.NewAttrSelector(attributes.UndefinedGroup, selectorCfg)
+	nfsOwner, err := nfsOwnerFor(ctxInfo.MetricAttributeGroups, selectorCfg)
 	if err != nil {
-		return nil, fmt.Errorf("creating attr selector: %w", err)
+		return nil, err
 	}
-	nfsOwner := nfsOwnerWanted(attrSel)
 	nfsCgroupV1Host := nfsOwner && nfsCgroupV1()
 	nfsCfg := ebpf.NFSConfig{
 		Exponential:  nfsLayout.Kind == statagg.LayoutExponential,
