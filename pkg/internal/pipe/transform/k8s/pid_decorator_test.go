@@ -364,3 +364,72 @@ func TestPIDMetadataDecorator_UntrackedPIDResolvedFromCgroup(t *testing.T) {
 	}
 	assert.Equal(t, 1, reads, "the container ID is cached per PID")
 }
+
+// A writer that exits before its events are decorated, like a dd spawned by a
+// shell loop, is still attributed to its container through its PID namespace,
+// which the container's other processes keep alive.
+func TestPIDMetadataDecorator_ExitedPIDResolvedThroughItsNamespace(t *testing.T) {
+	originalInfoForPID := kube.InfoForPID
+	defer func() { kube.InfoForPID = originalInfoForPID }()
+	originalPidsInNamespace := pidsInNamespace
+	defer func() { pidsInNamespace = originalPidsInNamespace }()
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	store := newPIDTestStore(t)
+	const (
+		exitedPID = app.PID(5001)
+		shellPID  = app.PID(4000)
+		podNs     = uint32(7100)
+	)
+
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		if pid == shellPID {
+			return container.Info{ContainerID: "cid-writer", PIDNamespace: podNs}, nil
+		}
+		return container.Info{}, assert.AnError // exitedPID is gone
+	}
+	scans := 0
+	pidsInNamespace = func(ns uint32) []app.PID {
+		scans++
+		if ns == podNs {
+			return []app.PID{shellPID}
+		}
+		return nil
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: &informer.ObjectMeta{
+		Name: "writer", Namespace: "vol-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{
+			Uid:        "pod-uid-2",
+			Containers: []*informer.ContainerInfo{{Id: "cid-writer", Name: "io"}},
+		},
+	}}))
+	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-2", PVName: "pvc-a", VolumeType: "nfs", Shared: true}, true
+	}
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	// Two short-lived writers in the same container: the namespace is scanned once.
+	input.Send([]*pidTestItem{
+		{pidNs: podNs, hostPID: uint32(exitedPID), sDev: 42, hasPID: true},
+		{pidNs: podNs, hostPID: uint32(exitedPID + 1), sDev: 42, hasPID: true},
+	})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 2)
+	for _, item := range got {
+		assert.Equal(t, "writer", item.Metadata[attr.K8sPodName])
+		assert.Equal(t, "io", item.Metadata[attr.K8sContainerName])
+	}
+	assert.Equal(t, 1, scans, "the namespace's container is cached")
+}

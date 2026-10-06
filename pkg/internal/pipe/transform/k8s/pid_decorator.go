@@ -6,6 +6,9 @@ package k8s // import "go.opentelemetry.io/obi/pkg/internal/pipe/transform/k8s"
 import (
 	"context"
 	"log/slog"
+	"os"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/golang-lru/v2/expirable"
@@ -14,6 +17,7 @@ import (
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	ikube "go.opentelemetry.io/obi/pkg/internal/kube"
 	"go.opentelemetry.io/obi/pkg/internal/pipe"
+	"go.opentelemetry.io/obi/pkg/internal/procs"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/kube"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
@@ -55,6 +59,7 @@ func PIDMetadataDecoratorProvider[T any](
 			store:      store,
 			pvc:        pvc,
 			containers: expirable.NewLRU[app.PID, string](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+			namespaces: expirable.NewLRU[uint32, string](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
 		}
 		in := input.Subscribe(msg.SubscriberName("k8s.PIDMetadataDecorator"))
 
@@ -80,6 +85,9 @@ type pidDecorator struct {
 	// containers caches the container ID, or "" for none, of host PIDs the
 	// Store does not track.
 	containers *expirable.LRU[app.PID, string]
+	// namespaces caches the container ID, or "" for none, owning a PID
+	// namespace, for processes that exited before they were decorated.
+	namespaces *expirable.LRU[uint32, string]
 }
 
 // decorate populates a's Metadata with pod/namespace/container attribution
@@ -98,7 +106,7 @@ func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs,
 	// which with storage metrics alone is none of them. The process's cgroup
 	// names its container just as well.
 	if podMeta == nil {
-		podMeta, containerName = d.podContainerByCgroup(app.PID(hostPID))
+		podMeta, containerName = d.podContainerByCgroup(pidNs, app.PID(hostPID))
 	}
 
 	mountInfo, mountFound := resolveMount(sDev)
@@ -143,23 +151,80 @@ func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs,
 	}
 }
 
-// podContainerByCgroup resolves a host PID to its pod and container through
-// /proc/<pid>/cgroup, caching the container ID per PID.
-func (d *pidDecorator) podContainerByCgroup(hostPID app.PID) (*ikube.CachedObjMeta, string) {
+// podContainerByCgroup resolves the process that issued the I/O to its pod and
+// container through its cgroup, caching the container ID per host PID. A
+// process that has already exited, the norm for short-lived writers such as a
+// dd or a backup script, is resolved through its PID namespace instead.
+func (d *pidDecorator) podContainerByCgroup(pidNs uint32, hostPID app.PID) (*ikube.CachedObjMeta, string) {
 	if hostPID == 0 {
 		return nil, ""
 	}
 	cid, ok := d.containers.Get(hostPID)
 	if !ok {
-		info, err := kube.InfoForPID(hostPID)
-		if err != nil {
-			pidLog().Debug("no container for process", "pid", hostPID, "error", err)
+		cid = containerOf(hostPID)
+		if cid == "" {
+			cid = d.containerOfNamespace(pidNs)
 		}
-		cid = info.ContainerID
 		d.containers.Add(hostPID, cid)
 	}
 	if cid == "" {
 		return nil, ""
 	}
 	return d.store.PodContainerByContainerID(cid)
+}
+
+// containerOfNamespace finds the container owning PID namespace pidNs through
+// any process still living in it. Kubernetes gives each container its own PID
+// namespace, so the namespace names the container for as long as the
+// container runs, whichever of its processes did the I/O. The host's own
+// namespace names no container and is never looked up.
+func (d *pidDecorator) containerOfNamespace(pidNs uint32) string {
+	if pidNs == 0 || pidNs == hostPIDNamespace() {
+		return ""
+	}
+	if cid, ok := d.namespaces.Get(pidNs); ok {
+		return cid
+	}
+	cid := ""
+	for _, pid := range pidsInNamespace(pidNs) {
+		if cid = containerOf(pid); cid != "" {
+			break
+		}
+	}
+	d.namespaces.Add(pidNs, cid)
+	return cid
+}
+
+func containerOf(pid app.PID) string {
+	info, err := kube.InfoForPID(pid)
+	if err != nil {
+		pidLog().Debug("no container for process", "pid", pid, "error", err)
+		return ""
+	}
+	return info.ContainerID
+}
+
+var hostPIDNamespace = sync.OnceValue(func() uint32 {
+	ns, _ := procs.FindNamespace(1)
+	return ns
+})
+
+// pidsInNamespace lists the live processes in PID namespace ns. It is an
+// injectable indirection for tests.
+var pidsInNamespace = func(ns uint32) []app.PID {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var pids []app.PID
+	for _, e := range entries {
+		n, err := strconv.ParseUint(e.Name(), 10, 32)
+		if err != nil {
+			continue
+		}
+		if pidNs, err := procs.FindNamespace(app.PID(n)); err == nil && pidNs == ns {
+			pids = append(pids, app.PID(n))
+		}
+	}
+	return pids
 }
