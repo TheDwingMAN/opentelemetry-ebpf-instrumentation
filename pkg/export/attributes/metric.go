@@ -730,6 +730,50 @@ var (
 		Unit:    "{error}",
 		Type:    InstrumentCounter,
 	})
+	// Execute time of each NFS client RPC attempt, as /proc/self/mountstats
+	// sums it: from the task's start to its end, backlog and retransmissions
+	// included. A server-requested retry (NFSv3 JUKEBOX, NFSv4 DELAY or
+	// GRACE) is a new attempt, which includes the client's backoff. Not
+	// rpc.client.call.duration, which OBI emits for application-level ONC
+	// RPC.
+	StatNFSClientRPCDuration = metric(Name{
+		Section: "obi.stat.nfs.client.rpc.duration",
+		OTEL:    "obi.stat.nfs.client.rpc.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	// NFS client RPC attempts that ended with an error status, as
+	// mountstats counts them: normal misses such as ENOENT on LOOKUP and
+	// server back-pressure (EJUKEBOX, NFS4ERR_DELAY) included.
+	StatNFSClientRPCErrors = metric(Name{
+		Section: "obi.stat.nfs.client.rpc.errors",
+		OTEL:    "obi.stat.nfs.client.rpc.errors",
+		Unit:    "{error}",
+		Type:    InstrumentCounter,
+	})
+	// Retransmissions of NFS client RPC requests: every transmission of an
+	// attempt after the first. Server-requested retries are new attempts,
+	// not retransmissions. The OBI counterpart of the hostmetrics
+	// nfs.client.rpc.retransmit.count.
+	StatNFSClientRPCRetransmits = metric(Name{
+		Section: "obi.stat.nfs.client.rpc.retransmits",
+		OTEL:    "obi.stat.nfs.client.rpc.retransmits",
+		Unit:    "{retransmit}",
+		Type:    InstrumentCounter,
+	})
+	// Wire bytes of NFS client RPC calls and replies: headers and every
+	// procedure included (RPC/XDR headers, not just READ/WRITE payload), so
+	// it is larger than the fs NFS bytes of StatFsIO. By direction
+	// (network.io.direction: transmit = sent to the server, receive = from
+	// it), not by procedure or version: those stay opt-in, unlike on the
+	// duration and errors metrics, to keep this metric's default series to
+	// one pair per server.
+	StatNFSClientIO = metric(Name{
+		Section: "obi.stat.nfs.client.io",
+		OTEL:    "obi.stat.nfs.client.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
 )
 
 // StatMetrics lists every StatsO11y metric, so tests can check that each one is
@@ -751,6 +795,10 @@ var StatMetrics = []Name{
 	StatFsOperationDuration,
 	StatFsIO,
 	StatFsOperationErrors,
+	StatNFSClientRPCDuration,
+	StatNFSClientRPCErrors,
+	StatNFSClientRPCRetransmits,
+	StatNFSClientIO,
 }
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.

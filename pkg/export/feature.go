@@ -71,6 +71,14 @@ const (
 	FeatureStorageBlockQueueDepth
 	FeatureStorageBlockFlush
 	FeatureStorageBlockDiscard
+	// FeatureStorageNFSDuration, FeatureStorageNFSErrors,
+	// FeatureStorageNFSRetransmits and FeatureStorageNFSIo emit the NFS
+	// client RPC metrics, counted in the kernel from the sunrpc
+	// rpc_stats_latency tracepoint.
+	FeatureStorageNFSDuration
+	FeatureStorageNFSErrors
+	FeatureStorageNFSRetransmits
+	FeatureStorageNFSIo
 	// FeatureAll is what "all" and "*" select: every feature except the deprecated
 	// FeatureStorageBlockQueueDepth, which is in no umbrella and is only enabled
 	// when listed by name.
@@ -92,6 +100,14 @@ const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo 
 // same probe pair, so disabling one does not reduce kernel-side overhead —
 // splitting them controls series cardinality only.
 const FeatureStorageFS = FeatureStorageFSDuration | FeatureStorageFSIo | FeatureStorageFSErrors
+
+// FeatureStorageNFS enables all NFS client RPC metrics. They share one
+// program on the sunrpc rpc_stats_latency tracepoint, which runs once per NFS
+// RPC attempt: disabling one of them reduces series cardinality, and only
+// storage_nfs_errors adds kernel keys (one per error status); storage_nfs_io
+// reads two more words of the same key. It is its own umbrella: storage_fs
+// does not imply it.
+const FeatureStorageNFS = FeatureStorageNFSDuration | FeatureStorageNFSErrors | FeatureStorageNFSRetransmits | FeatureStorageNFSIo
 
 // FeatureStats enables all stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -120,6 +136,11 @@ var FeatureMapper = map[string]Features{
 	"storage_fs_duration":              FeatureStorageFSDuration,
 	"storage_fs_io":                    FeatureStorageFSIo,
 	"storage_fs_errors":                FeatureStorageFSErrors,
+	"storage_nfs":                      FeatureStorageNFS,
+	"storage_nfs_duration":             FeatureStorageNFSDuration,
+	"storage_nfs_errors":               FeatureStorageNFSErrors,
+	"storage_nfs_retransmits":          FeatureStorageNFSRetransmits,
+	"storage_nfs_io":                   FeatureStorageNFSIo,
 	"network":                          FeatureNetwork,
 	"network_inter_zone":               FeatureNetworkInterZone,
 	"network_flow_packets":             FeatureNetworkFlowPackets,
@@ -422,7 +443,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStorageBlock | FeatureStorageBlockQueueDepth | FeatureStorageFS)
+	return f.any(FeatureStats | FeatureStorageBlock | FeatureStorageBlockQueueDepth | FeatureStorageFS | FeatureStorageNFS)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -503,6 +524,28 @@ func (f Features) StorageFSIo() bool {
 
 func (f Features) StorageFSErrors() bool {
 	return f.any(FeatureStorageFSErrors)
+}
+
+// StorageNFS reports whether any NFS client RPC metric is enabled. It gates
+// the NFS program and its kernel aggregation map.
+func (f Features) StorageNFS() bool {
+	return f.any(FeatureStorageNFS)
+}
+
+func (f Features) StorageNFSDuration() bool {
+	return f.any(FeatureStorageNFSDuration)
+}
+
+func (f Features) StorageNFSErrors() bool {
+	return f.any(FeatureStorageNFSErrors)
+}
+
+func (f Features) StorageNFSRetransmits() bool {
+	return f.any(FeatureStorageNFSRetransmits)
+}
+
+func (f Features) StorageNFSIo() bool {
+	return f.any(FeatureStorageNFSIo)
 }
 
 func (f Features) NetworkInterZone() bool {

@@ -39,6 +39,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/health"
 	"go.opentelemetry.io/obi/pkg/internal/avoidedsvc"
 	"go.opentelemetry.io/obi/pkg/internal/pipe/cidr"
+	"go.opentelemetry.io/obi/pkg/internal/statsolly/statagg"
 	"go.opentelemetry.io/obi/pkg/kube"
 	"go.opentelemetry.io/obi/pkg/kube/kubeflags"
 	"go.opentelemetry.io/obi/pkg/metadata"
@@ -288,6 +289,7 @@ discovery:
 				StatFsOperationDurationHistogram:   export.DefaultBuckets.StatFsOperationDurationHistogram,
 				V8JSGCDurationHistogram:            export.DefaultBuckets.V8JSGCDurationHistogram,
 				JVMGCDurationHistogram:             export.DefaultBuckets.JVMGCDurationHistogram,
+				StatNFSClientRPCDurationHistogram:  export.DefaultBuckets.StatNFSClientRPCDurationHistogram,
 			},
 			Instrumentations: []instrumentations.Instrumentation{
 				instrumentations.InstrumentationALL,
@@ -344,6 +346,7 @@ discovery:
 				StatFsOperationDurationHistogram:   export.DefaultBuckets.StatFsOperationDurationHistogram,
 				V8JSGCDurationHistogram:            export.DefaultBuckets.V8JSGCDurationHistogram,
 				JVMGCDurationHistogram:             export.DefaultBuckets.JVMGCDurationHistogram,
+				StatNFSClientRPCDurationHistogram:  export.DefaultBuckets.StatNFSClientRPCDurationHistogram,
 			},
 		},
 		InternalMetrics: imetrics.InternalMetricsConfig{
@@ -1156,8 +1159,42 @@ func TestConfigValidateForReceiverUsesHostMetricsForStats(t *testing.T) {
 	cfg := loadConfig(t, envMap{})
 	cfg.Metrics.Features = export.FeatureStats
 
-	require.ErrorContains(t, cfg.Validate(), "at least one of 'network', 'application', 'stats', 'storage_block' or 'storage_fs'")
+	require.ErrorContains(t, cfg.Validate(), "at least one of 'network', 'application', 'stats', 'storage_block', 'storage_fs' or 'storage_nfs'")
 	require.NoError(t, cfg.ValidateForReceiver())
+}
+
+// The NFS client RPC histogram is counted in the kernel, over the union of
+// the enabled exporters' buckets: more than 32 bounds is a configuration
+// error, whatever buckets a disabled exporter has.
+func TestConfigValidate_NFSBucketsFitTheKernelLayout(t *testing.T) {
+	many := make([]float64, 20)
+	others := make([]float64, 20)
+	for i := range many {
+		many[i] = float64(i+1) / 1000
+		others[i] = float64(i+1)/1000 + 0.0005
+	}
+	cfg := loadConfig(t, envMap{"OTEL_EBPF_PROMETHEUS_PORT": "8999"})
+	cfg.Metrics.Features = export.FeatureStorageNFS
+	cfg.Prometheus.Buckets.StatNFSClientRPCDurationHistogram = many
+	cfg.OTELMetrics.Buckets.StatNFSClientRPCDurationHistogram = others
+	require.NoError(t, cfg.Validate(), "the OTel exporter is off: its buckets do not count")
+
+	layout, err := cfg.NFSHistogramLayout(false)
+	require.NoError(t, err)
+	assert.Equal(t, many, layout.Bounds)
+
+	cfg.OTELMetrics.CommonEndpoint = "http://localhost:4318"
+	require.ErrorContains(t, cfg.Validate(), "stat_nfs_client_rpc_duration_histogram")
+
+	cfg.Metrics.Features = export.FeatureStorageNFSErrors
+	require.NoError(t, cfg.Validate(), "no NFS histogram: no bounds")
+
+	cfg.Metrics.Features = export.FeatureStorageNFS
+	cfg.OTELMetrics.HistogramAggregation = otelcfg.HistogramAggregationExponential
+	require.NoError(t, cfg.Validate(), "exponential OTel histograms: the fixed exponential layout")
+	layout, err = cfg.NFSHistogramLayout(true)
+	require.NoError(t, err)
+	assert.Equal(t, statagg.LayoutExponential, layout.Kind)
 }
 
 func TestConfigValidateStaticSkipsHostCompatibility(t *testing.T) {

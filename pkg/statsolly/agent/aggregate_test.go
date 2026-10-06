@@ -36,6 +36,13 @@ func fsStat(op ebpf.FsOpCode, errno int32) *ebpf.Stat {
 	}
 }
 
+func nfsStat(status int32) *ebpf.Stat {
+	return &ebpf.Stat{
+		Type:   ebpf.StatTypeNFSRPC,
+		NFSRPC: &ebpf.NFSRPC{Version: 3, StatIdx: 6, Status: status, Family: 2, Addr: [16]byte{10, 0, 0, 5}},
+	}
+}
+
 func cloneStat(s *ebpf.Stat) *ebpf.Stat {
 	c := *s
 	if s.BlockIo != nil {
@@ -45,6 +52,10 @@ func cloneStat(s *ebpf.Stat) *ebpf.Stat {
 	if s.FsIo != nil {
 		f := *s.FsIo
 		c.FsIo = &f
+	}
+	if s.NFSRPC != nil {
+		n := *s.NFSRPC
+		c.NFSRPC = &n
 	}
 	return &c
 }
@@ -58,11 +69,11 @@ func TestAggregatedStatDecorator_FiltersLikeThePipeline(t *testing.T) {
 		filters filter.AttributeFamilyConfig
 		kept    int
 	}{
-		{name: "no filter", kept: 7},
+		{name: "no filter", kept: 9},
 		{name: "direction", kept: 2, filters: filter.AttributeFamilyConfig{
 			"disk.io.direction": filter.MatchDefinition{Match: "write"},
 		}},
-		{name: "not error", kept: 4, filters: filter.AttributeFamilyConfig{
+		{name: "not error", kept: 5, filters: filter.AttributeFamilyConfig{
 			"error_type": filter.MatchDefinition{NotMatch: "E*"},
 		}},
 		{name: "fs operation", kept: 1, filters: filter.AttributeFamilyConfig{
@@ -79,7 +90,7 @@ func TestAggregatedStatDecorator_FiltersLikeThePipeline(t *testing.T) {
 				agentIP: net.ParseIP("1.2.3.4"),
 				ctxInfo: &global.ContextInfo{OverrideStatsExportQueue: out},
 				cfg: &obi.Config{
-					Metrics: perapp.GlobalMetricsConfig{Features: export.FeatureStorageBlock | export.FeatureStorageFS},
+					Metrics: perapp.GlobalMetricsConfig{Features: export.FeatureStorageBlock | export.FeatureStorageFS | export.FeatureStorageNFS},
 					Filters: filter.AttributesConfig{Stats: tc.filters},
 				},
 			}
@@ -106,6 +117,8 @@ func TestAggregatedStatDecorator_FiltersLikeThePipeline(t *testing.T) {
 				blockStat(ebpf.CodeBlockDiscard, -95),
 				fsStat(ebpf.CodeFsOpRead, 0),
 				fsStat(ebpf.CodeFsOpFsync, -5),
+				nfsStat(0),
+				nfsStat(-528),
 			}
 			var want []*ebpf.Stat
 			for _, e := range events {
@@ -138,6 +151,7 @@ func TestAggregatedStatDecorator_FiltersLikeThePipeline(t *testing.T) {
 				assert.Equal(t, want[i].CommonAttrs, got[i].CommonAttrs)
 				assert.Equal(t, want[i].BlockIo, got[i].BlockIo)
 				assert.Equal(t, want[i].FsIo, got[i].FsIo)
+				assert.Equal(t, want[i].NFSRPC, got[i].NFSRPC)
 			}
 			close(ringBuf)
 		})

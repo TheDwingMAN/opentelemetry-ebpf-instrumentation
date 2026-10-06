@@ -49,4 +49,43 @@ func TestStatTypeDiscriminators(t *testing.T) {
 	assert.Equal(t, StatTypeTCPRtt, StatType(1))
 	assert.Equal(t, StatTypeBlockIo, StatType(6))
 	assert.Equal(t, StatTypeFsIo, StatType(7))
+	assert.Equal(t, StatTypeNFSRPC, StatType(8))
+}
+
+// The NFS aggregation key and value are read from raw map bytes by offset.
+func TestNFSRPCKeyLayout(t *testing.T) {
+	var k NfsRpcNfsRpcKey
+	assert.Equal(t, uintptr(NFSRPCKeySize), unsafe.Sizeof(k), "sizeof struct nfs_rpc_key")
+	assert.Equal(t, uintptr(0), unsafe.Offsetof(k.Owner))
+	assert.Equal(t, uintptr(nfsKeyStatIdx), unsafe.Offsetof(k.Statidx))
+	assert.Equal(t, uintptr(nfsKeyVers), unsafe.Offsetof(k.Vers))
+	assert.Equal(t, uintptr(nfsKeyFamily), unsafe.Offsetof(k.Family))
+	assert.Equal(t, uintptr(nfsKeyStatus), unsafe.Offsetof(k.Status))
+	assert.Equal(t, uintptr(nfsKeyAddr), unsafe.Offsetof(k.Addr))
+	assert.Equal(t, uintptr(nfsKeyScopeID), unsafe.Offsetof(k.ScopeId))
+
+	const word = unsafe.Sizeof(uint64(0))
+	var v NfsRpcNfsRpcVal
+	assert.Equal(t, uintptr(168), unsafe.Sizeof(v), "sizeof struct nfs_rpc_val")
+	assert.Equal(t, NFSRPCWordSumNs*word, unsafe.Offsetof(v.SumNs))
+	assert.Equal(t, NFSRPCWordTxBytes*word, unsafe.Offsetof(v.TxBytes))
+	assert.Equal(t, NFSRPCWordRxBytes*word, unsafe.Offsetof(v.RxBytes))
+	assert.Equal(t, NFSRPCWordRetrans*word, unsafe.Offsetof(v.Retrans))
+	assert.Equal(t, NFSRPCCounters*word, unsafe.Offsetof(v.Bkt))
+	assert.Len(t, v.Bkt, 33)
+
+	var e NfsRpcNfsRpcExpVal
+	assert.Equal(t, NFSRPCCounters*word, unsafe.Offsetof(e.Bkt))
+	assert.Len(t, e.Bkt, 129)
+}
+
+func TestNFSRPCKeyRoundTrip(t *testing.T) {
+	rpc := &NFSRPC{
+		Owner:   123456,
+		Version: 4, StatIdx: 18, Status: -10008, Family: nfsAFInet6,
+		Addr: [16]byte{0xfe, 0x80, 15: 7}, ScopeID: 3,
+	}
+	key := EncodeNFSRPCKey(rpc)
+	assert.Len(t, key, NFSRPCKeySize)
+	assert.Equal(t, rpc, DecodeNFSRPCKey(key))
 }

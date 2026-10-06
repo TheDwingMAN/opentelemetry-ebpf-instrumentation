@@ -86,13 +86,16 @@ type StatsFetcher struct {
 	log       *slog.Logger
 	objects   *StatsObjects
 	closables []io.Closer
+	nfs       *nfsRPC
 }
 
 func tlog() *slog.Logger {
 	return slog.With("component", "ebpf.StatFetcher")
 }
 
-func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig) (*StatsFetcher, error) {
+func NewStatsFetcher(
+	cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, nfsCfg NFSConfig,
+) (*StatsFetcher, error) {
 	tlog := tlog()
 	if err := rlimit.RemoveMemlock(); err != nil {
 		tlog.Warn("can't remove mem lock. The agent could not be able to start eBPF programs",
@@ -260,6 +263,19 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		closables = append(closables, attachBlockProbes(&objects, useRawBlock, tlog)...)
 	}
 
+	// NFS client RPCs: best-effort, as a collection of its own that attaches
+	// once sunrpc is there. Started before the filesystems, whose first
+	// pass ends the startup BTF burst this one shares.
+	var nfs *nfsRPC
+	if features.StorageNFS() {
+		nfs, err = startNFS(tlog, cfg, *features, nfsCfg)
+		if err != nil {
+			tlog.Warn("NFS programs cannot be loaded; disabling the NFS client RPC metrics", "error", err)
+		} else {
+			closables = append(closables, nfs)
+		}
+	}
+
 	// filesystem I/O: best-effort per filesystem. Each filesystem loads as a
 	// collection of its own, when it becomes probeable (network filesystems)
 	// or when the node first mounts a volume of its type (ext4, xfs, btrfs),
@@ -302,6 +318,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		log:       tlog,
 		objects:   &objects,
 		closables: closables,
+		nfs:       nfs,
 	}, nil
 }
 
@@ -334,6 +351,16 @@ func (m *StatsFetcher) StatsEventsMap() *ebpf.Map {
 
 func (m *StatsFetcher) DebugEventsMap() *ebpf.Map {
 	return m.objects.DebugEvents
+}
+
+// NFSRPCMap returns the map the kernel counts NFS client RPC attempts in,
+// in the layout NFSConfig selected, or nil when no NFS metric is enabled or
+// the NFS maps could not be created.
+func (m *StatsFetcher) NFSRPCMap() *ebpf.Map {
+	if m.nfs == nil {
+		return nil
+	}
+	return m.nfs.accum
 }
 
 // storagePlan is what the block programs need done to the stats spec before

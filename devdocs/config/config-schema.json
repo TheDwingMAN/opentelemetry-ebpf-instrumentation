@@ -324,6 +324,31 @@
             5
           ]
         },
+        "stat_nfs_client_rpc_duration_histogram": {
+          "items": {
+            "type": "number"
+          },
+          "type": "array",
+          "description": "Counts NFS client RPC attempts in the kernel, whose explicit layout holds at most 32 bounds: the union of the OTel and Prometheus bounds must fit in it.",
+          "default": [
+            0.0001,
+            0.00025,
+            0.0005,
+            0.001,
+            0.0025,
+            0.005,
+            0.01,
+            0.025,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1,
+            2.5,
+            5,
+            10
+          ]
+        },
         "stat_tcp_rtt_histogram": {
           "items": {
             "type": "number"
@@ -1131,7 +1156,12 @@
               "storage_fs",
               "storage_fs_duration",
               "storage_fs_errors",
-              "storage_fs_io"
+              "storage_fs_io",
+              "storage_nfs",
+              "storage_nfs_duration",
+              "storage_nfs_errors",
+              "storage_nfs_io",
+              "storage_nfs_retransmits"
             ]
           },
           {

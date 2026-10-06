@@ -166,6 +166,9 @@ func (o *otelMetric) produce(m *accMetric[attribute.Set], now time.Time) (metric
 // cumulative temporality; for delta, what it counted since the last export,
 // and ok=false when nothing counted into it since.
 func (o *otelMetric) emitted(s *series[attribute.Set], now time.Time) (e snapshot, start time.Time, ok bool) {
+	if !s.counted {
+		return snapshot{}, time.Time{}, false
+	}
 	e = snapshot{value: s.value, sumNs: s.sumNs, buckets: s.buckets}
 	if o.temporality != metricdata.DeltaTemporality {
 		return e, s.start, true

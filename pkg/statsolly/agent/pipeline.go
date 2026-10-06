@@ -31,11 +31,12 @@ import (
 
 func statAttrs(s *ebpf.Stat) *pipe.CommonAttrs { return &s.CommonAttrs }
 
-// isStorageStat reports block and filesystem stats. They carry no network
-// endpoints, so drop_external, which keeps only items whose endpoints are
-// Kubernetes objects, must not judge them: it would drop every one.
+// isStorageStat reports block, filesystem and NFS client RPC stats. They
+// carry no network endpoints, so drop_external, which keeps only items whose
+// endpoints are Kubernetes objects, must not judge them: it would drop every
+// one.
 func isStorageStat(s *ebpf.Stat) bool {
-	return s.Type == ebpf.StatTypeBlockIo || s.Type == ebpf.StatTypeFsIo
+	return s.Type == ebpf.StatTypeBlockIo || s.Type == ebpf.StatTypeFsIo || s.Type == ebpf.StatTypeNFSRPC
 }
 
 // fsIoPID extracts the PID namespace, host PID, and the mount (superblock
@@ -152,6 +153,11 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	swi.Add(filter.ByDynamicPIDTracker(s.aggDeps.dynamicIPs, statAttrs, dynamicDecoratedStats, dynamicFilteredStats),
 		swarm.WithID("DynamicPIDFilter"))
 
+	aggregated, err := s.aggregatedFamilies(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	filteredStats := s.ctxInfo.OverrideStatsExportQueue
 	if filteredStats == nil {
 		filteredStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredStats")
@@ -166,12 +172,14 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		Metrics:     &s.cfg.OTELMetrics,
 		SelectorCfg: selectorCfg,
 		CommonCfg:   &s.cfg.Metrics,
+		Aggregated:  aggregated,
 	}, filteredStats), swarm.WithID("OTelExporter"))
 
 	swi.Add(prom.StatsPrometheusEndpoint(s.ctxInfo, &prom.StatsPrometheusConfig{
 		Config:      &s.cfg.Prometheus,
 		SelectorCfg: selectorCfg,
 		CommonCfg:   &s.cfg.Metrics,
+		Aggregated:  aggregated,
 	}, filteredStats), swarm.WithID("PrometheusExporter"))
 
 	swi.Add(swarm.DirectInstance(export.StatPrinterProvider(s.cfg.Stats.Print, filteredStats)),

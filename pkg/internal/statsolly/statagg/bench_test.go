@@ -145,6 +145,64 @@ func BenchmarkCollect(b *testing.B) {
 	}
 }
 
+// splitIOMetric is a Metric with Variants, as StatNFSClientIO's tx/rx split
+// is: one kernel key read as two series.
+func splitIOMetric() *Metric {
+	return &Metric{
+		Name: testSplitIO, Kind: KindCounter,
+		Variants: []Variant{
+			{
+				Value: func(d Delta) uint64 { return d.Counter(wordBytes) },
+				Mark:  func(s *ebpf.Stat) { s.BlockIo.Op = 10 },
+			},
+			{
+				Value: func(d Delta) uint64 { return d.Counter(wordSumNs) },
+				Mark:  func(s *ebpf.Stat) { s.BlockIo.Op = 20 },
+			},
+		},
+	}
+}
+
+// BenchmarkPoll_AllChanged_WithVariants reports the per-key cost with one
+// more Metric, read as two Variants (StatNFSClientIO's shape), added to the
+// three plain metrics BenchmarkPoll_AllChanged polls: the added cost of the
+// Variants, not the baseline.
+func BenchmarkPoll_AllChanged_WithVariants(b *testing.B) {
+	for _, keys := range benchSizes {
+		b.Run(strconv.Itoa(keys), func(b *testing.B) {
+			tf := newTestFamily(b, benchCPUs, diskBounds, func(c *Config) {
+				neverDelete(c)
+				c.Metrics = append(c.Metrics, splitIOMetric())
+			})
+			ks := make([][]byte, keys)
+			for i := range ks {
+				ks[i] = blkKey(uint32(i), ebpf.CodeBlockRead, 0)
+				record(tf.m, tf.layout, ks[i], i%benchCPUs, 4096, 200_000)
+			}
+			tf.otelProducer(b, cumulative, 0)
+			tf.promCollector(b, diskBounds, 0)
+			proj, _ := devOpLabels(false)
+			p := NewProducer(tf.reg, "bench-split", cumulative, 0)
+			if err := p.Add(testSplitIO, OTelMetric{Project: proj}); err != nil {
+				b.Fatal(err)
+			}
+			tf.family.poll(tf.clock.Now())
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				b.StopTimer()
+				for i, k := range ks {
+					record(tf.m, tf.layout, k, i%benchCPUs, 4096, 200_000)
+				}
+				tf.clock.Advance(time.Second)
+				b.StartTimer()
+				tf.family.poll(tf.clock.Now())
+			}
+			perKey(b, keys)
+		})
+	}
+}
+
 // Many-CPU benchmarks: a per-CPU map holds a copy of every value per possible
 // CPU, so what the Reader keeps per key, and what a poll reads, grow with the
 // CPU count. Unless Sparse, every key has counted on every CPU, the worst

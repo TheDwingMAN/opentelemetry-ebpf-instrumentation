@@ -122,7 +122,10 @@ func (b *Block) Record(s *ebpf.Stat, cpu int) {
 	b.Map.AddU32(key, cpu%b.cpus, blockWords*counterSize+(buckets+b.idx(io.QueueNs))*bucketSize, 1)
 }
 
-// idx is bpf/statsolly/hist.h's search: the first bound >= v.
-func (b *Block) idx(v uint64) int {
-	return sort.Search(len(b.Layout.BoundsNs), func(i int) bool { return v <= b.Layout.BoundsNs[i] })
+func (b *Block) idx(v uint64) int { return searchBounds(b.Layout.BoundsNs, v) }
+
+// searchBounds is bpf/statsolly/hist.h's search: the index of the first
+// bound >= v, or len(bounds).
+func searchBounds(bounds []uint64, v uint64) int {
+	return sort.Search(len(bounds), func(i int) bool { return v <= bounds[i] })
 }

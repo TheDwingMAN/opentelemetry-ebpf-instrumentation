@@ -206,7 +206,7 @@ func attachBlockPrograms(t *testing.T, features export.Features) (*StatsFetcher,
 		t.Skip("needs root to load eBPF programs and set up block devices")
 	}
 
-	fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{})
+	fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{}, NFSConfig{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 

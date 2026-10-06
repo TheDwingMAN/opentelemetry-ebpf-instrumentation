@@ -440,7 +440,7 @@ GlobalMetricsConfig is a placeholder for the progressive support of global and p
 
 | YAML Path | Type | Env Var | Default | Values | Deprecated | Description |
 |---|---|---|---|---|---|---|
-| `metrics.features` | `string`[] | `OTEL_EBPF_METRICS_FEATURES` | `1536` | `*`, `all`, `application`, `application_red`, `application_runtime`, `application_service_graph`, `application_sizes`, `application_span_otel`, `ebpf`, `network`, `network_flow_packets`, `network_inter_zone`, `stats`, `stats_tcp_failed_connections`, `stats_tcp_io`, `stats_tcp_retransmits`, `stats_tcp_rtt`, `stats_tcp_successful_connections`, `storage_block`, `storage_block_discard`, `storage_block_duration`, `storage_block_errors`, `storage_block_flush`, `storage_block_io`, `storage_block_queue`, `storage_fs`, `storage_fs_duration`, `storage_fs_errors`, `storage_fs_io`, `application_span` (deprecated), `application_span_sizes` (deprecated), `storage_block_queue_depth` (deprecated) |  | Specifies which metric features to export. Accepted values: application, network, application_span, application_service_graph, stats, ... envDefault is provided to avoid breaking changes |
+| `metrics.features` | `string`[] | `OTEL_EBPF_METRICS_FEATURES` | `1536` | `*`, `all`, `application`, `application_red`, `application_runtime`, `application_service_graph`, `application_sizes`, `application_span_otel`, `ebpf`, `network`, `network_flow_packets`, `network_inter_zone`, `stats`, `stats_tcp_failed_connections`, `stats_tcp_io`, `stats_tcp_retransmits`, `stats_tcp_rtt`, `stats_tcp_successful_connections`, `storage_block`, `storage_block_discard`, `storage_block_duration`, `storage_block_errors`, `storage_block_flush`, `storage_block_io`, `storage_block_queue`, `storage_fs`, `storage_fs_duration`, `storage_fs_errors`, `storage_fs_io`, `storage_nfs`, `storage_nfs_duration`, `storage_nfs_errors`, `storage_nfs_io`, `storage_nfs_retransmits`, `application_span` (deprecated), `application_span_sizes` (deprecated), `storage_block_queue_depth` (deprecated) |  | Specifies which metric features to export. Accepted values: application, network, application_span, application_service_graph, stats, ... envDefault is provided to avoid breaking changes |
 
 ## `name_resolver`
 
@@ -528,10 +528,9 @@ ReverseDNS is currently experimental. It is kept disabled by default and will be
 |---|---|---|---|---|---|---|
 |  | `integer` | `OTEL_METRIC_EXPORT_INTERVAL` | `60000` |  |  | Supports metric intervals as specified by the standard OTEL definition. OTEL_EBPF_METRICS_INTERVAL takes precedence over it. |
 | `otel_metrics_export.allow_service_graph_self_references` | `boolean` | `OTEL_EBPF_ALLOW_SERVICE_GRAPH_SELF_REFERENCES` | `false` |  |  |  |
-| `otel_metrics_export.buckets` | [`Buckets`](#buckets) |  |  |  |  | Buckets defines the histograms bucket boundaries, and allows users to redefine them |
 | `otel_metrics_export.endpoint` | `uri` | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` |  |  |  |  |
 | `otel_metrics_export.extra_span_resource_attributes` | `string`[] | `OTEL_EBPF_EXTRA_SPAN_RESOURCE_ATTRIBUTES` |  |  |  | Adds extra metadata labels to OTEL span metrics from sources whose availability can't be known beforehand. For example, to add the OTEL deployment.environment resource attribute as a OTEL resource attribute, you should add `deployment.environment`. |
-| `otel_metrics_export.features` | `string`[] |  | `0` | `*`, `all`, `application`, `application_red`, `application_runtime`, `application_service_graph`, `application_sizes`, `application_span_otel`, `ebpf`, `network`, `network_flow_packets`, `network_inter_zone`, `stats`, `stats_tcp_failed_connections`, `stats_tcp_io`, `stats_tcp_retransmits`, `stats_tcp_rtt`, `stats_tcp_successful_connections`, `storage_block`, `storage_block_discard`, `storage_block_duration`, `storage_block_errors`, `storage_block_flush`, `storage_block_io`, `storage_block_queue`, `storage_fs`, `storage_fs_duration`, `storage_fs_errors`, `storage_fs_io`, `application_span` (deprecated), `application_span_sizes` (deprecated), `storage_block_queue_depth` (deprecated) | Yes | Features specifies which metric features to export. Accepted values: application, network, application_span, application_service_graph, ...  use the top-level metrics.features property (perapp.GlobalMetricsConfig.Features) instead. |
+| `otel_metrics_export.features` | `string`[] |  | `0` | `*`, `all`, `application`, `application_red`, `application_runtime`, `application_service_graph`, `application_sizes`, `application_span_otel`, `ebpf`, `network`, `network_flow_packets`, `network_inter_zone`, `stats`, `stats_tcp_failed_connections`, `stats_tcp_io`, `stats_tcp_retransmits`, `stats_tcp_rtt`, `stats_tcp_successful_connections`, `storage_block`, `storage_block_discard`, `storage_block_duration`, `storage_block_errors`, `storage_block_flush`, `storage_block_io`, `storage_block_queue`, `storage_fs`, `storage_fs_duration`, `storage_fs_errors`, `storage_fs_io`, `storage_nfs`, `storage_nfs_duration`, `storage_nfs_errors`, `storage_nfs_io`, `storage_nfs_retransmits`, `application_span` (deprecated), `application_span_sizes` (deprecated), `storage_block_queue_depth` (deprecated) | Yes | Features specifies which metric features to export. Accepted values: application, network, application_span, application_service_graph, ...  use the top-level metrics.features property (perapp.GlobalMetricsConfig.Features) instead. |
 | `otel_metrics_export.histogram_aggregation` | `string` | `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION` | `explicit_bucket_histogram` | `base2_exponential_bucket_histogram`, `explicit_bucket_histogram` |  |  |
 | `otel_metrics_export.insecure_skip_verify` | `boolean` | `OTEL_EBPF_INSECURE_SKIP_VERIFY` | `false` |  |  | Enables skipping TLS certificate verification (not standard, so we don't follow the same naming convention) |
 | `otel_metrics_export.instrumentations` | `string`[] | `OTEL_EBPF_METRICS_INSTRUMENTATIONS` | `*` | `*`, `aerospike`, `amqp`, `couchbase`, `dns`, `genai`, `gpu`, `grpc`, `http`, `kafka`, `memcached`, `mongo`, `mqtt`, `nats`, `redis`, `sql`, `sunrpc` |  | Allows configuration of which instrumentations should be enabled, e.g. http, grpc, sql... |
@@ -540,6 +539,25 @@ ReverseDNS is currently experimental. It is kept disabled by default and will be
 | `otel_metrics_export.protocol` | `string` | `OTEL_EXPORTER_OTLP_PROTOCOL` |  | ``, `debug`, `grpc`, `http/json`, `http/protobuf` |  |  |
 | `otel_metrics_export.reporters_cache_len` | `integer` | `OTEL_EBPF_METRICS_REPORT_CACHE_LEN` | `256` |  |  |  |
 | `otel_metrics_export.ttl` | `duration` | `OTEL_EBPF_METRICS_TTL` | `5m` | `30s`, `5m`, `1ms`, etc |  | Specifies the time since a metric was updated for the last time until it is removed from the metrics set. |
+
+### `otel_metrics_export.buckets`
+
+Buckets defines the histograms bucket boundaries, and allows users to redefine them
+
+| YAML Path | Type | Env Var | Default | Values | Deprecated | Description |
+|---|---|---|---|---|---|---|
+| `otel_metrics_export.buckets.duration_histogram` | `number`[] |  | `0`, `0.005`, `0.01`, `0.025`, `0.05`, `0.075`, `0.1`, `0.25`, `0.5`, `0.75`, `1`, `2.5`, `5`, `7.5`, `10` |  |  |  |
+| `otel_metrics_export.buckets.gen_ai_client_operation_duration_histogram` | `number`[] |  | `0.01`, `0.02`, `0.04`, `0.08`, `0.16`, `0.32`, `0.64`, `1.28`, `2.56`, `5.12`, `10.24`, `20.48`, `40.96`, `81.92` |  |  |  |
+| `otel_metrics_export.buckets.gen_ai_client_token_usage_histogram` | `number`[] |  | `1`, `4`, `16`, `64`, `256`, `1024`, `4096`, `16384`, `65536`, `262144`, `1.048576e+06`, `4.194304e+06`, `1.6777216e+07`, `6.7108864e+07` |  |  |  |
+| `otel_metrics_export.buckets.jvm_gc_duration_histogram` | `number`[] |  | `0.01`, `0.1`, `1`, `10` |  |  |  |
+| `otel_metrics_export.buckets.request_size_histogram` | `number`[] |  | `0`, `32`, `64`, `128`, `256`, `512`, `1024`, `2048`, `4096`, `8192` |  |  |  |
+| `otel_metrics_export.buckets.response_size_histogram` | `number`[] |  | `0`, `32`, `64`, `128`, `256`, `512`, `1024`, `2048`, `4096`, `8192` |  |  |  |
+| `otel_metrics_export.buckets.stat_disk_operation_duration_histogram` | `number`[] |  | `0.0001`, `0.00025`, `0.0005`, `0.001`, `0.0025`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1`, `2.5`, `5` |  |  |  |
+| `otel_metrics_export.buckets.stat_disk_queue_depth_histogram` | `number`[] |  | `1`, `2`, `4`, `8`, `16`, `32`, `64`, `128`, `256`, `512`, `1024` |  |  |  |
+| `otel_metrics_export.buckets.stat_fs_operation_duration_histogram` | `number`[] |  | `0.0001`, `0.00025`, `0.0005`, `0.001`, `0.0025`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1`, `2.5`, `5` |  |  |  |
+| `otel_metrics_export.buckets.stat_nfs_client_rpc_duration_histogram` | `number`[] |  | `0.0001`, `0.00025`, `0.0005`, `0.001`, `0.0025`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1`, `2.5`, `5`, `10` |  |  | Counts NFS client RPC attempts in the kernel, whose explicit layout holds at most 32 bounds: the union of the OTel and Prometheus bounds must fit in it. |
+| `otel_metrics_export.buckets.stat_tcp_rtt_histogram` | `number`[] |  | `0.0005`, `0.001`, `0.002`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1` |  |  |  |
+| `otel_metrics_export.buckets.v8js_gc_duration_histogram` | `number`[] |  | `0.005`, `0.01`, `0.025`, `0.05`, `0.075`, `0.1`, `0.25`, `0.5`, `0.75`, `1`, `2.5`, `5`, `7.5`, `10` |  |  |  |
 
 ### `otel_metrics_export.exponential_histogram`
 
@@ -584,17 +602,35 @@ TODO: TLS
 | YAML Path | Type | Env Var | Default | Values | Deprecated | Description |
 |---|---|---|---|---|---|---|
 | `prometheus_export.allow_service_graph_self_references` | `boolean` | `OTEL_EBPF_PROMETHEUS_ALLOW_SERVICE_GRAPH_SELF_REFERENCES` | `false` |  |  |  |
-| `prometheus_export.buckets` | [`Buckets`](#buckets) |  |  |  |  | Buckets defines the histograms bucket boundaries, and allows users to redefine them |
 | `prometheus_export.disable_build_info` | `boolean` | `OTEL_EBPF_PROMETHEUS_DISABLE_BUILD_INFO` | `false` |  |  |  |
 | `prometheus_export.exemplar_filter` | `string` | `OTEL_EBPF_PROMETHEUS_EXEMPLAR_FILTER` |  |  |  | Controls when exemplars are attached to metrics. Accepted values: "always_on", "always_off", "trace_based". Defaults to "always_off": do not attach exemplars. This mimics the OTEL_METRICS_EXEMPLAR_FILTER specification. |
 | `prometheus_export.extra_resource_attributes` | `string`[] | `OTEL_EBPF_PROMETHEUS_EXTRA_RESOURCE_ATTRIBUTES` |  |  |  | Adds extra metadata labels to Prometheus metrics from sources whose availability can't be known beforehand. For example, to add the OTEL deployment.environment resource attribute as a Prometheus resource attribute, you should add `deployment.environment`. |
 | `prometheus_export.extra_span_resource_attributes` | `string`[] | `OTEL_EBPF_PROMETHEUS_EXTRA_SPAN_RESOURCE_ATTRIBUTES` |  |  |  | Adds extra metadata labels to Prometheus span metrics from sources whose availability can't be known beforehand. For example, to add the OTEL deployment.environment resource attribute as a Prometheus resource attribute, you should add `deployment.environment`. |
-| `prometheus_export.features` | `string`[] | `OTEL_EBPF_PROMETHEUS_FEATURES` | `0` | `*`, `all`, `application`, `application_red`, `application_runtime`, `application_service_graph`, `application_sizes`, `application_span_otel`, `ebpf`, `network`, `network_flow_packets`, `network_inter_zone`, `stats`, `stats_tcp_failed_connections`, `stats_tcp_io`, `stats_tcp_retransmits`, `stats_tcp_rtt`, `stats_tcp_successful_connections`, `storage_block`, `storage_block_discard`, `storage_block_duration`, `storage_block_errors`, `storage_block_flush`, `storage_block_io`, `storage_block_queue`, `storage_fs`, `storage_fs_duration`, `storage_fs_errors`, `storage_fs_io`, `application_span` (deprecated), `application_span_sizes` (deprecated), `storage_block_queue_depth` (deprecated) | Yes | Features specifies which metric features to export. Accepted values: application, network, application_span, application_service_graph, ...  use the top-level metrics.features property (perapp.GlobalMetricsConfig.Features) instead. |
+| `prometheus_export.features` | `string`[] | `OTEL_EBPF_PROMETHEUS_FEATURES` | `0` | `*`, `all`, `application`, `application_red`, `application_runtime`, `application_service_graph`, `application_sizes`, `application_span_otel`, `ebpf`, `network`, `network_flow_packets`, `network_inter_zone`, `stats`, `stats_tcp_failed_connections`, `stats_tcp_io`, `stats_tcp_retransmits`, `stats_tcp_rtt`, `stats_tcp_successful_connections`, `storage_block`, `storage_block_discard`, `storage_block_duration`, `storage_block_errors`, `storage_block_flush`, `storage_block_io`, `storage_block_queue`, `storage_fs`, `storage_fs_duration`, `storage_fs_errors`, `storage_fs_io`, `storage_nfs`, `storage_nfs_duration`, `storage_nfs_errors`, `storage_nfs_io`, `storage_nfs_retransmits`, `application_span` (deprecated), `application_span_sizes` (deprecated), `storage_block_queue_depth` (deprecated) | Yes | Features specifies which metric features to export. Accepted values: application, network, application_span, application_service_graph, ...  use the top-level metrics.features property (perapp.GlobalMetricsConfig.Features) instead. |
 | `prometheus_export.instrumentations` | `string`[] | `OTEL_EBPF_PROMETHEUS_INSTRUMENTATIONS` | `*` | `*`, `aerospike`, `amqp`, `couchbase`, `dns`, `genai`, `gpu`, `grpc`, `http`, `kafka`, `memcached`, `mongo`, `mqtt`, `nats`, `redis`, `sql`, `sunrpc` |  | Allows configuration of which instrumentations should be enabled, e.g. http, grpc, sql... |
 | `prometheus_export.path` | `string` | `OTEL_EBPF_PROMETHEUS_PATH` | `/metrics` |  |  |  |
 | `prometheus_export.port` | `integer` | `OTEL_EBPF_PROMETHEUS_PORT` | `0` |  |  | 0 means disabled |
 | `prometheus_export.service_cache_size` | `integer` |  | `10000` |  |  |  |
 | `prometheus_export.ttl` | `duration` | `OTEL_EBPF_PROMETHEUS_TTL` | `5m` | `30s`, `5m`, `1ms`, etc |  | Specifies the time since a metric was updated for the last time until it is removed from the metrics set. |
+
+### `prometheus_export.buckets`
+
+Buckets defines the histograms bucket boundaries, and allows users to redefine them
+
+| YAML Path | Type | Env Var | Default | Values | Deprecated | Description |
+|---|---|---|---|---|---|---|
+| `prometheus_export.buckets.duration_histogram` | `number`[] |  | `0`, `0.005`, `0.01`, `0.025`, `0.05`, `0.075`, `0.1`, `0.25`, `0.5`, `0.75`, `1`, `2.5`, `5`, `7.5`, `10` |  |  |  |
+| `prometheus_export.buckets.gen_ai_client_operation_duration_histogram` | `number`[] |  | `0.01`, `0.02`, `0.04`, `0.08`, `0.16`, `0.32`, `0.64`, `1.28`, `2.56`, `5.12`, `10.24`, `20.48`, `40.96`, `81.92` |  |  |  |
+| `prometheus_export.buckets.gen_ai_client_token_usage_histogram` | `number`[] |  | `1`, `4`, `16`, `64`, `256`, `1024`, `4096`, `16384`, `65536`, `262144`, `1.048576e+06`, `4.194304e+06`, `1.6777216e+07`, `6.7108864e+07` |  |  |  |
+| `prometheus_export.buckets.jvm_gc_duration_histogram` | `number`[] |  | `0.01`, `0.1`, `1`, `10` |  |  |  |
+| `prometheus_export.buckets.request_size_histogram` | `number`[] |  | `0`, `32`, `64`, `128`, `256`, `512`, `1024`, `2048`, `4096`, `8192` |  |  |  |
+| `prometheus_export.buckets.response_size_histogram` | `number`[] |  | `0`, `32`, `64`, `128`, `256`, `512`, `1024`, `2048`, `4096`, `8192` |  |  |  |
+| `prometheus_export.buckets.stat_disk_operation_duration_histogram` | `number`[] |  | `0.0001`, `0.00025`, `0.0005`, `0.001`, `0.0025`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1`, `2.5`, `5` |  |  |  |
+| `prometheus_export.buckets.stat_disk_queue_depth_histogram` | `number`[] |  | `1`, `2`, `4`, `8`, `16`, `32`, `64`, `128`, `256`, `512`, `1024` |  |  |  |
+| `prometheus_export.buckets.stat_fs_operation_duration_histogram` | `number`[] |  | `0.0001`, `0.00025`, `0.0005`, `0.001`, `0.0025`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1`, `2.5`, `5` |  |  |  |
+| `prometheus_export.buckets.stat_nfs_client_rpc_duration_histogram` | `number`[] |  | `0.0001`, `0.00025`, `0.0005`, `0.001`, `0.0025`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1`, `2.5`, `5`, `10` |  |  | Counts NFS client RPC attempts in the kernel, whose explicit layout holds at most 32 bounds: the union of the OTel and Prometheus bounds must fit in it. |
+| `prometheus_export.buckets.stat_tcp_rtt_histogram` | `number`[] |  | `0.0005`, `0.001`, `0.002`, `0.005`, `0.01`, `0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1` |  |  |  |
+| `prometheus_export.buckets.v8js_gc_duration_histogram` | `number`[] |  | `0.005`, `0.01`, `0.025`, `0.05`, `0.075`, `0.1`, `0.25`, `0.5`, `0.75`, `1`, `2.5`, `5`, `7.5`, `10` |  |  |  |
 
 ### `prometheus_export.native_histogram`
 
@@ -666,24 +702,6 @@ ReverseDNS is currently experimental. It is kept disabled by default and will be
 ---
 
 ## Type Definitions
-
-### Buckets
-
-Buckets defines the histograms bucket boundaries, and allows users to redefine them
-
-| Field | Type | Values | Description |
-|---|---|---|---|
-| `duration_histogram` | `number`[] |  |  |
-| `gen_ai_client_operation_duration_histogram` | `number`[] |  |  |
-| `gen_ai_client_token_usage_histogram` | `number`[] |  |  |
-| `jvm_gc_duration_histogram` | `number`[] |  |  |
-| `request_size_histogram` | `number`[] |  |  |
-| `response_size_histogram` | `number`[] |  |  |
-| `stat_disk_operation_duration_histogram` | `number`[] |  |  |
-| `stat_disk_queue_depth_histogram` | `number`[] |  |  |
-| `stat_fs_operation_duration_histogram` | `number`[] |  |  |
-| `stat_tcp_rtt_histogram` | `number`[] |  |  |
-| `v8js_gc_duration_histogram` | `number`[] |  |  |
 
 ### ExtraGroupAttributesMap
 
@@ -843,7 +861,7 @@ SvcMetricsConfig is equivalent to GlobalMetricsConfig, but avoids defining envir
 
 | Field | Type | Values | Description |
 |---|---|---|---|
-| `features` | `string`[] | `*`, `all`, `application`, `application_red`, `application_runtime`, `application_service_graph`, `application_sizes`, `application_span_otel`, `ebpf`, `network`, `network_flow_packets`, `network_inter_zone`, `stats`, `stats_tcp_failed_connections`, `stats_tcp_io`, `stats_tcp_retransmits`, `stats_tcp_rtt`, `stats_tcp_successful_connections`, `storage_block`, `storage_block_discard`, `storage_block_duration`, `storage_block_errors`, `storage_block_flush`, `storage_block_io`, `storage_block_queue`, `storage_fs`, `storage_fs_duration`, `storage_fs_errors`, `storage_fs_io`, `application_span` (deprecated), `application_span_sizes` (deprecated), `storage_block_queue_depth` (deprecated) | Specifies which metric features to export. Accepted values: application, network, application_span, application_service_graph, ... |
+| `features` | `string`[] | `*`, `all`, `application`, `application_red`, `application_runtime`, `application_service_graph`, `application_sizes`, `application_span_otel`, `ebpf`, `network`, `network_flow_packets`, `network_inter_zone`, `stats`, `stats_tcp_failed_connections`, `stats_tcp_io`, `stats_tcp_retransmits`, `stats_tcp_rtt`, `stats_tcp_successful_connections`, `storage_block`, `storage_block_discard`, `storage_block_duration`, `storage_block_errors`, `storage_block_flush`, `storage_block_io`, `storage_block_queue`, `storage_fs`, `storage_fs_duration`, `storage_fs_errors`, `storage_fs_io`, `storage_nfs`, `storage_nfs_duration`, `storage_nfs_errors`, `storage_nfs_io`, `storage_nfs_retransmits`, `application_span` (deprecated), `application_span_sizes` (deprecated), `storage_block_queue_depth` (deprecated) | Specifies which metric features to export. Accepted values: application, network, application_span, application_service_graph, ... |
 
 ### NumericRange
 

@@ -11,7 +11,6 @@ import (
 	"io"
 	"iter"
 	"log/slog"
-	"slices"
 	"sync"
 
 	"github.com/cilium/ebpf"
@@ -498,21 +497,9 @@ func (l *fsLoader) prepare(plan fsAttachPlan) (*ebpf.CollectionSpec, ebpf.Collec
 	return spec, *opts, nil
 }
 
-// cacheFor returns the BTF cache for a load of a filesystem in module. A
-// cache lists the kernel's modules once, the first time it relocates a load,
-// so a module that loaded since (nfs, on the node's first NFS mount) is seen
-// only through a fresh cache, which replaces the burst's.
+// cacheFor returns the BTF cache for a load of a filesystem in module.
 func (l *fsLoader) cacheFor(module string) *btf.Cache {
-	cache := l.btf.Cache()
-	if !moduleBTFExists(module) {
-		return cache
-	}
-	modules, err := cache.Modules()
-	if err != nil || slices.Contains(modules, module) {
-		return cache
-	}
-	l.log.Debug("kernel module loaded after the BTF cache was filled; parsing the kernel BTF again", "module", module)
-	return l.btf.Renew()
+	return l.btf.CacheFor(l.log, module)
 }
 
 // relocationTargets returns the kernel BTF and the BTF of module, when some

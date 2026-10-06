@@ -38,6 +38,11 @@ type seriesCore struct {
 
 	start   time.Time
 	updated time.Time
+	// counted is set once a key counted something into the series. A key
+	// links its series when it is decorated, but a counter that skips zero
+	// values may never count into it; like a per-event series never
+	// recorded, such a series is not exported.
+	counted bool
 
 	// dead is set once the series expired; the next count revives it as a
 	// new series, as the per-event exporters recreate a removed series.
@@ -54,6 +59,9 @@ type reviver interface {
 func (s *seriesCore) touch(now time.Time) *seriesCore {
 	if s.dead {
 		s = s.owner.revive(now)
+	}
+	if !s.counted {
+		s.counted, s.start = true, now
 	}
 	s.updated = now
 	return s

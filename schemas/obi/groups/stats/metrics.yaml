@@ -782,3 +782,162 @@ groups:
       - ref: k8s.storageclass.name
         requirement_level:
           conditionally_required: if Kubernetes decoration is enabled and the PersistentVolume is Bound
+
+  # NFS client RPC stats. Emitted when the `storage_nfs` feature (or one of
+  # `storage_nfs_duration`, `storage_nfs_errors`, `storage_nfs_retransmits`)
+  # is enabled; `storage_fs` does not imply it. Counted in the kernel from the
+  # sunrpc `rpc_stats_latency` tracepoint, once per RPC attempt, which is how
+  # /proc/self/mountstats counts `ops` and `errors`. Not
+  # rpc.client.call.duration: OBI emits that one for application-level ONC
+  # RPC, and an NFS client RPC is made by the kernel, not by an application.
+  #
+  # NFSv2/v3 RPCs carry onc_rpc.procedure.name; NFSv4 RPCs, whose wire
+  # procedure is always COMPOUND, carry nfs.operation.name instead (the
+  # client operation, such as READ, OPEN or OPEN_NOATTR).
+  - id: metric.obi.obi.stat.nfs.client.rpc.duration
+    type: metric
+    metric_name: obi.stat.nfs.client.rpc.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Execute time of each NFS client RPC attempt, from the task's start to
+      its end, backlog and retransmissions included. A retry the server asks
+      for (NFSv3 JUKEBOX, NFSv4 DELAY or GRACE) is a new attempt, counted as
+      an error followed by a slower attempt that includes the client's
+      backoff (5 s after a JUKEBOX); it is not a retransmission.
+    attributes:
+      - ref: onc_rpc.version
+        requirement_level: recommended
+      - ref: onc_rpc.procedure.name
+        requirement_level:
+          conditionally_required: for NFSv2 and NFSv3 RPCs
+      - ref: nfs.operation.name
+        requirement_level:
+          conditionally_required: for NFSv4 RPCs
+      - ref: server.address
+        requirement_level:
+          recommended: the server's IP address, as the mount option addr= shows it
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: when Kubernetes metadata is enabled
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.nfs.client.rpc.errors
+    type: metric
+    metric_name: obi.stat.nfs.client.rpc.errors
+    instrument: counter
+    unit: "{error}"
+    stability: development
+    brief: >
+      Count of NFS client RPC attempts that ended with an error status, as
+      mountstats counts errors: normal misses (ENOENT on LOOKUP or OPEN,
+      which every O_CREAT on NFSv3 produces) and server back-pressure
+      (EJUKEBOX, NFS4ERR_DELAY) included.
+    attributes:
+      - ref: onc_rpc.version
+        requirement_level: recommended
+      - ref: onc_rpc.procedure.name
+        requirement_level:
+          conditionally_required: for NFSv2 and NFSv3 RPCs
+      - ref: nfs.operation.name
+        requirement_level:
+          conditionally_required: for NFSv4 RPCs
+      - ref: server.address
+        requirement_level:
+          recommended: the server's IP address, as the mount option addr= shows it
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: when Kubernetes metadata is enabled
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level: required
+
+  - id: metric.obi.obi.stat.nfs.client.rpc.retransmits
+    type: metric
+    metric_name: obi.stat.nfs.client.rpc.retransmits
+    instrument: counter
+    unit: "{retransmit}"
+    stability: development
+    brief: >
+      Count of retransmissions of NFS client RPC requests: every transmission
+      of an attempt after its first. The OBI counterpart of the hostmetrics
+      receiver's nfs.client.rpc.retransmit.count.
+    attributes:
+      - ref: onc_rpc.version
+        requirement_level: recommended
+      - ref: onc_rpc.procedure.name
+        requirement_level:
+          conditionally_required: for NFSv2 and NFSv3 RPCs
+      - ref: nfs.operation.name
+        requirement_level:
+          conditionally_required: for NFSv4 RPCs
+      - ref: server.address
+        requirement_level:
+          recommended: the server's IP address, as the mount option addr= shows it
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: when Kubernetes metadata is enabled
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+
+  # Wire bytes of each RPC attempt's call and reply: the sunrpc
+  # rpc_stats_latency tracepoint's rq_xmit_bytes_sent and
+  # rq_reply_bytes_recvd, the same fields /proc/self/mountstats sums, so this
+  # includes RPC/XDR headers and every procedure (larger than the fs NFS
+  # bytes of obi.stat.fs.io). The kernel counts an attempt's two directions
+  # in the same key, so by default this metric's series are one pair per
+  # server, not broken down by procedure or version as the other NFS client
+  # RPC metrics are.
+  - id: metric.obi.obi.stat.nfs.client.io
+    type: metric
+    metric_name: obi.stat.nfs.client.io
+    instrument: counter
+    unit: "By"
+    stability: development
+    brief: >
+      Count of wire bytes of NFS client RPC calls and replies, by direction:
+      transmit is sent to the server, receive is from it.
+    attributes:
+      - ref: network.io.direction
+        requirement_level: recommended
+      - ref: onc_rpc.version
+        requirement_level: opt_in
+      - ref: onc_rpc.procedure.name
+        requirement_level: opt_in
+      - ref: nfs.operation.name
+        requirement_level: opt_in
+      - ref: server.address
+        requirement_level:
+          recommended: the server's IP address, as the mount option addr= shows it
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: when Kubernetes metadata is enabled
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in

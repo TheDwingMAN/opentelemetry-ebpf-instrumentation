@@ -214,6 +214,7 @@ func fakeIoRecord(srcPort, dstPort uint16, direction uint8, bytes uint32) *ebpf.
 func TestIsStorageStat(t *testing.T) {
 	assert.True(t, isStorageStat(&ebpf.Stat{Type: ebpf.StatTypeBlockIo}))
 	assert.True(t, isStorageStat(&ebpf.Stat{Type: ebpf.StatTypeFsIo}))
+	assert.True(t, isStorageStat(&ebpf.Stat{Type: ebpf.StatTypeNFSRPC}))
 	assert.False(t, isStorageStat(&ebpf.Stat{Type: ebpf.StatTypeTCPRtt}))
 }
 

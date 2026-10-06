@@ -22,6 +22,10 @@ type Buckets struct {
 	StatFsOperationDurationHistogram   []float64 `yaml:"stat_fs_operation_duration_histogram"`
 	V8JSGCDurationHistogram            []float64 `yaml:"v8js_gc_duration_histogram"`
 	JVMGCDurationHistogram             []float64 `yaml:"jvm_gc_duration_histogram"`
+	// StatNFSClientRPCDurationHistogram counts NFS client RPC attempts in the
+	// kernel, whose explicit layout holds at most 32 bounds: the union of the
+	// OTel and Prometheus bounds must fit in it.
+	StatNFSClientRPCDurationHistogram []float64 `yaml:"stat_nfs_client_rpc_duration_histogram"`
 }
 
 // DefaultBuckets define the default explicit bucket boundaries. They are ignored by the OTEL exporter when
@@ -52,6 +56,12 @@ var DefaultBuckets = Buckets{
 	// Filesystem ops: sub-millisecond page-cache hits up to multi-second
 	// stalls on a degraded server.
 	StatFsOperationDurationHistogram: []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 2.5, 5.0},
+
+	// NFS client RPC attempts: the filesystem bounds plus 10 s. An attempt
+	// that follows a server's NFSv3 JUKEBOX or NFSv4 DELAY includes the
+	// client's backoff (5 s for JUKEBOX), which the filesystem bounds would
+	// leave in +Inf.
+	StatNFSClientRPCDurationHistogram: []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 2.5, 5.0, 10.0},
 
 	// https://opentelemetry.io/docs/specs/semconv/runtime/nodejs-metrics/#metric-v8jsgcduration
 	V8JSGCDurationHistogram: []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10},

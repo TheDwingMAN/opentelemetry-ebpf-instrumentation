@@ -1399,6 +1399,88 @@ Count of filesystem read or write operations that failed, broken down by filesys
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
 
+## `obi.stat.nfs.client.io`
+
+Count of wire bytes of NFS client RPC calls and replies, by direction: transmit is sent to the server, receive is from it.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: when Kubernetes metadata is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `network.io.direction` | enum | `recommended` | development | The network IO operation direction. | transmit |
+| `nfs.operation.name` | string | `opt_in` | development | NFSv4+ operation name. | OPEN; READ; GETATTR |
+| `onc_rpc.procedure.name` | string | `opt_in` | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `opt_in` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended`: the server's IP address, as the mount option addr= shows it | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
+## `obi.stat.nfs.client.rpc.duration`
+
+Execute time of each NFS client RPC attempt, from the task's start to its end, backlog and retransmissions included. A retry the server asks for (NFSv3 JUKEBOX, NFSv4 DELAY or GRACE) is a new attempt, counted as an error followed by a slower attempt that includes the client's backoff (5 s after a JUKEBOX); it is not a retransmission.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: when Kubernetes metadata is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `nfs.operation.name` | string | `conditionally_required`: for NFSv4 RPCs | development | NFSv4+ operation name. | OPEN; READ; GETATTR |
+| `onc_rpc.procedure.name` | string | `conditionally_required`: for NFSv2 and NFSv3 RPCs | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended`: the server's IP address, as the mount option addr= shows it | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
+## `obi.stat.nfs.client.rpc.errors`
+
+Count of NFS client RPC attempts that ended with an error status, as mountstats counts errors: normal misses (ENOENT on LOOKUP or OPEN, which every O_CREAT on NFSv3 produces) and server back-pressure (EJUKEBOX, NFS4ERR_DELAY) included.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {error} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `required` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: when Kubernetes metadata is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `nfs.operation.name` | string | `conditionally_required`: for NFSv4 RPCs | development | NFSv4+ operation name. | OPEN; READ; GETATTR |
+| `onc_rpc.procedure.name` | string | `conditionally_required`: for NFSv2 and NFSv3 RPCs | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended`: the server's IP address, as the mount option addr= shows it | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
+## `obi.stat.nfs.client.rpc.retransmits`
+
+Count of retransmissions of NFS client RPC requests: every transmission of an attempt after its first. The OBI counterpart of the hostmetrics receiver's nfs.client.rpc.retransmit.count.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {retransmit} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: when Kubernetes metadata is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `nfs.operation.name` | string | `conditionally_required`: for NFSv4 RPCs | development | NFSv4+ operation name. | OPEN; READ; GETATTR |
+| `onc_rpc.procedure.name` | string | `conditionally_required`: for NFSv2 and NFSv3 RPCs | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended`: the server's IP address, as the mount option addr= shows it | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
 ## `obi.stat.tcp.failed.connections`
 
 Count of TCP connections that failed to establish, broken down by `reason`.

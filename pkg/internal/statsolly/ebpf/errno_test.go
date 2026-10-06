@@ -56,3 +56,30 @@ func TestErrnoNameForErrorOmitsSuccess(t *testing.T) {
 	assert.Empty(t, errnoNameForError(0))
 	assert.Equal(t, "EJUKEBOX", errnoNameForError(-528))
 }
+
+// The NFS RPC errors S0-c observed, as error.type names them: tk_status is
+// -errno, or -528 for a v3 JUKEBOX, or -NFS4ERR_* for a v4 status the client
+// does not map.
+func TestNFSRPCErrorType(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version uint8
+		statIdx uint16
+		status  int32
+		want    string
+	}{
+		{"v3 READ", 3, 6, -13, "EACCES"},
+		{"v3 WRITE", 3, 7, -528, "EJUKEBOX"},
+		{"v3 LOOKUP", 3, 3, -2, "ENOENT"},
+		{"v4 READ", 4, 1, -13, "EACCES"},
+		{"v4 OPEN_NOATTR", 4, 25, -13, "EACCES"},
+		{"v4 OPEN", 4, 2, -10008, "NFS4ERR_DELAY"},
+		// UNVERIFIED: GRACE is expected on the same path as DELAY; S0-c
+		// could not reproduce it without restarting the lab's nfsd.
+		{"v4 OPEN in grace", 4, 2, -10013, "NFS4ERR_GRACE"},
+		{"success", 3, 6, 0, ""},
+	} {
+		s := &Stat{Type: StatTypeNFSRPC, NFSRPC: &NFSRPC{Version: tc.version, StatIdx: tc.statIdx, Status: tc.status}}
+		assert.Equal(t, tc.want, errorTypeStr(s), tc.name)
+	}
+}

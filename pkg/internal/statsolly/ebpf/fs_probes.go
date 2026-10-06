@@ -7,6 +7,7 @@ package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
 	"bufio"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -147,6 +148,24 @@ func (b *btfBurst) Renew() *btf.Cache {
 	defer b.mu.Unlock()
 	b.reset()
 	return b.current()
+}
+
+// CacheFor returns the burst's cache for a load that relocates against, or
+// attaches to, module. A cache lists the kernel's modules once, the first
+// time it relocates a load, so a module that loaded since (nfs, on the
+// node's first NFS mount) is seen only through a fresh cache, which replaces
+// the burst's.
+func (b *btfBurst) CacheFor(log *slog.Logger, module string) *btf.Cache {
+	cache := b.Cache()
+	if !moduleBTFExists(module) {
+		return cache
+	}
+	modules, err := cache.Modules()
+	if err != nil || slices.Contains(modules, module) {
+		return cache
+	}
+	log.Debug("kernel module loaded after the BTF cache was filled; parsing the kernel BTF again", "module", module)
+	return b.Renew()
 }
 
 // Release ends the burst: its cache, and every BTF parsed into it, is

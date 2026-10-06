@@ -78,13 +78,42 @@ type Metric struct {
 	SumWord    int
 	BucketWord int
 	Layout     *Layout
+
+	// Variants, when set, makes the metric emit, from every key, one series
+	// per entry instead of one: each reads its own word of the same key's
+	// Delta and, before its series' attributes are read, tags the stat with
+	// whatever its Mark sets (e.g. the two directions of NFS client IO's
+	// wire bytes, which the kernel counts together in one key). Two
+	// variants whose attributes end up equal, the way two different real
+	// keys can, add into that one series together. Kind must be
+	// KindCounter; Value and SkipZero are unused.
+	Variants []Variant
+}
+
+// Variant is one of a split Metric's several series from each key.
+type Variant struct {
+	// Value is what this variant's series adds for a key's Delta.
+	Value func(d Delta) uint64
+	// Mark sets, on the stat a key decorates to, whatever this metric's
+	// attributes read to tell this variant's series from the others. Nil
+	// for a variant that needs no mark.
+	Mark func(stat *ebpf.Stat)
 }
 
 func (m *Metric) validate(layout ValueLayout) error {
 	words := layout.Counters + layout.Buckets
 	switch m.Kind {
 	case KindCounter, KindUpDownCounter:
-		if m.Value == nil {
+		if len(m.Variants) > 0 {
+			if m.Kind != KindCounter {
+				return fmt.Errorf("metric %s: variants need a counter", m.Name.OTEL)
+			}
+			for i, v := range m.Variants {
+				if v.Value == nil {
+					return fmt.Errorf("metric %s: variant %d needs a Value", m.Name.OTEL, i)
+				}
+			}
+		} else if m.Value == nil {
 			return fmt.Errorf("metric %s: a counter needs a Value", m.Name.OTEL)
 		}
 	case KindHistogram:
@@ -98,6 +127,14 @@ func (m *Metric) validate(layout ValueLayout) error {
 		return fmt.Errorf("metric %s: unknown kind %d", m.Name.OTEL, m.Kind)
 	}
 	return nil
+}
+
+// slots is how many series Metric links per key: one, or one per Variant.
+func (m *Metric) slots() int {
+	if len(m.Variants) > 0 {
+		return len(m.Variants)
+	}
+	return 1
 }
 
 // Config of a Family.
@@ -120,6 +157,12 @@ type Config struct {
 	// same functions the per-event pipeline runs. A key whose stat it drops
 	// counts for no metric. Nil keeps every stat undecorated.
 	Decorate func(stat *ebpf.Stat) bool
+
+	// Pending reports, after Decorate, that stat still lacks something that
+	// may come later (set by a decorator, as the NFS owner's): the key is
+	// decorated again the next time it counts, as with Stat's final=false.
+	// Nil means never.
+	Pending func(stat *ebpf.Stat) bool
 
 	// Deletable reports whether a key that counted nothing for IdleAfter may
 	// be deleted from the kernel map now, e.g. not while the cgroup it
@@ -150,9 +193,10 @@ type sink interface {
 type decoration struct {
 	decorated time.Time
 	final     bool
-	// links holds, per sink and metric, the series the key counts into,
-	// resolved when it was last decorated with sinkGen sinks.
-	links   [][]*seriesCore
+	// links holds, per sink, metric and variant slot (Metric.slots, one for
+	// a metric with no Variants), the series the key counts into, resolved
+	// when it was last decorated with sinkGen sinks.
+	links   [][][]*seriesCore
 	sinkGen int
 }
 
@@ -169,7 +213,11 @@ type Family struct {
 	sinks []sink
 	// started is set by Run: until then exporters collect without reading
 	// the map, so every exporter attached before Run sees every delta.
-	started  bool
+	started bool
+	// stopped is set when Run returns, after its last read: from then on
+	// exporters collect what was read without reading the map, which its
+	// owner may close.
+	stopped  bool
 	lastPoll time.Time
 	pollErr  bool
 }
@@ -219,8 +267,13 @@ func NewFamily(cfg Config) (*Family, error) {
 // Run starts reading the kernel map, every TickInterval and whenever an
 // exporter collects, until ctx is done. Attach every exporter
 // before: one attached later misses what the map counted until then.
+//
+// Once ctx is done, Run reads the map one last time, so what the kernel
+// counted until then reaches the exporters, and returns: from then on the
+// family never reads the map again, and its owner may close it.
 func (f *Family) Run(ctx context.Context) {
 	f.start()
+	defer f.stop()
 	ticker := time.NewTicker(f.cfg.TickInterval)
 	defer ticker.Stop()
 	for {
@@ -233,6 +286,16 @@ func (f *Family) Run(ctx context.Context) {
 			f.mu.Unlock()
 		}
 	}
+}
+
+// stop reads the map a last time, without deleting idle keys, which would
+// only cost syscalls on a map about to be closed, and stops reading it. The
+// lock waits for a collection that is reading the map.
+func (f *Family) stop() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.read(f.cfg.Clock())
+	f.stopped = true
 }
 
 func (f *Family) start() {
@@ -250,26 +313,37 @@ func (f *Family) attach(s sink) {
 }
 
 // collect runs export with the family locked, after reading the kernel map
-// unless the family is not running yet or an exporter read it less than
-// MinPollInterval ago.
+// unless the family is not running (yet or any more) or an exporter read it
+// less than MinPollInterval ago.
 func (f *Family) collect(export func(now time.Time)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := f.cfg.Clock()
-	if f.started && now.Sub(f.lastPoll) >= f.cfg.MinPollInterval {
+	if f.started && !f.stopped && now.Sub(f.lastPoll) >= f.cfg.MinPollInterval {
 		f.poll(now)
 	}
 	export(now)
 }
 
 func (f *Family) poll(now time.Time) {
-	f.lastPoll = now
-	visit := func(k *kernelKey, d Delta, values []byte) { f.count(k, d, values, now) }
-	if err := f.reader.Poll(now, visit); err != nil {
-		f.logPollError(err)
-		return
+	if f.read(now) {
+		f.deleteIdle(now, f.visitor(now))
 	}
-	f.deleteIdle(now, visit)
+}
+
+// read counts what every key counted since the previous read, reporting
+// whether the map could be read.
+func (f *Family) read(now time.Time) bool {
+	f.lastPoll = now
+	if err := f.reader.Poll(now, f.visitor(now)); err != nil {
+		f.logPollError(err)
+		return false
+	}
+	return true
+}
+
+func (f *Family) visitor(now time.Time) func(k *kernelKey, d Delta, values []byte) {
+	return func(k *kernelKey, d Delta, values []byte) { f.count(k, d, values, now) }
 }
 
 // deleteIdle deletes up to MaxDeletesPerPoll keys that counted nothing for
@@ -308,10 +382,18 @@ func (f *Family) count(k *kernelKey, d Delta, values []byte, now time.Time) {
 		now.Sub(k.decorated) >= f.cfg.RedecorateAfter {
 		f.decorate(k, values, now)
 	}
-	for _, links := range k.links {
-		for i, s := range links {
-			if s != nil {
-				links[i] = f.cfg.Metrics[i].add(s, d, now)
+	for _, perMetric := range k.links {
+		for i, slots := range perMetric {
+			m := f.cfg.Metrics[i]
+			for v, s := range slots {
+				if s == nil {
+					continue
+				}
+				if len(m.Variants) == 0 {
+					slots[v] = m.add(s, d, now)
+				} else {
+					slots[v] = m.addVariant(v, s, d, now)
+				}
 			}
 		}
 	}
@@ -320,19 +402,37 @@ func (f *Family) count(k *kernelKey, d Delta, values []byte, now time.Time) {
 func (f *Family) decorate(k *kernelKey, values []byte, now time.Time) {
 	stat, final := f.cfg.Stat(f.reader.keyBytes(k), values)
 	keep := stat != nil && (f.cfg.Decorate == nil || f.cfg.Decorate(stat))
+	if final && stat != nil && f.cfg.Pending != nil && f.cfg.Pending(stat) {
+		final = false
+	}
 	k.decorated, k.final, k.sinkGen = now, final, len(f.sinks)
 
 	if len(k.links) != len(f.sinks) {
-		k.links = make([][]*seriesCore, len(f.sinks))
+		k.links = make([][][]*seriesCore, len(f.sinks))
 	}
 	for s, sk := range f.sinks {
 		if k.links[s] == nil {
-			k.links[s] = make([]*seriesCore, len(f.cfg.Metrics))
+			k.links[s] = make([][]*seriesCore, len(f.cfg.Metrics))
 		}
 		for i, m := range f.cfg.Metrics {
-			k.links[s][i] = nil
-			if keep && (m.Select == nil || m.Select(stat)) {
-				k.links[s][i] = sk.link(i, stat, now)
+			if len(k.links[s][i]) != m.slots() {
+				k.links[s][i] = make([]*seriesCore, m.slots())
+			}
+			for v := range k.links[s][i] {
+				k.links[s][i][v] = nil
+			}
+			if !keep || (m.Select != nil && !m.Select(stat)) {
+				continue
+			}
+			if len(m.Variants) == 0 {
+				k.links[s][i][0] = sk.link(i, stat, now)
+				continue
+			}
+			for v, variant := range m.Variants {
+				if variant.Mark != nil {
+					variant.Mark(stat)
+				}
+				k.links[s][i][v] = sk.link(i, stat, now)
 			}
 		}
 	}
@@ -360,6 +460,15 @@ func (m *Metric) add(s *seriesCore, d Delta, now time.Time) *seriesCore {
 		s = s.touch(now)
 		s.value += v
 	}
+	return s
+}
+
+// addVariant counts a key's delta into series s through variant v of a
+// split Metric, the way add does for a metric with no Variants.
+func (m *Metric) addVariant(v int, s *seriesCore, d Delta, now time.Time) *seriesCore {
+	val := m.Variants[v].Value(d)
+	s = s.touch(now)
+	s.value += val
 	return s
 }
 

@@ -319,6 +319,59 @@ func getDefinitions(
 		},
 	}
 
+	// the node of the agent, on NFS client RPC metrics, only relevant when
+	// kubernetes metadata is enabled.
+	statsNFSKubeAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sNodeName: true,
+		},
+	}
+
+	// Pod attribution of an NFS RPC (step 19), opt-in: the submitter's pod,
+	// namespace, container and owner workload, only relevant when
+	// kubernetes metadata is enabled. Selecting any of these is also what
+	// turns the kernel key's owner on (nfs_key_owner): background NFS calls
+	// (writeback, COMMIT, DELEGRETURN) carry no pod either way.
+	statsNFSPodAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sNamespaceName: false,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
+			attr.K8sOwnerName:     false,
+		},
+	}
+
+	// NFS client RPC metrics attributes. An NFSv2 or NFSv3 RPC is named by
+	// its ONC RPC procedure, an NFSv4 one by its operation: its procedure is
+	// always COMPOUND. Each name is left out of the other versions' series.
+	statsNFSAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&statsNFSKubeAttributes, &statsNFSPodAttributes},
+		Attributes: map[attr.Name]Default{
+			attr.OncRPCVersion:       true,
+			attr.OncRPCProcedureName: true,
+			attr.NFSOperationName:    true,
+			attr.ServerAddr:          true,
+		},
+	}
+
+	// NFS client IO attributes. Its one kernel key counts an attempt's sent
+	// and received bytes together, so network.io.direction is on by
+	// default to tell the two apart; the procedure and version breakdown
+	// statsNFSAttributes defaults on is opt-in here instead, to keep this
+	// metric's default series to one pair per server (section 5).
+	statsNFSIOAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&statsNFSKubeAttributes, &statsNFSPodAttributes},
+		Attributes: map[attr.Name]Default{
+			attr.NetworkIoDirection:  true,
+			attr.ServerAddr:          true,
+			attr.OncRPCVersion:       false,
+			attr.OncRPCProcedureName: false,
+			attr.NFSOperationName:    false,
+		},
+	}
+
 	// The semantic conventions define service.name and service.namespace as
 	// resource attributes, and OBI reports them there. They are also available
 	// as metric-level attributes for backends that read service identity off
@@ -988,6 +1041,24 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
+		},
+		StatNFSClientRPCDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&statsNFSAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatNFSClientRPCErrors.Section: {
+			SubGroups: []*AttrReportGroup{&statsNFSAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatNFSClientRPCRetransmits.Section: {
+			SubGroups:  []*AttrReportGroup{&statsNFSAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatNFSClientIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsNFSIOAttributes},
+			Attributes: map[attr.Name]Default{},
 		},
 
 		// span and service graph metrics don't yet implement attribute selection,

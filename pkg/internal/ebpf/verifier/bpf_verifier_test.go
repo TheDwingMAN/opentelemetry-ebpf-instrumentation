@@ -85,6 +85,12 @@ func loadAndVerify(t *testing.T, name string, loadFn func() (*ebpf.CollectionSpe
 			require.NoError(t, statsolly.PrepareStorageSpec(spec), "failed to prepare storage programs")
 		}
 
+		// The NFS program: the tp_btf variant needs the sunrpc BTF, which a
+		// kernel without the module loaded does not have.
+		if spec.Programs["obi_stats_tp_btf_rpc_stats_latency"] != nil && !statsolly.PrepareNFSSpec(spec) {
+			t.Log("no sunrpc BTF on this kernel: verifying the raw_tp NFS program only")
+		}
+
 		if len(consts) > 0 && consts[0] != nil {
 			err := ebpfconvenience.RewriteConstants(spec, consts[0])
 			require.NoError(t, err, "failed to rewrite constants")
@@ -319,5 +325,11 @@ func TestBPFVerifierWithConstants(t *testing.T) {
 	forEachCombination(t, "statsolly/FsIo", statsolly.LoadFsIo, []constOption{
 		{"g_bpf_debug", []any{true, false}},
 		{"stats_wakeup_data_bytes", []any{uint32(0), uint32(1 << 20)}},
+	})
+	forEachCombination(t, "statsolly/NfsRpc", statsolly.LoadNfsRpc, []constOption{
+		{"nfs_want_status", []any{uint8(0), uint8(1)}},
+		{"nfs_hist_exp", []any{uint8(0), uint8(1)}},
+		{"nfs_key_owner", []any{uint8(0), uint8(1)}},
+		{"nfs_cgroup_v1", []any{uint8(0), uint8(1)}},
 	})
 }

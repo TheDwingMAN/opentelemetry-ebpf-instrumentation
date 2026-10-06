@@ -138,6 +138,9 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 					continue
 				}
 				for _, s := range pf.acc.metrics[i].series {
+					if !s.counted {
+						continue
+					}
 					m, err := out.metric(pf.acc.metrics[i].def, s)
 					if err != nil {
 						c.logBuildError(now, out.desc, err)

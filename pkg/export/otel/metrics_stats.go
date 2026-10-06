@@ -34,6 +34,15 @@ const statScopeName = "stats_ebpf_events"
 
 const fsOperationDurationDescription = "Filesystem read, write and sync latency as the application sees it. Buffered writes end once the data is in the page cache."
 
+// Descriptions of the NFS client RPC metrics.
+const (
+	nfsRPCDurationDescription = "Execute time of each NFS client RPC attempt, from the task's start to its end." +
+		" A retry the server asks for (JUKEBOX, DELAY) is a new attempt, which includes the client's backoff."
+	nfsRPCErrorsDescription      = "NFS client RPC attempts that ended with an error status, normal misses and server back-pressure included."
+	nfsRPCRetransmitsDescription = "Retransmissions of NFS client RPC requests: every transmission of an attempt after the first."
+	nfsClientIODescription       = "Wire bytes of NFS client RPC calls and replies, headers and every procedure included."
+)
+
 // StatMetricsConfig extends MetricsConfig for Statistical Metrics
 type StatMetricsConfig struct {
 	Metrics     *otelcfg.MetricsConfig
@@ -130,6 +139,7 @@ func statHistograms(buckets *export.Buckets) []statHistogram {
 		{attributes.StatDiskDiscardDuration, buckets.StatDiskOperationDurationHistogram},
 		{attributes.StatDiskQueueDepth, buckets.StatDiskQueueDepthHistogram},
 		{attributes.StatFsOperationDuration, buckets.StatFsOperationDurationHistogram},
+		{attributes.StatNFSClientRPCDuration, buckets.StatNFSClientRPCDurationHistogram},
 	}
 }
 
@@ -154,6 +164,10 @@ type statMetricsExporter struct {
 	fsOpDuration             *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
 	fsIOBytes                *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	fsOpErrors               *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	nfsRPCDuration           *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
+	nfsRPCErrors             *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	nfsRPCRetransmits        *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	nfsClientIO              *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
 }
@@ -478,6 +492,53 @@ func newStatMetricsExporter(
 		nme.fsOpErrors = newStorageExpirer[metric2.Int64Counter, int64](ctx, fsOpErrors, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	// The NFS client RPC metrics are counted by the kernel: the per-event
+	// instruments below only see NFS stats in the parity tests of kernel
+	// aggregation, whose reference they are.
+	if cfg.CommonCfg.Features.StorageNFSDuration() && !cfg.Aggregated.Handles(attributes.StatNFSClientRPCDuration) {
+		h, err := ebpfEvents.Float64Histogram(attributes.StatNFSClientRPCDuration.OTEL,
+			metric2.WithUnit(attributes.StatNFSClientRPCDuration.Unit), metric2.WithDescription(nfsRPCDurationDescription))
+		if err != nil {
+			log.Error("creating nfs client rpc duration histogram", "error", err)
+			return nil, err
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatNFSClientRPCDuration))
+		nme.nfsRPCDuration = newStorageExpirer[metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if cfg.CommonCfg.Features.StorageNFSErrors() && !cfg.Aggregated.Handles(attributes.StatNFSClientRPCErrors) {
+		c, err := ebpfEvents.Int64Counter(attributes.StatNFSClientRPCErrors.OTEL,
+			metric2.WithUnit(attributes.StatNFSClientRPCErrors.Unit), metric2.WithDescription(nfsRPCErrorsDescription))
+		if err != nil {
+			log.Error("creating nfs client rpc errors counter", "error", err)
+			return nil, err
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatNFSClientRPCErrors))
+		nme.nfsRPCErrors = newStorageExpirer[metric2.Int64Counter, int64](ctx, c, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if cfg.CommonCfg.Features.StorageNFSRetransmits() && !cfg.Aggregated.Handles(attributes.StatNFSClientRPCRetransmits) {
+		c, err := ebpfEvents.Int64Counter(attributes.StatNFSClientRPCRetransmits.OTEL,
+			metric2.WithUnit(attributes.StatNFSClientRPCRetransmits.Unit), metric2.WithDescription(nfsRPCRetransmitsDescription))
+		if err != nil {
+			log.Error("creating nfs client rpc retransmits counter", "error", err)
+			return nil, err
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatNFSClientRPCRetransmits))
+		nme.nfsRPCRetransmits = newStorageExpirer[metric2.Int64Counter, int64](ctx, c, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if cfg.CommonCfg.Features.StorageNFSIo() && !cfg.Aggregated.Handles(attributes.StatNFSClientIO) {
+		c, err := ebpfEvents.Int64Counter(attributes.StatNFSClientIO.OTEL,
+			metric2.WithUnit(attributes.StatNFSClientIO.Unit), metric2.WithDescription(nfsClientIODescription))
+		if err != nil {
+			log.Error("creating nfs client io bytes counter", "error", err)
+			return nil, err
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatNFSClientIO))
+		nme.nfsClientIO = newStorageExpirer[metric2.Int64Counter, int64](ctx, c, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -557,7 +618,43 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				fsOpErrors, attrs := me.fsOpErrors.ForRecord(v)
 				fsOpErrors.Add(ctx, 1, metric2.WithAttributeSet(attrs))
 			}
+			if v.NFSRPC != nil {
+				me.recordNFSRPC(ctx, v)
+			}
 		}
+	}
+}
+
+// recordNFSRPC records one NFS client RPC attempt.
+func (me *statMetricsExporter) recordNFSRPC(ctx context.Context, v *ebpf.Stat) {
+	if me.nfsRPCDuration != nil {
+		h, attrs := me.nfsRPCDuration.ForRecord(v)
+		h.Record(ctx, time.Duration(v.NFSRPC.ExecuteNs).Seconds(), metric2.WithAttributeSet(attrs))
+	}
+	if me.nfsRPCErrors != nil && v.NFSRPC.Status != 0 {
+		c, attrs := me.nfsRPCErrors.ForRecord(v)
+		c.Add(ctx, 1, metric2.WithAttributeSet(attrs))
+	}
+	if me.nfsRPCRetransmits != nil && v.NFSRPC.Retransmits != 0 {
+		c, attrs := me.nfsRPCRetransmits.ForRecord(v)
+		c.Add(ctx, int64(v.NFSRPC.Retransmits), metric2.WithAttributeSet(attrs))
+	}
+	if me.nfsClientIO != nil {
+		// One kernel key counts both directions together: project a copy
+		// twice, transmit then receive, each its own network.io.direction
+		// series. v is shared with every other subscriber of the stats
+		// queue (e.g. the Prometheus exporter, run concurrently in the
+		// parity harness), so its NFSRPC is never mutated in place.
+		nfs := *v.NFSRPC
+		tx, rx := nfs, nfs
+		tx.Direction, rx.Direction = uint8(ebpf.CodeDirectionTransmit), uint8(ebpf.CodeDirectionReceive)
+		txStat, rxStat := *v, *v
+		txStat.NFSRPC, rxStat.NFSRPC = &tx, &rx
+
+		c, attrs := me.nfsClientIO.ForRecord(&txStat)
+		c.Add(ctx, int64(nfs.TxBytes), metric2.WithAttributeSet(attrs))
+		c, attrs = me.nfsClientIO.ForRecord(&rxStat)
+		c.Add(ctx, int64(nfs.RxBytes), metric2.WithAttributeSet(attrs))
 	}
 }
 
@@ -582,6 +679,10 @@ func aggregatableStats(f export.Features) []aggregatableStat {
 		{name: attributes.StatFsOperationDuration, enabled: f.StorageFSDuration(), description: fsOperationDurationDescription},
 		{name: attributes.StatFsIO, enabled: f.StorageFSIo()},
 		{name: attributes.StatFsOperationErrors, enabled: f.StorageFSErrors()},
+		{name: attributes.StatNFSClientRPCDuration, enabled: f.StorageNFSDuration(), description: nfsRPCDurationDescription},
+		{name: attributes.StatNFSClientRPCErrors, enabled: f.StorageNFSErrors(), description: nfsRPCErrorsDescription},
+		{name: attributes.StatNFSClientRPCRetransmits, enabled: f.StorageNFSRetransmits(), description: nfsRPCRetransmitsDescription},
+		{name: attributes.StatNFSClientIO, enabled: f.StorageNFSIo(), description: nfsClientIODescription},
 	}
 }
 

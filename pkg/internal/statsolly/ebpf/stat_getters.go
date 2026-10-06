@@ -68,8 +68,14 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 	case attr.NetworkIoDirection:
 		getter = func(s *Stat) attribute.KeyValue {
 			var direction uint8
-			if s.TCPIo != nil {
+			switch {
+			case s.TCPIo != nil:
 				direction = s.TCPIo.Direction
+			case s.NFSRPC != nil:
+				// Set by whichever of StatNFSClientIO's two series readers
+				// is projecting this stat right now (its one kernel key
+				// counts both directions of an attempt together).
+				direction = s.NFSRPC.Direction
 			}
 			return attribute.String(string(attr.NetworkIoDirection), networkIoDirectionStr(NetworkIoDirectionCode(direction)))
 		}
@@ -94,7 +100,15 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 	case attr.DiskPhysicalDevice:
 		getter = mountAttrGetter(name, func(m *MountAttrs) string { return m.PhysicalDevice })
 	case attr.ServerAddr:
-		getter = mountAttrGetter(name, func(m *MountAttrs) string { return m.ServerAddress })
+		// NFS RPC stats carry the peer of the RPC transport; filesystem stats
+		// read the fs join label resolved once per mount (step 10, 3.0).
+		mount := mountAttrGetter(name, func(m *MountAttrs) string { return m.ServerAddress })
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSRPC != nil {
+				return attribute.String(string(attr.ServerAddr), nfsServerAddress(s.NFSRPC.Family, &s.NFSRPC.Addr, s.NFSRPC.ScopeID))
+			}
+			return mount(s)
+		}
 	case attr.DiskIODirection:
 		getter = func(s *Stat) attribute.KeyValue {
 			var op uint8
@@ -142,6 +156,27 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		getter = mountAttrGetter(name, func(m *MountAttrs) string { return m.PVCName })
 	case attr.K8sStorageClassName:
 		getter = mountAttrGetter(name, func(m *MountAttrs) string { return m.StorageClass })
+	case attr.OncRPCVersion:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSRPC == nil {
+				return attribute.KeyValue{}
+			}
+			return attribute.Int64(string(attr.OncRPCVersion), int64(s.NFSRPC.Version))
+		}
+	case attr.OncRPCProcedureName:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSRPC == nil {
+				return attribute.String(string(attr.OncRPCProcedureName), "")
+			}
+			return attribute.String(string(attr.OncRPCProcedureName), nfsProcedureName(s.NFSRPC.Version, s.NFSRPC.StatIdx))
+		}
+	case attr.NFSOperationName:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSRPC == nil {
+				return attribute.String(string(attr.NFSOperationName), "")
+			}
+			return attribute.String(string(attr.NFSOperationName), nfs4OperationName(s.NFSRPC.Version, s.NFSRPC.StatIdx))
+		}
 	case attr.K8sNodeName:
 		// The agent sees only the processes of its own node, so the value is
 		// the same for every stat and is built once, with the getter.
@@ -283,14 +318,17 @@ func fsOpStr(o FsOpCode) string {
 }
 
 // errorTypeStr returns the errno name for a failed BlockIo or FsIo event
-// (Error holds 0 or -errno), or "" when there was no error or the stat
-// carries neither event type.
+// (Error holds 0 or -errno), or an NFS RPC's error status (-errno, -528
+// EJUKEBOX or -NFS4ERR_*), or "" when there was no error or the stat carries
+// none of these.
 func errorTypeStr(s *Stat) string {
 	switch {
 	case s.BlockIo != nil:
 		return errnoNameForError(s.BlockIo.Error)
 	case s.FsIo != nil:
 		return errnoNameForError(s.FsIo.Error)
+	case s.NFSRPC != nil:
+		return errnoNameForError(s.NFSRPC.Status)
 	default:
 		return ""
 	}

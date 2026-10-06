@@ -6,6 +6,7 @@ package statagg
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -175,6 +176,24 @@ func TestFamily_NonFinalDecorationIsRetried(t *testing.T) {
 	tf.clock.Advance(time.Second)
 	produce(t, p)
 	assert.Equal(t, 2, calls, "decorated again once, then reused")
+}
+
+// A decorator that could not settle a stat (Pending) asks for the key to be
+// decorated again on its next count, like a non-final Stat.
+func TestFamily_PendingDecorationIsRetried(t *testing.T) {
+	var decorations int
+	tf := newTestFamily(t, 1, diskBounds, func(c *Config) {
+		c.Decorate = func(*ebpf.Stat) bool { decorations++; return true }
+		c.Pending = func(*ebpf.Stat) bool { return decorations < 3 }
+	})
+	p := tf.otelProducer(t, cumulative, 0)
+	k := blkKey(devA, ebpf.CodeBlockRead, 0)
+	for range 5 {
+		record(tf.m, tf.layout, k, 0, 1, 1)
+		tf.clock.Advance(time.Second)
+		produce(t, p)
+	}
+	assert.Equal(t, 3, decorations, "decorated until it settled, then reused")
 }
 
 func TestFamily_IdleKeysAreDeletedWithoutLosingCounts(t *testing.T) {
@@ -356,6 +375,49 @@ func TestFamily_ReadsNothingBeforeRun(t *testing.T) {
 	}
 }
 
+// closableMap is a fakeMap its owner closes, as the agent closes the eBPF
+// maps on shutdown, counting the reads after it was closed.
+type closableMap struct {
+	*fakeMap
+	closed      atomic.Bool
+	readsClosed atomic.Int32
+}
+
+func (m *closableMap) ForEach(fn func(key, values []byte)) error {
+	if m.closed.Load() {
+		m.readsClosed.Add(1)
+		return errors.New("map closed")
+	}
+	return m.fakeMap.ForEach(fn)
+}
+
+// Once its context is done, Run reads what the kernel counted since the
+// last tick and returns; exporters collecting later, during the shutdown,
+// export it without reading the map, which the agent closes after Run
+// returns.
+func TestFamily_RunReadsALastTimeAndThenNeverAgain(t *testing.T) {
+	var m *closableMap
+	tf := newTestFamily(t, 1, diskBounds, func(c *Config) {
+		m = &closableMap{fakeMap: c.Source.(*fakeMap)}
+		c.Source = m
+		c.TickInterval = time.Hour
+	})
+	p := tf.otelProducer(t, cumulative, 0)
+	k := blkKey(devA, ebpf.CodeBlockRead, 0)
+	record(tf.m, tf.layout, k, 0, 100, 1000)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	tf.family.Run(ctx)
+	m.closed.Store(true)
+
+	record(tf.m, tf.layout, k, 0, 7, 1000)
+	tf.clock.Advance(time.Minute)
+	assert.Equal(t, int64(100), sumValue(t, produce(t, p)["test.io"], devAOp(ebpf.CodeBlockRead)...),
+		"the last read, before the map was closed")
+	assert.Zero(t, m.readsClosed.Load(), "no read of a closed map")
+}
+
 func TestFamily_ValidatesMetrics(t *testing.T) {
 	l, err := NewExplicitLayout(diskBounds)
 	require.NoError(t, err)
@@ -436,4 +498,121 @@ func TestFamily_ConcurrentScrapeAndCollect(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, mfs, 1)
 	assert.InDelta(t, float64(3*writes), mfs[0].Metric[0].GetCounter().GetValue(), 0)
+}
+
+// A key links the series of a SkipZero counter when it is decorated, but a
+// series it never counts into is not exported, as the per-event path never
+// creates a series for a value it skips. Once counted, it is exported from
+// then on, starting at its first count.
+func TestFamily_SkipZeroSeriesAreExportedOnceCounted(t *testing.T) {
+	tf := newTestFamily(t, 2, diskBounds, func(c *Config) {
+		c.Metrics[1].SkipZero = true
+	})
+	p := tf.otelProducer(t, cumulative, 0)
+	c := tf.promCollector(t, diskBounds, 0)
+	k := blkKey(devA, ebpf.CodeBlockWrite, 0)
+
+	record(tf.m, tf.layout, k, 0, 0, 200_000)
+	assert.NotContains(t, produce(t, p), "test.io")
+	assert.NotContains(t, promText(t, c), "test_io_bytes_total{")
+
+	tf.clock.Advance(time.Second)
+	counted := tf.clock.Now()
+	record(tf.m, tf.layout, k, 1, 10, 200_000)
+	io := produce(t, p)["test.io"].Data.(metricdata.Sum[int64])
+	require.Len(t, io.DataPoints, 1)
+	assert.Equal(t, int64(10), io.DataPoints[0].Value)
+	assert.Equal(t, counted, io.DataPoints[0].StartTime)
+	assert.Contains(t, promText(t, c), `test_io_bytes_total{dev="264241152",op="1"} 10`)
+}
+
+// A Metric with Variants reads one kernel key as more than one series, each
+// its own word of the Delta, tagged by Mark before its attributes are read
+// (StatNFSClientIO's two directions, counted together in one key).
+func TestFamily_VariantsReadSeparateWordsFromOneKey(t *testing.T) {
+	tf := newTestFamily(t, 1, diskBounds, func(c *Config) {
+		c.Metrics = append(c.Metrics, &Metric{
+			Name: testSplitIO, Kind: KindCounter,
+			Variants: []Variant{
+				{
+					Value: func(d Delta) uint64 { return d.Counter(wordBytes) },
+					Mark:  func(s *ebpf.Stat) { s.BlockIo.Op = 10 },
+				},
+				{
+					Value: func(d Delta) uint64 { return d.Counter(wordSumNs) },
+					Mark:  func(s *ebpf.Stat) { s.BlockIo.Op = 20 },
+				},
+			},
+		})
+	})
+	p := NewProducer(tf.reg, "test", cumulative, 0)
+	proj, _ := devOpLabels(false)
+	require.NoError(t, p.Add(testSplitIO, OTelMetric{Project: proj}))
+
+	record(tf.m, tf.layout, blkKey(devA, ebpf.CodeBlockRead, 0), 0, 111, 222)
+
+	got := produce(t, p)
+	assert.Equal(t, int64(111), sumValue(t, got["test.split.io"],
+		attribute.String("dev", strconv.Itoa(devA)), attribute.String("op", "10")))
+	assert.Equal(t, int64(222), sumValue(t, got["test.split.io"],
+		attribute.String("dev", strconv.Itoa(devA)), attribute.String("op", "20")))
+}
+
+// Two variants whose attributes come out equal (no Mark, or an excluded
+// attribute that would otherwise tell them apart) add into the one series
+// their shared labels identify, the way two different real keys do.
+func TestFamily_VariantsWithEqualAttributesMergeIntoOneSeries(t *testing.T) {
+	tf := newTestFamily(t, 1, diskBounds, func(c *Config) {
+		c.Metrics = append(c.Metrics, &Metric{
+			Name: testSplitIO, Kind: KindCounter,
+			Variants: []Variant{
+				{Value: func(d Delta) uint64 { return d.Counter(wordBytes) }},
+				{Value: func(d Delta) uint64 { return d.Counter(wordSumNs) }},
+			},
+		})
+	})
+	p := NewProducer(tf.reg, "test", cumulative, 0)
+	devOnly := func(s *ebpf.Stat) (string, attribute.Set) {
+		v := strconv.Itoa(int(s.BlockIo.Dev))
+		return v, attribute.NewSet(attribute.String("dev", v))
+	}
+	require.NoError(t, p.Add(testSplitIO, OTelMetric{Project: devOnly}))
+
+	record(tf.m, tf.layout, blkKey(devA, ebpf.CodeBlockRead, 0), 0, 111, 222)
+
+	got := produce(t, p)
+	points := got["test.split.io"].Data.(metricdata.Sum[int64]).DataPoints
+	require.Len(t, points, 1, "one merged series, not one per variant")
+	assert.Equal(t, int64(333), sumValue(t, got["test.split.io"], attribute.String("dev", strconv.Itoa(devA))))
+}
+
+// The same merge on the Prometheus side must not register the series
+// twice: a real duplicate registration under one label set is what a
+// Collector.Gather would reject.
+func TestFamily_VariantsWithEqualAttributesMergeOnPrometheusToo(t *testing.T) {
+	tf := newTestFamily(t, 1, diskBounds, func(c *Config) {
+		c.Metrics = append(c.Metrics, &Metric{
+			Name: testSplitIO, Kind: KindCounter,
+			Variants: []Variant{
+				{Value: func(d Delta) uint64 { return d.Counter(wordBytes) }},
+				{Value: func(d Delta) uint64 { return d.Counter(wordSumNs) }},
+			},
+		})
+	})
+	c := NewCollector(tf.reg, 0)
+	devOnly := func(s *ebpf.Stat) (string, []string) {
+		v := strconv.Itoa(int(s.BlockIo.Dev))
+		return v, []string{v}
+	}
+	require.NoError(t, c.Add(testSplitIO, PromMetric{Help: "split io", LabelNames: []string{"dev"}, Project: devOnly}))
+	reg := prometheus.NewRegistry()
+	require.NoError(t, reg.Register(c))
+
+	record(tf.m, tf.layout, blkKey(devA, ebpf.CodeBlockRead, 0), 0, 111, 222)
+
+	mfs, err := reg.Gather()
+	require.NoError(t, err, "no duplicate series across variants")
+	require.Len(t, mfs, 1)
+	require.Len(t, mfs[0].Metric, 1, "one merged series, not one per variant")
+	assert.InDelta(t, 333, mfs[0].Metric[0].GetCounter().GetValue(), 0)
 }

@@ -433,6 +433,28 @@ func TestStorageFSFeatureParsing(t *testing.T) {
 	assert.False(t, e.StorageFSIo())
 }
 
+func TestStorageNFSFeatureParsing(t *testing.T) {
+	var f Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_nfs"]`), &f))
+	assert.True(t, f.StorageNFS())
+	assert.True(t, f.StorageNFSDuration())
+	assert.True(t, f.StorageNFSErrors())
+	assert.True(t, f.StorageNFSRetransmits())
+	assert.True(t, f.StatMetrics(), "storage_nfs rides the stats pipeline")
+	assert.False(t, f.StorageFS(), "storage_nfs does not imply the filesystem metrics")
+
+	var e Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_nfs_errors"]`), &e))
+	assert.True(t, e.StorageNFS())
+	assert.True(t, e.StorageNFSErrors())
+	assert.False(t, e.StorageNFSDuration())
+	assert.False(t, e.StorageNFSRetransmits())
+
+	var fs Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_fs"]`), &fs))
+	assert.False(t, fs.StorageNFS(), "storage_fs does not imply the NFS RPC metrics")
+}
+
 func TestFeatureUndefined(t *testing.T) {
 	t.Run("undefined YAML", func(t *testing.T) {
 		doc := struct {

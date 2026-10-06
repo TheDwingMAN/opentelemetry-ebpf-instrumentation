@@ -21,6 +21,7 @@ const (
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
 	StatTypeBlockIo                 = StatType(StatsStatTypeK_statTypeBlockIo)
 	StatTypeFsIo                    = StatType(StatsStatTypeK_statTypeFsIo)
+	StatTypeNFSRPC                  = StatType(StatsStatTypeK_statTypeNfsRpc)
 )
 
 type TCPFailReasonType string
@@ -170,6 +171,7 @@ type Stat struct {
 	TCPIo                   *TCPIo                   `json:"-"`
 	BlockIo                 *BlockIo                 `json:"-"`
 	FsIo                    *FsIo                    `json:"-"`
+	NFSRPC                  *NFSRPC                  `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -264,6 +266,54 @@ type MountAttrs struct {
 	// ServerAddress is "" for ceph (several monitors, ambiguous) and local
 	// filesystems.
 	ServerAddress string
+}
+
+// NFSRPC is an NFS client RPC attempt, or the kernel aggregation key of
+// attempts to one server with one procedure and outcome (struct nfs_rpc_key
+// in bpf/statsolly/nfs_rpc.h).
+type NFSRPC struct {
+	// Owner attributes the RPC to a submitter (step 19): the cgroup v2 id
+	// of the thread that called rpc_execute, or on a cgroup v1 host the
+	// tgid of that thread (task->tk_owner); 0 when no pod attribute is
+	// selected, or when the owner could not be read. It is not itself an
+	// attribute: the decoration pipeline resolves it to the pod trio and
+	// k8s.owner.name in CommonAttrs.Metadata.
+	Owner uint64 `json:"owner"`
+	// OwnerPending is set by the decoration when Owner could not be settled
+	// yet (a cgroup the index has not scanned, a container the Kubernetes
+	// store has not learned): the aggregated family decorates the key again
+	// the next time it counts. Not part of the key or an attribute.
+	OwnerPending bool `json:"-"`
+	// Version is the NFS version: 2, 3 or 4 (whatever its minor version).
+	Version uint8 `json:"version"`
+	// StatIdx is the procedure number of an NFSv2 or NFSv3 RPC, the
+	// NFSPROC4_CLNT_* operation index of an NFSv4 one.
+	StatIdx uint16 `json:"stat_idx"`
+	// Status is 0, or the RPC task's negative status: -errno, -528
+	// (EJUKEBOX) or -NFS4ERR_*.
+	Status int32 `json:"status"`
+	// Family is the server address family, AF_INET or AF_INET6, or 0 when
+	// the address is unknown. Addr holds 4 (AF_INET) or 16 bytes, in network
+	// byte order, and ScopeID the IPv6 scope of a link-local server.
+	Family  uint8    `json:"family"`
+	Addr    [16]byte `json:"-"`
+	ScopeID uint32   `json:"scope_id"`
+
+	// ExecuteNs, Retransmits, TxBytes and RxBytes describe a single
+	// attempt: kernel aggregation keeps their sums in the key's values
+	// instead. TxBytes and RxBytes are the attempt's rq_xmit_bytes_sent and
+	// rq_reply_bytes_recvd: the wire bytes of the call and its reply,
+	// headers included, the same fields /proc/self/mountstats sums.
+	ExecuteNs   uint64 `json:"execute_ns"`
+	Retransmits uint64 `json:"retransmits"`
+	TxBytes     uint64 `json:"tx_bytes"`
+	RxBytes     uint64 `json:"rx_bytes"`
+
+	// Direction is not part of the kernel key: it is set by the exporters
+	// that split StatNFSClientIO's one kernel-counted value into its two
+	// NetworkIoDirectionCode series, transmit and receive, right before
+	// reading this stat's attributes.
+	Direction uint8 `json:"-"`
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.

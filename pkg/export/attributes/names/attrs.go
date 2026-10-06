@@ -399,4 +399,7 @@ const (
 	DiskPhysicalDevice        = Name("obi.disk.physical_device")
 	FsType                    = Name("system.filesystem.type")
 	FsOperation               = Name("fs.operation")
+	// NFSOperationName is the NFSv4 operation of an NFS client RPC, whose
+	// ONC RPC procedure is always COMPOUND.
+	NFSOperationName = Name(semconv.NfsOperationNameKey)
 )

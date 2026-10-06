@@ -139,6 +139,9 @@ var (
 	testDuration = attributes.Name{Section: "test.duration", OTEL: "test.duration", Prom: "test_duration_seconds", Unit: "s"}
 	testIO       = attributes.Name{Section: "test.io", OTEL: "test.io", Prom: "test_io_bytes_total", Unit: "By"}
 	testErrors   = attributes.Name{Section: "test.errors", OTEL: "test.errors", Prom: "test_errors_total", Unit: "{error}"}
+	// testSplitIO is a counter with Variants, as StatNFSClientIO is: one
+	// kernel key, read as more than one series.
+	testSplitIO = attributes.Name{Section: "test.split.io", OTEL: "test.split.io", Prom: "test_split_io_bytes_total", Unit: "By"}
 )
 
 func testMetrics(l *Layout) []*Metric {
