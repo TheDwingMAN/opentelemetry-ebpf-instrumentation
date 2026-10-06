@@ -63,16 +63,17 @@ func TestFSJoinDeviceBtrfsMultiDeviceViaSource(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(hostPath), 0o755))
 	require.NoError(t, os.WriteFile(hostPath, []byte("x"), 0o644))
 
-	// hostStat is stubbed rather than really stat-ing hostPath: the dev_t a
-	// real stat would report is the *containing* filesystem's own device
-	// (st_dev, not a represented device number), which in a container is
-	// whatever major the test runner's own root happens to have -- not
-	// something this test can pin to a resolvable fixture device.
+	// hostStat is stubbed rather than really stat-ing hostPath: source is a
+	// block special file, so the dev_t it represents is st_rdev, not st_dev
+	// (st_dev there is devtmpfs's own device, major 0 on every real host --
+	// stubbed here too, to prove statHostPathDevT does not fall back to it).
 	backingDev := devT(253, 7)
 	old := hostStat
 	hostStat = func(path string, st *unix.Stat_t) error {
 		require.Equal(t, hostPath, path)
-		st.Dev = unix.Mkdev(253, 7)
+		st.Mode = unix.S_IFBLK
+		st.Dev = unix.Mkdev(0, 7)
+		st.Rdev = unix.Mkdev(253, 7)
 		return nil
 	}
 	t.Cleanup(func() { hostStat = old })
@@ -103,4 +104,37 @@ func TestFSJoinDeviceDevZeroOmitsSystemDevice(t *testing.T) {
 	device, physical := FSJoinDevice(0, "")
 	assert.Empty(t, device)
 	assert.Empty(t, physical)
+}
+
+// A regular file's st_rdev is always zero; the device it lives on is named by
+// st_dev alone (the loop backing-file case). A block special file's st_dev
+// names devtmpfs, not the device the node represents -- st_rdev does (the
+// mount-source fallback case). statHostPathDevT must pick the field that
+// matches which one path is.
+func TestStatHostPathDevTUsesRdevOnlyForBlockSpecialFiles(t *testing.T) {
+	withProcRoot(t, t.TempDir())
+	old := hostStat
+	t.Cleanup(func() { hostStat = old })
+
+	for _, tc := range []struct {
+		name string
+		mode uint32
+		dev  uint64
+		rdev uint64
+		want uint32
+	}{
+		{"regular file uses st_dev", unix.S_IFREG, unix.Mkdev(8, 1), unix.Mkdev(253, 9), devT(8, 1)},
+		{"block special file uses st_rdev", unix.S_IFBLK, unix.Mkdev(0, 7), unix.Mkdev(259, 0), devT(259, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hostStat = func(_ string, st *unix.Stat_t) error {
+				st.Mode, st.Dev, st.Rdev = tc.mode, tc.dev, tc.rdev
+				return nil
+			}
+
+			dev, ok := statHostPathDevT("/dev/whatever")
+			require.True(t, ok)
+			assert.Equal(t, tc.want, dev)
+		})
+	}
 }

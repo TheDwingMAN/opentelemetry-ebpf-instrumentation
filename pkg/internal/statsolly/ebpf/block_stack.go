@@ -185,6 +185,12 @@ func physicalFromLoop(dir string, visiting map[uint32]bool) []string {
 // absolute, or that does not exist there, is not an error worth logging: a
 // network filesystem's source ("host:/export", a ceph monitor list) is never
 // a host path, and simply fails to resolve.
+//
+// A block special file (the mount source case: "/dev/mapper/vg-lv") names
+// its device through st_rdev, not st_dev -- st_dev is the device backing the
+// node itself (devtmpfs on every real host, major 0), which is never the
+// device the caller means. A regular file (the loop backing-file case) has
+// no st_rdev; st_dev there correctly names the host filesystem it lives on.
 func statHostPathDevT(path string) (uint32, bool) {
 	if !filepath.IsAbs(path) {
 		return 0, false
@@ -193,7 +199,11 @@ func statHostPathDevT(path string) (uint32, bool) {
 	if err := hostStat(filepath.Join(procRoot, "1", "root", path), &st); err != nil {
 		return 0, false
 	}
-	return unix.Major(st.Dev)<<devMinorBits | unix.Minor(st.Dev), true
+	dev := st.Dev
+	if st.Mode&unix.S_IFMT == unix.S_IFBLK {
+		dev = st.Rdev
+	}
+	return unix.Major(dev)<<devMinorBits | unix.Minor(dev), true
 }
 
 // FSJoinDevice resolves the block-backed fs join labels of step 10
