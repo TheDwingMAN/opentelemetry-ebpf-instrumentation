@@ -53,3 +53,27 @@ func TestFsIoErrorTypeGetter(t *testing.T) {
 	notFsIo := &Stat{Type: StatTypeTCPRtt, TCPRtt: &TCPRtt{}}
 	assert.Empty(t, errGetter(notFsIo).Value.Emit())
 }
+
+// fsync(2) and fdatasync(2) reach the filesystem through the same operation
+// and are told apart only by the kernel's datasync argument, which the entry
+// probe turns into a distinct operation code. Reporting both as "fsync" would
+// hide that a database is flushing data only.
+func TestFsOpStrSeparatesFdatasync(t *testing.T) {
+	getter, ok := StatGetters(attr.FsOperation)
+	assert.True(t, ok)
+
+	for _, tc := range []struct {
+		op   FsOpCode
+		want string
+	}{
+		{CodeFsOpRead, "read"},
+		{CodeFsOpWrite, "write"},
+		{CodeFsOpFsync, "fsync"},
+		{CodeFsOpFdatasync, "fdatasync"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			s := &Stat{Type: StatTypeFsIo, FsIo: &FsIo{Fs: uint8(CodeFsNFS), Op: uint8(tc.op)}}
+			assert.Equal(t, tc.want, getter(s).Value.AsString())
+		})
+	}
+}

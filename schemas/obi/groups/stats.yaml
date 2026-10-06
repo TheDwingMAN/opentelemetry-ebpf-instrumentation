@@ -55,6 +55,9 @@ groups:
             - id: fsync
               value: fsync
               stability: development
+            - id: fdatasync
+              value: fdatasync
+              stability: development
         stability: development
         brief: Filesystem operation performed.
       # Mirrors `NetworkTCPHandshakeRoleType` in
