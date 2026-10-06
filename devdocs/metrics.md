@@ -150,7 +150,15 @@ Storage metrics have two independent layers: block-layer I/O from the `block_rq_
 
 Block metrics come from the request-queue tracepoints (`block_rq_insert`/`block_rq_issue`/`block_rq_complete`), which see the device and the request but not the process that issued it. They are node-wide: no pod, namespace, or PV/PVC attribute is ever attached, only `system.device` and `disk.io.direction`.
 
-Filesystem metrics come from probes on each filesystem's own `file_operations` read/write/fsync implementation, which runs in the calling process's context, so they carry `k8s.pod.name`, `k8s.namespace.name` and `k8s.container.name`, plus `k8s.persistentvolume.name`, `k8s.persistentvolumeclaim.name` and `k8s.storageclass.name` once the filesystem's superblock device resolves to a kubelet volume mount (`statsFsAttributes`, `statsFsKubeAttributes` in [pkg/export/attributes/attr_defs.go](../pkg/export/attributes/attr_defs.go)). All Kubernetes attributes, including the PV/PVC/storage-class ones, are disabled when Kubernetes metadata is off.
+Filesystem metrics come from probes on each filesystem's own `file_operations` read/write/fsync implementation, which runs in the calling process's context, so they carry `k8s.pod.name` and `k8s.namespace.name`, plus `k8s.persistentvolume.name`, `k8s.persistentvolumeclaim.name` and `k8s.storageclass.name` once the filesystem's superblock device resolves to a kubelet volume mount (`statsFsAttributes`, `statsFsKubeAttributes` in [pkg/export/attributes/attr_defs.go](../pkg/export/attributes/attr_defs.go)). All Kubernetes attributes, including the PV/PVC/storage-class ones, are disabled when Kubernetes metadata is off.
+
+Reads and writes that a process performs with `splice(2)`, `sendfile(2)` or
+`copy_file_range(2)` are not recorded. The probes hook each filesystem's
+`read_iter` and `write_iter` operations, and those paths use `splice_read`
+instead, so a file server built on `sendfile` shows its network I/O but not
+its filesystem I/O.
+
+`k8s.container.name` is best-effort and often absent. The pod is resolved from the volume mount, which always works, but the container name is only known when the process that issued the I/O has been tracked, so it is left unset for short-lived processes and for deployments that instrument no services.
 
 Capacity and usage (bytes used/free/total on a volume) are out of scope here on purpose: join kubelet's own `kubelet_volume_stats_*` metrics on `k8s.persistentvolumeclaim.name` for that.
 
