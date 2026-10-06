@@ -42,17 +42,17 @@ type statMetricsReporter struct {
 	tcpRetransmits           *Expirer[prometheus.Counter]
 	tcpIo                    *Expirer[prometheus.Counter]
 	tcpSuccessfulConnections *Expirer[prometheus.Counter]
-	diskOperationDuration    *Expirer[prometheus.Histogram]
+	diskOperationDuration    *kernelHistogramVec
 	diskIO                   *Expirer[prometheus.Counter]
 	diskOperations           *Expirer[prometheus.Counter]
 	diskOperationTime        *Expirer[prometheus.Counter]
-	fsSyncDuration           *Expirer[prometheus.Histogram]
-	diskQueueDuration        *Expirer[prometheus.Histogram]
-	diskFlushDuration        *Expirer[prometheus.Histogram]
-	diskDiscardDuration      *Expirer[prometheus.Histogram]
+	fsSyncDuration           *kernelHistogramVec
+	diskQueueDuration        *kernelHistogramVec
+	diskFlushDuration        *kernelHistogramVec
+	diskDiscardDuration      *kernelHistogramVec
 	diskDiscardIO            *Expirer[prometheus.Counter]
 	diskPendingOperations    *Expirer[prometheus.Gauge]
-	nfsProcedureDuration     *Expirer[prometheus.Histogram]
+	nfsProcedureDuration     *kernelHistogramVec
 	nfsIO                    *Expirer[prometheus.Counter]
 	k8sPodVolumeDevice       *Expirer[prometheus.Gauge]
 	diskVolumeDevice         *Expirer[prometheus.Gauge]
@@ -212,14 +212,9 @@ func newStatsReporter(
 			ebpf.StatStringGetters,
 			provider.For(attributes.StatDiskOperationDuration))
 
-		mr.diskOperationDuration = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:                            attributes.StatDiskOperationDuration.Prom,
-			Help:                            "measures the duration of block I/O requests, from their issue to the device until their completion, in seconds",
-			Buckets:                         cfg.Config.Buckets.StatDiskOperationDurationHistogram,
-			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
-			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
-			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
-		}, labelNames(mr.diskOperationDurationAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		mr.diskOperationDuration = newKernelHistogramVec(attributes.StatDiskOperationDuration.Prom,
+			"measures the duration of block I/O requests, from their issue to the device until their completion, in seconds",
+			cfg.Config.Buckets.StatDiskOperationDurationHistogram, labelNames(mr.diskOperationDurationAttrs), cfg.Config.TTL)
 		register = append(register, mr.diskOperationDuration)
 	}
 
@@ -252,14 +247,9 @@ func newStatsReporter(
 
 	if cfg.CommonCfg.Features.StatsFsSyncDuration() {
 		mr.fsSyncDurationAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncDuration))
-		mr.fsSyncDuration = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:                            attributes.StatFsSyncDuration.Prom,
-			Help:                            "measures the duration of file syncs (fsync, fdatasync, sync, syncfs, sync_file_range and their equivalents), in seconds",
-			Buckets:                         cfg.Config.Buckets.StatFsSyncDurationHistogram,
-			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
-			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
-			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
-		}, labelNames(mr.fsSyncDurationAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		mr.fsSyncDuration = newKernelHistogramVec(attributes.StatFsSyncDuration.Prom,
+			"measures the duration of file syncs (fsync, fdatasync, sync, syncfs, sync_file_range and their equivalents), in seconds",
+			cfg.Config.Buckets.StatFsSyncDurationHistogram, labelNames(mr.fsSyncDurationAttrs), cfg.Config.TTL)
 		register = append(register, mr.fsSyncDuration)
 	}
 
@@ -309,14 +299,9 @@ func (r *statMetricsReporter) registerNFSMetrics(cfg *StatsPrometheusConfig, pro
 	var register []prometheus.Collector
 	if features.StatsNFSClientProcedureDuration() {
 		r.nfsProcedureDurationAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatNFSClientProcedureDuration))
-		r.nfsProcedureDuration = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:                            attributes.StatNFSClientProcedureDuration.Prom,
-			Help:                            "measures the duration of the RPCs of the NFS client, in seconds",
-			Buckets:                         cfg.Config.Buckets.StatNFSClientProcedureDurationHistogram,
-			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
-			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
-			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
-		}, labelNames(r.nfsProcedureDurationAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		r.nfsProcedureDuration = newKernelHistogramVec(attributes.StatNFSClientProcedureDuration.Prom,
+			"measures the duration of the RPCs of the NFS client, in seconds",
+			cfg.Config.Buckets.StatNFSClientProcedureDurationHistogram, labelNames(r.nfsProcedureDurationAttrs), cfg.Config.TTL)
 		register = append(register, r.nfsProcedureDuration)
 	}
 	if features.StatsNFSClientIO() {
@@ -366,7 +351,7 @@ func (r *statMetricsReporter) registerDiskOperationMetrics(cfg *StatsPrometheusC
 		name    attributes.Name
 		help    string
 		buckets []float64
-		dst     **Expirer[prometheus.Histogram]
+		dst     **kernelHistogramVec
 		attrs   *[]attributes.Field[*ebpf.Stat, string]
 	}{
 		{
@@ -390,14 +375,7 @@ func (r *statMetricsReporter) registerDiskOperationMetrics(cfg *StatsPrometheusC
 			continue
 		}
 		*h.attrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(h.name))
-		*h.dst = NewExpirer[prometheus.Histogram](prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:                            h.name.Prom,
-			Help:                            h.help,
-			Buckets:                         h.buckets,
-			NativeHistogramBucketFactor:     cfg.Config.NativeHistogram.BucketFactor,
-			NativeHistogramMaxBucketNumber:  cfg.Config.NativeHistogram.MaxBucketNumber,
-			NativeHistogramMinResetDuration: cfg.Config.NativeHistogram.MinResetDuration,
-		}, labelNames(*h.attrs)).MetricVec, timeNow, cfg.Config.TTL)
+		*h.dst = newKernelHistogramVec(h.name.Prom, h.help, h.buckets, labelNames(*h.attrs), cfg.Config.TTL)
 		register = append(register, *h.dst)
 	}
 
@@ -462,28 +440,17 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observeDiskOperationDuration(stat *ebpf.Stat) {
-	if r.diskOperationDuration == nil || stat.DiskIO == nil || !stat.DiskIO.Op.IsTransfer() {
+	if stat.DiskIO == nil || !stat.DiskIO.Op.IsTransfer() {
 		return
 	}
-	observeLatency(r.diskOperationDuration.WithLabelValues(labelValues(stat, r.diskOperationDurationAttrs)...).Metric,
-		stat.DiskIO.Latency)
+	observeLatencyIn(r.diskOperationDuration, r.diskOperationDurationAttrs, stat, stat.DiskIO.Latency)
 }
 
 func (r *statMetricsReporter) observeFsSyncDuration(stat *ebpf.Stat) {
-	if r.fsSyncDuration == nil || stat.FsSync == nil {
+	if stat.FsSync == nil {
 		return
 	}
-	observeLatency(r.fsSyncDuration.WithLabelValues(labelValues(stat, r.fsSyncDurationAttrs)...).Metric,
-		stat.FsSync.Latency)
-}
-
-// observeLatency observes each kernel histogram bucket sample as many times as requests it stands for
-func observeLatency(histogram prometheus.Histogram, latency []ebpf.LatencySample) {
-	for _, sample := range latency {
-		for range sample.Count {
-			histogram.Observe(sample.Seconds)
-		}
-	}
+	observeLatencyIn(r.fsSyncDuration, r.fsSyncDurationAttrs, stat, stat.FsSync.Latency)
 }
 
 func (r *statMetricsReporter) observeDiskCounters(stat *ebpf.Stat) {
@@ -524,11 +491,11 @@ func (r *statMetricsReporter) observeDiskOperations(stat *ebpf.Stat) {
 	}
 }
 
-func observeLatencyIn(histogram *Expirer[prometheus.Histogram], attrs []attributes.Field[*ebpf.Stat, string], stat *ebpf.Stat, latency []ebpf.LatencySample) {
+func observeLatencyIn(histogram *kernelHistogramVec, attrs []attributes.Field[*ebpf.Stat, string], stat *ebpf.Stat, latency []ebpf.LatencySample) {
 	if histogram == nil || len(latency) == 0 {
 		return
 	}
-	observeLatency(histogram.WithLabelValues(labelValues(stat, attrs)...).Metric, latency)
+	histogram.observe(labelValues(stat, attrs), latency)
 }
 
 func (r *statMetricsReporter) observeNFS(stat *ebpf.Stat) {
