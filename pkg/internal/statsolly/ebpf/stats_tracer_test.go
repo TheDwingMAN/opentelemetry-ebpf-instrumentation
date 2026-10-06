@@ -17,6 +17,7 @@ import (
 
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 )
 
 func TestFixupSpec(t *testing.T) {
@@ -348,10 +349,12 @@ func TestDiskAttributeReads(t *testing.T) {
 			attributes.Section(metric): attributes.InclusionLists{Include: include},
 		}}
 	}
-	reads := func(features export.Features, groups attributes.AttrGroups, selection *attributes.SelectorConfig) diskReads {
+	reads := func(features export.Features, groups attributes.AttrGroups, selection *attributes.SelectorConfig,
+		filtered ...attr.Name,
+	) diskReads {
 		attrSel, err := attributes.NewAttrSelector(groups, selection)
 		require.NoError(t, err)
-		return diskAttributeReads(&features, attrSel)
+		return diskAttributeReads(&features, attrSel, filtered)
 	}
 
 	assert.Equal(t, diskReads{}, reads(export.FeatureStatsDisk, attributes.UndefinedGroup, &attributes.SelectorConfig{}),
@@ -365,6 +368,14 @@ func TestDiskAttributeReads(t *testing.T) {
 	assert.Equal(t, diskReads{},
 		reads(export.FeatureStatsDiskIO, attributes.UndefinedGroup, selecting("obi.stat.disk.operations", "container.id", "obi.disk.partition")),
 		"the attributes of disabled metrics don't count")
+	assert.Equal(t, diskReads{cgroup: true, partition: true},
+		reads(export.FeatureStatsDiskIO, attributes.UndefinedGroup, &attributes.SelectorConfig{}, "container_id", "obi.disk.partition"),
+		"the filters need the attributes that they match, with dots or underscores")
+	assert.Equal(t, diskReads{cgroup: true},
+		reads(export.FeatureStatsDiskIO, attributes.UndefinedGroup, &attributes.SelectorConfig{}, "k8s_namespace_name"))
+	assert.Equal(t, diskReads{},
+		reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, &attributes.SelectorConfig{}, "container.id"),
+		"filters don't need reads of the disabled metrics")
 }
 
 func TestFsSyncAttributeReads(t *testing.T) {
@@ -373,10 +384,12 @@ func TestFsSyncAttributeReads(t *testing.T) {
 			"obi.stat.fs.sync.duration": attributes.InclusionLists{Include: include},
 		}}
 	}
-	reads := func(features export.Features, groups attributes.AttrGroups, selection *attributes.SelectorConfig) fsSyncReads {
+	reads := func(features export.Features, groups attributes.AttrGroups, selection *attributes.SelectorConfig,
+		filtered ...attr.Name,
+	) fsSyncReads {
 		attrSel, err := attributes.NewAttrSelector(groups, selection)
 		require.NoError(t, err)
-		return fsSyncAttributeReads(&features, attrSel)
+		return fsSyncAttributeReads(&features, attrSel, filtered)
 	}
 
 	assert.Equal(t, fsSyncReads{}, reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, &attributes.SelectorConfig{}),
@@ -392,6 +405,10 @@ func TestFsSyncAttributeReads(t *testing.T) {
 	assert.Equal(t, fsSyncReads{},
 		reads(export.FeatureStatsDisk, attributes.UndefinedGroup, selecting("container.id", "system.filesystem.mountpoint")),
 		"the attributes of a disabled metric don't count")
+	assert.Equal(t, fsSyncReads{cgroup: true, filesystem: true},
+		reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, &attributes.SelectorConfig{},
+			"k8s.pod.name", "system_filesystem_mountpoint"),
+		"the filters need the attributes that they match, with dots or underscores")
 }
 
 func TestSizeInFlightMaps(t *testing.T) {

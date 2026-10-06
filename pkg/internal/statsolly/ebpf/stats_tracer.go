@@ -136,11 +136,10 @@ func tlog() *slog.Logger {
 	return slog.With("component", "ebpf.StatFetcher")
 }
 
-// NewStatsFetcher loads and attaches the stat probes of the enabled features. With readWorkloads,
-// the storage probes read the workload that each operation is charged to even when no reported
-// attribute needs it, as dynamic selection keeps only the storage stats of the selected workloads.
+// NewStatsFetcher loads and attaches the stat probes of the enabled features. The storage probes
+// read the attributes that the reported attributes need, and the ones in reads.
 func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups attributes.AttrGroups,
-	selectorCfg *attributes.SelectorConfig, histograms LatencyHistograms, readWorkloads bool,
+	selectorCfg *attributes.SelectorConfig, histograms LatencyHistograms, reads ProbeReads,
 ) (*StatsFetcher, error) {
 	tlog := tlog()
 	// the kernel buckets each group of histograms with the union of their boundaries in the
@@ -209,9 +208,9 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 	diskAttached := diskEnabled && !blockLayout.unknown
 	toDisable = append(toDisable, diskProgramsToDisable(diskEnabled, blockLayout)...)
 	bioAttached := diskAttached && features.StatsDiskStackedVolumes() && !blockLayout.bioUnknown
-	diskReads := diskAttributeReads(features, attrSel)
-	fsSyncReads := fsSyncAttributeReads(features, attrSel)
-	if readWorkloads {
+	diskReads := diskAttributeReads(features, attrSel, reads.Filtered)
+	fsSyncReads := fsSyncAttributeReads(features, attrSel, reads.Filtered)
+	if reads.Workloads {
 		diskReads.cgroup = true
 		fsSyncReads.cgroup = true
 	}
@@ -781,7 +780,8 @@ type diskReads struct {
 }
 
 // diskAttributeReads returns the attributes of the block I/O that the enabled disk metrics report
-func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelector) diskReads {
+// or that the filters match
+func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelector, filtered []attr.Name) diskReads {
 	metrics := []struct {
 		enabled bool
 		name    attributes.Name
@@ -796,17 +796,20 @@ func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelec
 		{enabled: features.StatsDiskDiscard(), name: attributes.StatDiskDiscardIO},
 	}
 	var reads diskReads
-	for _, metric := range metrics {
-		if !metric.enabled {
-			continue
-		}
-		for _, name := range attrSel.For(metric.name) {
+	read := func(names []attr.Name) {
+		for _, name := range names {
 			switch {
-			case name == attr.DiskPartition:
+			case sameAttribute(name, attr.DiskPartition):
 				reads.partition = true
 			case reportsWorkload(name):
 				reads.cgroup = true
 			}
+		}
+	}
+	for _, metric := range metrics {
+		if metric.enabled {
+			read(attrSel.For(metric.name))
+			read(filtered)
 		}
 	}
 	return reads
@@ -820,14 +823,15 @@ type fsSyncReads struct {
 }
 
 // fsSyncAttributeReads returns the attributes of the file syncs that the file sync metric reports
-func fsSyncAttributeReads(features *export.Features, attrSel *attributes.AttrSelector) fsSyncReads {
+// or that the filters match
+func fsSyncAttributeReads(features *export.Features, attrSel *attributes.AttrSelector, filtered []attr.Name) fsSyncReads {
 	var reads fsSyncReads
 	if !features.StatsFsSyncDuration() {
 		return reads
 	}
-	for _, name := range attrSel.For(attributes.StatFsSyncDuration) {
+	for _, name := range slices.Concat(attrSel.For(attributes.StatFsSyncDuration), filtered) {
 		switch {
-		case name == attr.FilesystemMountpoint || name == attr.FilesystemType:
+		case sameAttribute(name, attr.FilesystemMountpoint) || sameAttribute(name, attr.FilesystemType):
 			reads.filesystem = true
 		case reportsWorkload(name):
 			reads.cgroup = true
@@ -839,7 +843,12 @@ func fsSyncAttributeReads(features *export.Features, attrSel *attributes.AttrSel
 // reportsWorkload tells whether an attribute describes the workload that the kernel charges an
 // operation to, which the probes find from its cgroup
 func reportsWorkload(name attr.Name) bool {
-	return name == attr.ContainerID || strings.HasPrefix(string(name), "k8s.")
+	return sameAttribute(name, attr.ContainerID) || strings.HasPrefix(name.Prom(), "k8s_")
+}
+
+// sameAttribute tells whether two attribute names, with dots or underscores, are the same
+func sameAttribute(name, other attr.Name) bool {
+	return name.Prom() == other.Prom()
 }
 
 // diskProgramsToDisable returns the disk programs that must not be loaded

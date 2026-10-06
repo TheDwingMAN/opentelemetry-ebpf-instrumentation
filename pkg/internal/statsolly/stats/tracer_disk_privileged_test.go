@@ -57,7 +57,7 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	bounds := []float64{0.001, 0.01, 0.1}
 	features := export.FeatureStatsDiskOperationDuration
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
-		ebpf.LatencyHistograms{Disk: bounds}, false)
+		ebpf.LatencyHistograms{Disk: bounds}, ebpf.ProbeReads{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 	require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
@@ -290,7 +290,7 @@ func TestDiskStackedVolumes(t *testing.T) {
 	features := export.FeatureStatsDiskOperations | export.FeatureStatsDiskIO | export.FeatureStatsDiskStackedVolumes
 	bounds := []float64{0.001}
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
-		ebpf.LatencyHistograms{Disk: bounds}, false)
+		ebpf.LatencyHistograms{Disk: bounds}, ebpf.ProbeReads{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 	require.NotNil(t, fetcher.DiskBioAccumMap(), "the bio probes must be attached on this kernel")
@@ -333,7 +333,7 @@ func attachDiskReader(t *testing.T, features export.Features) *accumReader[ebpf.
 	t.Helper()
 	bounds := []float64{0.001, 0.01, 0.1}
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
-		ebpf.LatencyHistograms{Disk: bounds}, false)
+		ebpf.LatencyHistograms{Disk: bounds}, ebpf.ProbeReads{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 	require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
@@ -451,7 +451,7 @@ func TestDiskIOIsChargedPerCgroup(t *testing.T) {
 	features := export.FeatureStatsDiskOperations
 	bounds := []float64{0.001}
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
-		ebpf.LatencyHistograms{Disk: bounds}, false)
+		ebpf.LatencyHistograms{Disk: bounds}, ebpf.ProbeReads{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 
@@ -516,7 +516,7 @@ func TestFsSyncTypesAndFilesystems(t *testing.T) {
 	features := export.FeatureStatsFsSyncDuration
 	bounds := []float64{0.001}
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
-		ebpf.LatencyHistograms{FsSyncDuration: bounds}, false)
+		ebpf.LatencyHistograms{FsSyncDuration: bounds}, ebpf.ProbeReads{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 	reader := newFsSyncReader(ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: fetcher.FsSyncAccumMap()},
@@ -571,7 +571,7 @@ func TestFsSyncIsChargedPerCgroup(t *testing.T) {
 	features := export.FeatureStatsFsSyncDuration
 	bounds := []float64{0.001}
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
-		ebpf.LatencyHistograms{FsSyncDuration: bounds}, false)
+		ebpf.LatencyHistograms{FsSyncDuration: bounds}, ebpf.ProbeReads{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 
@@ -605,7 +605,7 @@ func TestFsSyncWithoutCgroupsOrFilesystems(t *testing.T) {
 	features := export.FeatureStatsFsSyncDuration
 	bounds := []float64{0.001}
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup,
-		&attributes.SelectorConfig{}, ebpf.LatencyHistograms{FsSyncDuration: bounds}, false)
+		&attributes.SelectorConfig{}, ebpf.LatencyHistograms{FsSyncDuration: bounds}, ebpf.ProbeReads{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 
@@ -848,7 +848,7 @@ func alignedBuffer(t *testing.T, size int) []byte {
 func TestNFSStatsAreOptional(t *testing.T) {
 	features := export.FeatureStatsNFS | export.FeatureStatsDiskOperations
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
-		ebpf.LatencyHistograms{Disk: testBounds, NFS: testBounds}, false)
+		ebpf.LatencyHistograms{Disk: testBounds, NFS: testBounds}, ebpf.ProbeReads{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 

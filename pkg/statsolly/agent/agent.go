@@ -17,6 +17,8 @@ import (
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
+	"go.opentelemetry.io/obi/pkg/filter"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/logger"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/tracefs"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
@@ -122,8 +124,11 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		ExtraGroupAttributesCfg: cfg.Attributes.ExtraGroupAttributes,
 	}
 	features := cfg.Metrics.Features
-	// dynamic selection keeps only the storage stats of the workloads of the selected applications
-	readWorkloads := ctxInfo.DynamicSelector != nil
+	reads := ebpf.ProbeReads{
+		// dynamic selection keeps only the storage stats of the workloads of the selected applications
+		Workloads: ctxInfo.DynamicSelector != nil,
+		Filtered:  filteredAttributes(cfg.Filters.Stats),
+	}
 
 	histograms, approximated := latencyHistograms(cfg)
 	if len(approximated) > 0 {
@@ -131,8 +136,7 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 			"histograms", approximated)
 	}
 
-	statsFetcher, err = newFetcher(&cfg.EBPF, &features, ctxInfo.MetricAttributeGroups, selectorCfg, histograms,
-		readWorkloads)
+	statsFetcher, err = newFetcher(&cfg.EBPF, &features, ctxInfo.MetricAttributeGroups, selectorCfg, histograms, reads)
 	if err != nil {
 		return nil, err
 	}
@@ -141,9 +145,18 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 }
 
 func newFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups attributes.AttrGroups,
-	selectorCfg *attributes.SelectorConfig, histograms ebpf.LatencyHistograms, readWorkloads bool,
+	selectorCfg *attributes.SelectorConfig, histograms ebpf.LatencyHistograms, reads ebpf.ProbeReads,
 ) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, attrGroups, selectorCfg, histograms, readWorkloads)
+	return ebpf.NewStatsFetcher(cfg, features, attrGroups, selectorCfg, histograms, reads)
+}
+
+// filteredAttributes returns the attributes that the stats attribute filters match
+func filteredAttributes(filters filter.AttributeFamilyConfig) []attr.Name {
+	names := make([]attr.Name, 0, len(filters))
+	for name := range filters {
+		names = append(names, attr.Name(name))
+	}
+	return names
 }
 
 // latencyHistograms returns the boundaries the kernel buckets latencies with: the union of the
