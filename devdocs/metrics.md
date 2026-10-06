@@ -193,7 +193,7 @@ The `obi.fs.sync.type` attribute tells the system call apart: syncs outside of t
 
 #### Pod volume devices
 
-`obi.stat.k8s.pod.volume.device` links the pods to the disks of the block I/O metrics: it is 1 for each disk that a volume that a pod of the node mounts from a PersistentVolumeClaim is on, with the pod, the volume, the claim, the PersistentVolume, the device the volume is mounted from (`obi.disk.volume.device`) and the disk (`system.device`). A volume on a stacked device, like an LVM volume over two disks, has a series for each disk. When a pod no longer mounts a volume, its series are reported once more with 0. For example, the bytes read from the disks of each PersistentVolumeClaim, by any workload:
+`obi.stat.k8s.pod.volume.device` links the pods to the disks of the block I/O metrics: it is 1 for each disk that a volume that a pod of the node mounts from a PersistentVolumeClaim is on, with the pod, the volume, the claim, the PersistentVolume, the device the volume is mounted from (`obi.disk.volume.device`) and the disk (`system.device`). A volume on a stacked device, like an LVM volume over two disks, has a series for each disk, and a volume on a loop device has the disks of the filesystem that holds the file of the loop device. When a pod no longer mounts a volume, its series are reported once more with 0. For example, the bytes read from the disks of each PersistentVolumeClaim, by any workload:
 
 ```promql
 max by (k8s_persistentvolumeclaim_name, system_device) (obi_stat_k8s_pod_volume_device == 1)
@@ -206,6 +206,7 @@ OBI resolves the volumes every 30 seconds, from the Kubernetes metadata and the 
 - It watches the PersistentVolumes, which needs `list` and `watch` permissions on `persistentvolumes`. Without them, OBI logs a warning and reports no volumes, and the rest of the Kubernetes metadata keeps working. With the Kubernetes metadata cache (`k8s-cache`), enable its `persistent_volumes` option instead.
 - Only `Bound` PersistentVolumes are the volume of their claim: a `Released` one keeps referring to a claim that was deleted, whose name a new claim may have taken.
 - It finds the device of a volume from where the kubelet mounts it for the pod, `<kubelet root>/pods/<pod UID>/volumes/<plugin>/<PersistentVolume>`, in the mount table of the host (that of PID 1). `hostPath` PersistentVolumes, which the kubelet doesn't mount, are found by their path on the host. OBI needs the host PID namespace, like for the other disk metrics.
+- It finds the file of a loop device by its path on the host (`/sys/block/<loop device>/loop/backing_file`). The loop device is reported as the disk when its file was deleted, is on no block device, like on tmpfs, or isn't at that path on the host, like the file of a loop device set up in the mount namespace of a container.
 - Volumes on no block device, like NFS or tmpfs ones, and on filesystems that don't report the device they are on, like Btrfs subvolumes, are not reported. Generic ephemeral volumes are not reported either.
 
 #### NFS client stats

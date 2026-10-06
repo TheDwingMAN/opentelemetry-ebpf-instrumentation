@@ -6,6 +6,7 @@ package stats // import "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -124,9 +125,8 @@ func (p *PodVolumesTracer) volumeDevices(pod *informer.ObjectMeta, claim *inform
 	if !ok {
 		return nil
 	}
-	dir := filepath.Join(p.devices.sysRoot, "dev", "block", fmt.Sprintf("%d:%d", major, minor))
-	if !exists(dir) {
-		// e.g. overlay, tmpfs or network filesystems, which are on no block device
+	dir, ok := p.blockDeviceDir(major, minor)
+	if !ok {
 		return nil
 	}
 	mounted := p.devices.name(major, minor)
@@ -135,7 +135,7 @@ func (p *PodVolumesTracer) volumeDevices(pod *informer.ObjectMeta, claim *inform
 		ownerName, ownerKind = owner.Name, owner.Kind
 	}
 	var volumes []ebpf.PodVolume
-	for _, disk := range physicalDisks(dir, maxDeviceStackDepth) {
+	for _, disk := range p.physicalDisks(dir, maxDeviceStackDepth) {
 		volumes = append(volumes, ebpf.PodVolume{
 			Namespace:        pod.Namespace,
 			PodName:          pod.Name,
@@ -185,15 +185,26 @@ func volumeMountDevice(mounts []*procfs.MountInfo, podUID, pvName string) (major
 	return 0, 0, false
 }
 
+// blockDeviceDir returns the sysfs directory of a block device, and false for the devices of the
+// filesystems on no block device, like overlay, tmpfs or network filesystems
+func (p *PodVolumesTracer) blockDeviceDir(major, minor uint32) (string, bool) {
+	dir := filepath.Join(p.devices.sysRoot, "dev", "block", fmt.Sprintf("%d:%d", major, minor))
+	return dir, exists(dir)
+}
+
 // physicalDisks returns the names of the disks that a block device is on, from its sysfs
-// directory: the disk of a partition, or the disks below the slaves of a stacked device
-func physicalDisks(dir string, depth int) []string {
+// directory: the disk of a partition, the disks of the filesystem that holds the file of a loop
+// device, or the disks below the slaves of a stacked device
+func (p *PodVolumesTracer) physicalDisks(dir string, depth int) []string {
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil || depth == 0 {
 		return nil
 	}
 	if exists(filepath.Join(resolved, "partition")) {
-		return physicalDisks(filepath.Dir(resolved), depth-1)
+		return p.physicalDisks(filepath.Dir(resolved), depth-1)
+	}
+	if backing, ok := p.loopBackingDevice(resolved); ok {
+		return p.physicalDisks(backing, depth-1)
 	}
 	slaves, _ := filepath.Glob(filepath.Join(resolved, "slaves", "*"))
 	if len(slaves) == 0 {
@@ -201,11 +212,32 @@ func physicalDisks(dir string, depth int) []string {
 	}
 	var disks []string
 	for _, slave := range slaves {
-		for _, disk := range physicalDisks(slave, depth-1) {
+		for _, disk := range p.physicalDisks(slave, depth-1) {
 			if !slices.Contains(disks, disk) {
 				disks = append(disks, disk)
 			}
 		}
 	}
 	return disks
+}
+
+// loopBackingDevice returns the sysfs directory of the block device of the filesystem that holds
+// the file of a loop device, which it finds by its path on the host. It returns false for other
+// devices, and when the file was deleted, isn't at that path on the host (e.g. a loop device set
+// up in the mount namespace of a container), or is on no block device.
+func (p *PodVolumesTracer) loopBackingDevice(dir string) (string, bool) {
+	content, err := os.ReadFile(filepath.Join(dir, "loop", "backing_file"))
+	if err != nil {
+		return "", false
+	}
+	// the kernel appends " (deleted)" to the path of a deleted file
+	path, deleted := strings.CutSuffix(strings.TrimSuffix(string(content), "\n"), " (deleted)")
+	if deleted {
+		return "", false
+	}
+	major, minor, err := p.deviceOf(path)
+	if err != nil {
+		return "", false
+	}
+	return p.blockDeviceDir(major, minor)
 }

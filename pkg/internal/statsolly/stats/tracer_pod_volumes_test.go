@@ -66,7 +66,38 @@ func fakeVolumeHost(t *testing.T) string {
 	fakeSysDevice(t, root, "pci/block/nvme0n1", "259:0")
 	// an LVM volume over partitions of two disks
 	fakeSysDevice(t, root, "virtual/block/dm-0", "252:0", "pci/block/sda/sda1", "pci/block/sdb/sdb1")
+	// loop devices on files of the host, whose devices are in fakeHostPaths
+	fakeLoopDevice(t, root, "loop0", "7:0", "/var/lib/images/on-disk.img")
+	fakeLoopDevice(t, root, "loop1", "7:1", "/mnt/data/on-partition.img")
+	fakeLoopDevice(t, root, "loop2", "7:2", "/srv/on-lvm.img")
+	fakeLoopDevice(t, root, "loop3", "7:3", "/var/lib/images/deleted.img (deleted)")
+	fakeLoopDevice(t, root, "loop4", "7:4", "/run/on-tmpfs.img")
+	fakeLoopDevice(t, root, "loop5", "7:5", "/in-a-container.img")
+	// an LVM volume over a loop device
+	fakeSysDevice(t, root, "virtual/block/dm-1", "252:1", "virtual/block/loop0")
 	return root
+}
+
+// fakeLoopDevice creates the sysfs directory of a loop device on a file of the host
+func fakeLoopDevice(t *testing.T, root, name, numbers, backingFile string) {
+	t.Helper()
+	path := filepath.Join("virtual", "block", name)
+	fakeSysDevice(t, root, path, numbers)
+	dir := filepath.Join(root, "devices", path, "loop")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "backing_file"), []byte(backingFile+"\n"), 0o644))
+}
+
+// fakeHostPaths are the devices of the paths of the fake host
+var fakeHostPaths = map[string][2]uint32{
+	"/var/local-path-provisioner/pvc-local": {259, 0},
+	"/var/lib/images/on-disk.img":           {259, 0},
+	"/mnt/data/on-partition.img":            {8, 1},
+	"/srv/on-lvm.img":                       {252, 0},
+	// a new file took the path of the deleted file of loop3
+	"/var/lib/images/deleted.img": {259, 0},
+	// tmpfs, which is on no block device
+	"/run/on-tmpfs.img": {0, 45},
 }
 
 func testPod(name, uid string, claims ...*informer.VolumeClaim) *informer.ObjectMeta {
@@ -93,8 +124,8 @@ func newTestPodVolumesTracer(t *testing.T, store *fakePodVolumes, mounts []*proc
 	tracer.devices = &deviceNames{sysRoot: fakeVolumeHost(t)}
 	tracer.mounts = func() ([]*procfs.MountInfo, error) { return mounts, nil }
 	tracer.deviceOf = func(path string) (uint32, uint32, error) {
-		if path == "/var/local-path-provisioner/pvc-local" {
-			return 259, 0, nil
+		if device, ok := fakeHostPaths[path]; ok {
+			return device[0], device[1], nil
 		}
 		return 0, 0, errors.New("no such path")
 	}
@@ -173,14 +204,22 @@ func TestPodVolumesTracer(t *testing.T) {
 }
 
 func TestPhysicalDisks(t *testing.T) {
-	root := fakeVolumeHost(t)
+	tracer := newTestPodVolumesTracer(t, &fakePodVolumes{}, nil)
 	disks := func(numbers string) []string {
-		return physicalDisks(filepath.Join(root, "dev", "block", numbers), maxDeviceStackDepth)
+		return tracer.physicalDisks(filepath.Join(tracer.devices.sysRoot, "dev", "block", numbers), maxDeviceStackDepth)
 	}
 	assert.Equal(t, []string{"sda"}, disks("8:0"), "a disk")
 	assert.Equal(t, []string{"sda"}, disks("8:1"), "a partition")
 	assert.ElementsMatch(t, []string{"sda", "sdb"}, disks("252:0"), "an LVM volume over two disks")
 	assert.Empty(t, disks("9:9"), "an unknown device")
+
+	assert.Equal(t, []string{"nvme0n1"}, disks("7:0"), "a loop device on a file on a disk")
+	assert.Equal(t, []string{"sda"}, disks("7:1"), "a loop device on a file on a partition")
+	assert.ElementsMatch(t, []string{"sda", "sdb"}, disks("7:2"), "a loop device on a file on an LVM volume")
+	assert.Equal(t, []string{"nvme0n1"}, disks("252:1"), "an LVM volume over a loop device")
+	assert.Equal(t, []string{"loop3"}, disks("7:3"), "a loop device on a deleted file")
+	assert.Equal(t, []string{"loop4"}, disks("7:4"), "a loop device on a filesystem on no block device")
+	assert.Equal(t, []string{"loop5"}, disks("7:5"), "a loop device on a file that isn't on the host")
 }
 
 func TestVolumeMountDevice(t *testing.T) {
