@@ -323,7 +323,8 @@ func newStatMetricsExporter(
 	if cfg.CommonCfg.Features.StorageFSDuration() {
 		log := log.With("metricFamily", "StorageFSDuration")
 
-		h, err := ebpfEvents.Float64Histogram(attributes.StatFsOperationDuration.OTEL, metric2.WithUnit("s"))
+		h, err := ebpfEvents.Float64Histogram(attributes.StatFsOperationDuration.OTEL, metric2.WithUnit("s"),
+			metric2.WithDescription("Filesystem read, write and sync latency as the application sees it. Buffered writes end once the data is in the page cache."))
 		if err != nil {
 			log.Error("creating fs operation duration histogram", "error", err)
 			return nil, err
