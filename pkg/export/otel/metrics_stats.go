@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
+	"go.opentelemetry.io/obi/pkg/export/expire"
 	"go.opentelemetry.io/obi/pkg/export/otel/metric"
 	metric2 "go.opentelemetry.io/obi/pkg/export/otel/metric/api/metric"
 	"go.opentelemetry.io/obi/pkg/export/otel/otelcfg"
@@ -35,6 +36,8 @@ type StatMetricsConfig struct {
 	Metrics     *otelcfg.MetricsConfig
 	CommonCfg   *perapp.GlobalMetricsConfig
 	SelectorCfg *attributes.SelectorConfig
+	// HostName is host.name on the resource; omitted when empty.
+	HostName string
 }
 
 func (mc *StatMetricsConfig) Enabled() bool {
@@ -46,9 +49,24 @@ func smlog() *slog.Logger {
 	return slog.With("component", "otel.StatMetricsExporter")
 }
 
+// newStorageExpirer is NewExpirer for the storage metrics, which leave out an
+// attribute that does not apply (its getter returns "") rather than send it
+// with an empty value.
+func newStorageExpirer[M removableMetric[V], V any](
+	ctx context.Context,
+	m M,
+	attrs []attributes.Field[*ebpf.Stat, attribute.KeyValue],
+	clock expire.Clock,
+	ttl time.Duration,
+) *Expirer[*ebpf.Stat, M, V] {
+	ex := NewExpirer[*ebpf.Stat, M, V](ctx, m, attrs, clock, ttl)
+	ex.omitEmptyStrings = true
+	return ex
+}
+
 // getFilteredStatsResourceAttrs returns resource attributes that can be filtered based on the attribute selector
 // for statistical metrics.
-func getFilteredStatsResourceAttrs(hostID string, attrSelector attributes.Selection) []attribute.KeyValue {
+func getFilteredStatsResourceAttrs(hostID, hostName string, attrSelector attributes.Selection) []attribute.KeyValue {
 	baseAttrs := []attribute.KeyValue{
 		attribute.String(attr.VendorPrefix+string(attr.VendorVersionSuffix), buildinfo.Version),
 		attribute.String(attr.VendorPrefix+string(attr.VendorRevisionSuffix), buildinfo.Revision),
@@ -59,12 +77,15 @@ func getFilteredStatsResourceAttrs(hostID string, attrSelector attributes.Select
 	extraAttrs := []attribute.KeyValue{
 		semconv.HostID(hostID),
 	}
+	if hostName != "" {
+		extraAttrs = append(extraAttrs, semconv.HostName(hostName))
+	}
 
 	return otelcfg.GetFilteredAttributesByPrefix(baseAttrs, attrSelector, extraAttrs, []string{"stats.", attr.VendorPrefix + ".stats"})
 }
 
-func createFilteredStatsResource(hostID string, attrSelector attributes.Selection) *resource.Resource {
-	attrs := getFilteredStatsResourceAttrs(hostID, attrSelector)
+func createFilteredStatsResource(hostID, hostName string, attrSelector attributes.Selection) *resource.Resource {
+	attrs := getFilteredStatsResourceAttrs(hostID, hostName, attrSelector)
 	return resource.NewWithAttributes(attr.OBISchemaURL, attrs...)
 }
 
@@ -167,7 +188,7 @@ func newStatMetricsExporter(
 	}
 	exporter = instrumentMetricsExporter(ctxInfo.Metrics, exporter)
 
-	resource := createFilteredStatsResource(ctxInfo.NodeMeta.HostID, cfg.SelectorCfg.SelectionCfg)
+	resource := createFilteredStatsResource(ctxInfo.NodeMeta.HostID, cfg.HostName, cfg.SelectorCfg.SelectionCfg)
 	provider := newStatMeterProvider(resource, &exporter, cfg.Metrics.Interval, cfg.Metrics)
 
 	attrProv, err := attributes.NewAttrSelector(ctxInfo.MetricAttributeGroups, cfg.SelectorCfg)
@@ -278,7 +299,7 @@ func newStatMetricsExporter(
 			ebpf.StatGetters,
 			attrProv.For(attributes.StatDiskOperationDuration))
 
-		nme.diskOpDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+		nme.diskOpDuration = newStorageExpirer[metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	if cfg.CommonCfg.Features.StorageBlockIo() {
@@ -294,7 +315,7 @@ func newStatMetricsExporter(
 			ebpf.StatGetters,
 			attrProv.For(attributes.StatDiskIO))
 
-		nme.diskIOBytes = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, diskIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
+		nme.diskIOBytes = newStorageExpirer[metric2.Int64Counter, int64](ctx, diskIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	if cfg.CommonCfg.Features.StorageBlockQueue() {
@@ -310,7 +331,7 @@ func newStatMetricsExporter(
 			ebpf.StatGetters,
 			attrProv.For(attributes.StatDiskQueueDuration))
 
-		nme.diskQueueDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+		nme.diskQueueDuration = newStorageExpirer[metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	if cfg.CommonCfg.Features.StorageBlockQueueDepth() {
@@ -326,7 +347,7 @@ func newStatMetricsExporter(
 			ebpf.StatGetters,
 			attrProv.For(attributes.StatDiskQueueDepth))
 
-		nme.diskQueueDepth = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, depth, depthAttrs, timeNow, cfg.Metrics.TTL)
+		nme.diskQueueDepth = newStorageExpirer[metric2.Float64Histogram, float64](ctx, depth, depthAttrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	if cfg.CommonCfg.Features.StorageBlockErrors() {
@@ -342,7 +363,7 @@ func newStatMetricsExporter(
 			ebpf.StatGetters,
 			attrProv.For(attributes.StatDiskOperationErrors))
 
-		nme.diskOpErrors = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, diskOpErrors, attrs, timeNow, cfg.Metrics.TTL)
+		nme.diskOpErrors = newStorageExpirer[metric2.Int64Counter, int64](ctx, diskOpErrors, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	if cfg.CommonCfg.Features.StorageBlockFlush() {
@@ -358,7 +379,7 @@ func newStatMetricsExporter(
 			ebpf.StatGetters,
 			attrProv.For(attributes.StatDiskFlushDuration))
 
-		nme.diskFlushDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+		nme.diskFlushDuration = newStorageExpirer[metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	if cfg.CommonCfg.Features.StorageBlockDiscard() {
@@ -374,7 +395,7 @@ func newStatMetricsExporter(
 			ebpf.StatGetters,
 			attrProv.For(attributes.StatDiskDiscardDuration))
 
-		nme.diskDiscardDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+		nme.diskDiscardDuration = newStorageExpirer[metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
 
 		discardIOBytes, err := ebpfEvents.Int64Counter(attributes.StatDiskDiscardIO.OTEL, metric2.WithUnit(attributes.StatDiskDiscardIO.Unit))
 		if err != nil {
@@ -386,7 +407,7 @@ func newStatMetricsExporter(
 			ebpf.StatGetters,
 			attrProv.For(attributes.StatDiskDiscardIO))
 
-		nme.diskDiscardIOBytes = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, discardIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
+		nme.diskDiscardIOBytes = newStorageExpirer[metric2.Int64Counter, int64](ctx, discardIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	if cfg.CommonCfg.Features.StorageFSDuration() {
@@ -403,7 +424,7 @@ func newStatMetricsExporter(
 			ebpf.StatGetters,
 			attrProv.For(attributes.StatFsOperationDuration))
 
-		nme.fsOpDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
+		nme.fsOpDuration = newStorageExpirer[metric2.Float64Histogram, float64](ctx, h, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	if cfg.CommonCfg.Features.StorageFSIo() {
@@ -419,7 +440,7 @@ func newStatMetricsExporter(
 			ebpf.StatGetters,
 			attrProv.For(attributes.StatFsIO))
 
-		nme.fsIOBytes = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, fsIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
+		nme.fsIOBytes = newStorageExpirer[metric2.Int64Counter, int64](ctx, fsIOBytes, bytesAttrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	if cfg.CommonCfg.Features.StorageFSErrors() {
@@ -435,7 +456,7 @@ func newStatMetricsExporter(
 			ebpf.StatGetters,
 			attrProv.For(attributes.StatFsOperationErrors))
 
-		nme.fsOpErrors = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, fsOpErrors, attrs, timeNow, cfg.Metrics.TTL)
+		nme.fsOpErrors = newStorageExpirer[metric2.Int64Counter, int64](ctx, fsOpErrors, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))

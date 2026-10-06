@@ -4,6 +4,8 @@
 package otel
 
 import (
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,8 +15,10 @@ import (
 	"go.opentelemetry.io/obi/internal/test/collector"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	"go.opentelemetry.io/obi/pkg/export/otel/otelcfg"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
+	"go.opentelemetry.io/obi/pkg/internal/pipe"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/pipe/global"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
@@ -321,4 +325,81 @@ func TestStatMetricsExporter_FsOperationErrorsSkipsZeroError(t *testing.T) {
 
 	// AND the errors counter never does.
 	assert.NotContains(t, seen, "obi.stat.fs.operation.errors", "errors counter must not be recorded for Error == 0")
+}
+
+// A storage attribute that does not apply is left out of the OTLP data point
+// rather than sent as "": a process in no pod has no k8s.pod.name, I/O on no
+// volume no k8s.persistentvolume.name, and an unknown filesystem no
+// system.filesystem.type. With a pod and a volume, all of them are there, the
+// volume ones read from the mount the stat went through.
+func TestStatMetricsExporter_FsOmitsEmptyAttributes(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	otelExporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{
+			OTELMetricsExporter:   &otelcfg.MetricsExporterInstancer{Cfg: cfg},
+			MetricAttributeGroups: attributes.GroupKubernetes,
+		},
+		&StatMetricsConfig{
+			Metrics:     cfg,
+			SelectorCfg: &attributes.SelectorConfig{SelectionCfg: attributes.Selection{}},
+			CommonCfg:   &perapp.GlobalMetricsConfig{Features: export.FeatureStorageFSIo},
+		}, stats)(ctx)
+	require.NoError(t, err)
+	go otelExporter(ctx)
+
+	onVolume := &ebpf.Stat{
+		Type: ebpf.StatTypeFsIo,
+		FsIo: &ebpf.FsIo{
+			Fs: uint8(ebpf.CodeFsXFS), Op: uint8(ebpf.CodeFsOpWrite), Bytes: 4096,
+			Mount: &ebpf.MountAttrs{PVName: "pvc-1", PVCName: "data", StorageClass: "fast", PVCNamespace: "ns"},
+		},
+		CommonAttrs: pipe.CommonAttrs{Metadata: map[attr.Name]string{
+			attr.K8sPodName: "writer", attr.K8sNamespaceName: "ns", attr.K8sContainerName: "io",
+		}},
+	}
+	noVolume := &ebpf.Stat{
+		Type: ebpf.StatTypeFsIo,
+		FsIo: &ebpf.FsIo{Fs: uint8(ebpf.CodeFsUnknown), Op: uint8(ebpf.CodeFsOpRead), Bytes: 512},
+	}
+	stats.Send([]*ebpf.Stat{onVolume, noVolume})
+
+	want := []map[string]string{
+		{
+			"system.filesystem.type":         "xfs",
+			"fs.operation":                   "write",
+			"k8s.pod.name":                   "writer",
+			"k8s.namespace.name":             "ns",
+			"k8s.container.name":             "io",
+			"k8s.persistentvolume.name":      "pvc-1",
+			"k8s.persistentvolumeclaim.name": "data",
+			"k8s.storageclass.name":          "fast",
+		},
+		{"fs.operation": "read"},
+	}
+	var got []map[string]string
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case rec := <-otlp.Records():
+				if rec.Name == "obi.stat.fs.io" && !slices.ContainsFunc(got, func(a map[string]string) bool { return maps.Equal(a, rec.Attributes) }) {
+					got = append(got, rec.Attributes)
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.ElementsMatch(ct, want, got)
+	}, timeout, 100*time.Millisecond)
 }

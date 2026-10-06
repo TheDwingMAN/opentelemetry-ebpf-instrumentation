@@ -4,6 +4,8 @@
 package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
+	"sync/atomic"
+
 	"go.opentelemetry.io/otel/attribute"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
@@ -89,19 +91,17 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		}
 	case attr.FsType:
 		getter = func(s *Stat) attribute.KeyValue {
-			var fs uint8
-			if s.FsIo != nil {
-				fs = s.FsIo.Fs
+			if s.FsIo == nil {
+				return attribute.String(string(attr.FsType), "")
 			}
-			return attribute.String(string(attr.FsType), fsTypeStr(FsTypeCode(fs)))
+			return attribute.String(string(attr.FsType), fsTypeStr(FsTypeCode(s.FsIo.Fs)))
 		}
 	case attr.FsOperation:
 		getter = func(s *Stat) attribute.KeyValue {
-			var op uint8
-			if s.FsIo != nil {
-				op = s.FsIo.Op
+			if s.FsIo == nil {
+				return attribute.String(string(attr.FsOperation), "")
 			}
-			return attribute.String(string(attr.FsOperation), fsOpStr(FsOpCode(op)))
+			return attribute.String(string(attr.FsOperation), fsOpStr(FsOpCode(s.FsIo.Op)))
 		}
 	case attr.ErrorType:
 		// Omitted when the operation succeeded, as semconv asks: the metrics
@@ -114,10 +114,47 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.ErrorType), errType)
 		}
+	case attr.K8sPersistentVolumeName:
+		getter = mountAttrGetter(name, func(m *MountAttrs) string { return m.PVName })
+	case attr.K8sPersistentVolumeClaimName:
+		getter = mountAttrGetter(name, func(m *MountAttrs) string { return m.PVCName })
+	case attr.K8sStorageClassName:
+		getter = mountAttrGetter(name, func(m *MountAttrs) string { return m.StorageClass })
+	case attr.K8sNodeName:
+		// The agent sees only the processes of its own node, so the value is
+		// the same for every stat and is built once, with the getter.
+		kv := attribute.String(string(attr.K8sNodeName), NodeName())
+		getter = func(*Stat) attribute.KeyValue { return kv }
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
 	}
 	return getter, getter != nil
+}
+
+// mountAttrGetter reads an attribute of the mount a filesystem stat went
+// through, resolved once per mount by the PID decorator; "" when there is none.
+func mountAttrGetter(name attr.Name, field func(*MountAttrs) string) attributes.Getter[*Stat, attribute.KeyValue] {
+	return func(s *Stat) attribute.KeyValue {
+		if s.FsIo == nil || s.FsIo.Mount == nil {
+			return attribute.String(string(name), "")
+		}
+		return attribute.String(string(name), field(s.FsIo.Mount))
+	}
+}
+
+// nodeName is the Kubernetes node the agent runs on, "" when unknown.
+var nodeName atomic.Pointer[string]
+
+// SetNodeName records the Kubernetes node the agent runs on. The stats
+// pipeline calls it before its exporters build their getters.
+func SetNodeName(name string) { nodeName.Store(&name) }
+
+// NodeName returns the name SetNodeName recorded, or "".
+func NodeName() string {
+	if n := nodeName.Load(); n != nil {
+		return *n
+	}
+	return ""
 }
 
 func StatStringGetters(name attr.Name) (attributes.Getter[*Stat, string], bool) {
@@ -185,6 +222,8 @@ func diskIoDirectionStr(d DiskIoDirectionCode) string {
 	return ""
 }
 
+// fsTypeStr returns "" for a code with no name, fs_type_unknown included, so
+// the attribute is omitted rather than set to a made-up type.
 func fsTypeStr(f FsTypeCode) string {
 	switch f {
 	case CodeFsNFS:
@@ -201,22 +240,24 @@ func fsTypeStr(f FsTypeCode) string {
 		return string(FsXFS)
 	case CodeFsBtrfs:
 		return string(FsBtrfs)
-	default:
-		return string(FsUnknown)
 	}
+	return ""
 }
 
+// fsOpStr returns "" for a code with no name, so an operation the probes
+// report and this table does not know is never counted as a read.
 func fsOpStr(o FsOpCode) string {
 	switch o {
+	case CodeFsOpRead:
+		return string(FsOpRead)
 	case CodeFsOpWrite:
 		return string(FsOpWrite)
 	case CodeFsOpFsync:
 		return string(FsOpFsync)
 	case CodeFsOpFdatasync:
 		return string(FsOpFdatasync)
-	default:
-		return string(FsOpRead)
 	}
+	return ""
 }
 
 // errorTypeStr returns the errno name for a failed BlockIo or FsIo event
@@ -239,5 +280,5 @@ func errnoNameForError(err int32) string {
 	if err == 0 {
 		return ""
 	}
-	return errnoName(-err)
+	return errnoName(err)
 }

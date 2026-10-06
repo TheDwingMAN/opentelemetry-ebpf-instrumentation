@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -224,7 +225,7 @@ func kubensNode(t *testing.T) string {
 func TestScanMountsReadsKubeletNamespace(t *testing.T) {
 	kubensNode(t)
 
-	info, ok := scanForMount(MountKey{Dev: 32})
+	info, ok, _ := scanForMount(MountKey{Dev: 32})
 
 	require.True(t, ok)
 	assert.Equal(t, "pvc-kubens", info.PVName)
@@ -234,12 +235,12 @@ func TestScanMountsReadsKubeletNamespace(t *testing.T) {
 // CRI-O is still there to read them from: attribution must not lapse.
 func TestScanMountsFollowsNamespaceAcrossKubeletRestart(t *testing.T) {
 	root := kubensNode(t)
-	_, ok := scanForMount(MountKey{Dev: 32})
+	_, ok, _ := scanForMount(MountKey{Dev: 32})
 	require.True(t, ok)
 
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "901")))
 
-	info, ok := scanForMount(MountKey{Dev: 32})
+	info, ok, _ := scanForMount(MountKey{Dev: 32})
 	require.True(t, ok, "the namespace is still readable through CRI-O")
 	assert.Equal(t, "pvc-kubens", info.PVName)
 }
@@ -279,7 +280,7 @@ func resetMountCache() {
 	mountCache = map[MountKey]mountCacheEntry{}
 	mountOrder = nil
 	mountMu.Unlock()
-	forgetRootInodes()
+	forgetRootInodes(nil)
 }
 
 // The kubelet's mounts live in the host mount namespace, which hostPID makes
@@ -331,7 +332,7 @@ func TestScanForMountMarksSharedSuperblock(t *testing.T) {
 		"36 35 0:32 / /var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw",
 	)
 
-	info, ok := scanForMount(MountKey{Dev: 32})
+	info, ok, _ := scanForMount(MountKey{Dev: 32})
 
 	require.True(t, ok)
 	assert.Equal(t, "pvc-shared", info.PVName, "the volume is the same for every mount")
@@ -346,7 +347,7 @@ func TestScanForMountSinglePodIsNotShared(t *testing.T) {
 		"37 35 0:32 / /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-shared rw,relatime shared:1 - nfs 10.0.0.1:/export rw",
 	)
 
-	info, ok := scanForMount(MountKey{Dev: 32})
+	info, ok, _ := scanForMount(MountKey{Dev: 32})
 
 	require.True(t, ok)
 	assert.False(t, info.Shared)
@@ -362,7 +363,7 @@ func TestScanForMountDistinctVolumesOnOneSuperblock(t *testing.T) {
 		"37 35 0:77 /pvc-bbbb /var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~csi/pvc-bbbb/mount rw,relatime shared:1 - nfs4 10.0.0.1:/export/pvc-bbbb rw",
 	)
 
-	info, ok := scanForMount(MountKey{Dev: 77})
+	info, ok, _ := scanForMount(MountKey{Dev: 77})
 
 	require.True(t, ok, "the device is still a kubelet volume")
 	assert.Empty(t, info.PVName)
@@ -394,14 +395,28 @@ func TestInvalidateMountCacheSeesNewSharer(t *testing.T) {
 }
 
 // withRootDir creates the directory a mount point is reached through, under
-// the fixture table's "<proc>/<pid>/root", and returns its inode.
+// the fixture table's "<proc>/<pid>/root", and returns its inode, already
+// looked up as the first event of that mount would have.
 func withRootDir(t *testing.T, mountPoint string) uint64 {
 	t.Helper()
 
 	dir := filepath.Join(rootOf(mountInfoPath), mountPoint)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
-	ino, ok := mountRootInode(dir)
-	require.True(t, ok)
+	return knownRootInode(t, mountPoint)
+}
+
+// knownRootInode looks up the root inode of a fixture mount point and waits
+// until the cache has it.
+func knownRootInode(t *testing.T, mountPoint string) uint64 {
+	t.Helper()
+
+	path := filepath.Join(rootOf(mountInfoPath), mountPoint)
+	var ino uint64
+	require.Eventually(t, func() bool {
+		var ok bool
+		ino, ok, _ = mountRootInode(path)
+		return ok
+	}, 5*time.Second, time.Millisecond)
 	return ino
 }
 
@@ -420,13 +435,13 @@ func TestScanForMountTellsVolumesApartByMountRoot(t *testing.T) {
 	inoA := withRootDir(t, mpA)
 	inoB := withRootDir(t, mpB)
 
-	info, ok := scanForMount(MountKey{Dev: 77, RootIno: inoB})
+	info, ok, _ := scanForMount(MountKey{Dev: 77, RootIno: inoB})
 	require.True(t, ok)
 	assert.Equal(t, "pvc-bbbb", info.PVName)
 	assert.Equal(t, "e6db4197-793a-4924-8d17-2b71dbad18bb", info.PodUID)
 	assert.False(t, info.Shared, "only one pod mounts pvc-bbbb")
 
-	info, ok = scanForMount(MountKey{Dev: 77, RootIno: inoA})
+	info, ok, _ = scanForMount(MountKey{Dev: 77, RootIno: inoA})
 	require.True(t, ok)
 	assert.Equal(t, "pvc-aaaa", info.PVName)
 }
@@ -448,9 +463,10 @@ func TestScanForMountSharedVolumeOnSharedSuperblock(t *testing.T) {
 	inoA := withRootDir(t, mpA1)
 	require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(rootOf(mountInfoPath), mpA2)), 0o755))
 	require.NoError(t, os.Symlink(filepath.Join(rootOf(mountInfoPath), mpA1), filepath.Join(rootOf(mountInfoPath), mpA2)))
+	knownRootInode(t, mpA2)
 	withRootDir(t, mpB)
 
-	info, ok := scanForMount(MountKey{Dev: 77, RootIno: inoA})
+	info, ok, _ := scanForMount(MountKey{Dev: 77, RootIno: inoA})
 	require.True(t, ok)
 	assert.Equal(t, "pvc-aaaa", info.PVName)
 	assert.True(t, info.Shared)
@@ -470,7 +486,7 @@ func TestScanForMountUnknownMountRootLeavesVolumeUnnamed(t *testing.T) {
 	withRootDir(t, mpA)
 	// pvc-bbbb's mount point does not exist in the fixture: its lookup fails.
 
-	info, ok := scanForMount(MountKey{Dev: 77, RootIno: 1})
+	info, ok, _ := scanForMount(MountKey{Dev: 77, RootIno: 1})
 	require.True(t, ok, "the device is still a kubelet volume")
 	assert.Empty(t, info.PVName)
 	assert.False(t, info.Shared)
@@ -494,4 +510,171 @@ func TestResolveMountCachesPerMountRoot(t *testing.T) {
 	b, _ := resolveMount(MountKey{Dev: 77, RootIno: inoB})
 	assert.Equal(t, "pvc-aaaa", a.PVName)
 	assert.Equal(t, "pvc-bbbb", b.PVName)
+}
+
+// Naming a volume on a shared superblock needs the root inode of each of its
+// mounts, and on a network filesystem that lookup can hang. The decorator
+// must not wait for it: the first events of the mount go out without the
+// volume name, and the mount is resolved again once the inode is known.
+func TestResolveMountNeverWaitsForRootInode(t *testing.T) {
+	const (
+		mpA        = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-aaaa"
+		mpB        = "/var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-bbbb"
+		inoA, inoB = uint64(1001), uint64(1002)
+	)
+	withMountInfo(t,
+		"36 35 0:77 /a "+mpA+" rw - nfs4 10.0.0.1:/export/a rw",
+		"37 35 0:77 /b "+mpB+" rw - nfs4 10.0.0.1:/export/b rw",
+	)
+	release := make(chan struct{})
+	withRootInodeStat(t, func(path string) (uint64, error) {
+		<-release
+		if strings.HasSuffix(path, mpA) {
+			return inoA, nil
+		}
+		return inoB, nil
+	})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	start := time.Now()
+	info, ok := resolveMount(MountKey{Dev: 77, RootIno: inoB})
+	assert.Less(t, time.Since(start), 500*time.Millisecond, "the lookup must not wait for the root inodes")
+	require.True(t, ok, "the device is a kubelet volume")
+	assert.Empty(t, info.PVName, "the volume is unknown until the root inodes are")
+
+	info, _ = resolveMount(MountKey{Dev: 77, RootIno: inoB})
+	assert.Empty(t, info.PVName, "a pending resolution is served from cache while the lookup runs")
+
+	close(release)
+	assert.Eventually(t, func() bool {
+		info, _ := resolveMount(MountKey{Dev: 77, RootIno: inoB})
+		return info.PVName == "pvc-bbbb"
+	}, 5*time.Second, time.Millisecond)
+}
+
+// A root inode lookup that fails leaves the volume unnamed until the entry's
+// TTL, rather than having every event rescan the table and stat again.
+func TestResolveMountFailedRootInodeStaysCached(t *testing.T) {
+	const mpA = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-aaaa"
+	const mpB = "/var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-bbbb"
+	withMountInfo(t,
+		"36 35 0:77 /a "+mpA+" rw - nfs4 10.0.0.1:/export/a rw",
+		"37 35 0:77 /b "+mpB+" rw - nfs4 10.0.0.1:/export/b rw",
+	)
+	var stats atomic.Int32
+	withRootInodeStat(t, func(string) (uint64, error) {
+		stats.Add(1)
+		return 0, os.ErrNotExist
+	})
+
+	resolveMount(MountKey{Dev: 77, RootIno: 5})
+	require.Eventually(t, func() bool { return stats.Load() == 2 }, 5*time.Second, time.Millisecond)
+	for range 10 {
+		resolveMount(MountKey{Dev: 77, RootIno: 5})
+	}
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(2), stats.Load(), "one lookup per mount point, not one per event")
+}
+
+// withRootInodeStat replaces how root inodes are read, and starts from an
+// empty cache.
+func withRootInodeStat(t *testing.T, stat func(string) (uint64, error)) {
+	t.Helper()
+	old := rootInodeStat
+	rootInodeStat = stat
+	resetMountCache()
+	t.Cleanup(func() {
+		rootInodeStat = old
+		resetMountCache()
+	})
+}
+
+// A mount table change drops only the resolutions of the devices whose mounts
+// it added or removed, and the root inodes of those mount points. Every other
+// mount keeps its resolution: pods starting elsewhere on the node must not
+// make each volume rescan the table.
+func TestMountTableWatchDropsOnlyChangedDevices(t *testing.T) {
+	const (
+		mpX = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-x"
+		mpY = "/var/lib/kubelet/pods/e6db4197-793a-4924-8d17-2b71dbad18bb/volumes/kubernetes.io~nfs/pvc-y"
+	)
+	lineX := "36 35 0:32 / " + mpX + " rw - nfs4 10.0.0.1:/x rw"
+	lineY := "37 35 0:41 / " + mpY + " rw - nfs4 10.0.0.1:/y rw"
+	unrelated := "50 1 0:20 / /run/user/1000 rw - tmpfs tmpfs rw"
+	withMountInfo(t, lineX, lineY)
+	withRootDir(t, mpX)
+	withRootDir(t, mpY)
+
+	w := mountTableWatch{known: map[string]mountSet{}}
+	w.changed(mountInfoPath)
+	_, ok := resolveMount(MountKey{Dev: 32})
+	require.True(t, ok)
+	_, ok = resolveMount(MountKey{Dev: 41})
+	require.True(t, ok)
+
+	// A pod unrelated to either volume starts: nothing is dropped.
+	require.NoError(t, os.WriteFile(mountInfoPath, []byte(lineX+"\n"+lineY+"\n"+unrelated+"\n"), 0o644))
+	w.changed(mountInfoPath)
+	assert.True(t, mountCached(MountKey{Dev: 32}))
+	assert.True(t, mountCached(MountKey{Dev: 41}))
+
+	// The pod on pvc-y goes away: only its device is resolved again.
+	require.NoError(t, os.WriteFile(mountInfoPath, []byte(lineX+"\n"+unrelated+"\n"), 0o644))
+	w.changed(mountInfoPath)
+	assert.True(t, mountCached(MountKey{Dev: 32}))
+	assert.False(t, mountCached(MountKey{Dev: 41}))
+	assert.True(t, rootInodeCached(mpX))
+	assert.False(t, rootInodeCached(mpY))
+
+	_, ok = resolveMount(MountKey{Dev: 41})
+	assert.False(t, ok, "the gone volume no longer resolves")
+}
+
+// The first read of a table only records it; a table that cannot be read
+// again drops every resolution, since what changed cannot be told.
+func TestMountTableWatchUnreadableTableDropsAll(t *testing.T) {
+	const mpX = "/var/lib/kubelet/pods/55293f39-c745-4578-accb-f3e5cfc7b303/volumes/kubernetes.io~nfs/pvc-x"
+	withMountInfo(t, "36 35 0:32 / "+mpX+" rw - nfs4 10.0.0.1:/x rw")
+
+	w := mountTableWatch{known: map[string]mountSet{}}
+	_, ok := resolveMount(MountKey{Dev: 32})
+	require.True(t, ok)
+	w.changed(mountInfoPath)
+	assert.True(t, mountCached(MountKey{Dev: 32}), "the first read only records the table")
+
+	require.NoError(t, os.Remove(mountInfoPath))
+	w.changed(mountInfoPath)
+	assert.False(t, mountCached(MountKey{Dev: 32}))
+}
+
+func TestParseDevInvertsFmtDev(t *testing.T) {
+	for _, dev := range []uint32{0, 32, 253<<devMinorBits | 4, 259<<devMinorBits | devMinorMask, 4095 << devMinorBits} {
+		got, ok := parseDev(fmtDev(dev))
+		assert.True(t, ok)
+		assert.Equal(t, dev, got)
+	}
+	for _, bad := range []string{"", "8", "8:x", "4096:0", "0:1048576"} {
+		_, ok := parseDev(bad)
+		assert.False(t, ok, bad)
+	}
+}
+
+func mountCached(key MountKey) bool {
+	mountMu.RLock()
+	defer mountMu.RUnlock()
+	_, ok := mountCache[key]
+	return ok
+}
+
+func rootInodeCached(mountPoint string) bool {
+	rootInodeMu.Lock()
+	defer rootInodeMu.Unlock()
+	_, ok := rootInodes[filepath.Join(rootOf(mountInfoPath), mountPoint)]
+	return ok
 }

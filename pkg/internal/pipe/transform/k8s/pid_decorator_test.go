@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -34,6 +35,7 @@ type pidTestItem struct {
 	hostPID uint32
 	sDev    uint32
 	hasPID  bool
+	mount   *ebpf.MountAttrs
 }
 
 func pidTestAttrs(item *pidTestItem) *pipe.CommonAttrs { return &item.CommonAttrs }
@@ -42,10 +44,20 @@ func pidTestPidOf(item *pidTestItem) (uint32, uint32, ebpf.MountKey, bool) {
 	return item.pidNs, item.hostPID, ebpf.MountKey{Dev: item.sDev}, item.hasPID
 }
 
+func pidTestSetMount(item *pidTestItem, m *ebpf.MountAttrs) { item.mount = m }
+
+// volume returns an item's volume attributes, or none when it has no volume.
+func (item *pidTestItem) volume() ebpf.MountAttrs {
+	if item.mount == nil {
+		return ebpf.MountAttrs{}
+	}
+	return *item.mount
+}
+
 func noopPVCLookup(context.Context, string) (string, string, string, bool) { return "", "", "", false }
 
-func newPIDTestStore(t *testing.T) *kube.Store {
-	t.Helper()
+func newPIDTestStore(tb testing.TB) *kube.Store {
+	tb.Helper()
 	n := meta.NewBaseNotifier(slog.Default())
 	return kube.NewStore(&n, kube.ResourceLabels{}, nil, imetrics.NoopReporter{})
 }
@@ -59,7 +71,7 @@ func TestPIDMetadataDecorator_PassesThroughItemsWithoutPID(t *testing.T) {
 	outCh := output.Subscribe()
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -105,7 +117,7 @@ func TestPIDMetadataDecorator_DecoratesFromPIDPath(t *testing.T) {
 	outCh := output.Subscribe()
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -146,7 +158,7 @@ func TestPIDMetadataDecorator_FallsBackToMountPodWhenPIDUnresolved(t *testing.T)
 	}
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		store, pidTestAttrs, pidTestPidOf, pvc, input, output,
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, pvc, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -159,10 +171,10 @@ func TestPIDMetadataDecorator_FallsBackToMountPodWhenPIDUnresolved(t *testing.T)
 	assert.Equal(t, "vol-pod", got[0].Metadata[attr.K8sPodName])
 	assert.Equal(t, "vol-ns", got[0].Metadata[attr.K8sNamespaceName])
 	assert.Empty(t, got[0].Metadata[attr.K8sContainerName])
-	assert.Equal(t, "pvc-abc", got[0].Metadata[attr.K8sPersistentVolumeName])
-	assert.Equal(t, "my-claim", got[0].Metadata[attr.K8sPersistentVolumeClaimName])
+	assert.Equal(t, "pvc-abc", got[0].volume().PVName)
+	assert.Equal(t, "my-claim", got[0].volume().PVCName)
 	// Storage class attribute must be absent when PVC lookup returns empty string
-	assert.Empty(t, got[0].Metadata[attr.K8sStorageClassName])
+	assert.Empty(t, got[0].volume().StorageClass)
 }
 
 func TestPIDMetadataDecorator_AttributesStorageClass(t *testing.T) {
@@ -192,7 +204,7 @@ func TestPIDMetadataDecorator_AttributesStorageClass(t *testing.T) {
 	}
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		store, pidTestAttrs, pidTestPidOf, pvc, input, output,
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, pvc, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -203,10 +215,10 @@ func TestPIDMetadataDecorator_AttributesStorageClass(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, "vol-pod", got[0].Metadata[attr.K8sPodName])
 	assert.Equal(t, "vol-ns", got[0].Metadata[attr.K8sNamespaceName])
-	assert.Equal(t, "pvc-def", got[0].Metadata[attr.K8sPersistentVolumeName])
-	assert.Equal(t, "my-claim", got[0].Metadata[attr.K8sPersistentVolumeClaimName])
+	assert.Equal(t, "pvc-def", got[0].volume().PVName)
+	assert.Equal(t, "my-claim", got[0].volume().PVCName)
 	// Storage class attribute must be present and equal to the non-empty value returned by PVC lookup
-	assert.Equal(t, "fast-ssd", got[0].Metadata[attr.K8sStorageClassName])
+	assert.Equal(t, "fast-ssd", got[0].volume().StorageClass)
 }
 
 func TestPIDMetadataDecorator_NoMountFoundSkipsVolumeAttrs(t *testing.T) {
@@ -222,7 +234,7 @@ func TestPIDMetadataDecorator_NoMountFoundSkipsVolumeAttrs(t *testing.T) {
 	outCh := output.Subscribe()
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -231,8 +243,8 @@ func TestPIDMetadataDecorator_NoMountFoundSkipsVolumeAttrs(t *testing.T) {
 
 	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
 	require.Len(t, got, 1)
-	assert.Empty(t, got[0].Metadata[attr.K8sPersistentVolumeName])
-	assert.Empty(t, got[0].Metadata[attr.K8sPersistentVolumeClaimName])
+	assert.Empty(t, got[0].volume().PVName)
+	assert.Empty(t, got[0].volume().PVCName)
 }
 
 func TestPIDMetadataDecoratorProvider_BypassesWhenStoreNil(t *testing.T) {
@@ -242,7 +254,7 @@ func TestPIDMetadataDecoratorProvider_BypassesWhenStoreNil(t *testing.T) {
 	outCh := output.Subscribe()
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		nil, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+		nil, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -283,7 +295,7 @@ func TestPIDMetadataDecorator_SharedVolumeKeepsVolumeButNotPod(t *testing.T) {
 	}
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		store, pidTestAttrs, pidTestPidOf, pvc, input, output,
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, pvc, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -293,9 +305,9 @@ func TestPIDMetadataDecorator_SharedVolumeKeepsVolumeButNotPod(t *testing.T) {
 	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
 	require.Len(t, got, 1)
 	assert.Empty(t, got[0].Metadata[attr.K8sPodName], "a shared volume must not name the first mounter")
-	assert.Equal(t, "pvc-shared", got[0].Metadata[attr.K8sPersistentVolumeName])
-	assert.Equal(t, "shared-claim", got[0].Metadata[attr.K8sPersistentVolumeClaimName])
-	assert.Equal(t, "obi-nfs", got[0].Metadata[attr.K8sStorageClassName])
+	assert.Equal(t, "pvc-shared", got[0].volume().PVName)
+	assert.Equal(t, "shared-claim", got[0].volume().PVCName)
+	assert.Equal(t, "obi-nfs", got[0].volume().StorageClass)
 	assert.Equal(t, "vol-ns", got[0].Metadata[attr.K8sNamespaceName], "the claim's namespace is still certain")
 }
 
@@ -344,7 +356,7 @@ func TestPIDMetadataDecorator_UntrackedPIDResolvedFromCgroup(t *testing.T) {
 	outCh := output.Subscribe()
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -361,7 +373,7 @@ func TestPIDMetadataDecorator_UntrackedPIDResolvedFromCgroup(t *testing.T) {
 		assert.Equal(t, "writer", item.Metadata[attr.K8sPodName])
 		assert.Equal(t, "vol-ns", item.Metadata[attr.K8sNamespaceName])
 		assert.Equal(t, "io", item.Metadata[attr.K8sContainerName])
-		assert.Equal(t, "pvc-shared", item.Metadata[attr.K8sPersistentVolumeName])
+		assert.Equal(t, "pvc-shared", item.volume().PVName)
 	}
 	assert.Equal(t, 1, reads, "the container ID is cached per PID")
 }
@@ -415,7 +427,7 @@ func TestPIDMetadataDecorator_ExitedPIDResolvedThroughItsNamespace(t *testing.T)
 	outCh := output.Subscribe()
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -474,7 +486,7 @@ func TestPIDMetadataDecorator_NewContainerResolvedByPodUID(t *testing.T) {
 	outCh := output.Subscribe()
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		store, pidTestAttrs, pidTestPidOf, noopPVCLookup, input, output,
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -521,7 +533,7 @@ func TestPIDMetadataDecorator_AmbiguousVolumeSkipsVolumeAttrs(t *testing.T) {
 	outCh := output.Subscribe()
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
-		store, pidTestAttrs, pidTestPidOf, pvcLookup, input, output,
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, pvcLookup, input, output,
 	)(t.Context())
 	require.NoError(t, err)
 	go run(t.Context())
@@ -530,7 +542,78 @@ func TestPIDMetadataDecorator_AmbiguousVolumeSkipsVolumeAttrs(t *testing.T) {
 
 	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
 	require.Len(t, got, 1)
-	assert.Empty(t, got[0].Metadata[attr.K8sPersistentVolumeName])
-	assert.Empty(t, got[0].Metadata[attr.K8sPersistentVolumeClaimName])
+	assert.Empty(t, got[0].volume().PVName)
+	assert.Empty(t, got[0].volume().PVCName)
 	assert.Zero(t, lookups, "no claim lookup for an unnamed volume")
+}
+
+// The volume attributes depend on the mount alone, so they are built once per
+// mount resolution and shared by the stats of that mount: the claim is not
+// looked up per event, and a stat's getters never go back to a resolver.
+func TestPIDMetadataDecorator_VolumeResolvedOncePerMount(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+	info := ebpf.MountInfo{PodUID: "pod-uid-1", PVName: "pvc-abc", VolumeType: "nfs"}
+	resolveMount = func(ebpf.MountKey) (ebpf.MountInfo, bool) { return info, true }
+
+	lookups := 0
+	d := &pidDecorator{
+		store: newPIDTestStore(t),
+		pvc: func(context.Context, string) (string, string, string, bool) {
+			lookups++
+			return "vol-ns", "my-claim", "fast", true
+		},
+		containers: expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		namespaces: expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		volumes:    map[ebpf.MountKey]volumeEntry{},
+	}
+	key := ebpf.MountKey{Dev: 42, RootIno: 7}
+
+	first := d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
+	second := d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
+	require.NotNil(t, first)
+	assert.Same(t, first, second, "one value per mount, shared by its stats")
+	assert.Equal(t, ebpf.MountAttrs{PVName: "pvc-abc", PVCName: "my-claim", StorageClass: "fast", PVCNamespace: "vol-ns"}, *first)
+	assert.Equal(t, 1, lookups)
+
+	// The mount resolves to something else (the table changed): rebuilt.
+	info.Shared = true
+	third := d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
+	assert.NotSame(t, first, third)
+	assert.Equal(t, 2, lookups)
+}
+
+// A volume whose claim is not found is not asked about on every event either.
+func TestPIDMetadataDecorator_UnboundVolumeRetriedLater(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+	resolveMount = func(ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-1", PVName: "pvc-abc", VolumeType: "nfs"}, true
+	}
+
+	lookups := 0
+	d := &pidDecorator{
+		store:      newPIDTestStore(t),
+		pvc:        func(context.Context, string) (string, string, string, bool) { lookups++; return "", "", "", false },
+		containers: expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		namespaces: expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		volumes:    map[ebpf.MountKey]volumeEntry{},
+	}
+	key := ebpf.MountKey{Dev: 42}
+
+	for range 5 {
+		a := &pipe.CommonAttrs{}
+		v := d.decorate(t.Context(), a, 0, 0, key)
+		require.NotNil(t, v)
+		assert.Equal(t, "pvc-abc", v.PVName)
+		assert.Empty(t, v.PVCName)
+		assert.Nil(t, a.Metadata, "no pod and no claim namespace: nothing to record")
+	}
+	assert.Equal(t, 1, lookups)
+
+	entry := d.volumes[key]
+	entry.retryAt = time.Now().Add(-time.Second)
+	d.volumes[key] = entry
+	d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
+	assert.Equal(t, 2, lookups)
 }
