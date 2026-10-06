@@ -3,6 +3,11 @@
 
 package export // import "go.opentelemetry.io/obi/pkg/export"
 
+import (
+	"math"
+	"slices"
+)
+
 // Buckets defines the histograms bucket boundaries, and allows users to
 // redefine them
 type Buckets struct {
@@ -53,4 +58,33 @@ var DefaultBuckets = Buckets{
 
 	// https://opentelemetry.io/docs/specs/semconv/runtime/jvm-metrics/#metric-jvmgcduration
 	JVMGCDurationHistogram: []float64{0.01, 0.1, 1, 10},
+}
+
+// UnionBounds returns the sorted union of histogram bucket bounds, without
+// duplicates. A kernel-side histogram that must serve several exporters, each
+// with its own bounds, counts into this union: every exporter folds it back to
+// its own bounds exactly, because they are a subset.
+func UnionBounds(sets ...[]float64) []float64 {
+	var union []float64
+	for _, set := range sets {
+		union = append(union, set...)
+	}
+	slices.Sort(union)
+	return slices.Compact(union)
+}
+
+// Base2ExponentialBounds returns the bucket boundaries of a base-2 exponential
+// histogram at scale, base^k with base = 2^(2^-scale), from the largest one <=
+// lowest to the smallest one >= highest, and the index k of the first. These
+// are the boundaries the OpenTelemetry base2_exponential_bucket_histogram and
+// Prometheus native histograms (schema = scale) place their buckets on.
+func Base2ExponentialBounds(scale int32, lowest, highest float64) (firstIndex int32, bounds []float64) {
+	perOctave := math.Exp2(float64(scale))
+	first := int32(math.Floor(math.Log2(lowest) * perOctave))
+	last := int32(math.Ceil(math.Log2(highest) * perOctave))
+	bounds = make([]float64, 0, last-first+1)
+	for k := first; k <= last; k++ {
+		bounds = append(bounds, math.Exp2(float64(k)/perOctave))
+	}
+	return first, bounds
 }
