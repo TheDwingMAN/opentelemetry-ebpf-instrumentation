@@ -993,59 +993,61 @@ func attachFsPlan(objects *StatsObjects, plan fsAttachPlan) ([]io.Closer, error)
 	fentryFsync, fexitFsync, kprobeFsync, kretprobeFsync := fsFsyncProgramsFor(plan.Fs, objects)
 	fentrySplice, fexitSplice, kprobeSplice, kretprobeSplice := fsSpliceReadProgramsFor(plan.Fs, objects)
 
+	// Every exit probe attaches before its entry probe. A call that enters
+	// between the two would otherwise record a start whose exit never runs.
 	var steps []func() (io.Closer, error)
 	if plan.UseFentry {
 		steps = []func() (io.Closer, error){
 			func() (io.Closer, error) {
-				return link.AttachTracing(link.TracingOptions{Program: fentryRead, AttachType: ebpf.AttachTraceFEntry})
-			},
-			func() (io.Closer, error) {
 				return link.AttachTracing(link.TracingOptions{Program: fexitRead, AttachType: ebpf.AttachTraceFExit})
 			},
 			func() (io.Closer, error) {
-				return link.AttachTracing(link.TracingOptions{Program: fentryWrite, AttachType: ebpf.AttachTraceFEntry})
+				return link.AttachTracing(link.TracingOptions{Program: fentryRead, AttachType: ebpf.AttachTraceFEntry})
 			},
 			func() (io.Closer, error) {
 				return link.AttachTracing(link.TracingOptions{Program: fexitWrite, AttachType: ebpf.AttachTraceFExit})
+			},
+			func() (io.Closer, error) {
+				return link.AttachTracing(link.TracingOptions{Program: fentryWrite, AttachType: ebpf.AttachTraceFEntry})
 			},
 		}
 		if plan.FsyncSym != "" {
 			steps = append(steps,
 				func() (io.Closer, error) {
-					return link.AttachTracing(link.TracingOptions{Program: fentryFsync, AttachType: ebpf.AttachTraceFEntry})
+					return link.AttachTracing(link.TracingOptions{Program: fexitFsync, AttachType: ebpf.AttachTraceFExit})
 				},
 				func() (io.Closer, error) {
-					return link.AttachTracing(link.TracingOptions{Program: fexitFsync, AttachType: ebpf.AttachTraceFExit})
+					return link.AttachTracing(link.TracingOptions{Program: fentryFsync, AttachType: ebpf.AttachTraceFEntry})
 				},
 			)
 		}
 		if plan.SpliceReadSym != "" {
 			steps = append(steps,
 				func() (io.Closer, error) {
-					return link.AttachTracing(link.TracingOptions{Program: fentrySplice, AttachType: ebpf.AttachTraceFEntry})
+					return link.AttachTracing(link.TracingOptions{Program: fexitSplice, AttachType: ebpf.AttachTraceFExit})
 				},
 				func() (io.Closer, error) {
-					return link.AttachTracing(link.TracingOptions{Program: fexitSplice, AttachType: ebpf.AttachTraceFExit})
+					return link.AttachTracing(link.TracingOptions{Program: fentrySplice, AttachType: ebpf.AttachTraceFEntry})
 				},
 			)
 		}
 	} else {
 		steps = []func() (io.Closer, error){
-			func() (io.Closer, error) { return link.Kprobe(plan.ReadSym, kprobeRead, nil) },
 			func() (io.Closer, error) { return link.Kretprobe(plan.ReadSym, kretprobeRead, nil) },
-			func() (io.Closer, error) { return link.Kprobe(plan.WriteSym, kprobeWrite, nil) },
+			func() (io.Closer, error) { return link.Kprobe(plan.ReadSym, kprobeRead, nil) },
 			func() (io.Closer, error) { return link.Kretprobe(plan.WriteSym, kretprobeWrite, nil) },
+			func() (io.Closer, error) { return link.Kprobe(plan.WriteSym, kprobeWrite, nil) },
 		}
 		if plan.FsyncSym != "" {
 			steps = append(steps,
-				func() (io.Closer, error) { return link.Kprobe(plan.FsyncSym, kprobeFsync, nil) },
 				func() (io.Closer, error) { return link.Kretprobe(plan.FsyncSym, kretprobeFsync, nil) },
+				func() (io.Closer, error) { return link.Kprobe(plan.FsyncSym, kprobeFsync, nil) },
 			)
 		}
 		if plan.SpliceReadSym != "" {
 			steps = append(steps,
-				func() (io.Closer, error) { return link.Kprobe(plan.SpliceReadSym, kprobeSplice, nil) },
 				func() (io.Closer, error) { return link.Kretprobe(plan.SpliceReadSym, kretprobeSplice, nil) },
+				func() (io.Closer, error) { return link.Kprobe(plan.SpliceReadSym, kprobeSplice, nil) },
 			)
 		}
 	}
