@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -25,7 +26,7 @@ import (
 var diskBounds = []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500, 1.0, 2.5, 5.0}
 
 const (
-	devA = 252<<20 | 0
+	devA = 252 << 20
 	devB = 252<<20 | 16
 )
 
@@ -36,21 +37,21 @@ func cumulative(sdkmetric.InstrumentKind) metricdata.Temporality {
 func delta(sdkmetric.InstrumentKind) metricdata.Temporality { return metricdata.DeltaTemporality }
 
 // otelProducer exports every test metric; errors keep the err label.
-func (tf *testFamily) otelProducer(t testing.TB, temporality func(sdkmetric.InstrumentKind) metricdata.Temporality, ttl time.Duration) *Producer {
-	t.Helper()
+func (tf *testFamily) otelProducer(tb testing.TB, temporality func(sdkmetric.InstrumentKind) metricdata.Temporality, ttl time.Duration) *Producer {
+	tb.Helper()
 	p := NewProducer(tf.reg, "test", temporality, ttl)
 	proj, _ := devOpLabels(false)
 	projErr, _ := devOpLabels(true)
-	require.NoError(t, p.Add(testDuration, OTelMetric{Bounds: diskBounds, Project: proj}))
-	require.NoError(t, p.Add(testIO, OTelMetric{Project: proj}))
-	require.NoError(t, p.Add(testErrors, OTelMetric{Project: projErr}))
+	require.NoError(tb, p.Add(testDuration, OTelMetric{Bounds: diskBounds, Project: proj}))
+	require.NoError(tb, p.Add(testIO, OTelMetric{Project: proj}))
+	require.NoError(tb, p.Add(testErrors, OTelMetric{Project: projErr}))
 	return p
 }
 
-func produce(t testing.TB, p *Producer) map[string]metricdata.Metrics {
-	t.Helper()
+func produce(tb testing.TB, p *Producer) map[string]metricdata.Metrics {
+	tb.Helper()
 	sm, err := p.Produce(context.Background())
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	out := map[string]metricdata.Metrics{}
 	for _, s := range sm {
 		for _, m := range s.Metrics {
@@ -60,33 +61,33 @@ func produce(t testing.TB, p *Producer) map[string]metricdata.Metrics {
 	return out
 }
 
-func sumValue(t testing.TB, m metricdata.Metrics, attrs ...attribute.KeyValue) int64 {
-	t.Helper()
+func sumValue(tb testing.TB, m metricdata.Metrics, attrs ...attribute.KeyValue) int64 {
+	tb.Helper()
 	want := attribute.NewSet(attrs...)
 	for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
 		if dp.Attributes.Equals(&want) {
 			return dp.Value
 		}
 	}
-	t.Fatalf("no data point %v in %s", want.ToSlice(), m.Name)
+	tb.Fatalf("no data point %v in %s", want.ToSlice(), m.Name)
 	return 0
 }
 
-func histPoint(t testing.TB, m metricdata.Metrics, attrs ...attribute.KeyValue) metricdata.HistogramDataPoint[float64] {
-	t.Helper()
+func histPoint(tb testing.TB, m metricdata.Metrics, attrs ...attribute.KeyValue) metricdata.HistogramDataPoint[float64] {
+	tb.Helper()
 	want := attribute.NewSet(attrs...)
 	for _, dp := range m.Data.(metricdata.Histogram[float64]).DataPoints {
 		if dp.Attributes.Equals(&want) {
 			return dp
 		}
 	}
-	t.Fatalf("no data point %v in %s", want.ToSlice(), m.Name)
+	tb.Fatalf("no data point %v in %s", want.ToSlice(), m.Name)
 	return metricdata.HistogramDataPoint[float64]{}
 }
 
-func devOp(dev uint32, op ebpf.BlockOpCode) []attribute.KeyValue {
+func devAOp(op ebpf.BlockOpCode) []attribute.KeyValue {
 	return []attribute.KeyValue{
-		attribute.String("dev", strconv.Itoa(int(dev))), attribute.String("op", strconv.Itoa(int(op))),
+		attribute.String("dev", strconv.Itoa(devA)), attribute.String("op", strconv.Itoa(int(op))),
 	}
 }
 
@@ -103,7 +104,7 @@ func TestFamily_KeysMergeIntoTheExportedSeries(t *testing.T) {
 	record(tf.m, tf.layout, flush, 0, 0, 1_000_000)
 
 	got := produce(t, p)
-	dur := histPoint(t, got["test.duration"], devOp(devA, ebpf.CodeBlockRead)...)
+	dur := histPoint(t, got["test.duration"], devAOp(ebpf.CodeBlockRead)...)
 	assert.Equal(t, uint64(3), dur.Count, "both keys of the read series")
 	assert.InDelta(t, 0.0033, dur.Sum, 1e-12)
 	assert.Equal(t, diskBounds, dur.Bounds)
@@ -115,9 +116,9 @@ func TestFamily_KeysMergeIntoTheExportedSeries(t *testing.T) {
 	}
 	assert.Equal(t, dur.Count, bucketSum, "count == sum(buckets)")
 
-	assert.Equal(t, int64(4096*2+512), sumValue(t, got["test.io"], devOp(devA, ebpf.CodeBlockRead)...))
+	assert.Equal(t, int64(4096*2+512), sumValue(t, got["test.io"], devAOp(ebpf.CodeBlockRead)...))
 	assert.Equal(t, int64(1), sumValue(t, got["test.errors"],
-		append(devOp(devA, ebpf.CodeBlockRead), attribute.String("err", "-5"))...))
+		append(devAOp(ebpf.CodeBlockRead), attribute.String("err", "-5"))...))
 	assert.Len(t, got["test.errors"].Data.(metricdata.Sum[int64]).DataPoints, 1, "only failed requests count as errors")
 	assert.Len(t, got["test.duration"].Data.(metricdata.Histogram[float64]).DataPoints, 1, "flushes select no read/write metric")
 }
@@ -137,7 +138,7 @@ func TestFamily_DecorateDropsKeysLikeTheFilter(t *testing.T) {
 	got := produce(t, p)
 	points := got["test.io"].Data.(metricdata.Sum[int64]).DataPoints
 	require.Len(t, points, 1)
-	assert.Equal(t, int64(8192), sumValue(t, got["test.io"], devOp(devA, ebpf.CodeBlockWrite)...))
+	assert.Equal(t, int64(8192), sumValue(t, got["test.io"], devAOp(ebpf.CodeBlockWrite)...))
 	assert.Equal(t, int32(2), decorated.Load())
 
 	// A final decoration is reused while the key keeps counting.
@@ -151,7 +152,7 @@ func TestFamily_DecorateDropsKeysLikeTheFilter(t *testing.T) {
 	record(tf.m, tf.layout, blkKey(devA, ebpf.CodeBlockWrite, 0), 0, 8192, 50_000)
 	got = produce(t, p)
 	assert.Equal(t, int32(3), decorated.Load())
-	assert.Equal(t, int64(3*8192), sumValue(t, got["test.io"], devOp(devA, ebpf.CodeBlockWrite)...))
+	assert.Equal(t, int64(3*8192), sumValue(t, got["test.io"], devAOp(ebpf.CodeBlockWrite)...))
 }
 
 func TestFamily_NonFinalDecorationIsRetried(t *testing.T) {
@@ -193,8 +194,8 @@ func TestFamily_IdleKeysAreDeletedWithoutLosingCounts(t *testing.T) {
 	record(tf.m, tf.layout, k, 1, 50, 1000)
 	tf.clock.Advance(time.Second)
 	got := produce(t, p)
-	assert.Equal(t, int64(150), sumValue(t, got["test.io"], devOp(devA, ebpf.CodeBlockRead)...), "totals survive the deletion")
-	assert.Equal(t, uint64(2), histPoint(t, got["test.duration"], devOp(devA, ebpf.CodeBlockRead)...).Count)
+	assert.Equal(t, int64(150), sumValue(t, got["test.io"], devAOp(ebpf.CodeBlockRead)...), "totals survive the deletion")
+	assert.Equal(t, uint64(2), histPoint(t, got["test.duration"], devAOp(ebpf.CodeBlockRead)...).Count)
 }
 
 func TestFamily_DeletableKeepsKeys(t *testing.T) {
@@ -232,7 +233,7 @@ func TestFamily_ExpiredSeriesComeBackFromZero(t *testing.T) {
 	record(tf.m, tf.layout, k, 0, 7, 1000)
 	tf.clock.Advance(time.Second)
 	got = produce(t, p)
-	assert.Equal(t, int64(7), sumValue(t, got["test.io"], devOp(devA, ebpf.CodeBlockRead)...),
+	assert.Equal(t, int64(7), sumValue(t, got["test.io"], devAOp(ebpf.CodeBlockRead)...),
 		"a new series, as the per-event exporter recreates a removed one")
 }
 
@@ -246,8 +247,8 @@ func TestFamily_AttachingAnExporterLater(t *testing.T) {
 	second := tf.otelProducer(t, cumulative, 0)
 	record(tf.m, tf.layout, k, 0, 5, 1000)
 	tf.clock.Advance(time.Second)
-	assert.Equal(t, int64(105), sumValue(t, produce(t, first)["test.io"], devOp(devA, ebpf.CodeBlockRead)...))
-	assert.Equal(t, int64(5), sumValue(t, produce(t, second)["test.io"], devOp(devA, ebpf.CodeBlockRead)...),
+	assert.Equal(t, int64(105), sumValue(t, produce(t, first)["test.io"], devAOp(ebpf.CodeBlockRead)...))
+	assert.Equal(t, int64(5), sumValue(t, produce(t, second)["test.io"], devAOp(ebpf.CodeBlockRead)...),
 		"counts from its attachment on")
 }
 
@@ -270,7 +271,7 @@ func TestFamily_ReadsNothingBeforeRun(t *testing.T) {
 	f.Run(ctx)
 	tf.clock.Advance(time.Second)
 	for _, p := range []*Producer{first, second} {
-		assert.Equal(t, int64(100), sumValue(t, produce(t, p)["test.io"], devOp(devA, ebpf.CodeBlockRead)...),
+		assert.Equal(t, int64(100), sumValue(t, produce(t, p)["test.io"], devAOp(ebpf.CodeBlockRead)...),
 			"every exporter attached before Run sees every count")
 	}
 }
@@ -278,8 +279,10 @@ func TestFamily_ReadsNothingBeforeRun(t *testing.T) {
 func TestFamily_ValidatesMetrics(t *testing.T) {
 	l, err := NewExplicitLayout(diskBounds)
 	require.NoError(t, err)
-	base := Config{Source: newFakeMap(testKeySize, testStride(l), 1), Stat: blkStat,
-		Layout: ValueLayout{Counters: testWords, Buckets: l.Buckets()}}
+	base := Config{
+		Source: newFakeMap(testKeySize, testStride(l), 1), Stat: blkStat,
+		Layout: ValueLayout{Counters: testWords, Buckets: l.Buckets()},
+	}
 
 	cfg := base
 	cfg.Metrics = []*Metric{{Name: testIO, Kind: KindCounter}}
@@ -348,7 +351,7 @@ func TestFamily_ConcurrentScrapeAndCollect(t *testing.T) {
 	wg.Wait()
 
 	got := produce(t, p)
-	assert.Equal(t, int64(3*writes), sumValue(t, got["test.io"], devOp(devA, ebpf.CodeBlockWrite)...))
+	assert.Equal(t, int64(3*writes), sumValue(t, got["test.io"], devAOp(ebpf.CodeBlockWrite)...))
 	mfs, err := reg.Gather()
 	require.NoError(t, err)
 	require.Len(t, mfs, 1)

@@ -294,7 +294,6 @@ func TestResolvePod(t *testing.T) {
 	assert.Nil(t, m)
 }
 
-
 func TestCgroupIndex_ConcurrentLookupsAndScans(t *testing.T) {
 	root := makeTree(t, crioFixture)
 	x := NewCgroupIndex(WithCgroupRoots(root))

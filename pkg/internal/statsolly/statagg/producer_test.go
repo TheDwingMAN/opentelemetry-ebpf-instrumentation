@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -35,7 +36,7 @@ func TestProducer_Cumulative(t *testing.T) {
 	assert.Equal(t, first["test.io"].Data.(metricdata.Sum[int64]).DataPoints[0].StartTime, io.DataPoints[0].StartTime,
 		"a cumulative series keeps its start")
 
-	dur := histPoint(t, second["test.duration"], devOp(devA, ebpf.CodeBlockWrite)...)
+	dur := histPoint(t, second["test.duration"], devAOp(ebpf.CodeBlockWrite)...)
 	assert.Equal(t, uint64(2), dur.Count)
 	_, minSet := dur.Min.Value()
 	_, maxSet := dur.Max.Value()
@@ -44,7 +45,7 @@ func TestProducer_Cumulative(t *testing.T) {
 	// Nothing new: a cumulative exporter keeps sending the series.
 	tf.clock.Advance(time.Second)
 	third := produce(t, p)
-	assert.Equal(t, int64(20), sumValue(t, third["test.io"], devOp(devA, ebpf.CodeBlockWrite)...))
+	assert.Equal(t, int64(20), sumValue(t, third["test.io"], devAOp(ebpf.CodeBlockWrite)...))
 }
 
 func TestProducer_Delta(t *testing.T) {
@@ -57,7 +58,7 @@ func TestProducer_Delta(t *testing.T) {
 	t0 := tf.clock.Now()
 	first := produce(t, p)
 	assert.Equal(t, metricdata.DeltaTemporality, first["test.io"].Data.(metricdata.Sum[int64]).Temporality)
-	assert.Equal(t, int64(10), sumValue(t, first["test.io"], devOp(devA, ebpf.CodeBlockWrite)...))
+	assert.Equal(t, int64(10), sumValue(t, first["test.io"], devAOp(ebpf.CodeBlockWrite)...))
 
 	tf.clock.Advance(time.Second)
 	record(tf.m, tf.layout, ka, 1, 5, 3_000_000)
@@ -67,7 +68,7 @@ func TestProducer_Delta(t *testing.T) {
 	assert.Equal(t, int64(5), io.DataPoints[0].Value)
 	assert.Equal(t, t0, io.DataPoints[0].StartTime, "a delta starts at the previous export")
 
-	dur := histPoint(t, second["test.duration"], devOp(devA, ebpf.CodeBlockWrite)...)
+	dur := histPoint(t, second["test.duration"], devAOp(ebpf.CodeBlockWrite)...)
 	assert.Equal(t, uint64(1), dur.Count)
 	assert.Equal(t, uint64(1), dur.BucketCounts[5])
 	assert.InDelta(t, 0.003, dur.Sum, 1e-12)

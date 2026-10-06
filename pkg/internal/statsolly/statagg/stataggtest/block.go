@@ -45,8 +45,10 @@ func NewBlock(layout *statagg.Layout, cpus int, decorate func(*ebpf.Stat) bool) 
 	m := NewMemMap(blockKeySize, blockWords*counterSize+2*buckets*bucketSize, cpus)
 	readWrite := func(s *ebpf.Stat) bool { return s.BlockIo.IsReadWrite() }
 	svc := func(name attributes.Name, sel func(*ebpf.Stat) bool) *statagg.Metric {
-		return &statagg.Metric{Name: name, Kind: statagg.KindHistogram, Select: sel,
-			SumWord: wordSvcSum, BucketWord: blockWords, Layout: layout}
+		return &statagg.Metric{
+			Name: name, Kind: statagg.KindHistogram, Select: sel,
+			SumWord: wordSvcSum, BucketWord: blockWords, Layout: layout,
+		}
 	}
 	bytes := func(d statagg.Delta) uint64 { return d.Counter(wordBytes) }
 
