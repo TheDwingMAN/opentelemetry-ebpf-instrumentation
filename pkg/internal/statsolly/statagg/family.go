@@ -28,10 +28,20 @@ const (
 	// counting is reused before the pipeline decorators run on it again, so
 	// Kubernetes metadata that changes reaches its series.
 	DefaultRedecorateAfter = 30 * time.Second
-	// DefaultIdlePolls is how many polls in a row a key must count nothing
-	// before it is deleted from the kernel map.
-	DefaultIdlePolls = 2
+	// DefaultMaxDeletesPerPoll bounds the keys one poll deletes from the
+	// kernel map, one syscall each, so the family lock that scrapes and
+	// collections wait on is held for a bounded time; the rest wait for the
+	// next poll.
+	DefaultMaxDeletesPerPoll = 1024
 )
+
+// DefaultIdleAfter is how long a key must count nothing before it is deleted
+// from the kernel map: two background ticks. It is a time, not a number of
+// polls, because exporter collections poll too: a key that counts every 30 s
+// must stay in the map rather than be deleted and decorated again after two
+// 1 s collections, and every deletion opens a window in which the kernel
+// reuses the freed element of a preallocated map.
+func DefaultIdleAfter(tick time.Duration) time.Duration { return 2 * tick }
 
 // Kind is the instrument a Metric is exported as.
 type Kind uint8
@@ -111,18 +121,22 @@ type Config struct {
 	// counts for no metric. Nil keeps every stat undecorated.
 	Decorate func(stat *ebpf.Stat) bool
 
-	// Deletable reports whether a key the reader found unchanged for idle
-	// polls in a row may be deleted from the kernel map. Nil deletes it
-	// after DefaultIdlePolls. Neither Stat nor Deletable may keep key after
-	// returning.
-	Deletable func(key []byte, idle int) bool
+	// Deletable reports whether a key that counted nothing for IdleAfter may
+	// be deleted from the kernel map now, e.g. not while the cgroup it
+	// counts for is a tombstone. Nil deletes every such key. Neither Stat
+	// nor Deletable may keep key after returning.
+	Deletable func(key []byte) bool
 
 	Metrics []*Metric
 
 	MinPollInterval time.Duration
 	TickInterval    time.Duration
 	RedecorateAfter time.Duration
-	Clock           func() time.Time
+	// IdleAfter defaults to DefaultIdleAfter(TickInterval).
+	IdleAfter time.Duration
+	// MaxDeletesPerPoll defaults to DefaultMaxDeletesPerPoll.
+	MaxDeletesPerPoll int
+	Clock             func() time.Time
 }
 
 // sink is one exporter's view of a Family's metrics.
@@ -183,11 +197,17 @@ func NewFamily(cfg Config) (*Family, error) {
 	if cfg.RedecorateAfter == 0 {
 		cfg.RedecorateAfter = DefaultRedecorateAfter
 	}
+	if cfg.IdleAfter == 0 {
+		cfg.IdleAfter = DefaultIdleAfter(cfg.TickInterval)
+	}
+	if cfg.MaxDeletesPerPoll == 0 {
+		cfg.MaxDeletesPerPoll = DefaultMaxDeletesPerPoll
+	}
 	if cfg.Clock == nil {
 		cfg.Clock = time.Now
 	}
 	if cfg.Deletable == nil {
-		cfg.Deletable = func(_ []byte, idle int) bool { return idle >= DefaultIdlePolls }
+		cfg.Deletable = func([]byte) bool { return true }
 	}
 	return &Family{
 		cfg:    cfg,
@@ -249,18 +269,25 @@ func (f *Family) poll(now time.Time) {
 		f.logPollError(err)
 		return
 	}
-	f.deleteIdle(visit)
+	f.deleteIdle(now, visit)
 }
 
-func (f *Family) deleteIdle(visit func(k *kernelKey, d Delta, values []byte)) {
+// deleteIdle deletes up to MaxDeletesPerPoll keys that counted nothing for
+// IdleAfter, as Deletable allows.
+func (f *Family) deleteIdle(now time.Time, visit func(k *kernelKey, d Delta, values []byte)) {
+	deleted := 0
 	for _, k := range f.reader.keys {
-		if k.idle == 0 || !f.cfg.Deletable(f.reader.keyBytes(k), k.idle) {
+		if deleted >= f.cfg.MaxDeletesPerPoll {
+			return
+		}
+		if now.Sub(k.changed) < f.cfg.IdleAfter || !f.cfg.Deletable(f.reader.keyBytes(k)) {
 			continue
 		}
 		if err := f.reader.Delete(k, visit); err != nil {
 			f.logPollError(err)
 			return
 		}
+		deleted++
 	}
 }
 

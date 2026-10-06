@@ -231,8 +231,8 @@ func TestCgroupIndex_KeysOutliveTombstones(t *testing.T) {
 
 	var index *CgroupIndex
 	tf := newTestFamily(t, 1, diskBounds, func(c *Config) {
-		c.Deletable = func(key []byte, idle int) bool {
-			return idle >= DefaultIdlePolls && !index.Tombstoned(uint64(binary.NativeEndian.Uint32(key)))
+		c.Deletable = func(key []byte) bool {
+			return !index.Tombstoned(uint64(binary.NativeEndian.Uint32(key)))
 		}
 	})
 	index = NewCgroupIndex(WithCgroupRoots(root), WithCgroupClock(tf.clock.Now))

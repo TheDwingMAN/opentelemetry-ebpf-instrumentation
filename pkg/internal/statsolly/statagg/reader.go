@@ -71,8 +71,7 @@ type kernelKey struct {
 	key string
 	// prev holds the values of every CPU at the previous poll.
 	prev []byte
-	// idle counts the polls in a row that saw no change, since changed.
-	idle    int
+	// changed is when a poll last found the key changed, or first found it.
 	changed time.Time
 	// seen is the poll generation that last found the key in the map.
 	seen uint64
@@ -128,10 +127,9 @@ func (r *Reader) Poll(now time.Time, visit func(k *kernelKey, d Delta, values []
 		}
 		k.seen = r.gen
 		if !r.diff(k.prev, values) {
-			k.idle++
 			return
 		}
-		k.idle, k.changed = 0, now
+		k.changed = now
 		visit(k, r.delta, values)
 	})
 	if err != nil {

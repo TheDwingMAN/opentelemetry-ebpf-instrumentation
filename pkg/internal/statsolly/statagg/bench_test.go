@@ -33,7 +33,7 @@ func benchFamily(b *testing.B, keys int) (*testFamily, [][]byte) {
 }
 
 // neverDelete keeps every key in the map, so benchmarks poll the same keys.
-func neverDelete(c *Config) { c.Deletable = func([]byte, int) bool { return false } }
+func neverDelete(c *Config) { c.Deletable = func([]byte) bool { return false } }
 
 func perKey(b *testing.B, keys int) {
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(keys), "ns/key")

@@ -24,8 +24,13 @@ type visited struct {
 
 func pollAll(t *testing.T, r *Reader) []visited {
 	t.Helper()
+	return pollAt(t, r, time.Now())
+}
+
+func pollAt(t *testing.T, r *Reader, now time.Time) []visited {
+	t.Helper()
 	var out []visited
-	require.NoError(t, r.Poll(time.Now(), func(k *kernelKey, d Delta, _ []byte) {
+	require.NoError(t, r.Poll(now, func(k *kernelKey, d Delta, _ []byte) {
 		out = append(out, visited{key: k.key, delta: append([]uint64(nil), d...)})
 	}))
 	return out
@@ -47,14 +52,15 @@ func TestReader_SumsCPUsAndReportsOnlyChanges(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, []uint64{150, 7, 0, 0, 7}, got[0].delta)
 
-	assert.Empty(t, pollAll(t, r), "an unchanged key is not visited")
-	assert.Equal(t, 1, r.keys["key1"].idle)
+	first := r.keys["key1"].changed
+	assert.Empty(t, pollAt(t, r, first.Add(time.Second)), "an unchanged key is not visited")
+	assert.Equal(t, first, r.keys["key1"].changed)
 
 	m.addU32(k, 0, 0, 1)
-	got = pollAll(t, r)
+	got = pollAt(t, r, first.Add(2*time.Second))
 	require.Len(t, got, 1)
 	assert.Equal(t, []uint64{0, 0, 1, 0, 0}, got[0].delta)
-	assert.Zero(t, r.keys["key1"].idle)
+	assert.Equal(t, first.Add(2*time.Second), r.keys["key1"].changed)
 }
 
 func TestReader_BucketDeltasAreWrapSafe(t *testing.T) {
