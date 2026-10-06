@@ -636,7 +636,11 @@ func TestPIDMetadataDecorator_AmbiguousVolumeSkipsVolumeAttrs(t *testing.T) {
 func TestPIDMetadataDecorator_VolumeResolvedOncePerMount(t *testing.T) {
 	originalResolveMount := resolveMount
 	defer func() { resolveMount = originalResolveMount }()
-	info := ebpf.MountInfo{PodUID: "pod-uid-1", PVName: "pvc-abc", VolumeType: "nfs"}
+	// Addr is set (a plausible nfs server.address) and Source left empty, so
+	// the fs join device labels stay deterministically empty (dev 42's major
+	// is 0, and an empty source never resolves through statHostPathDevT)
+	// while still exercising the info.Addr -> attrs.ServerAddress wiring.
+	info := ebpf.MountInfo{PodUID: "pod-uid-1", PVName: "pvc-abc", VolumeType: "nfs", Addr: "10.0.0.5:2049"}
 	resolveMount = func(ebpf.MountKey) (ebpf.MountInfo, bool) { return info, true }
 
 	lookups := 0
@@ -656,7 +660,10 @@ func TestPIDMetadataDecorator_VolumeResolvedOncePerMount(t *testing.T) {
 	second := d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
 	require.NotNil(t, first)
 	assert.Same(t, first, second, "one value per mount, shared by its stats")
-	assert.Equal(t, ebpf.MountAttrs{PVName: "pvc-abc", PVCName: "my-claim", StorageClass: "fast", PVCNamespace: "vol-ns"}, *first)
+	assert.Equal(t, ebpf.MountAttrs{
+		PVName: "pvc-abc", PVCName: "my-claim", StorageClass: "fast", PVCNamespace: "vol-ns",
+		ServerAddress: "10.0.0.5:2049",
+	}, *first)
 	assert.Equal(t, 1, lookups)
 
 	// The mount resolves to something else (the table changed): rebuilt.
@@ -664,6 +671,51 @@ func TestPIDMetadataDecorator_VolumeResolvedOncePerMount(t *testing.T) {
 	third := d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
 	assert.NotSame(t, first, third)
 	assert.Equal(t, 2, lookups)
+}
+
+// A bound volume's attrs, including the fs join labels, are cached for
+// boundVolumeRetry (not forever): once it elapses, volumeOf asks the PVC
+// lookup again, so a Retain PV rebound to a new claim is picked up.
+func TestPIDMetadataDecorator_BoundVolumeRetriedAfterBoundVolumeRetry(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+	resolveMount = func(ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-1", PVName: "pvc-abc", VolumeType: "nfs"}, true
+	}
+
+	lookups := 0
+	d := &pidDecorator{
+		store: newPIDTestStore(t),
+		pvc: func(context.Context, string) (string, string, string, bool) {
+			lookups++
+			return "vol-ns", "my-claim", "fast", true
+		},
+		containers: expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		namespaces: expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		volumes:    map[ebpf.MountKey]volumeEntry{},
+	}
+	key := ebpf.MountKey{Dev: 42}
+
+	for range 5 {
+		v := d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
+		require.NotNil(t, v)
+		assert.Equal(t, "my-claim", v.PVCName)
+	}
+	assert.Equal(t, 1, lookups, "cached for boundVolumeRetry, not looked up per event")
+
+	// A bound entry's retryAt must actually be boundVolumeRetry away, not the
+	// zero value: a zero retryAt would (as it once did) cache the entry
+	// forever regardless of how much time passes, since decorate's own retry
+	// check treats a zero retryAt as "never expires".
+	retryAt := d.volumes[key].retryAt
+	require.False(t, retryAt.IsZero(), "a bound volume's retryAt must not be the zero value")
+	assert.WithinDuration(t, time.Now().Add(boundVolumeRetry), retryAt, time.Second)
+
+	entry := d.volumes[key]
+	entry.retryAt = time.Now().Add(-time.Second)
+	d.volumes[key] = entry
+	d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
+	assert.Equal(t, 2, lookups, "re-resolved once boundVolumeRetry elapses, not cached forever")
 }
 
 // A volume whose claim is not found is not asked about on every event either.
