@@ -91,6 +91,15 @@ func TestConfigValidate_BlockPodNeedsCgroupV2IO(t *testing.T) {
 		})
 		assert.Equal(t, export.FeatureStorageBlock, cfg.Metrics.Features&^export.FeatureApplicationRED&^export.FeatureApplicationSizes)
 	})
+	// "all" selects storage_block_pod too, and both span metrics formats,
+	// which validation resolves only while the list is still FeatureAll.
+	t.Run("all on a host without cgroup v2", func(t *testing.T) {
+		cfg, logs := validate(t, "all", unsupported)
+		assert.False(t, cfg.Metrics.Features.StorageBlockPod())
+		assert.True(t, cfg.Metrics.Features.SpanMetrics())
+		assert.False(t, cfg.Metrics.Features.LegacySpanMetrics(), "the implicit conflict resolved to OTel")
+		assert.Contains(t, logs, "feature=storage_block_pod")
+	})
 	t.Run("static validation reads no host state", func(t *testing.T) {
 		cfg, _ := validate(t, "storage_block_pod", nil)
 		assert.True(t, cfg.Metrics.Features.StorageBlockPod())

@@ -154,6 +154,12 @@ func metricsOf(mfs []*dto.MetricFamily, name, dev, op string) []*dto.Metric {
 // its kernel dev_t, node and diskstats file.
 func loopDevice(t *testing.T) (dev uint32, path, stat string) {
 	t.Helper()
+	return loopDeviceOfSize(t, 1<<20)
+}
+
+// loopDeviceOfSize is loopDevice over a file of size bytes.
+func loopDeviceOfSize(t *testing.T, size int64) (dev uint32, path, stat string) {
+	t.Helper()
 
 	control, err := os.OpenFile("/dev/loop-control", os.O_RDWR, 0)
 	if err != nil {
@@ -172,7 +178,7 @@ func loopDevice(t *testing.T) (dev uint32, path, stat string) {
 	backing, err := os.Create(filepath.Join(t.TempDir(), "backing"))
 	require.NoError(t, err)
 	t.Cleanup(func() { backing.Close() })
-	require.NoError(t, backing.Truncate(1<<20))
+	require.NoError(t, backing.Truncate(size))
 
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	require.NoError(t, err)

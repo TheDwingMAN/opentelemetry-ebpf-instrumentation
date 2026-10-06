@@ -906,7 +906,6 @@ func (c *Config) validate(context validationContext) error {
 		}
 	}
 	c.warnStorageBlockVolumesAlone()
-	c.disableBlockPodIfUnsupported(context.checkBlockPod)
 
 	if !c.TracePrinter.Valid() {
 		return ConfigError(fmt.Sprintf("invalid value for trace_printer: '%s'", c.TracePrinter))
@@ -930,6 +929,11 @@ func (c *Config) validate(context validationContext) error {
 		// drive the exporters through JoinMetricsConfig, so report against the same set.
 		c.warnDeprecatedMetricsFeatures()
 	}
+
+	// After the span metrics formats are resolved: clearing a bit makes an
+	// "all" list no longer FeatureAll, which InvalidSpanMetricsConfig tells
+	// apart from an explicit choice of both formats.
+	c.disableBlockPodIfUnsupported(context.checkBlockPod)
 
 	if c.InternalMetrics.Exporter == imetrics.InternalMetricsExporterOTEL && c.InternalMetrics.Prometheus.Port != 0 {
 		return ConfigError("you can't enable both OTEL and Prometheus internal metrics")
