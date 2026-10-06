@@ -29,14 +29,15 @@ import (
 
 func statAttrs(s *ebpf.Stat) *pipe.CommonAttrs { return &s.CommonAttrs }
 
-// fsIoPID extracts the PID namespace, host PID, and filesystem superblock
-// device number from a filesystem I/O stat, for Kubernetes pod and
-// persistent volume attribution. Stats that don't carry FsIo are left alone.
-func fsIoPID(s *ebpf.Stat) (pidNs, hostPID, sDev uint32, ok bool) {
+// fsIoPID extracts the PID namespace, host PID, and the mount (superblock
+// device and mount root inode) from a filesystem I/O stat, for Kubernetes pod
+// and persistent volume attribution. Stats that don't carry FsIo are left
+// alone.
+func fsIoPID(s *ebpf.Stat) (pidNs, hostPID uint32, mount ebpf.MountKey, ok bool) {
 	if s.FsIo == nil {
-		return 0, 0, 0, false
+		return 0, 0, ebpf.MountKey{}, false
 	}
-	return s.FsIo.PidNs, s.FsIo.HostPID, s.FsIo.SDev, true
+	return s.FsIo.PidNs, s.FsIo.HostPID, ebpf.MountKey{Dev: s.FsIo.SDev, RootIno: s.FsIo.RootIno}, true
 }
 
 // noPVCLookup reports every volume as unbound. Used when Kubernetes is

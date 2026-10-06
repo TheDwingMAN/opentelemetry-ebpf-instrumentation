@@ -38,8 +38,8 @@ type pidTestItem struct {
 
 func pidTestAttrs(item *pidTestItem) *pipe.CommonAttrs { return &item.CommonAttrs }
 
-func pidTestPidOf(item *pidTestItem) (uint32, uint32, uint32, bool) {
-	return item.pidNs, item.hostPID, item.sDev, item.hasPID
+func pidTestPidOf(item *pidTestItem) (uint32, uint32, ebpf.MountKey, bool) {
+	return item.pidNs, item.hostPID, ebpf.MountKey{Dev: item.sDev}, item.hasPID
 }
 
 func noopPVCLookup(context.Context, string) (string, string, string, bool) { return "", "", "", false }
@@ -131,7 +131,7 @@ func TestPIDMetadataDecorator_FallsBackToMountPodWhenPIDUnresolved(t *testing.T)
 	}
 	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
 
-	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
 		return ebpf.MountInfo{PodUID: "pod-uid-2", PVName: "pvc-abc", VolumeType: "nfs"}, true
 	}
 
@@ -177,7 +177,7 @@ func TestPIDMetadataDecorator_AttributesStorageClass(t *testing.T) {
 	}
 	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
 
-	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
 		return ebpf.MountInfo{PodUID: "pod-uid-3", PVName: "pvc-def", VolumeType: "nfs"}, true
 	}
 
@@ -212,7 +212,7 @@ func TestPIDMetadataDecorator_AttributesStorageClass(t *testing.T) {
 func TestPIDMetadataDecorator_NoMountFoundSkipsVolumeAttrs(t *testing.T) {
 	originalResolveMount := resolveMount
 	defer func() { resolveMount = originalResolveMount }()
-	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) { return ebpf.MountInfo{}, false }
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) { return ebpf.MountInfo{}, false }
 
 	store := newPIDTestStore(t)
 
@@ -269,7 +269,7 @@ func TestPIDMetadataDecorator_SharedVolumeKeepsVolumeButNotPod(t *testing.T) {
 	}
 	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
 
-	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
 		return ebpf.MountInfo{PodUID: "pod-uid-2", PVName: "pvc-shared", VolumeType: "nfs", Shared: true}, true
 	}
 
@@ -334,7 +334,7 @@ func TestPIDMetadataDecorator_UntrackedPIDResolvedFromCgroup(t *testing.T) {
 	} {
 		require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
 	}
-	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
 		return ebpf.MountInfo{PodUID: "pod-uid-1", PVName: "pvc-shared", VolumeType: "nfs", Shared: true}, true
 	}
 
@@ -405,7 +405,7 @@ func TestPIDMetadataDecorator_ExitedPIDResolvedThroughItsNamespace(t *testing.T)
 			Containers: []*informer.ContainerInfo{{Id: "cid-writer", Name: "io"}},
 		},
 	}}))
-	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
 		return ebpf.MountInfo{PodUID: "pod-uid-2", PVName: "pvc-a", VolumeType: "nfs", Shared: true}, true
 	}
 
@@ -464,7 +464,7 @@ func TestPIDMetadataDecorator_NewContainerResolvedByPodUID(t *testing.T) {
 		Name: "early-writer", Namespace: "jobs", Kind: "Pod",
 		Pod: &informer.PodInfo{Uid: "0e0c38ef-d14c-4ca4-8810-5b6360663f4b"},
 	}}))
-	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
 		return ebpf.MountInfo{PodUID: "someone-else", PVName: "pvc-shared", VolumeType: "nfs", Shared: true}, true
 	}
 
@@ -504,7 +504,7 @@ func TestPodUIDPatternMatchesBothCgroupDrivers(t *testing.T) {
 func TestPIDMetadataDecorator_AmbiguousVolumeSkipsVolumeAttrs(t *testing.T) {
 	originalResolveMount := resolveMount
 	defer func() { resolveMount = originalResolveMount }()
-	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
 		return ebpf.MountInfo{PodUID: "55293f39-c745-4578-accb-f3e5cfc7b303", VolumeType: "csi"}, true
 	}
 	lookups := 0

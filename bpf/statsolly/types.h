@@ -93,6 +93,10 @@ typedef struct fs_io {
     u64 bytes;
     s32 error; // 0 on success, or -errno from the read/write implementation
     unsigned char _pad2[4];
+    // Inode of the root directory of the mount the file was reached through.
+    // Several volumes can share one superblock (NFS subdirectories of one
+    // export); each is mounted at its own root, which tells them apart.
+    u64 root_ino;
 } fs_io_t;
 
 // Force struct into the ELF for automatic creation of Golang struct

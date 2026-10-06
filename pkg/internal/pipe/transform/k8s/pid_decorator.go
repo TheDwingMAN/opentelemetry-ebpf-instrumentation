@@ -43,12 +43,12 @@ const (
 )
 
 // PIDMetadataDecoratorProvider attributes items to their Kubernetes pod,
-// namespace, container, and persistent volume/claim, using the PID triple and
-// filesystem superblock device number returned by pidOf.
+// namespace, container, and persistent volume/claim, using the PID pair and
+// the filesystem mount returned by pidOf.
 func PIDMetadataDecoratorProvider[T any](
 	store *kube.Store,
 	attrs func(T) *pipe.CommonAttrs,
-	pidOf func(item T) (pidNs, hostPID, sDev uint32, ok bool),
+	pidOf func(item T) (pidNs, hostPID uint32, mount ebpf.MountKey, ok bool),
 	pvc ebpf.PVCLookup,
 	input, output *msg.Queue[[]T],
 ) swarm.InstanceFunc {
@@ -69,11 +69,11 @@ func PIDMetadataDecoratorProvider[T any](
 			defer output.Close()
 			swarms.ForEachInput(runCtx, in, pidLog().Debug, func(items []T) {
 				for _, item := range items {
-					pidNs, hostPID, sDev, ok := pidOf(item)
+					pidNs, hostPID, mount, ok := pidOf(item)
 					if !ok {
 						continue
 					}
-					dec.decorate(runCtx, attrs(item), pidNs, hostPID, sDev)
+					dec.decorate(runCtx, attrs(item), pidNs, hostPID, mount)
 				}
 				output.Send(items)
 			})
@@ -102,9 +102,9 @@ type cgroupIdentity struct {
 // decorate populates a's Metadata with pod/namespace/container attribution
 // from the PID path, and PersistentVolume/PersistentVolumeClaim attribution
 // from the mount path. Both paths are independent: a ReadWriteMany volume is
-// shared by several pods over one superblock, so sDev alone cannot identify
+// shared by several pods over one mount, so the mount alone cannot identify
 // which pod issued this I/O.
-func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs, hostPID, sDev uint32) {
+func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs, hostPID uint32, mount ebpf.MountKey) {
 	if a.Metadata == nil {
 		a.Metadata = map[attr.Name]string{}
 	}
@@ -118,7 +118,7 @@ func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs,
 		podMeta, containerName = d.podContainerByCgroup(pidNs, app.PID(hostPID))
 	}
 
-	mountInfo, mountFound := resolveMount(sDev)
+	mountInfo, mountFound := resolveMount(mount)
 
 	// A process that is gone, or that runs outside any container, leaves the
 	// PID path empty. Falling back to the mount's owning pod still gives
