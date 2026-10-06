@@ -37,9 +37,11 @@ map(select(
     (
       (.error.FailToResolveDefinition? // null) as $fail
       | $fail != null
-        and ($fail.UnstableFileFormat? // null) as $unstable
-        | $unstable != null
-          and $unstable.file_format == "definition/2"
+        and (
+          ($fail.UnstableFileFormat? // null) as $unstable
+          | $unstable != null
+            and $unstable.file_format == "definition/2"
+        )
     )
     or
     (
@@ -59,10 +61,12 @@ map(select(
       (.error.DuplicateMetricName? // null) as $dupmetric
       | $dupmetric != null
         and $dupmetric.metric_name == "dns.lookup.duration"
-        and (($dupmetric.provenances // []) | map(.path)) as $paths
-            | ($paths | length) == 2
-              and ($paths | any(. == "/obi-registry/groups/dns/metrics.yaml"))
-              and ($paths | any(startswith(".deps/") and endswith("/dns/metrics.yaml")))
+        and (
+          (($dupmetric.provenances // []) | map(.path)) as $paths
+          | ($paths | length) == 2
+            and ($paths | any(. == "/obi-registry/groups/dns/metrics.yaml"))
+            and ($paths | any(startswith(".deps/") and endswith("/dns/metrics.yaml")))
+        )
     )
     or
     (
