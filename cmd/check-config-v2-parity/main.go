@@ -424,6 +424,11 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 		{"storage_fs_duration", export.FeatureStorageFSDuration},
 		{"storage_fs_io", export.FeatureStorageFSIo},
 		{"storage_fs_errors", export.FeatureStorageFSErrors},
+		{"storage_fs_sync", export.FeatureStorageFSSync},
+		{"storage_nfs_duration", export.FeatureStorageNFSDuration},
+		{"storage_nfs_errors", export.FeatureStorageNFSErrors},
+		{"storage_nfs_retransmits", export.FeatureStorageNFSRetransmits},
+		{"storage_nfs_io", export.FeatureStorageNFSIo},
 	} {
 		if features&f.feature != 0 {
 			want = append(want, f.name)

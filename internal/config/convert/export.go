@@ -407,6 +407,11 @@ var storageStatsFamilies = []storageStatsFamily{
 	{"storage_fs_duration", featureexport.FeatureStorageFSDuration},
 	{"storage_fs_io", featureexport.FeatureStorageFSIo},
 	{"storage_fs_errors", featureexport.FeatureStorageFSErrors},
+	{"storage_fs_sync", featureexport.FeatureStorageFSSync},
+	{"storage_nfs_duration", featureexport.FeatureStorageNFSDuration},
+	{"storage_nfs_errors", featureexport.FeatureStorageNFSErrors},
+	{"storage_nfs_retransmits", featureexport.FeatureStorageNFSRetransmits},
+	{"storage_nfs_io", featureexport.FeatureStorageNFSIo},
 }
 
 // storageStatsUmbrellas are accepted on import, as in metrics.features, and
@@ -414,6 +419,7 @@ var storageStatsFamilies = []storageStatsFamily{
 var storageStatsUmbrellas = []storageStatsFamily{
 	{"storage_block", featureexport.FeatureStorageBlock},
 	{"storage_fs", featureexport.FeatureStorageFS},
+	{"storage_nfs", featureexport.FeatureStorageNFS},
 }
 
 func statsFeatures(features featureexport.Features) []string {

@@ -121,6 +121,7 @@ func TestV2ToRuntimeStorageUmbrellas(t *testing.T) {
 	}{
 		"block":                     {[]string{"storage_block"}, export.FeatureStorageBlock},
 		"fs":                        {[]string{"storage_fs"}, export.FeatureStorageFS},
+		"nfs":                       {[]string{"storage_nfs"}, export.FeatureStorageNFS},
 		"block umbrella and a leaf": {[]string{"storage_block", "storage_block_io"}, export.FeatureStorageBlock},
 		// queue.depth is in no umbrella, as in metrics.features.
 		"queue depth is not in storage_block": {
@@ -160,7 +161,7 @@ func TestV2StatsSectionReplacesTheBaseStorageFlags(t *testing.T) {
 		cfg := runtimeConfigDefaults()
 		cfg.Metrics.Features = export.FeatureApplicationRED | export.FeatureStorageBlock |
 			export.FeatureStorageBlockQueueDepth | export.FeatureStorageBlockVolumes | export.FeatureStorageBlockPod |
-			export.FeatureStorageFS
+			export.FeatureStorageFS | export.FeatureStorageNFS
 		return &cfg
 	}
 

@@ -2109,11 +2109,17 @@
                   "storage_fs",
                   "storage_fs_duration",
                   "storage_fs_io",
-                  "storage_fs_errors"
+                  "storage_fs_errors",
+                  "storage_fs_sync",
+                  "storage_nfs",
+                  "storage_nfs_duration",
+                  "storage_nfs_errors",
+                  "storage_nfs_retransmits",
+                  "storage_nfs_io"
                 ]
               },
               "default": [],
-              "description": "Enabled stats families: the TCP ones and the storage ones, named as in metrics.features.\nstorage_block and storage_fs enable every family of their prefix except storage_block_queue_depth, storage_block_volumes and storage_block_pod.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones and the storage ones, named as in metrics.features.\nstorage_block, storage_fs and storage_nfs enable every family of their prefix except storage_block_queue_depth, storage_block_volumes and storage_block_pod.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",

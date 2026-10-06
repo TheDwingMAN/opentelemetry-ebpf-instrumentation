@@ -36,7 +36,7 @@ var v2NetworkMetricsFeatureMask = export.FeatureNetwork |
 var v2StatsMetricsFeatureMask = export.FeatureStats |
 	export.FeatureStorageBlock | export.FeatureStorageBlockQueueDepth | export.FeatureStorageBlockVolumes |
 	export.FeatureStorageBlockPod |
-	export.FeatureStorageFS
+	export.FeatureStorageFS | export.FeatureStorageNFS
 
 // V2ToRuntime converts a config v2 extension shape into an OBI runtime
 // configuration.

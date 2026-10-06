@@ -489,7 +489,9 @@ extensions:
           # storage_block_flush, storage_block_discard, storage_block_pending, storage_block_volumes (opt-in),
           # storage_block_pod (opt-in),
           # storage_block_queue_depth (deprecated),
-          # storage_fs (umbrella), storage_fs_duration, storage_fs_io, storage_fs_errors.
+          # storage_fs (umbrella), storage_fs_duration, storage_fs_io, storage_fs_errors, storage_fs_sync,
+          # storage_nfs (umbrella), storage_nfs_duration, storage_nfs_errors, storage_nfs_retransmits,
+          # storage_nfs_io.
           features: []
           endpoint_identity:
             agent_ip: ""
