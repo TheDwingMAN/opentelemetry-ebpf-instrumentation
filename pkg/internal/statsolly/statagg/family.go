@@ -311,7 +311,7 @@ func (f *Family) count(k *kernelKey, d Delta, values []byte, now time.Time) {
 	for _, links := range k.links {
 		for i, s := range links {
 			if s != nil {
-				f.cfg.Metrics[i].add(s, d, now)
+				links[i] = f.cfg.Metrics[i].add(s, d, now)
 			}
 		}
 	}
@@ -338,15 +338,16 @@ func (f *Family) decorate(k *kernelKey, values []byte, now time.Time) {
 	}
 }
 
-// add counts a key's delta into one series.
-func (m *Metric) add(s *seriesCore, d Delta, now time.Time) {
+// add counts a key's delta into series s and returns the series the key
+// counts into from now on: s, or the one that replaced it once it expired.
+func (m *Metric) add(s *seriesCore, d Delta, now time.Time) *seriesCore {
 	switch m.Kind {
 	case KindHistogram:
 		n := d.Sum(m.BucketWord, m.Layout.Buckets())
 		if n == 0 {
-			return
+			return s
 		}
-		s.touch(now)
+		s = s.touch(now)
 		for i := range s.buckets {
 			s.buckets[i] += d[m.BucketWord+i]
 		}
@@ -354,11 +355,12 @@ func (m *Metric) add(s *seriesCore, d Delta, now time.Time) {
 	default:
 		v := m.Value(d)
 		if v == 0 && m.SkipZero {
-			return
+			return s
 		}
-		s.touch(now)
+		s = s.touch(now)
 		s.value += v
 	}
+	return s
 }
 
 // Registry is the set of families whose metrics are exported from kernel

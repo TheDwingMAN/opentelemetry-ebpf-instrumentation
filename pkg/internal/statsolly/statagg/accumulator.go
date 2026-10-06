@@ -45,13 +45,16 @@ type seriesCore struct {
 	owner reviver
 }
 
-type reviver interface{ revive(now time.Time) }
+type reviver interface{ revive(now time.Time) *seriesCore }
 
-func (s *seriesCore) touch(now time.Time) {
+// touch returns the series a count at now goes into, marked updated: s, or
+// when s expired, the series exported under its key now.
+func (s *seriesCore) touch(now time.Time) *seriesCore {
 	if s.dead {
-		s.owner.revive(now)
+		s = s.owner.revive(now)
 	}
 	s.updated = now
+	return s
 }
 
 // count is the number of values a histogram series counted.
@@ -80,13 +83,21 @@ type series[L any] struct {
 	last   *snapshot
 }
 
-func (s *series[L]) revive(now time.Time) {
+// revive returns the series that replaces s, expired: the one another key
+// linked under the same labels since, which a key still decorated with s
+// must not replace (RedecorateAfter can be longer than the TTL), or else s
+// itself, from zero.
+func (s *series[L]) revive(now time.Time) *seriesCore {
+	if cur, ok := s.metric.series[s.key]; ok {
+		return &cur.seriesCore
+	}
 	s.dead = false
 	s.value, s.sumNs = 0, 0
 	clear(s.buckets)
 	s.start = now
 	s.last = nil
 	s.metric.series[s.key] = s
+	return &s.seriesCore
 }
 
 type accMetric[L any] struct {

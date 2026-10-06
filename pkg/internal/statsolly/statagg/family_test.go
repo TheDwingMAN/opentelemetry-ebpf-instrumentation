@@ -289,6 +289,34 @@ func TestFamily_ExpiredSeriesComeBackFromZero(t *testing.T) {
 		"a new series, as the per-event exporter recreates a removed one")
 }
 
+// With a TTL shorter than RedecorateAfter, a key can still be linked to an
+// expired series when another key of the same labels creates its
+// replacement: both must count into the exported one.
+func TestFamily_ExpiredSeriesDoesNotReplaceItsSuccessor(t *testing.T) {
+	tf := newTestFamily(t, 1, diskBounds, nil)
+	p := tf.otelProducer(t, cumulative, 5*time.Second)
+	// Both keys project to the same test.io series (no err label); the
+	// newer one comes first in the map.
+	older := blkKey(devA, ebpf.CodeBlockRead, -5)
+	newer := blkKey(devA, ebpf.CodeBlockRead, 0)
+	record(tf.m, tf.layout, older, 0, 100, 1000)
+	produce(t, p)
+	tf.clock.Advance(6 * time.Second)
+	assert.NotContains(t, produce(t, p), "test.io", "expired")
+
+	record(tf.m, tf.layout, newer, 0, 7, 1000)
+	record(tf.m, tf.layout, older, 0, 3, 1000)
+	tf.clock.Advance(time.Second)
+	got := produce(t, p)
+	assert.Equal(t, int64(10), sumValue(t, got["test.io"], devAOp(ebpf.CodeBlockRead)...),
+		"the older key counts into the series the newer one created")
+
+	record(tf.m, tf.layout, older, 0, 1, 1000)
+	tf.clock.Advance(time.Second)
+	got = produce(t, p)
+	assert.Equal(t, int64(11), sumValue(t, got["test.io"], devAOp(ebpf.CodeBlockRead)...))
+}
+
 func TestFamily_AttachingAnExporterLater(t *testing.T) {
 	tf := newTestFamily(t, 1, diskBounds, nil)
 	first := tf.otelProducer(t, cumulative, 0)
