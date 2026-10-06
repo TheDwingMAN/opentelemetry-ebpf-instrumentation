@@ -68,6 +68,11 @@ func TestStatsReporterRecordsFsMetrics(t *testing.T) {
 	fsLabels := map[string]string{
 		"system_filesystem_type": "nfs",
 		"fs_operation":           "write",
+		// The step 10 fs join labels: "" because fsIoStat carries no Mount
+		// to resolve them from.
+		"system_device":            "",
+		"obi_disk_physical_device": "",
+		"server_address":           "",
 	}
 
 	latency := gatheredMetric(t, registry, "obi_stat_fs_operation_duration_seconds", fsLabels)
@@ -152,9 +157,12 @@ func TestStatsReporterRecordsFsOperationErrors(t *testing.T) {
 	reporter.observeFsOpErrors(fsIoErrorStat())
 
 	opErrors := gatheredMetric(t, registry, "obi_stat_fs_operation_errors_total", map[string]string{
-		"system_filesystem_type": "nfs",
-		"fs_operation":           "write",
-		"error_type":             "ESTALE",
+		"system_filesystem_type":   "nfs",
+		"fs_operation":             "write",
+		"error_type":               "ESTALE",
+		"system_device":            "",
+		"obi_disk_physical_device": "",
+		"server_address":           "",
 	})
 	require.NotNil(t, opErrors, "errors counter not registered or not observed")
 	assert.InEpsilon(t, 1.0, opErrors.GetCounter().GetValue(), 0)
@@ -182,15 +190,21 @@ func TestStatsReporterFsFeatureGating(t *testing.T) {
 			reporter.observeFsOpErrors(fsIoErrorStat())
 
 			fsLabels := map[string]string{
-				"system_filesystem_type": "nfs",
-				"fs_operation":           "write",
+				"system_filesystem_type":   "nfs",
+				"fs_operation":             "write",
+				"system_device":            "",
+				"obi_disk_physical_device": "",
+				"server_address":           "",
 			}
 			latency := gatheredMetric(t, registry, "obi_stat_fs_operation_duration_seconds", fsLabels)
 
 			opErrors := gatheredMetric(t, registry, "obi_stat_fs_operation_errors_total", map[string]string{
-				"system_filesystem_type": "nfs",
-				"fs_operation":           "write",
-				"error_type":             "ESTALE",
+				"system_filesystem_type":   "nfs",
+				"fs_operation":             "write",
+				"error_type":               "ESTALE",
+				"system_device":            "",
+				"obi_disk_physical_device": "",
+				"server_address":           "",
 			})
 
 			assert.Equal(t, tc.wantLatency, latency != nil, "latency histogram presence")
@@ -236,6 +250,13 @@ func TestStatsReporterFsKubeLabels(t *testing.T) {
 		"k8s_persistentvolume_name":      "pvc-1",
 		"k8s_persistentvolumeclaim_name": "data",
 		"k8s_storageclass_name":          "fast",
+		// k8s.owner.name, and the step 10 fs join labels, are unset by this
+		// test's stat and mount fixtures.
+		"k8s_owner_name":           "",
+		"k8s_node_name":            "",
+		"system_device":            "",
+		"obi_disk_physical_device": "",
+		"server_address":           "",
 	}))
 	assert.NotNil(t, gatheredMetric(t, registry, "obi_stat_fs_operation_duration_seconds", map[string]string{
 		"system_filesystem_type":         "",
@@ -246,5 +267,10 @@ func TestStatsReporterFsKubeLabels(t *testing.T) {
 		"k8s_persistentvolume_name":      "",
 		"k8s_persistentvolumeclaim_name": "",
 		"k8s_storageclass_name":          "",
+		"k8s_owner_name":                 "",
+		"k8s_node_name":                  "",
+		"system_device":                  "",
+		"obi_disk_physical_device":       "",
+		"server_address":                 "",
 	}), "an unknown filesystem has no type label, not \"unknown\"")
 }
