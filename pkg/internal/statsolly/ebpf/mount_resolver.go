@@ -107,7 +107,7 @@ var (
 	mountScan = scanForMount
 
 	mountWatchOnce sync.Once
-	mountWatch     = mountTableWatch{known: map[string]mountSet{}}
+	mountWatch     = newMountTableWatch()
 )
 
 func mrlog() *slog.Logger {
@@ -319,11 +319,19 @@ type mountTableWatch struct {
 	// known holds the last read of each table. A nil set means the last read
 	// failed, so the next change cannot be told apart and drops everything.
 	known map[string]mountSet
+	// namespaces holds the mount namespace of the process each table belongs
+	// to, as its ns/mnt link read when the table was first read.
+	namespaces map[string]string
+}
+
+func newMountTableWatch() mountTableWatch {
+	return mountTableWatch{known: map[string]mountSet{}, namespaces: map[string]string{}}
 }
 
 // changed reads again the table the watch identifies by key, through the
 // file the watch holds open, and drops the resolutions its change affected.
-// The first read of a table, when its watch starts, only records it.
+// The first read of a table, when its watch starts, records it. Every read
+// starts looking up the root inodes the mounts it adds will need.
 //
 // The table is never read again by path. An open mountinfo keeps the mount
 // namespace and root it was opened in after its process exits, while the
@@ -340,16 +348,20 @@ func (w *mountTableWatch) changed(key string, table io.ReadSeeker) {
 	before, seen := w.known[key]
 	w.known[key] = now
 	if !seen {
+		w.namespaces[key] = mountNamespaceOf(key)
+		w.prewarmRootInodes(key, now, now)
 		return
 	}
 	if before == nil || now == nil {
 		invalidateMountCache()
+		w.prewarmRootInodes(key, now, now)
 		return
 	}
 
 	devs := map[uint32]struct{}{}
 	var mountPoints []string
-	for _, diff := range [2][2]mountSet{{before, now}, {now, before}} {
+	added := mountSet{}
+	for i, diff := range [2][2]mountSet{{now, before}, {before, now}} {
 		for m := range diff[0] {
 			if _, ok := diff[1][m]; ok {
 				continue
@@ -358,6 +370,9 @@ func (w *mountTableWatch) changed(key string, table io.ReadSeeker) {
 				devs[dev] = struct{}{}
 			}
 			mountPoints = append(mountPoints, m.mountPoint)
+			if i == 0 {
+				added[m] = struct{}{}
+			}
 		}
 	}
 	if len(mountPoints) == 0 {
@@ -365,6 +380,83 @@ func (w *mountTableWatch) changed(key string, table io.ReadSeeker) {
 	}
 	dropChangedMounts(devs)
 	forgetRootInodes(mountPoints)
+	w.prewarmRootInodes(key, now, added)
+}
+
+// prewarmRootInodes starts looking up the root inode of every volume mount in
+// table on a superblock that added touched and that holds more than one
+// volume, as NFS subdirectory PVs of one export do. Only the mount root tells
+// those volumes apart, and a pod's first I/O comes right after its mount:
+// looked up then, the inode would come too late for it, and those events
+// would go out without the volume. The lookups are mountRootInode's own, so
+// this never waits for the filesystem.
+//
+// They go through the root of the process whose table this is, and only
+// while that process is in the mount namespace the table was first read in:
+// once it exits, its PID may name a process that sees other mounts there.
+func (w *mountTableWatch) prewarmRootInodes(key string, table, added mountSet) {
+	mountPoints := sharedSuperblockMounts(table, added)
+	if len(mountPoints) == 0 {
+		return
+	}
+	if ns := w.namespaces[key]; ns == "" || mountNamespaceOf(key) != ns {
+		return
+	}
+	root := rootOf(key)
+	for _, mp := range mountPoints {
+		mountRootInode(root, mp)
+	}
+}
+
+// sharedSuperblockMounts returns the mount points of the kubelet volume
+// mounts in table whose device holds more than one volume, on the devices of
+// the kubelet volume mounts in added. Several pods mounting one volume share
+// its superblock too, but the device names that volume without a root inode.
+func sharedSuperblockMounts(table, added mountSet) []string {
+	touched := map[string]struct{}{}
+	for m := range added {
+		if kubeletVolumeRe.MatchString(m.mountPoint) {
+			touched[m.majMin] = struct{}{}
+		}
+	}
+	if len(touched) == 0 {
+		return nil
+	}
+
+	mountPoints := map[string][]string{}
+	volumes := map[string]map[string]struct{}{}
+	for m := range table {
+		if _, ok := touched[m.majMin]; !ok {
+			continue
+		}
+		info, ok := parseKubeletMount(m.mountPoint, m.source)
+		if !ok {
+			continue
+		}
+		mountPoints[m.majMin] = append(mountPoints[m.majMin], m.mountPoint)
+		if volumes[m.majMin] == nil {
+			volumes[m.majMin] = map[string]struct{}{}
+		}
+		volumes[m.majMin][info.PVName] = struct{}{}
+	}
+
+	var shared []string
+	for dev, mps := range mountPoints {
+		if len(volumes[dev]) > 1 {
+			shared = append(shared, mps...)
+		}
+	}
+	return shared
+}
+
+// mountNamespaceOf reads the mount namespace of the process whose mountinfo
+// is at path, or "" when it cannot be read.
+func mountNamespaceOf(mountInfo string) string {
+	ns, err := os.Readlink(filepath.Join(filepath.Dir(mountInfo), "ns", "mnt"))
+	if err != nil {
+		return ""
+	}
+	return ns
 }
 
 // readMountSet reads a mountinfo file, in the format documented by proc(5),
