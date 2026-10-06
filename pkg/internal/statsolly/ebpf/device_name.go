@@ -20,12 +20,20 @@ const (
 // each block device. It is a variable so tests can point it at a fixture dir.
 var sysBlockDir = "/sys/dev/block"
 
-// devNameCache memoizes successful dev_t -> name resolutions. Device numbers are
-// stable for a device's lifetime, so caching is safe; only successful lookups
-// are cached, so a transient sysfs miss is retried on the next emit.
+// namedDev is a cached dev_t -> name resolution, keyed on the sysfs symlink
+// target it was resolved from, so a cache entry a minor's reuse invalidates
+// (the symlink now points elsewhere, or is gone) is never returned stale.
+type namedDev struct {
+	target string
+	name   string
+}
+
+// devNameCache memoizes dev_t -> name resolutions, each valid only while its
+// sysfs symlink target is unchanged: dm/md minors are reused, so caching by
+// dev_t forever would keep naming a new device after its predecessor.
 var (
 	devNameMu    sync.RWMutex
-	devNameCache = map[uint32]string{}
+	devNameCache = map[uint32]namedDev{}
 )
 
 // deviceName resolves a Linux dev_t to its block device name, for example
@@ -33,24 +41,24 @@ var (
 // the "<major>:<minor>" form when sysfs is unavailable or the device cannot be
 // resolved, so the attribute is always populated.
 func deviceName(dev uint32) string {
-	devNameMu.RLock()
-	name, ok := devNameCache[dev]
-	devNameMu.RUnlock()
-	if ok {
-		return name
-	}
-
 	majMin := fmtDev(dev)
-	name = majMin
-	if target, err := os.Readlink(filepath.Join(sysBlockDir, majMin)); err == nil {
-		if base := filepath.Base(target); base != "" && base != "." && base != string(filepath.Separator) {
-			name = base
-		}
+	target, _ := os.Readlink(filepath.Join(sysBlockDir, majMin))
+
+	devNameMu.RLock()
+	cached, ok := devNameCache[dev]
+	devNameMu.RUnlock()
+	if ok && cached.target == target && target != "" {
+		return cached.name
 	}
 
-	if name != majMin {
+	name := majMin
+	if base := filepath.Base(target); base != "" && base != "." && base != string(filepath.Separator) {
+		name = base
+	}
+
+	if target != "" {
 		devNameMu.Lock()
-		devNameCache[dev] = name
+		devNameCache[dev] = namedDev{target: target, name: name}
 		devNameMu.Unlock()
 	}
 	return name
