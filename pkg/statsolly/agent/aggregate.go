@@ -50,7 +50,7 @@ func (s *Stats) newAggregatedStatDecorator(ctx context.Context) (func(*ebpf.Stat
 		pvc = noPVCLookup
 	}
 	pidDecorate := k8s.NewPIDItemDecoratorWith(s.aggDeps.store, statAttrs, fsIoPID, fsIoSetMount,
-		ebpf.CachedPVCLookup(pvc), s.aggDeps.mountpoints)
+		pvc, s.aggDeps.mountpoints)
 	nfsOwnerDecorate := s.newNFSOwnerDecorate()
 	rdnsDecorate := rdns.NewItemDecorator(&s.cfg.Stats.ReverseDNS, statAttrs)
 	geoIPDecorate, err := geoip.NewItemDecorator(&s.cfg.Stats.GeoIP, statAttrs)

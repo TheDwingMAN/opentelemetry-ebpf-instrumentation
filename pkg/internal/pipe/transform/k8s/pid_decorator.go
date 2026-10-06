@@ -222,7 +222,16 @@ type pathVariant struct {
 type cgroupIdentity struct {
 	containerID string
 	podUID      string
+	// scannedAt is when identityOfNamespace last scanned the namespace for
+	// this identity, and storeKnew whether the Store had its container or
+	// pod then; both zero for one read from a live process.
+	scannedAt time.Time
+	storeKnew bool
 }
+
+// namespaceRescanInterval bounds how often identityOfNamespace scans /proc
+// again for a namespace whose cached identity the Store does not know.
+const namespaceRescanInterval = time.Second
 
 // decorate populates a's Metadata with pod/namespace/container attribution
 // from the PID path, and returns the PersistentVolume/PersistentVolumeClaim
@@ -442,8 +451,17 @@ func (d *pidDecorator) identityOfNamespace(pidNs uint32) cgroupIdentity {
 	if pidNs == 0 || pidNs == hostPIDNamespace() {
 		return cgroupIdentity{}
 	}
+	// The kernel reuses a freed namespace number for the next namespace it
+	// creates, so a cached identity is only trusted while its container or
+	// pod is still in the Store: a pod created right after another was
+	// deleted gets the deleted pod's number. One that left the Store since
+	// the scan is scanned again at once; one the Store did not know at the
+	// scan either (it may not have heard of a new pod yet), at most every
+	// namespaceRescanInterval.
 	if id, ok := d.namespaces.Get(pidNs); ok {
-		return id
+		if d.storeKnows(id) || (!id.storeKnew && time.Since(id.scannedAt) < namespaceRescanInterval) {
+			return id
+		}
 	}
 	var id cgroupIdentity
 	for _, pid := range pidsInNamespace(pidNs) {
@@ -451,8 +469,23 @@ func (d *pidDecorator) identityOfNamespace(pidNs uint32) cgroupIdentity {
 			break
 		}
 	}
+	id.scannedAt, id.storeKnew = time.Now(), d.storeKnows(id)
 	d.namespaces.Add(pidNs, id)
 	return id
+}
+
+// storeKnows reports whether the Store has the container or pod of id; never
+// for an empty identity (a namespace no container was found in), whose number
+// may come back as a container's.
+func (d *pidDecorator) storeKnows(id cgroupIdentity) bool {
+	// The Store indexes the containers of a pod that has no container IDs
+	// yet under "", so an empty ID must not be looked up.
+	if id.containerID != "" {
+		if meta, _ := d.store.PodContainerByContainerID(id.containerID); meta != nil {
+			return true
+		}
+	}
+	return id.podUID != "" && d.store.PodByUID(id.podUID) != nil
 }
 
 func identityOf(pid app.PID) cgroupIdentity {

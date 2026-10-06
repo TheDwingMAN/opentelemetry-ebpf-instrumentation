@@ -42,6 +42,18 @@ const maxPVCLookupsInFlight = 64
 // pvLookupTimeout bounds one PersistentVolume GET.
 const pvLookupTimeout = 2 * time.Second
 
+// pvcFirstLookupWait bounds how long the first lookup of a PV waits for its
+// background fetch. Without it the first lookup always answers not-found:
+// the PID decorator keeps that for unboundVolumeRetry, and a kernel
+// aggregation key decorated with it counts into a claim-less series for as
+// long as that, which then lingers for the series TTL.
+const pvcFirstLookupWait = 300 * time.Millisecond
+
+// pvcSlowBackoff is how long lookups stop waiting for a first fetch once one
+// such wait timed out, so a slow API server costs at most one wait per
+// backoff, not one per new PV.
+const pvcSlowBackoff = time.Minute
+
 type pvcCacheEntry struct {
 	namespace    string
 	claimName    string
@@ -60,42 +72,82 @@ type pvcCache struct {
 	busy    map[string]bool
 	running int
 	now     func() time.Time
+	// firstWait is pvcFirstLookupWait, 0 to never wait. fetched holds, for
+	// a first fetch some get waits on, the channel fetch closes; noWaitUntil
+	// is the end of the backoff after a wait timed out.
+	firstWait   time.Duration
+	fetched     map[string]chan struct{}
+	noWaitUntil time.Time
 }
 
 // CachedPVCLookup wraps resolve with a bounded cache of resolutions, both
 // positive and negative, and never runs resolve on the caller's goroutine: a
-// cache miss returns not-found at once and starts resolve in the background,
-// so a slow or stuck API server stalls neither the calling decorator nor any
-// other PV's lookup. The claim is filled in by the next call once the
-// background fetch returns (same pattern as mountRootInode, 3.0).
+// cache miss starts resolve in the background, and the first lookup of a PV
+// waits for it at most pvcFirstLookupWait (none during pvcSlowBackoff after
+// such a wait timed out), so a slow or stuck API server stalls neither the
+// calling decorator nor any other PV's lookup for longer than that. A miss
+// that is not answered in time returns not-found, and the claim is filled in
+// by the next call once the background fetch returns (same pattern as
+// mountRootInode, 3.0).
 //
 // A negative resolution (PV not yet bound to a PVC, or the lookup errored) is
 // retried after pvcCacheNegativeTTL; a positive one after pvcCachePositiveTTL.
 // Either way the stale entry is still returned while the retry is in flight,
 // rather than reverting to not-found.
 func CachedPVCLookup(resolve PVCLookup) PVCLookup {
-	c := &pvcCache{resolve: resolve, entries: map[string]pvcCacheEntry{}, busy: map[string]bool{}, now: time.Now}
+	c := &pvcCache{
+		resolve: resolve, entries: map[string]pvcCacheEntry{}, busy: map[string]bool{}, now: time.Now,
+		firstWait: pvcFirstLookupWait, fetched: map[string]chan struct{}{},
+	}
 	return c.get
 }
 
-func (c *pvcCache) get(_ context.Context, pvName string) (string, string, string, bool) {
+func (c *pvcCache) get(ctx context.Context, pvName string) (string, string, string, bool) {
 	c.mu.Lock()
 	entry, ok := c.entries[pvName]
 	fetch := (!ok || c.now().Sub(entry.resolvedAt) >= ttl(entry)) && !c.busy[pvName] && c.running < maxPVCLookupsInFlight
+	var fetched chan struct{}
 	if fetch {
 		c.busy[pvName] = true
 		c.running++
+		if !ok && c.firstWait > 0 && !c.now().Before(c.noWaitUntil) {
+			fetched = make(chan struct{})
+			c.fetched[pvName] = fetched
+		}
 	}
 	c.mu.Unlock()
 
 	if fetch {
 		// resolve runs to completion even if the request that triggered it
 		// is done by the time it returns: it fills the shared cache for
-		// whichever call asks about this PV next, not this one.
+		// whichever call asks about this PV next.
 		go c.fetch(pvName)
+	}
+	if fetched != nil {
+		entry = c.waitFirstFetch(ctx, pvName, fetched)
 	}
 
 	return entry.namespace, entry.claimName, entry.storageClass, entry.found
+}
+
+// waitFirstFetch waits at most firstWait for the first fetch of pvName and
+// returns what it cached, or a not-found entry when it did not finish in
+// time, which starts the backoff.
+func (c *pvcCache) waitFirstFetch(ctx context.Context, pvName string, fetched <-chan struct{}) pvcCacheEntry {
+	timer := time.NewTimer(c.firstWait)
+	defer timer.Stop()
+	select {
+	case <-fetched:
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.entries[pvName]
+	case <-timer.C:
+		c.mu.Lock()
+		c.noWaitUntil = c.now().Add(pvcSlowBackoff)
+		c.mu.Unlock()
+	case <-ctx.Done():
+	}
+	return pvcCacheEntry{}
 }
 
 // fetch resolves pvName and stores the result, replacing whatever was cached
@@ -124,6 +176,10 @@ func (c *pvcCache) fetch(pvName string) {
 	}
 	delete(c.busy, pvName)
 	c.running--
+	if fetched, ok := c.fetched[pvName]; ok {
+		close(fetched)
+		delete(c.fetched, pvName)
+	}
 	c.mu.Unlock()
 }
 

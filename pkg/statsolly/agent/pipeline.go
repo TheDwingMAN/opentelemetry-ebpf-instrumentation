@@ -158,8 +158,11 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 
 	pidDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "pidDecoratedStats")
 	mountpoints := s.fsMountpoints(selectorCfg)
+	// One cache for the per-event pipeline and the aggregation families, so
+	// each PV is fetched once.
+	pvcLookup = ebpf.CachedPVCLookup(pvcLookup)
 	swi.Add(k8s.PIDMetadataDecoratorProviderWith(pidK8sStore, statAttrs, fsIoPID, fsIoSetMount,
-		ebpf.CachedPVCLookup(pvcLookup), mountpoints, kubeDecoratedStats, pidDecoratedStats),
+		pvcLookup, mountpoints, kubeDecoratedStats, pidDecoratedStats),
 		swarm.WithID("PIDMetadataDecorator"))
 
 	dnsDecoratedStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "dnsDecoratedStats")

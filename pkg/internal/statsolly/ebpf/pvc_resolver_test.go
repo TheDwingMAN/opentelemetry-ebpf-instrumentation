@@ -152,29 +152,53 @@ func TestCachedPVCLookup_BoundsCacheSize(t *testing.T) {
 
 // CachedPVCLookup's whole point (3.3, step 10): the release ran resolve
 // synchronously on the decorator's goroutine, so a slow or stuck API server
-// stalled every storage event behind it. get must return at once regardless
-// of how long resolve takes.
+// stalled every storage event behind it. get may wait for the first fetch of
+// a PV, but never longer than pvcFirstLookupWait, and after one such wait
+// timed out it does not wait at all for pvcSlowBackoff.
 func TestCachedPVCLookup_NeverBlocksOnASlowResolve(t *testing.T) {
 	unblock := make(chan struct{})
+	defer close(unblock)
 	lookup := func(_ context.Context, _ string) (string, string, string, bool) {
 		<-unblock
 		return "ns", "claim", "sc", true
 	}
 	cached := CachedPVCLookup(lookup)
 
-	done := make(chan struct{})
-	go func() {
-		cached(context.Background(), "pv-slow")
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("get blocked on a resolve call that had not returned yet")
+	timed := func(pv string) time.Duration {
+		start := time.Now()
+		done := make(chan struct{})
+		go func() {
+			cached(context.Background(), pv)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(pvcFirstLookupWait + time.Second):
+			t.Fatalf("get of %s blocked on a resolve call that had not returned yet", pv)
+		}
+		return time.Since(start)
 	}
 
-	close(unblock)
+	assert.Less(t, timed("pv-slow-1"), pvcFirstLookupWait+500*time.Millisecond, "the first wait is bounded")
+	assert.Less(t, timed("pv-slow-2"), pvcFirstLookupWait/2, "once a wait timed out, a slow API costs no more waits")
+}
+
+// A volume's first series must already carry its claim when the API server
+// answers in time: the first lookup of a PV waits for its fetch rather than
+// returning not-found, which the volume cache would then keep for its
+// unbound retry (30 s) and the kernel aggregation would export as a
+// claim-less series for as long as its TTL.
+func TestCachedPVCLookup_FirstLookupGetsAFastAnswer(t *testing.T) {
+	lookup := func(_ context.Context, pvName string) (string, string, string, bool) {
+		return "ns", "claim-" + pvName, "sc", true
+	}
+	cached := CachedPVCLookup(lookup)
+
+	namespace, claimName, storageClass, ok := cached(context.Background(), "pv-a")
+	require.True(t, ok, "the first lookup waits for a fetch that answers in time")
+	assert.Equal(t, "ns", namespace)
+	assert.Equal(t, "claim-pv-a", claimName)
+	assert.Equal(t, "sc", storageClass)
 }
 
 func TestK8sPVCLookup_BoundPVResolvesClaim(t *testing.T) {

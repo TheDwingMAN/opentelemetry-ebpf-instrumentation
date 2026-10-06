@@ -1062,3 +1062,83 @@ func TestPIDMetadataDecorator_AggregatedAndPerEventAgreeOnMountpoints(t *testing
 	assert.Equal(t, perEvent.Metadata, aggregated.Metadata)
 	assert.Equal(t, perEvent.volume(), aggregated.volume())
 }
+
+// The kernel hands out PID namespace numbers lowest free first, so a pod
+// created right after another was deleted (a StatefulSet pod, a Job, a pod
+// recreated under its own name) gets the old pod's namespace number. A
+// writer of the new pod that exited before decoration must be attributed to
+// the new pod, not resolved from the cached identity of the deleted one.
+func TestPIDMetadataDecorator_ReusedNamespaceNumberResolvesTheNewPod(t *testing.T) {
+	originalInfoForPID := kube.InfoForPID
+	defer func() { kube.InfoForPID = originalInfoForPID }()
+	originalPidsInNamespace := pidsInNamespace
+	defer func() { pidsInNamespace = originalPidsInNamespace }()
+	originalPodUIDForPID := podUIDForPID
+	defer func() { podUIDForPID = originalPodUIDForPID }()
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	const (
+		podNs   = uint32(7100)
+		oldSh   = app.PID(4000)
+		newSh   = app.PID(4100)
+		exitedA = app.PID(5001)
+		exitedB = app.PID(5101)
+	)
+	live := map[app.PID]container.Info{oldSh: {ContainerID: "cid-old", PIDNamespace: podNs}}
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		if info, ok := live[pid]; ok {
+			return info, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	podUIDForPID = func(pid app.PID) string {
+		return map[app.PID]string{oldSh: "uid-old", newSh: "uid-new"}[pid]
+	}
+	pidsInNamespace = func(ns uint32) []app.PID {
+		if ns != podNs {
+			return nil
+		}
+		var pids []app.PID
+		for pid := range live {
+			pids = append(pids, pid)
+		}
+		return pids
+	}
+	resolveMount = func(ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "uid-old", PVName: "pvc-shared", VolumeType: "nfs", Shared: true}, true
+	}
+
+	store := newPIDTestStore(t)
+	pod := func(uid, cid string) *informer.ObjectMeta {
+		return &informer.ObjectMeta{
+			Name: "writer", Namespace: "ns", Kind: "Pod",
+			Pod: &informer.PodInfo{Uid: uid, Containers: []*informer.ContainerInfo{{Id: cid, Name: "io"}}},
+		}
+	}
+	d := &pidDecorator{
+		store:      store,
+		pvc:        noopPVCLookup,
+		containers: expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		namespaces: expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		volumes:    map[ebpf.MountKey]volumeEntry{},
+	}
+	key := ebpf.MountKey{Dev: 42, RootIno: 7}
+
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: pod("uid-old", "cid-old")}))
+	first := &pipe.CommonAttrs{}
+	d.decorate(t.Context(), first, podNs, uint32(exitedA), key)
+	require.Equal(t, "writer", first.Metadata[attr.K8sPodName], "the old pod, through its namespace")
+
+	// The old pod is deleted and a new one, under the same name, gets the
+	// same namespace number.
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_DELETED, Resource: pod("uid-old", "cid-old")}))
+	delete(live, oldSh)
+	live[newSh] = container.Info{ContainerID: "cid-new", PIDNamespace: podNs}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: pod("uid-new", "cid-new")}))
+
+	second := &pipe.CommonAttrs{}
+	d.decorate(t.Context(), second, podNs, uint32(exitedB), key)
+	assert.Equal(t, "writer", second.Metadata[attr.K8sPodName], "the new pod, not the cached identity of the deleted one")
+	assert.Equal(t, "io", second.Metadata[attr.K8sContainerName])
+}
