@@ -41,6 +41,14 @@ var (
 	specCache   sync.Map // map[uintptr]*ebpf.CollectionSpec keyed by loadFn pointer
 	specCacheMu sync.Mutex
 	btfCache    = btf.NewCache()
+	// storageLoadMu serializes the loads of the storage collections. Their
+	// programs relocate against module BTF (nfs, cifs, ceph, sunrpc), and
+	// cilium/ebpf v0.22.0's split BTF decoders inflate the types of their
+	// shared vmlinux base under their own lock only, so two concurrent
+	// relocations through btfCache can write the base's type maps at once
+	// (fatal error: concurrent map writes), as soon as more than one of
+	// those modules is loaded.
+	storageLoadMu sync.Mutex
 )
 
 func cachedSpec(t *testing.T, loadFn func() (*ebpf.CollectionSpec, error)) *ebpf.CollectionSpec {
@@ -82,15 +90,20 @@ func loadAndVerify(t *testing.T, name string, loadFn func() (*ebpf.CollectionSpe
 		// placeholder attach target: the fentry/fexit ones pointed at the
 		// filesystem's own functions or at vmlinux stand-ins, and the
 		// kprobe/kretprobe fallback.
+		storage := false
 		if spec.Programs["obi_stats_tp_block_rq_issue"] != nil || spec.Programs["obi_stats_fentry_nfs_read"] != nil ||
 			spec.Programs["obi_stats_tp_btf_block_bio_queue"] != nil {
 			require.NoError(t, statsolly.PrepareStorageSpec(spec), "failed to prepare storage programs")
+			storage = true
 		}
 
 		// The NFS program: the tp_btf variant needs the sunrpc BTF, which a
 		// kernel without the module loaded does not have.
-		if spec.Programs["obi_stats_tp_btf_rpc_stats_latency"] != nil && !statsolly.PrepareNFSSpec(spec) {
-			t.Log("no sunrpc BTF on this kernel: verifying the raw_tp NFS program only")
+		if spec.Programs["obi_stats_tp_btf_rpc_stats_latency"] != nil {
+			if !statsolly.PrepareNFSSpec(spec) {
+				t.Log("no sunrpc BTF on this kernel: verifying the raw_tp NFS program only")
+			}
+			storage = true
 		}
 
 		if len(consts) > 0 && consts[0] != nil {
@@ -115,6 +128,9 @@ func loadAndVerify(t *testing.T, name string, loadFn func() (*ebpf.CollectionSpe
 			}
 		}
 
+		if storage {
+			storageLoadMu.Lock()
+		}
 		coll, err := ebpf.NewCollectionWithOptions(spec, ebpf.CollectionOptions{
 			Programs: ebpf.ProgramOptions{
 				// Increase log buffer so verifier rejections are not truncated.
@@ -122,6 +138,9 @@ func loadAndVerify(t *testing.T, name string, loadFn func() (*ebpf.CollectionSpe
 			},
 			Cache: btfCache,
 		})
+		if storage {
+			storageLoadMu.Unlock()
+		}
 		if err != nil {
 			var ve *ebpf.VerifierError
 			if errors.As(err, &ve) {
