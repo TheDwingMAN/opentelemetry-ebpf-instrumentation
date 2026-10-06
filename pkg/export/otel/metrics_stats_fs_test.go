@@ -87,8 +87,8 @@ func TestStatMetricsExporter_FsMetrics(t *testing.T) {
 
 	// Both metrics carry the same filesystem type/operation attributes
 	fsAttrs := map[string]string{
-		"fs.type":      "nfs",
-		"fs.operation": "write",
+		"system.filesystem.type": "nfs",
+		"fs.operation":           "write",
 	}
 
 	latency := seen["obi.stat.fs.operation.duration"]

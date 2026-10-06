@@ -88,6 +88,7 @@ const (
 
 	K8sPersistentVolumeName      = Name("k8s.persistentvolume.name")
 	K8sPersistentVolumeClaimName = Name("k8s.persistentvolumeclaim.name")
+	K8sStorageClassName          = Name("k8s.storageclass.name")
 
 	ContainerName = Name(semconv.ContainerNameKey)
 	ContainerID   = Name(semconv.ContainerIDKey)
@@ -321,6 +322,6 @@ const (
 	NetworkIoDirection        = Name(semconv.NetworkIODirectionKey)
 	DiskDevice                = Name("system.device")
 	DiskIODirection           = Name("disk.io.direction")
-	FsType                    = Name("fs.type")
+	FsType                    = Name("system.filesystem.type")
 	FsOperation               = Name("fs.operation")
 )
