@@ -76,6 +76,13 @@ func loadAndVerify(t *testing.T, name string, loadFn func() (*ebpf.CollectionSpe
 		}
 		uprobe.PrepareSpecs(spec)
 
+		// Storage filesystem programs carry a placeholder attach target until
+		// the loader points them at this kernel's symbols or turns them into
+		// kprobes; verify them the way they would actually load here.
+		if spec.Programs["obi_stats_tp_block_rq_issue"] != nil {
+			require.NoError(t, statsolly.PrepareStorageSpec(spec), "failed to prepare storage programs")
+		}
+
 		if len(consts) > 0 && consts[0] != nil {
 			err := ebpfconvenience.RewriteConstants(spec, consts[0])
 			require.NoError(t, err, "failed to rewrite constants")
