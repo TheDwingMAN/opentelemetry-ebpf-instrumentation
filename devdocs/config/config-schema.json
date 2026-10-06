@@ -1010,18 +1010,6 @@
         "redis_db_cache": {
           "$ref": "#/$defs/RedisDBCacheConfig"
         },
-        "stats_storage_exponential_histograms": {
-          "type": "boolean",
-          "description": "Counts the storage histograms aggregated in the kernel in base-2 exponential buckets at scale 2, exported as OTLP exponential and Prometheus native histograms, with no classic buckets. They are also selected when the OTLP exporter's histogram_aggregation is base2_exponential_bucket_histogram.",
-          "default": false,
-          "x-env-var": "OTEL_EBPF_STATS_STORAGE_EXPONENTIAL_HISTOGRAMS"
-        },
-        "stats_storage_per_event": {
-          "type": "boolean",
-          "description": "Sends each storage operation to userspace as a ring buffer event instead of aggregating the storage metrics in the kernel (today the filesystem metrics). It costs userspace CPU per operation and exists for troubleshooting and comparisons; the series and their counts are the same.",
-          "default": false,
-          "x-env-var": "OTEL_EBPF_STATS_STORAGE_PER_EVENT"
-        },
         "stats_wakeup_data_bytes": {
           "type": "integer",
           "description": "Specifies the minimum number of bytes that must be available in the stats eBPF ring buffer before waking up the userspace consumer. When 0, every submission wakes up userspace immediately. Higher values reduce wakeup overhead under high traffic at the cost of delivery latency. The value should be well below ring buffer size / flushInterval to avoid event loss.",
@@ -3189,7 +3177,7 @@
         },
         "disabled": {
           "type": "boolean",
-          "description": "Sends an event per block request to userspace instead, as earlier releases did: the same metrics, at a userspace cost that grows with the request rate. For comparisons and debugging.",
+          "description": "Sends an event per block request and filesystem operation to userspace instead, as earlier releases did: the same metrics, at a userspace cost that grows with the request rate. For comparisons and debugging.",
           "default": false,
           "x-env-var": "OTEL_EBPF_STORAGE_AGGREGATION_DISABLED"
         },
@@ -3201,7 +3189,7 @@
         }
       },
       "type": "object",
-      "description": "StorageAggregation configures the kernel aggregation of the storage metrics: the eBPF programs count block requests in per-CPU kernel maps, which OBI reads, instead of sending an event per request to userspace. Block requests are still sent one by one when the deprecated obi.stat.disk.queue.depth metric or print_stats is enabled, or when the enabled block histograms' buckets in the enabled exporters have more than 32 distinct bounds together."
+      "description": "StorageAggregation configures the kernel aggregation of the storage metrics: the eBPF programs count block requests and filesystem operations in kernel maps, which OBI reads, instead of sending an event per request or operation to userspace. They are still sent one by one when print_stats is enabled, block requests when the deprecated obi.stat.disk.queue.depth metric is, and either when the enabled histograms' buckets in the enabled exporters have more than 32 distinct bounds together."
     },
     "SvcMetricsConfig": {
       "properties": {

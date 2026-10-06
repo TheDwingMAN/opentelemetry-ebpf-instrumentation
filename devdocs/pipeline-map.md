@@ -117,9 +117,9 @@ flowchart TD
 
 ### Storage metrics
 
-Storage stats take one of two routes into the same OTEL and Prometheus exporters. Block metrics, and filesystem
-metrics when `ebpf.stats_storage_per_event` is set, use the ring buffer route: each operation is an
-event and goes through the pipeline above. Filesystem and NFS metrics count in kernel maps by default and
+Storage stats take one of two routes into the same OTEL and Prometheus exporters. Block and filesystem
+metrics when `ebpf.storage_aggregation.disabled` is set use the ring buffer route: each operation is an
+event and goes through the pipeline above. Block, filesystem and NFS metrics count in kernel maps by default and
 skip the per-event route: a `statagg` family reads the maps and decorates each kernel key once
 (then again every 30 s), running the same stages in the same order with the same `filters.stats`
 and dynamic PID selection, so both routes drop the same series.

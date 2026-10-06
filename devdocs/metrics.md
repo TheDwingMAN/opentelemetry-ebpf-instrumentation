@@ -352,10 +352,10 @@ The NFS client RPC metrics are counted in the kernel, never sent per event: one 
 | Layer | Default path | Per-event fallback |
 |---|---|---|
 | Block (`obi.stat.disk.*`) | per event: one ring buffer event per request | this is the only path on this branch |
-| Filesystem (`obi.stat.fs.*`) | kernel aggregation | `ebpf.stats_storage_per_event` (`OTEL_EBPF_STATS_STORAGE_PER_EVENT`), `stats.print_stats`, or more than 32 histogram bounds |
+| Filesystem (`obi.stat.fs.*`) | kernel aggregation | `ebpf.storage_aggregation.disabled` (`OTEL_EBPF_STORAGE_AGGREGATION_DISABLED`), `stats.print_stats`, or more than 32 histogram bounds |
 | NFS (`obi.stat.nfs.client.*`) | kernel aggregation | none: more than 32 bounds is a configuration error |
 
-The series and their counts are the same on both paths; only the cost and the histogram flavour differ. Per-event histograms export classic and native buckets on Prometheus (`prometheus_export.native_histogram.bucket_factor`); histograms aggregated in the kernel export **classic buckets only** on Prometheus, unless `ebpf.stats_storage_exponential_histograms` (`OTEL_EBPF_STATS_STORAGE_EXPONENTIAL_HISTOGRAMS`) or the OTLP `histogram_aggregation: base2_exponential_bucket_histogram` selects the exponential layout, which exports native (Prometheus) and exponential (OTLP) histograms only, at scale 2. Dashboards that use `histogram_quantile` over `_bucket` series work in the default case; with the exponential layout use `histogram_quantile(q, sum by (...) (rate(metric[5m])))` on the native histogram, without `le`.
+The series and their counts are the same on both paths; only the cost and the histogram flavour differ. Per-event histograms export classic and native buckets on Prometheus (`prometheus_export.native_histogram.bucket_factor`); histograms aggregated in the kernel export **classic buckets only** on Prometheus, unless `ebpf.storage_aggregation.exponential_histograms` (`OTEL_EBPF_STORAGE_AGGREGATION_EXPONENTIAL_HISTOGRAMS`) or the OTLP `histogram_aggregation: base2_exponential_bucket_histogram` selects the exponential layout, which exports native (Prometheus) and exponential (OTLP) histograms only, at scale 2. Dashboards that use `histogram_quantile` over `_bucket` series work in the default case; with the exponential layout use `histogram_quantile(q, sum by (...) (rate(metric[5m])))` on the native histogram, without `le`.
 
 #### Kernel aggregation and the cgroup index
 
@@ -375,7 +375,7 @@ The filesystem programs add each completed operation into `fs_io_accum` ([bpf/st
 
 - On a cgroup v2 host a key's pod and container come from its cgroup through the cgroup index; the PID decorator then only resolves the volume. A cgroup of no pod (the node's services, kernel threads) or one the index does not know yet is decorated through the key's PID namespace and sample process, as each event is on the per-event path. On a cgroup v1 or hybrid host (no `/sys/fs/cgroup/cgroup.controllers`) every key's cgroup is the root, and every key is decorated that way.
 - The start of each operation in flight is kept in the thread's task storage (`fs_start_task`) by the `fentry`/`fexit` programs: no hash lookup, and the kernel frees it with the thread. The `kprobe`/`kretprobe` programs, and `fentry`/`fexit` programs on kernels that do not let tracing programs use task storage (before 5.11), keep it in the `fs_start` hash map, whose entries older than 10 minutes (threads that died inside a call) are deleted every 30 seconds while some filesystem or the sync probes (`storage_fs_sync`: `sync` always, `syncfs` and `sync_file_range` on kprobes) use it.
-- The filesystem metrics are exported per event, as before, when `ebpf.stats_storage_per_event` is set, when `stats.print_stats` prints the stats, or when the OTel and Prometheus bounds of `stat_fs_operation_duration_histogram` together exceed 32 (logged at startup). `ebpf.stats_storage_exponential_histograms` opts into the exponential layout.
+- The filesystem metrics are exported per event, as before, when `ebpf.storage_aggregation.disabled` is set, when `stats.print_stats` prints the stats, or when the OTel and Prometheus bounds of `stat_fs_operation_duration_histogram` together exceed 32 (logged at startup). `ebpf.storage_aggregation.exponential_histograms` opts into the exponential layout.
 
 ### Known limitations
 

@@ -16,7 +16,7 @@ Conventions used below:
 - An attribute that does not apply is an empty label, which Prometheus treats as absent:
   `{k8s_pod_name=""}` selects I/O of no pod.
 - Histogram queries need classic buckets. They are there by default; with
-  `ebpf.stats_storage_exponential_histograms` the storage histograms are native only, and
+  `ebpf.storage_aggregation.exponential_histograms` the storage histograms are native only, and
   `histogram_quantile(q, sum by (...) (rate(metric[5m])))` replaces the `_bucket` form.
 - The block layer is node-wide: it has no pod, PV or PVC. Per-pod and per-PV numbers come
   from the filesystem layer (`obi_stat_fs_*`); disks are reached through the join labels

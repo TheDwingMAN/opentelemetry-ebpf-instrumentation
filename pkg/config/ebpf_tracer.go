@@ -34,16 +34,18 @@ const (
 )
 
 // StorageAggregation configures the kernel aggregation of the storage
-// metrics: the eBPF programs count block requests in per-CPU kernel maps,
-// which OBI reads, instead of sending an event per request to userspace.
-// Block requests are still sent one by one when the deprecated
-// obi.stat.disk.queue.depth metric or print_stats is enabled, or when the
-// enabled block histograms' buckets in the enabled exporters have more than
-// 32 distinct bounds together.
+// metrics: the eBPF programs count block requests and filesystem operations
+// in kernel maps, which OBI reads, instead of sending an event per request
+// or operation to userspace. They are still sent one by one when
+// print_stats is enabled, block requests when the deprecated
+// obi.stat.disk.queue.depth metric is, and either when the enabled
+// histograms' buckets in the enabled exporters have more than 32 distinct
+// bounds together.
 type StorageAggregation struct {
-	// Disabled sends an event per block request to userspace instead, as
-	// earlier releases did: the same metrics, at a userspace cost that grows
-	// with the request rate. For comparisons and debugging.
+	// Disabled sends an event per block request and filesystem operation to
+	// userspace instead, as earlier releases did: the same metrics, at a
+	// userspace cost that grows with the request rate. For comparisons and
+	// debugging.
 	Disabled bool `yaml:"disabled" env:"OTEL_EBPF_STORAGE_AGGREGATION_DISABLED" validate:"boolean"`
 	// ExponentialHistograms counts the storage histograms in base-2
 	// exponential buckets at a fixed scale of 2, exported as Prometheus
@@ -92,18 +94,6 @@ type EBPFTracer struct {
 	// Higher values reduce wakeup overhead under high traffic at the cost of delivery latency.
 	// The value should be well below ring buffer size / flushInterval to avoid event loss.
 	StatsWakeupDataBytes int `yaml:"stats_wakeup_data_bytes" env:"OTEL_EBPF_STATS_WAKEUP_DATA_BYTES" validate:"gte=0"`
-
-	// StatsStoragePerEvent sends each storage operation to userspace as a ring buffer event
-	// instead of aggregating the storage metrics in the kernel (today the filesystem metrics).
-	// It costs userspace CPU per operation and exists for troubleshooting and comparisons;
-	// the series and their counts are the same.
-	StatsStoragePerEvent bool `yaml:"stats_storage_per_event" env:"OTEL_EBPF_STATS_STORAGE_PER_EVENT" validate:"boolean"`
-
-	// StatsStorageExponentialHistograms counts the storage histograms aggregated in the kernel in
-	// base-2 exponential buckets at scale 2, exported as OTLP exponential and Prometheus native
-	// histograms, with no classic buckets. They are also selected when the OTLP exporter's
-	// histogram_aggregation is base2_exponential_bucket_histogram.
-	StatsStorageExponentialHistograms bool `yaml:"stats_storage_exponential_histograms" env:"OTEL_EBPF_STATS_STORAGE_EXPONENTIAL_HISTOGRAMS" validate:"boolean"`
 
 	// BatchLength allows specifying how many items (traces/metrics) will be batched at the initial
 	// stage before being forwarded to the next stage

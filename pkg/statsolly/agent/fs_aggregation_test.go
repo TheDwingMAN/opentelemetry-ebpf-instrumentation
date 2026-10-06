@@ -82,9 +82,9 @@ func TestFsAggregation(t *testing.T) {
 			c.OTELMetrics.HistogramAggregation = otelcfg.HistogramAggregationExponential
 		}, enabled: true, exponential: true},
 		{name: "exponential by choice", cfg: func(c *obi.Config) {
-			c.EBPF.StatsStorageExponentialHistograms = true
+			c.EBPF.StorageAggregation.ExponentialHistograms = true
 		}, enabled: true, exponential: true},
-		{name: "per event by choice", cfg: func(c *obi.Config) { c.EBPF.StatsStoragePerEvent = true }},
+		{name: "per event by choice", cfg: func(c *obi.Config) { c.EBPF.StorageAggregation.Disabled = true }},
 		{name: "printed stats", cfg: func(c *obi.Config) { c.Stats.Print = true }},
 		{name: "no filesystem metrics", cfg: func(c *obi.Config) { c.Metrics.Features = export.FeatureStorageBlock }},
 	} {

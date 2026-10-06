@@ -17,7 +17,7 @@ import (
 
 // fsAggregation decides how the filesystem programs report operations: added
 // into a kernel map, with the histogram layout it returns, unless the
-// configuration asks for events (stats_storage_per_event, or print_stats,
+// configuration asks for events (storage_aggregation.disabled, or print_stats,
 // which prints each one) or the exporters' filesystem histogram bounds do not
 // fit a kernel histogram. Only the exporters that export the filesystem
 // histogram count towards its layout.
@@ -26,8 +26,8 @@ func fsAggregation(cfg *obi.Config, log *slog.Logger) (ebpf.FsAggregation, *stat
 	switch {
 	case !features.StorageFS():
 		return ebpf.FsAggregation{}, nil
-	case cfg.EBPF.StatsStoragePerEvent:
-		log.Info("filesystem metrics are exported per event, as ebpf.stats_storage_per_event asks")
+	case cfg.EBPF.StorageAggregation.Disabled:
+		log.Info("filesystem metrics are exported per event, as ebpf.storage_aggregation.disabled asks")
 		return ebpf.FsAggregation{}, nil
 	case cfg.Stats.Print:
 		log.Info("filesystem metrics are exported per event, so that stats.print_stats prints them")
@@ -47,7 +47,7 @@ func fsAggregation(cfg *obi.Config, log *slog.Logger) (ebpf.FsAggregation, *stat
 	}
 	choice := statagg.HistogramChoice{
 		OTelExponential: otelEnabled && cfg.OTELMetrics.HistogramAggregation == otelcfg.HistogramAggregationExponential,
-		OptIn:           cfg.EBPF.StatsStorageExponentialHistograms,
+		OptIn:           cfg.EBPF.StorageAggregation.ExponentialHistograms,
 	}
 	layout, err := choice.NewLayout(bounds...)
 	if err != nil {
