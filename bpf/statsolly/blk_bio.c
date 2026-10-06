@@ -157,19 +157,27 @@ static __always_inline void blk_tp_btf_bio_queue(const struct bio *const bio) {
 }
 
 SEC("tp_btf/block_bio_queue")
+// NOLINTNEXTLINE(readability-non-const-parameter)
 int BPF_PROG(obi_stats_tp_btf_block_bio_queue, struct bio *bio) {
+    (void)ctx;
     blk_tp_btf_bio_queue(bio);
     return 0;
 }
 
 SEC("tp_btf/block_bio_queue")
+// NOLINTNEXTLINE(readability-non-const-parameter)
 int BPF_PROG(obi_stats_tp_btf_block_bio_queue_legacy, struct request_queue *q, struct bio *bio) {
+    (void)ctx;
+    (void)q;
     blk_tp_btf_bio_queue(bio);
     return 0;
 }
 
 SEC("tp_btf/block_bio_complete")
+// NOLINTNEXTLINE(readability-non-const-parameter)
 int BPF_PROG(obi_stats_tp_btf_block_bio_complete, struct request_queue *q, struct bio *bio) {
+    (void)ctx;
+    (void)q;
     struct blk_done done;
     if (blk_bio_end((u64)bio, &done)) {
         blk_bio_completed(&done, bio->bi_status);

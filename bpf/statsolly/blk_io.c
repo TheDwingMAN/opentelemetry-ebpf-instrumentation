@@ -294,22 +294,29 @@ static __always_inline void blk_tp_btf_issue(const struct request *const rq) {
 }
 
 SEC("tp_btf/block_rq_issue")
+// NOLINTNEXTLINE(readability-non-const-parameter)
 int BPF_PROG(obi_stats_tp_btf_block_rq_issue, struct request *rq) {
+    (void)ctx;
     blk_tp_btf_issue(rq);
     return 0;
 }
 
 SEC("tp_btf/block_rq_issue")
+// NOLINTNEXTLINE(readability-non-const-parameter)
 int BPF_PROG(obi_stats_tp_btf_block_rq_issue_legacy, struct request_queue *q, struct request *rq) {
+    (void)ctx;
+    (void)q;
     blk_tp_btf_issue(rq);
     return 0;
 }
 
 SEC("tp_btf/block_rq_complete")
+// NOLINTNEXTLINE(readability-non-const-parameter)
 int BPF_PROG(obi_stats_tp_btf_block_rq_complete,
              struct request *rq,
              unsigned long long error,
              unsigned int nr_bytes) {
+    (void)ctx;
     blk_rq_complete((u64)rq, rq->__data_len, error, nr_bytes);
     return 0;
 }
