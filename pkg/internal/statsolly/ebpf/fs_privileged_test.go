@@ -35,10 +35,11 @@ const (
 	eventTimeout  = 10 * time.Second
 )
 
-// A filesystem whose programs the kernel rejects -- here btrfs, planned
-// against a function that does not exist, so its fentry load and then its
-// kprobe attach fail -- is disabled on its own. The block programs, loaded
-// before, and ext4, attached in the same pass, keep reporting.
+// A filesystem whose programs the kernel rejects -- one of those probeable
+// here, planned against a function that does not exist, so its fentry load
+// and then its kprobe attach fail -- is disabled on its own. The block
+// programs, loaded before, and ext4, attached in the same pass, keep
+// reporting.
 func TestFailingFilesystemKeepsBlockAndOtherFilesystems(t *testing.T) {
 	fetcher, reader := attachBlockPrograms(t, export.FeatureStorageBlock)
 	events := collectStatEvents(t, reader)
@@ -50,33 +51,70 @@ func TestFailingFilesystemKeepsBlockAndOtherFilesystems(t *testing.T) {
 	}
 	a := newTestFsAttacher(t, sharedMaps)
 
+	// Every other local filesystem is made to look like it holds a volume,
+	// so that it is planned if this kernel can probe it; the network ones
+	// are all planned by the first refresh.
 	scan := a.localPVs
 	a.localPVs = func() (map[FsTypeCode]bool, error) {
 		withPV, err := scan()
 		if withPV != nil {
+			withPV[CodeFsXFS] = true
 			withPV[CodeFsBtrfs] = true
 		}
 		return withPV, err
 	}
+	// Which filesystems are probeable depends on the kernel and its loaded
+	// modules: the GitHub runners have neither btrfs nor xfs, for one.
+	var failing *fsAttachPlan
 	a.plan = func(targets []fsTarget) []fsAttachPlan {
 		plans := planFsTargets(targets)
-		for i := range plans {
-			if plans[i].Fs == CodeFsBtrfs {
-				plans[i].ReadSym = "obi_no_such_function"
-			}
+		if i := pickFailingFs(plans); i >= 0 {
+			plans[i].ReadSym = "obi_no_such_function"
+			failing = &plans[i]
 		}
 		return plans
 	}
 
 	a.refresh()
 	require.Contains(t, a.attached, CodeFsExt4)
-	assert.NotContains(t, a.attached, CodeFsBtrfs)
-	assert.Equal(t, 1, a.failures[CodeFsBtrfs], "btrfs failed with fentry and with kprobes")
-	assert.True(t, a.noFentry[CodeFsBtrfs], "btrfs was retried with kprobes")
-
 	writeAndSync(t, vol.mountPoint)
 	events.waitFs(t, vol.dev, CodeFsExt4)
 	events.waitBlock(t, vol.disk.kernelDev)
+
+	if failing == nil {
+		t.Skip("no filesystem besides ext4 is probeable on this kernel;" +
+			" a failing filesystem cannot be made to fail next to it")
+	}
+	name := fsTypeStr(failing.Fs)
+	assert.NotContains(t, a.attached, failing.Fs, "%s attached", name)
+	assert.Equal(t, 1, a.failures[failing.Fs], "%s failed once, with every probe type it tried", name)
+	if failing.UseFentry {
+		assert.True(t, a.noFentry[failing.Fs], "%s was retried with kprobes", name)
+	}
+}
+
+// pickFailingFs returns the index of the plan to make fail next to ext4, or
+// -1 when there is none: a local filesystem before a network one, as ext4 is
+// local, and one planned for fentry/fexit, whose fallback to kprobes is then
+// covered too.
+func pickFailingFs(plans []fsAttachPlan) int {
+	best, bestScore := -1, -1
+	for i, p := range plans {
+		if p.Fs == CodeFsExt4 {
+			continue
+		}
+		score := 0
+		if p.UseFentry {
+			score += 2
+		}
+		if isLocalFs(p.Fs) {
+			score++
+		}
+		if score > bestScore {
+			best, bestScore = i, score
+		}
+	}
+	return best
 }
 
 // ext4, xfs and btrfs attach only while a kubelet volume of their type is
