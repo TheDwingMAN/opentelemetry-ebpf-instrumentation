@@ -51,10 +51,7 @@ func deviceName(dev uint32) string {
 		return cached.name
 	}
 
-	name := majMin
-	if base := filepath.Base(target); base != "" && base != "." && base != string(filepath.Separator) {
-		name = base
-	}
+	name := nameFromTarget(majMin, target)
 
 	if target != "" {
 		devNameMu.Lock()
@@ -62,6 +59,19 @@ func deviceName(dev uint32) string {
 		devNameMu.Unlock()
 	}
 	return name
+}
+
+// nameFromTarget derives a block device's name from the /sys/dev/block
+// symlink target already read for it (e.g. "../../devices/virtual/block/dm-4"
+// resolves to "dm-4"), falling back to majMin ("<major>:<minor>") when the
+// target is empty or has no usable basename. Callers that already hold a
+// device's target (block_stack.go's computeDevInfo) use this directly instead
+// of calling deviceName, which would re-read the same symlink.
+func nameFromTarget(majMin, target string) string {
+	if base := filepath.Base(target); base != "" && base != "." && base != string(filepath.Separator) {
+		return base
+	}
+	return majMin
 }
 
 // fmtDev formats a Linux dev_t value as "<major>:<minor>".

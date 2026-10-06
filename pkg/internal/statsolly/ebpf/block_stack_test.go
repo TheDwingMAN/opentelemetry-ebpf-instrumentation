@@ -68,6 +68,15 @@ func (f *blockStackFixture) md(majMin, name string, slaves ...string) {
 	f.deviceLinks(filepath.Join(dir, "slaves"), slaves)
 }
 
+// stackedViaSlaves registers a device that is stacked only because it lists
+// a non-empty slaves/ directory, with no dm/, md/ or loop/ of its own: the
+// bcache and drbd case (v2 isStacked), which has no dedicated marker
+// directory the way dm/md/loop do.
+func (f *blockStackFixture) stackedViaSlaves(majMin, name string, slaves ...string) {
+	dir := f.link(majMin, name)
+	f.deviceLinks(filepath.Join(dir, "slaves"), slaves)
+}
+
 // multipathHead registers an NVMe native-multipath head with the given,
 // already registered, path device names.
 func (f *blockStackFixture) multipathHead(majMin, name string, paths ...string) {
@@ -164,6 +173,19 @@ func TestBlockStackRequestBasedMultipathViaSlaves(t *testing.T) {
 	info := blockStack(devT(253, 10))
 	assert.True(t, info.stacked)
 	assert.Equal(t, []string{"sda", "sdb"}, info.physical)
+}
+
+// TestBlockStackViaNonEmptySlaves covers a bcache-like device: stacked
+// because sysfs lists a non-empty slaves/, even though it has no dm/, md/ or
+// loop/ directory of its own (spec 1.2, step 8; v2 isStacked).
+func TestBlockStackViaNonEmptySlaves(t *testing.T) {
+	f := newBlockStackFixture(t)
+	f.disk("8:0", "sda")
+	f.stackedViaSlaves("252:0", "bcache0", "sda")
+
+	info := blockStack(devT(252, 0))
+	assert.True(t, info.stacked)
+	assert.Equal(t, []string{"sda"}, info.physical)
 }
 
 // TestBlockStackNVMeMultipathHead covers K5: the head is stacked, its paths
@@ -281,12 +303,13 @@ func TestBlockStackPhysicalInvariant(t *testing.T) {
 	f.disk("259:1", "nvme0c0n1")
 	f.disk("259:2", "nvme0c1n1")
 	f.multipathHead("259:0", "nvme0n1", "nvme0c0n1", "nvme0c1n1")
+	f.stackedViaSlaves("252:0", "bcache0", "vdb")
 
 	byName := map[string]uint32{
 		"vdb": devT(252, 16), "dm-0": devT(253, 0), "dm-1": devT(253, 1),
 		"dm-2": devT(253, 2), "sda": devT(8, 0), "sdb": devT(8, 16),
 		"md0": devT(9, 0), "nvme0c0n1": devT(259, 1), "nvme0c1n1": devT(259, 2),
-		"nvme0n1": devT(259, 0),
+		"nvme0n1": devT(259, 0), "bcache0": devT(252, 0),
 	}
 	for name, dev := range byName {
 		for _, physName := range blockStack(dev).physical {

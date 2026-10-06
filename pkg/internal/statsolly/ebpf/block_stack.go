@@ -84,7 +84,7 @@ func blockStackVisiting(dev uint32, visiting map[uint32]bool) devInfo {
 // computeDevInfo builds dev's device model from the sysfs directory its
 // /sys/dev/block symlink (already read as target) points to.
 func computeDevInfo(dev uint32, target string, visiting map[uint32]bool) devInfo {
-	name := deviceName(dev)
+	name := nameFromTarget(fmtDev(dev), target)
 	if target == "" {
 		return devInfo{name: name}
 	}
@@ -119,6 +119,11 @@ func computeDevInfo(dev uint32, target string, visiting map[uint32]bool) devInfo
 	case isDir(filepath.Join(dir, "loop")):
 		info.stacked = true
 		info.physical = capPhysical(physicalFromLoop(dir, visiting))
+	case nonEmptyDir(filepath.Join(dir, "slaves")):
+		// bcache and other stacking drivers that are neither dm, md nor loop
+		// still report their backing devices through slaves/ (v2 isStacked).
+		info.stacked = true
+		info.physical = capPhysical(physicalFromLinks(filepath.Join(dir, "slaves"), visiting))
 	default:
 		info.stacked = false
 		info.physical = []string{name}
@@ -208,6 +213,13 @@ func readDevFile(dir string) (uint32, bool) {
 func isDir(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && fi.IsDir()
+}
+
+// nonEmptyDir tells whether path is a directory sysfs populated with at
+// least one entry, matching v2's isStacked slaves/ check.
+func nonEmptyDir(path string) bool {
+	entries, err := os.ReadDir(path)
+	return err == nil && len(entries) > 0
 }
 
 func fileExists(path string) bool {
