@@ -67,6 +67,9 @@ enum fs_type : u8 {
     fs_type_ceph = 2,
     fs_type_cifs = 3,
     fs_type_fuse = 4,
+    fs_type_ext4 = 5,
+    fs_type_xfs = 6,
+    fs_type_btrfs = 7,
 };
 
 enum fs_op : u8 {

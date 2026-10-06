@@ -265,7 +265,7 @@ groups:
       - ref: disk.io.direction
       - ref: error.type
 
-  # Network filesystem stats. Emitted when the `storage_fs` feature is enabled.
+  # Filesystem stats. Emitted when the `storage_fs` feature is enabled.
   # Probes attach to each filesystem's own file_operations read/write
   # implementations (nfs_file_read, ceph_read_iter, cifs_loose_read_iter,
   # fuse_file_read_iter and their write counterparts) rather than to generic
@@ -281,7 +281,7 @@ groups:
     unit: "s"
     stability: development
     brief: >
-      Latency of a single network filesystem read or write as the application
+      Latency of a single filesystem read or write as the application
       experiences it, broken down by filesystem type and operation.
     attributes:
       - ref: system.filesystem.type
@@ -297,7 +297,7 @@ groups:
     unit: "By"
     stability: development
     brief: >
-      Count of bytes transferred through network filesystem read and write
+      Count of bytes transferred through filesystem read and write
       operations, broken down by filesystem type and operation.
     attributes:
       - ref: system.filesystem.type
@@ -316,7 +316,7 @@ groups:
     unit: "{error}"
     stability: development
     brief: >
-      Count of network filesystem read or write operations that failed,
+      Count of filesystem read or write operations that failed,
       broken down by filesystem type, operation and errno.
     attributes:
       - ref: system.filesystem.type
