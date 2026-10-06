@@ -58,6 +58,8 @@ typedef struct block_io {
     u64 bytes;
     s32 error;    // completion tracepoint's error field: 0 or -errno
     u32 inflight; // requests still in flight on this device after this completion
+    u32 part_dev; // partition dev_t; 0 for whole-disk I/O and until partitions are resolved
+    unsigned char _pad2[4];
 } block_io_t;
 
 // Force struct into the ELF for automatic creation of Golang struct

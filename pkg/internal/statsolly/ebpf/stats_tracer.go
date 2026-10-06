@@ -10,7 +10,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -239,12 +242,15 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	fsPlans := storage.fsPlans
 	fsAttachTo := storage.fsAttachTo
 	toDisable = append(toDisable, storage.toDisable...)
+	blockLoad := planBlockLoad(storageBlock, useRawBlock, features.StorageBlockQueueDepth(), func() uint32 {
+		return blockInflightEntries(sysBlockDevicesDir)
+	})
 
 	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
 	load := func(toDisable []string, attachTo map[string]string) error {
 		objects = StatsObjects{}
-		return loadStatsObjects(cfg, toDisable, attachTo, &objects, sharedMaps, &mu)
+		return loadStatsObjects(cfg, blockLoad, toDisable, attachTo, &objects, sharedMaps, &mu)
 	}
 	var fsOK bool
 	storageBlock, fsOK, err = loadWithStorageFallback(load, toDisable, fsAttachTo, storageBlock, tlog)
@@ -386,7 +392,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	// fuse load on the node's first mount of their type -- is attached when
 	// it appears. Skipped when the filesystem programs could not load at all.
 	if features.StorageFS() && fsOK {
-		closables = append(closables, startLateFsAttacher(tlog, cfg, fsPlans, localFSAttached, sharedMaps, &mu, objects.FsDevFilter))
+		closables = append(closables, startLateFsAttacher(tlog, cfg, blockLoad, fsPlans, localFSAttached, sharedMaps, &mu, objects.FsDevFilter))
 	}
 
 	// raw tracepoints
@@ -504,7 +510,7 @@ func PrepareStorageSpec(spec *ebpf.CollectionSpec) error {
 // retry via loadWithStorageFallback reuses the PinInternal maps a prior,
 // failed attempt already created instead of orphaning them and creating a
 // second set.
-func loadStatsObjects(cfg *config.EBPFTracer, toDisable []string, fsAttachTo map[string]string, objects *StatsObjects, sharedMaps map[string]*ebpf.Map, mu *sync.Mutex) error {
+func loadStatsObjects(cfg *config.EBPFTracer, blockLoad blockLoadPlan, toDisable []string, fsAttachTo map[string]string, objects *StatsObjects, sharedMaps map[string]*ebpf.Map, mu *sync.Mutex) error {
 	spec, err := LoadStats()
 	if err != nil {
 		return fmt.Errorf("loading BPF data: %w", err)
@@ -520,9 +526,19 @@ func loadStatsObjects(cfg *config.EBPFTracer, toDisable []string, fsAttachTo map
 
 	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
 
+	if err := setMapEntries(spec, blockLoad.mapEntries); err != nil {
+		return fmt.Errorf("sizing block maps: %w", err)
+	}
+
+	var wantQueueDepth uint8
+	if blockLoad.wantQueueDepth {
+		wantQueueDepth = 1
+	}
+
 	if err := ebpfconvenience.LoadSpec(spec, objects, map[string]any{
 		"g_bpf_debug":             cfg.BpfDebug,
 		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
+		"blk_want_queue_depth":    wantQueueDepth,
 	}, sharedMaps, mu, "", nil); err != nil {
 		return fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
@@ -550,6 +566,93 @@ func allBlockProgramNames() []string {
 	return append(blockTracepointPrograms(), blockRawTracepointPrograms()...)
 }
 
+// sysBlockDevicesDir lists every block device, with its request queue
+// settings under queue/ and one directory per hardware queue under mq/.
+const sysBlockDevicesDir = "/sys/block"
+
+const (
+	minBlockInflightEntries uint32 = 4 << 10
+	maxBlockInflightEntries uint32 = 64 << 10
+	// A map no loaded program uses must still be created; one entry is the
+	// smallest the kernel accepts.
+	unusedMapEntries uint32 = 1
+)
+
+// blockLoadPlan is what every load of the stats collection applies for the
+// block programs. The block maps are PinInternal, shared by the main load and
+// the late filesystem loads, and a load whose map spec differs from the shared
+// map is rejected, so the plan is made once and reused.
+type blockLoadPlan struct {
+	mapEntries     map[string]uint32
+	wantQueueDepth bool
+}
+
+// planBlockLoad sizes the block maps for the programs that will run: the
+// in-flight map of the tracepoint family in use, from inflightEntries for the
+// raw family, and one entry for every map nothing touches, so the idle
+// family, a disabled storage_block and a disabled queue depth cost no memory.
+func planBlockLoad(block, useRaw, queueDepth bool, inflightEntries func() uint32) blockLoadPlan {
+	entries := map[string]uint32{}
+	if !block {
+		for _, name := range []string{StatsMapBlkRqInflight, StatsMapBlkRqInflightSector, StatsMapBlkInsert, StatsMapBlkDevState} {
+			entries[name] = unusedMapEntries
+		}
+		return blockLoadPlan{mapEntries: entries}
+	}
+
+	if useRaw {
+		entries[StatsMapBlkRqInflight] = inflightEntries()
+		entries[StatsMapBlkRqInflightSector] = unusedMapEntries
+	} else {
+		entries[StatsMapBlkRqInflight] = unusedMapEntries
+	}
+	if !queueDepth {
+		entries[StatsMapBlkDevState] = unusedMapEntries
+	}
+	return blockLoadPlan{mapEntries: entries, wantQueueDepth: queueDepth}
+}
+
+// blockInflightEntries sizes the request-keyed in-flight map: at most
+// nr_requests requests are in flight per hardware queue, summed over every
+// device with hardware queues (bio-based devices such as dm-linear never
+// reach the request tracepoints). The sum is clamped, leaving room for
+// devices that appear later; an unreadable sysfs gets the largest size.
+func blockInflightEntries(sysBlock string) uint32 {
+	devices, err := os.ReadDir(sysBlock)
+	if err != nil {
+		return maxBlockInflightEntries
+	}
+
+	var total uint64
+	for _, dev := range devices {
+		hwQueues, err := os.ReadDir(filepath.Join(sysBlock, dev.Name(), "mq"))
+		if err != nil || len(hwQueues) == 0 {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(sysBlock, dev.Name(), "queue", "nr_requests"))
+		if err != nil {
+			continue
+		}
+		nrRequests, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 32)
+		if err != nil {
+			continue
+		}
+		total += nrRequests * uint64(len(hwQueues))
+	}
+	return uint32(min(max(total, uint64(minBlockInflightEntries)), uint64(maxBlockInflightEntries)))
+}
+
+func setMapEntries(spec *ebpf.CollectionSpec, entries map[string]uint32) error {
+	for name, n := range entries {
+		m := spec.Maps[name]
+		if m == nil {
+			return fmt.Errorf("unknown map name %s", name)
+		}
+		m.MaxEntries = n
+	}
+	return nil
+}
+
 // attachBlockProbes attaches one block family. On any failure it detaches
 // what it managed and returns nothing: block metrics are then off, and the
 // rest of the agent keeps running.
@@ -562,14 +665,18 @@ func attachBlockProbes(objects *StatsObjects, useRaw bool, log *slog.Logger) []i
 		return nil
 	}
 
+	// Completion attaches first: a request issued before the issue program
+	// attached has no in-flight entry and its completion is ignored, while
+	// issue attached first would leave behind the entries of requests that
+	// complete before the completion program attaches.
 	if useRaw {
 		for _, t := range []struct {
 			name    string
 			program *ebpf.Program
 		}{
+			{RawTracepointBlockRqComplete, objects.ObiStatsRawTpBlockRqComplete},
 			{RawTracepointBlockRqInsert, objects.ObiStatsRawTpBlockRqInsert},
 			{RawTracepointBlockRqIssue, objects.ObiStatsRawTpBlockRqIssue},
-			{RawTracepointBlockRqComplete, objects.ObiStatsRawTpBlockRqComplete},
 		} {
 			l, err := link.AttachRawTracepoint(link.RawTracepointOptions{Name: t.name, Program: t.program})
 			if err != nil {
@@ -584,9 +691,9 @@ func attachBlockProbes(objects *StatsObjects, useRaw bool, log *slog.Logger) []i
 		name    string
 		program *ebpf.Program
 	}{
+		{TracepointBlockRqComplete, objects.ObiStatsTpBlockRqComplete},
 		{TracepointBlockRqInsert, objects.ObiStatsTpBlockRqInsert},
 		{TracepointBlockRqIssue, objects.ObiStatsTpBlockRqIssue},
-		{TracepointBlockRqComplete, objects.ObiStatsTpBlockRqComplete},
 	} {
 		group, tp, _ := strings.Cut(t.name, "/")
 		l, err := link.Tracepoint(group, tp, t.program, nil)
