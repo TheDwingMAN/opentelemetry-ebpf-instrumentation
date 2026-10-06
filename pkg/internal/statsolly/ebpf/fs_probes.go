@@ -30,14 +30,21 @@ type fsTarget struct {
 	ReadSyms  []string
 	WriteSyms []string
 	FsyncSyms []string
+	// SpliceReadSyms is the filesystem's own splice_read implementation, which
+	// splice(2), sendfile(2) and copy_file_range(2) take instead of read_iter.
+	// Only filesystems with a dedicated symbol are listed: ceph, cifs and xfs
+	// use the generic filemap_splice_read, shared with every filesystem on the
+	// node, so probing it would fire for container root filesystems too.
+	SpliceReadSyms []string
 }
 
 var fsTargets = []fsTarget{
 	{
 		Fs: CodeFsNFS, Module: "nfs",
-		ReadSyms:  []string{"nfs_file_read"},
-		WriteSyms: []string{"nfs_file_write"},
-		FsyncSyms: []string{"nfs_file_fsync"},
+		ReadSyms:       []string{"nfs_file_read"},
+		WriteSyms:      []string{"nfs_file_write"},
+		FsyncSyms:      []string{"nfs_file_fsync"},
+		SpliceReadSyms: []string{"nfs_file_splice_read"},
 	},
 	{
 		Fs: CodeFsCeph, Module: "ceph",
@@ -53,15 +60,17 @@ var fsTargets = []fsTarget{
 	},
 	{
 		Fs: CodeFsFUSE, Module: "fuse",
-		ReadSyms:  []string{"fuse_file_read_iter"},
-		WriteSyms: []string{"fuse_file_write_iter"},
-		FsyncSyms: []string{"fuse_fsync"},
+		ReadSyms:       []string{"fuse_file_read_iter"},
+		WriteSyms:      []string{"fuse_file_write_iter"},
+		FsyncSyms:      []string{"fuse_fsync"},
+		SpliceReadSyms: []string{"fuse_splice_read"},
 	},
 	{
 		Fs: CodeFsExt4, Module: "ext4",
-		ReadSyms:  []string{"ext4_file_read_iter"},
-		WriteSyms: []string{"ext4_file_write_iter"},
-		FsyncSyms: []string{"ext4_sync_file"},
+		ReadSyms:       []string{"ext4_file_read_iter"},
+		WriteSyms:      []string{"ext4_file_write_iter"},
+		FsyncSyms:      []string{"ext4_sync_file"},
+		SpliceReadSyms: []string{"ext4_file_splice_read"},
 	},
 	{
 		Fs: CodeFsXFS, Module: "xfs",
@@ -71,9 +80,10 @@ var fsTargets = []fsTarget{
 	},
 	{
 		Fs: CodeFsBtrfs, Module: "btrfs",
-		ReadSyms:  []string{"btrfs_file_read_iter"},
-		WriteSyms: []string{"btrfs_file_write_iter"},
-		FsyncSyms: []string{"btrfs_sync_file"},
+		ReadSyms:       []string{"btrfs_file_read_iter"},
+		WriteSyms:      []string{"btrfs_file_write_iter"},
+		FsyncSyms:      []string{"btrfs_sync_file"},
+		SpliceReadSyms: []string{"btrfs_file_splice_read"},
 	},
 }
 
@@ -185,6 +195,9 @@ type fsAttachPlan struct {
 	ReadSym   string
 	WriteSym  string
 	FsyncSym  string
+	// SpliceReadSym is empty when the filesystem has no dedicated symbol, or
+	// the symbol is not probeable. Read and write still attach.
+	SpliceReadSym string
 }
 
 // planFsAttachWith decides, per filesystem, whether to attach fentry/fexit or
@@ -206,12 +219,14 @@ func planFsAttachWith(
 			continue
 		}
 		fsyncSym, _ := resolve(tgt.FsyncSyms)
+		spliceReadSym, _ := resolve(tgt.SpliceReadSyms)
 		plans = append(plans, fsAttachPlan{
-			Fs:        tgt.Fs,
-			UseFentry: fentryCapable(tgt.Module, readSym),
-			ReadSym:   readSym,
-			WriteSym:  writeSym,
-			FsyncSym:  fsyncSym,
+			Fs:            tgt.Fs,
+			UseFentry:     fentryCapable(tgt.Module, readSym),
+			ReadSym:       readSym,
+			WriteSym:      writeSym,
+			FsyncSym:      fsyncSym,
+			SpliceReadSym: spliceReadSym,
 		})
 	}
 	return plans

@@ -137,3 +137,45 @@ func TestPlanFsToDisableFsyncIndependent(t *testing.T) {
 		assert.Contains(t, toDisable, name, "fuse unplanned, all its programs including fsync must be disabled")
 	}
 }
+
+// A filesystem whose splice_read symbol cannot be probed still gets its read
+// and write probes: splice is an extra path, not a prerequisite.
+func TestPlanFsAttachSpliceReadResolvedIndependently(t *testing.T) {
+	targets := []fsTarget{{
+		Fs: CodeFsNFS, Module: "nfs",
+		ReadSyms:       []string{"nfs_file_read"},
+		WriteSyms:      []string{"nfs_file_write"},
+		FsyncSyms:      []string{"nfs_file_fsync"},
+		SpliceReadSyms: []string{"nfs_file_splice_read"},
+	}}
+	resolve := func(c []string) (string, bool) {
+		if len(c) == 0 || c[0] == "nfs_file_splice_read" {
+			return "", false
+		}
+		return c[0], true
+	}
+
+	plans := planFsAttachWith(targets, func(string, string) bool { return true }, resolve)
+
+	require.Len(t, plans, 1)
+	assert.Equal(t, "nfs_file_read", plans[0].ReadSym)
+	assert.Equal(t, "nfs_file_fsync", plans[0].FsyncSym)
+	assert.Empty(t, plans[0].SpliceReadSym)
+}
+
+// Ceph, CIFS and XFS have no dedicated splice_read symbol, so their plans
+// carry none and planFsToDisable must not try to stub a program that the
+// collection does not contain.
+func TestPlanFsToDisableSkipsAbsentSpliceFamilies(t *testing.T) {
+	plans := []fsAttachPlan{
+		{Fs: CodeFsCeph, UseFentry: true, ReadSym: "ceph_read_iter", WriteSym: "ceph_write_iter"},
+		{Fs: CodeFsNFS, UseFentry: true, ReadSym: "nfs_file_read", WriteSym: "nfs_file_write", SpliceReadSym: "nfs_file_splice_read"},
+	}
+
+	toDisable, attachTo := planFsToDisable(plans)
+
+	assert.NotContains(t, toDisable, "", "an empty name would fail fixupSpec")
+	assert.Equal(t, "nfs_file_splice_read", attachTo[progObiStatsFentrySpliceNFS])
+	assert.Equal(t, "nfs_file_splice_read", attachTo[progObiStatsFexitSpliceNFS])
+	assert.Contains(t, toDisable, progObiStatsKprobeSpliceNFS, "the kprobe family loses when fentry wins")
+}
