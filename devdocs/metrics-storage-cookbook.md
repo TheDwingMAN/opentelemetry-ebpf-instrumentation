@@ -107,8 +107,10 @@ sum by (k8s_node_name, system_device, error_type) (
 
 `queue.duration` is the wait before the request was issued to the device; `operation.duration`
 is the time the device took. A high queue share with a normal service time means saturation
-of the queue (or a scheduler), not a slow disk. Only requests that went through
-`block_rq_insert` are in `queue.duration`, so its count is at most the operation count.
+of the queue (or a scheduler), not a slow disk. `queue.duration` runs from the request's
+accounting start (`rq->start_time_ns`) to `block_rq_issue`; it is not recorded on devices with
+`queue/iostats=0` nor for the data write of a flush sequence, so its count is at most the
+operation count (see [metrics.md](metrics.md#storage-metrics)).
 
 ```promql
   sum by (k8s_node_name, system_device) (rate(obi_stat_disk_queue_duration_seconds_sum[5m]))
@@ -151,9 +153,11 @@ complete between two collections are not seen, so it undercounts on fast devices
 avg_over_time(obi_stat_disk_pending_operations{system_device="nvme0n1"}[5m])
 ```
 
-Reads and writes apart need `disk.io.direction`, which is opt-in on this metric
-(`attributes.select: {obi_stat_disk_pending_operations: {include: ["disk.io.direction"]}}`);
-flushes and discards in flight then have an empty direction.
+Reads and writes apart need `disk.io.direction`, which is opt-in on this metric. A non-empty
+`include` list replaces the metric's default attributes, so list them too:
+`attributes.select: {obi_stat_disk_pending_operations: {include: ["system.device", "obi.disk.stacked", "k8s.node.name", "disk.io.direction"]}}`
+(`k8s.node.name` exists with Kubernetes decoration). Flushes and discards in flight then have an
+empty direction.
 
 The deprecated `obi_stat_disk_queue_depth` histogram (`storage_block_queue_depth`, off by
 default) samples the in-flight count at each completion; its mean is:
