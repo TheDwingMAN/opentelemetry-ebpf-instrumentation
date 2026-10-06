@@ -9,13 +9,15 @@
 // Pure helpers of the block request path, kept free of kernel types and map
 // access so bpf/tests can check them natively.
 
-// What a completed request was, as far as the metrics care: a read, a write,
-// or something that is neither (discards and secure erases are not
-// throughput and are dropped rather than folded into the read counters).
+// What a request is, as far as the metrics care. The first four are the
+// values of enum blk_io_op (bpf/statsolly/types.h) that reach userspace; an
+// ignored request (zone management, driver-private operations) never does.
 enum blk_req_kind : u8 {
     blk_req_read = 0,
     blk_req_write = 1,
-    blk_req_ignore = 2,
+    blk_req_flush = 2,
+    blk_req_discard = 3,
+    blk_req_ignore = 4,
 };
 
 // The request's operation lives in the low bits of cmd_flags. These REQ_OP_*
@@ -28,12 +30,19 @@ enum {
     k_req_op_read = 0,
     k_req_op_write = 1,
     k_req_op_flush = 2,
+    k_req_op_discard = 3,
+    k_req_op_secure_erase = 5,
     k_req_op_write_zeroes = 9,
     // Passed as zone_append on a kernel without REQ_OP_ZONE_APPEND: no masked
     // operation can equal it.
     k_req_op_absent = k_req_op_mask + 1,
 };
 
+// Writes are what /proc/diskstats counts as writes. A data write that
+// carries REQ_PREFLUSH is still a write: the flush machinery issues the flush
+// as a request of its own (REQ_OP_FLUSH), which is what counts as a flush. A
+// secure erase is counted as a discard: both release blocks rather than move
+// data.
 static __always_inline enum blk_req_kind blk_kind_from_cmd_flags(const u32 cmd_flags,
                                                                  const u32 zone_append) {
     const u32 op = cmd_flags & k_req_op_mask;
@@ -41,26 +50,43 @@ static __always_inline enum blk_req_kind blk_kind_from_cmd_flags(const u32 cmd_f
     case k_req_op_read:
         return blk_req_read;
     case k_req_op_write:
-    case k_req_op_flush:
     case k_req_op_write_zeroes:
         return blk_req_write;
+    case k_req_op_flush:
+        return blk_req_flush;
+    case k_req_op_discard:
+    case k_req_op_secure_erase:
+        return blk_req_discard;
     default:
         return op == zone_append ? blk_req_write : blk_req_ignore;
     }
 }
 
-// The classic tracepoint hands over the rwbs string instead: 'W' (write) or
-// 'F' (flush, or a write with a preflush) means write, 'D' (discard and secure
-// erase) and 'N' (any operation without a letter of its own) are ignored,
-// anything else is a read.
-static __always_inline enum blk_req_kind blk_kind_from_rwbs0(const char rwbs0) {
-    if (rwbs0 == 'W' || rwbs0 == 'F') {
+// The classic tracepoint hands over the rwbs string instead (blk_fill_rwbs):
+// an 'F' for REQ_PREFLUSH comes first, then the operation's letter: 'W'
+// write, 'R' read, 'D' discard (secure erase is "DE"), 'F' flush and 'N' any
+// operation without a letter of its own. So "FW" is a write with a preflush,
+// and an 'F' followed by anything else is a flush.
+static __always_inline enum blk_req_kind blk_kind_from_rwbs(const char rwbs0, const char rwbs1) {
+    switch (rwbs0) {
+    case 'R':
+        return blk_req_read;
+    case 'W':
         return blk_req_write;
-    }
-    if (rwbs0 == 'D' || rwbs0 == 'N') {
+    case 'D':
+        return blk_req_discard;
+    case 'F':
+        return rwbs1 == 'W' ? blk_req_write : blk_req_flush;
+    default:
         return blk_req_ignore;
     }
-    return blk_req_read;
+}
+
+// Whether completions of this kind reach userspace. emit_kinds has one bit per
+// enum blk_req_kind, set by userspace from the enabled metrics; blk_req_ignore
+// never has one.
+static __always_inline bool blk_kind_emitted(const u8 emit_kinds, const enum blk_req_kind kind) {
+    return (emit_kinds >> kind) & 1;
 }
 
 // The classic tracepoint reports an errno; the raw one reports blk_status_t,

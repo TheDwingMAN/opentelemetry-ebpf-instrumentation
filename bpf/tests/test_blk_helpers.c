@@ -173,9 +173,9 @@ struct req_op_table {
 static const struct req_op_case bpfcore_ops[] = {
     {"REQ_OP_READ", 0, blk_req_read},
     {"REQ_OP_WRITE", 1, blk_req_write},
-    {"REQ_OP_FLUSH", 2, blk_req_write},
-    {"REQ_OP_DISCARD", 3, blk_req_ignore},
-    {"REQ_OP_SECURE_ERASE", 5, blk_req_ignore},
+    {"REQ_OP_FLUSH", 2, blk_req_flush},
+    {"REQ_OP_DISCARD", 3, blk_req_discard},
+    {"REQ_OP_SECURE_ERASE", 5, blk_req_discard},
     {"REQ_OP_WRITE_SAME", 7, blk_req_ignore},
     {"REQ_OP_WRITE_ZEROES", 9, blk_req_write},
     {"REQ_OP_ZONE_OPEN", 10, blk_req_ignore},
@@ -192,9 +192,9 @@ static const struct req_op_case bpfcore_ops[] = {
 static const struct req_op_case rocky_687_ops[] = {
     {"REQ_OP_READ", 0, blk_req_read},
     {"REQ_OP_WRITE", 1, blk_req_write},
-    {"REQ_OP_FLUSH", 2, blk_req_write},
-    {"REQ_OP_DISCARD", 3, blk_req_ignore},
-    {"REQ_OP_SECURE_ERASE", 5, blk_req_ignore},
+    {"REQ_OP_FLUSH", 2, blk_req_flush},
+    {"REQ_OP_DISCARD", 3, blk_req_discard},
+    {"REQ_OP_SECURE_ERASE", 5, blk_req_discard},
     {"REQ_OP_ZONE_APPEND", 7, blk_req_write},
     {"REQ_OP_WRITE_ZEROES", 9, blk_req_write},
     {"REQ_OP_ZONE_OPEN", 10, blk_req_ignore},
@@ -210,9 +210,9 @@ static const struct req_op_case rocky_687_ops[] = {
 static const struct req_op_case cs9_749_ops[] = {
     {"REQ_OP_READ", 0, blk_req_read},
     {"REQ_OP_WRITE", 1, blk_req_write},
-    {"REQ_OP_FLUSH", 2, blk_req_write},
-    {"REQ_OP_DISCARD", 3, blk_req_ignore},
-    {"REQ_OP_SECURE_ERASE", 5, blk_req_ignore},
+    {"REQ_OP_FLUSH", 2, blk_req_flush},
+    {"REQ_OP_DISCARD", 3, blk_req_discard},
+    {"REQ_OP_SECURE_ERASE", 5, blk_req_discard},
     {"REQ_OP_ZONE_APPEND", 7, blk_req_write},
     {"REQ_OP_WRITE_ZEROES", 9, blk_req_write},
     {"REQ_OP_ZONE_OPEN", 11, blk_req_ignore},
@@ -264,12 +264,65 @@ static void test_kernel_without_zone_append(void) {
                 "op 13 is not a write on a kernel without REQ_OP_ZONE_APPEND");
 }
 
+struct rwbs_case {
+    const char *rwbs;
+    enum blk_req_kind kind;
+    const char *what;
+};
+
+// Strings blk_fill_rwbs() builds: the REQ_PREFLUSH 'F', the operation's
+// letter, then the FUA 'F' and the 'A', 'S', 'M' flag letters.
+static const struct rwbs_case rwbs_cases[] = {
+    {"R", blk_req_read, "a read"},
+    {"RA", blk_req_read, "a readahead"},
+    {"RSM", blk_req_read, "a sync metadata read"},
+    {"W", blk_req_write, "a write"},
+    {"WS", blk_req_write, "a sync write"},
+    {"WFS", blk_req_write, "a FUA write"},
+    {"FW", blk_req_write, "a write with a preflush"},
+    {"FWFS", blk_req_write, "a FUA write with a preflush"},
+    {"F", blk_req_flush, "a flush"},
+    {"FF", blk_req_flush, "the flush machinery's flush request (REQ_OP_FLUSH|REQ_PREFLUSH)"},
+    {"FFS", blk_req_flush, "a sync flush request"},
+    {"D", blk_req_discard, "a discard"},
+    {"DE", blk_req_discard, "a secure erase"},
+    {"DS", blk_req_discard, "a sync discard"},
+    {"N", blk_req_ignore, "an operation without a letter of its own"},
+    {"", blk_req_ignore, "an empty rwbs"},
+};
+
 static void test_rwbs(void) {
-    assert_true(blk_kind_from_rwbs0('R') == blk_req_read, "rwbs R is a read");
-    assert_true(blk_kind_from_rwbs0('W') == blk_req_write, "rwbs W is a write");
-    assert_true(blk_kind_from_rwbs0('F') == blk_req_write, "rwbs F is a write");
-    assert_true(blk_kind_from_rwbs0('D') == blk_req_ignore, "rwbs D (discard) is ignored");
-    assert_true(blk_kind_from_rwbs0('N') == blk_req_ignore, "rwbs N (other operation) is ignored");
+    char message[160];
+    for (unsigned int i = 0; i < sizeof(rwbs_cases) / sizeof(rwbs_cases[0]); i++) {
+        const struct rwbs_case *const c = &rwbs_cases[i];
+        const char rwbs0 = c->rwbs[0];
+        const char rwbs1 = rwbs0 ? c->rwbs[1] : 0;
+        snprintf(message, sizeof(message), "rwbs \"%s\" is %s", c->rwbs, c->what);
+        assert_true(blk_kind_from_rwbs(rwbs0, rwbs1) == c->kind, message);
+    }
+}
+
+enum {
+    k_emit_read_write = (1 << blk_req_read) | (1 << blk_req_write),
+    k_emit_flush = 1 << blk_req_flush,
+    k_emit_discard = 1 << blk_req_discard,
+};
+
+static void test_kind_emitted(void) {
+    assert_true(blk_kind_emitted(k_emit_read_write, blk_req_read), "reads reach userspace");
+    assert_true(blk_kind_emitted(k_emit_read_write, blk_req_write), "writes reach userspace");
+    assert_true(!blk_kind_emitted(k_emit_read_write, blk_req_flush),
+                "flushes do not reach userspace without their metric");
+    assert_true(!blk_kind_emitted(k_emit_read_write, blk_req_discard),
+                "discards do not reach userspace without their metric");
+    assert_true(blk_kind_emitted(k_emit_flush, blk_req_flush), "flushes reach userspace");
+    assert_true(!blk_kind_emitted(k_emit_flush, blk_req_write),
+                "writes do not reach userspace with only the flush metric");
+    assert_true(blk_kind_emitted(k_emit_discard, blk_req_discard), "discards reach userspace");
+    assert_true(
+        !blk_kind_emitted(k_emit_read_write | k_emit_flush | k_emit_discard, blk_req_ignore),
+        "an ignored request never reaches userspace");
+    assert_true(!blk_kind_emitted(0, blk_req_read), "no kind reaches userspace with no metric");
 }
 
 int main(void) {
@@ -280,6 +333,7 @@ int main(void) {
     test_req_op_tables();
     test_kernel_without_zone_append();
     test_rwbs();
+    test_kind_emitted();
 
     if (failed_assertions != 0) {
         printf("%u failed assertions\n", failed_assertions);

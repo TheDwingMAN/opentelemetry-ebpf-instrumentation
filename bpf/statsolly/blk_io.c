@@ -21,6 +21,17 @@ enum { k_blk_bytes_per_sector = 512 };
 // read-modify-write on the block path, is dead code to the verifier.
 volatile const u8 blk_want_queue_depth;
 
+// The kinds of request whose completions reach userspace, one bit per enum
+// blk_req_kind, set by userspace from the enabled metrics. The others end here,
+// after their in-flight entry is released, without a ring buffer event.
+volatile const u8 blk_emit_kinds;
+
+// A request's kind is sent to userspace as the event's op.
+_Static_assert((int)blk_req_read == (int)blk_op_read && (int)blk_req_write == (int)blk_op_write &&
+                   (int)blk_req_flush == (int)blk_op_flush &&
+                   (int)blk_req_discard == (int)blk_op_discard,
+               "enum blk_req_kind must match enum blk_io_op");
+
 // Newer kernels renamed the completion tracepoint context struct
 // (trace_event_raw_block_rq_complete -> ..._completion). CO-RE flavor: only
 // the fields we access; ___x is ignored in BTF name matching. The request's
@@ -178,7 +189,11 @@ static __always_inline void blk_on_complete(void *const inflight_map,
                                             const int error) {
     struct blk_rq_inflight *const cur = bpf_map_lookup_elem(inflight_map, key);
     if (!cur) {
-        // Issued before this program attached: nothing to match.
+        // Issued before this program attached, or already ended. On a device
+        // without FUA, a write in a flush sequence (PREFLUSH or FUA) completes
+        // twice: with its bytes, which ends it here, then with none once the
+        // flush machinery's post-flush is done. The flushes themselves are
+        // requests of their own.
         return;
     }
 
@@ -197,7 +212,7 @@ static __always_inline void blk_on_complete(void *const inflight_map,
     }
     const u32 inflight = blk_queue_depth_dec(rq.dev);
 
-    if (rq.kind == blk_req_ignore) {
+    if (!blk_kind_emitted(blk_emit_kinds, rq.kind)) {
         return;
     }
 
@@ -207,7 +222,7 @@ static __always_inline void blk_on_complete(void *const inflight_map,
         return;
     }
     se->flags = k_stat_type_block_io;
-    se->op = rq.kind == blk_req_write ? blk_op_write : blk_op_read;
+    se->op = (enum blk_io_op)rq.kind;
     se->_pad[0] = 0;
     se->_pad[1] = 0;
     se->dev = rq.dev;
@@ -267,7 +282,7 @@ int obi_stats_tp_block_rq_issue(struct trace_event_raw_block_rq *ctx) {
                  &key,
                  key.dev,
                  key.sector,
-                 blk_kind_from_rwbs0(BPF_CORE_READ(ctx, rwbs[0])));
+                 blk_kind_from_rwbs(BPF_CORE_READ(ctx, rwbs[0]), BPF_CORE_READ(ctx, rwbs[1])));
     return 0;
 }
 

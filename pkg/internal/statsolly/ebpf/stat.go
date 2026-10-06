@@ -90,12 +90,25 @@ const (
 	DirectionWrite DiskIoDirectionType = "write"
 )
 
-// DiskIoDirectionCode mirrors enum blk_io_op in bpf/statsolly/types.h.
+// DiskIoDirectionCode aliases the read and write members of the
+// bpf2go-generated enum blk_io_op in bpf/statsolly/types.h: the kinds of block
+// request that have a direction.
 type DiskIoDirectionCode uint8
 
 const (
-	CodeDirectionRead  DiskIoDirectionCode = 0
-	CodeDirectionWrite DiskIoDirectionCode = 1
+	CodeDirectionRead  = DiskIoDirectionCode(StatsBlkIoOpBlkOpRead)
+	CodeDirectionWrite = DiskIoDirectionCode(StatsBlkIoOpBlkOpWrite)
+)
+
+// BlockOpCode aliases the bpf2go-generated enum blk_io_op in
+// bpf/statsolly/types.h: what a block request was.
+type BlockOpCode uint8
+
+const (
+	CodeBlockRead    = BlockOpCode(StatsBlkIoOpBlkOpRead)
+	CodeBlockWrite   = BlockOpCode(StatsBlkIoOpBlkOpWrite)
+	CodeBlockFlush   = BlockOpCode(StatsBlkIoOpBlkOpFlush)
+	CodeBlockDiscard = BlockOpCode(StatsBlkIoOpBlkOpDiscard)
 )
 
 type FsTypeName string
@@ -183,13 +196,31 @@ type TCPIo struct {
 }
 
 type BlockIo struct {
-	Dev       uint32 `json:"dev"`
+	Dev uint32 `json:"dev"`
+	// Op is a BlockOpCode.
 	Op        uint8  `json:"op"`
 	LatencyNs uint64 `json:"latency_ns"`
 	QueueNs   uint64 `json:"queue_ns"`
 	Bytes     uint64 `json:"bytes"`
 	Error     int32  `json:"error"`
 	Inflight  uint32 `json:"inflight"`
+}
+
+// IsReadWrite reports whether b is a read or a write request: the only ones
+// that feed the metrics with a disk.io.direction. It is false for a nil b.
+func (b *BlockIo) IsReadWrite() bool {
+	return b != nil && (BlockOpCode(b.Op) == CodeBlockRead || BlockOpCode(b.Op) == CodeBlockWrite)
+}
+
+// IsFlush reports whether b is a cache flush request. It is false for a nil b.
+func (b *BlockIo) IsFlush() bool {
+	return b != nil && BlockOpCode(b.Op) == CodeBlockFlush
+}
+
+// IsDiscard reports whether b is a discard (or secure erase) request. It is
+// false for a nil b.
+func (b *BlockIo) IsDiscard() bool {
+	return b != nil && BlockOpCode(b.Op) == CodeBlockDiscard
 }
 
 type FsIo struct {

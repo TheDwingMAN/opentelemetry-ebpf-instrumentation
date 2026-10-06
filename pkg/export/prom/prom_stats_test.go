@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
@@ -321,5 +322,127 @@ func TestStatsReporterDiskQueueAndErrorsFeatureGating(t *testing.T) {
 			assert.Equal(t, tc.wantDepth, queueDepth != nil, "queue depth histogram presence")
 			assert.Equal(t, tc.wantErrors, opErrors != nil, "errors counter presence")
 		})
+	}
+}
+
+// blockIoKindStat is a completed block request of the given kind on major 8 /
+// minor 16, taking 3ms.
+func blockIoKindStat(op ebpf.BlockOpCode, bytes uint64, errno int32) *ebpf.Stat {
+	return &ebpf.Stat{
+		Type: ebpf.StatTypeBlockIo,
+		BlockIo: &ebpf.BlockIo{
+			Dev:       0x800010,
+			Op:        uint8(op),
+			LatencyNs: 3_000_000,
+			QueueNs:   500_000,
+			Bytes:     bytes,
+			Error:     errno,
+			Inflight:  2,
+		},
+	}
+}
+
+// Flushes and discards have metrics of their own, without a direction, and
+// error.type only when they fail.
+func TestStatsReporterRecordsDiskFlushAndDiscard(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter := newDiskStatsReporter(t, registry)
+
+	reporter.observeDiskFlushDuration(blockIoKindStat(ebpf.CodeBlockFlush, 0, 0))
+	reporter.observeDiskFlushDuration(blockIoKindStat(ebpf.CodeBlockFlush, 0, -int32(unix.EIO)))
+	reporter.observeDiskDiscard(blockIoKindStat(ebpf.CodeBlockDiscard, 1<<20, 0))
+	reporter.observeDiskDiscard(blockIoKindStat(ebpf.CodeBlockDiscard, 1<<20, 0))
+
+	ok := map[string]string{"system_device": "8:16", "error_type": ""}
+	failed := map[string]string{"system_device": "8:16", "error_type": "EIO"}
+
+	flush := gatheredMetric(t, registry, "obi_stat_disk_flush_duration_seconds", ok)
+	require.NotNil(t, flush, "flush histogram not registered or not observed")
+	assert.Equal(t, uint64(1), flush.GetHistogram().GetSampleCount())
+	assert.InEpsilon(t, 0.003, flush.GetHistogram().GetSampleSum(), 0.0001)
+
+	reporter.observeDiskOpDuration(blockIoStat())
+	opDuration := gatheredMetric(t, registry, "obi_stat_disk_operation_duration_seconds",
+		map[string]string{"system_device": "8:16", "disk_io_direction": "write"})
+	require.NotNil(t, opDuration)
+	upperBounds := func(h *dto.Histogram) []float64 {
+		bounds := []float64{}
+		for _, b := range h.GetBucket() {
+			bounds = append(bounds, b.GetUpperBound())
+		}
+		return bounds
+	}
+	assert.Equal(t, upperBounds(opDuration.GetHistogram()), upperBounds(flush.GetHistogram()),
+		"flush shares the disk operation duration buckets")
+
+	failedFlush := gatheredMetric(t, registry, "obi_stat_disk_flush_duration_seconds", failed)
+	require.NotNil(t, failedFlush, "a failed flush carries its error.type")
+	assert.Equal(t, uint64(1), failedFlush.GetHistogram().GetSampleCount())
+
+	discard := gatheredMetric(t, registry, "obi_stat_disk_discard_duration_seconds", ok)
+	require.NotNil(t, discard, "discard histogram not registered or not observed")
+	assert.Equal(t, uint64(2), discard.GetHistogram().GetSampleCount())
+
+	discardBytes := gatheredMetric(t, registry, "obi_stat_disk_discard_io_bytes_total",
+		map[string]string{"system_device": "8:16"})
+	require.NotNil(t, discardBytes, "discard bytes counter not registered or not observed")
+	assert.InEpsilon(t, float64(2<<20), discardBytes.GetCounter().GetValue(), 0)
+	assert.Equal(t, upperBounds(opDuration.GetHistogram()), upperBounds(discard.GetHistogram()),
+		"discard shares the disk operation duration buckets")
+}
+
+// The read/write metrics see reads and writes only: a flush is not a 0-byte
+// write and a discard is not a read.
+func TestStatsReporterReadWriteMetricsSkipFlushAndDiscard(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter := newStatsReporterWithFeatures(t, registry, export.FeatureStorageBlock|export.FeatureStorageBlockQueueDepth)
+
+	for _, stat := range []*ebpf.Stat{
+		blockIoKindStat(ebpf.CodeBlockFlush, 0, -int32(unix.EIO)),
+		blockIoKindStat(ebpf.CodeBlockDiscard, 1<<20, -int32(unix.EIO)),
+	} {
+		reporter.observeDiskOpDuration(stat)
+		reporter.observeDiskIOBytes(stat)
+		reporter.observeDiskQueueDuration(stat)
+		reporter.observeDiskQueueDepth(stat)
+		reporter.observeDiskOpErrors(stat)
+	}
+	for _, stat := range []*ebpf.Stat{
+		blockIoKindStat(ebpf.CodeBlockWrite, 4096, 0),
+		blockIoKindStat(ebpf.CodeBlockRead, 4096, 0),
+	} {
+		reporter.observeDiskFlushDuration(stat)
+		reporter.observeDiskDiscard(stat)
+	}
+
+	metrics, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range metrics {
+		assert.Empty(t, family.GetMetric(), "%s observed a request of another kind", family.GetName())
+	}
+}
+
+// Each of flush and discard is selectable on its own.
+func TestStatsReporterDiskFlushDiscardFeatureGating(t *testing.T) {
+	for _, tc := range []struct {
+		features    export.Features
+		wantFlush   bool
+		wantDiscard bool
+	}{
+		{export.FeatureStorageBlockFlush, true, false},
+		{export.FeatureStorageBlockDiscard, false, true},
+		{export.FeatureStorageBlockDuration | export.FeatureStorageBlockIo, false, false},
+	} {
+		registry := prometheus.NewRegistry()
+		reporter := newStatsReporterWithFeatures(t, registry, tc.features)
+		reporter.observeDiskFlushDuration(blockIoKindStat(ebpf.CodeBlockFlush, 0, 0))
+		reporter.observeDiskDiscard(blockIoKindStat(ebpf.CodeBlockDiscard, 4096, 0))
+
+		assert.Equal(t, tc.wantFlush, gatheredMetric(t, registry, "obi_stat_disk_flush_duration_seconds",
+			map[string]string{"system_device": "8:16", "error_type": ""}) != nil)
+		assert.Equal(t, tc.wantDiscard, gatheredMetric(t, registry, "obi_stat_disk_discard_duration_seconds",
+			map[string]string{"system_device": "8:16", "error_type": ""}) != nil)
+		assert.Equal(t, tc.wantDiscard, gatheredMetric(t, registry, "obi_stat_disk_discard_io_bytes_total",
+			map[string]string{"system_device": "8:16"}) != nil)
 	}
 }

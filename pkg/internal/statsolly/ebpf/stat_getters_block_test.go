@@ -35,9 +35,48 @@ func TestBlockIoErrorTypeGetter(t *testing.T) {
 	errGetter, ok := StatGetters(attr.ErrorType)
 	assert.True(t, ok)
 
+	// No error: the attribute is omitted (an invalid KeyValue), not "".
 	noError := &Stat{Type: StatTypeBlockIo, BlockIo: &BlockIo{Error: 0}}
-	assert.Empty(t, errGetter(noError).Value.Emit())
+	assert.False(t, errGetter(noError).Valid())
 
 	notBlockIo := &Stat{Type: StatTypeTCPRtt, TCPRtt: &TCPRtt{}}
-	assert.Empty(t, errGetter(notBlockIo).Value.Emit())
+	assert.False(t, errGetter(notBlockIo).Valid())
+
+	// Prometheus label sets are fixed: an omitted attribute is the empty
+	// value, never Value.Emit()'s "unknown".
+	errString, ok := StatStringGetters(attr.ErrorType)
+	assert.True(t, ok)
+	assert.Empty(t, errString(noError))
+}
+
+func TestBlockIoKinds(t *testing.T) {
+	for _, tc := range []struct {
+		op                        BlockOpCode
+		readWrite, flush, discard bool
+	}{
+		{CodeBlockRead, true, false, false},
+		{CodeBlockWrite, true, false, false},
+		{CodeBlockFlush, false, true, false},
+		{CodeBlockDiscard, false, false, true},
+	} {
+		b := &BlockIo{Op: uint8(tc.op)}
+		assert.Equal(t, tc.readWrite, b.IsReadWrite(), "op %d", tc.op)
+		assert.Equal(t, tc.flush, b.IsFlush(), "op %d", tc.op)
+		assert.Equal(t, tc.discard, b.IsDiscard(), "op %d", tc.op)
+	}
+
+	var none *BlockIo
+	assert.False(t, none.IsReadWrite())
+	assert.False(t, none.IsFlush())
+	assert.False(t, none.IsDiscard())
+}
+
+// Flushes and discards have no direction.
+func TestBlockIoDirectionOfFlushAndDiscard(t *testing.T) {
+	opGetter, ok := StatStringGetters(attr.DiskIODirection)
+	assert.True(t, ok)
+	for _, op := range []BlockOpCode{CodeBlockFlush, CodeBlockDiscard} {
+		s := &Stat{Type: StatTypeBlockIo, BlockIo: &BlockIo{Op: uint8(op)}}
+		assert.Empty(t, opGetter(s), "op %d", op)
+	}
 }

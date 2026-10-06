@@ -182,7 +182,7 @@ const (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -type block_io_t -type fs_io_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -type blk_io_op -type block_io_t -type fs_io_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -245,6 +245,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	blockLoad := planBlockLoad(storageBlock, useRawBlock, features.StorageBlockQueueDepth(), func() uint32 {
 		return blockInflightEntries(sysBlockDevicesDir)
 	})
+	blockLoad.emitKinds = blockEmitKinds(*features)
 
 	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
@@ -539,6 +540,7 @@ func loadStatsObjects(cfg *config.EBPFTracer, blockLoad blockLoadPlan, toDisable
 		"g_bpf_debug":             cfg.BpfDebug,
 		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
 		"blk_want_queue_depth":    wantQueueDepth,
+		"blk_emit_kinds":          blockLoad.emitKinds,
 	}, sharedMaps, mu, "", nil); err != nil {
 		return fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
@@ -585,6 +587,26 @@ const (
 type blockLoadPlan struct {
 	mapEntries     map[string]uint32
 	wantQueueDepth bool
+	// emitKinds is blk_emit_kinds: one bit per enum blk_io_op whose
+	// completions reach userspace.
+	emitKinds uint8
+}
+
+// blockEmitKinds returns the kinds of block request the enabled metrics use.
+// The kernel ends the others at completion, without a ring buffer event, so
+// flushes and discards cost no userspace work unless their metrics are on.
+func blockEmitKinds(features export.Features) uint8 {
+	var kinds uint8
+	if features.StorageBlockReadWrite() {
+		kinds |= 1<<StatsBlkIoOpBlkOpRead | 1<<StatsBlkIoOpBlkOpWrite
+	}
+	if features.StorageBlockFlush() {
+		kinds |= 1 << StatsBlkIoOpBlkOpFlush
+	}
+	if features.StorageBlockDiscard() {
+		kinds |= 1 << StatsBlkIoOpBlkOpDiscard
+	}
+	return kinds
 }
 
 // planBlockLoad sizes the block maps for the programs that will run: the

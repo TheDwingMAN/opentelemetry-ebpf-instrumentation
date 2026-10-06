@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.opentelemetry.io/obi/pkg/export"
 )
 
 // StatsBlockIo is maintained by hand; the bpf2go type is generated from
@@ -142,4 +144,30 @@ func TestBlockInflightEntries(t *testing.T) {
 	t.Run("no sysfs: the largest size", func(t *testing.T) {
 		assert.Equal(t, maxBlockInflightEntries, blockInflightEntries(filepath.Join(t.TempDir(), "missing")))
 	})
+}
+
+// Only the kinds some enabled metric uses cross the ring buffer.
+func TestBlockEmitKinds(t *testing.T) {
+	const (
+		readWrite = 1<<StatsBlkIoOpBlkOpRead | 1<<StatsBlkIoOpBlkOpWrite
+		flush     = 1 << StatsBlkIoOpBlkOpFlush
+		discard   = 1 << StatsBlkIoOpBlkOpDiscard
+	)
+	for _, tc := range []struct {
+		features export.Features
+		want     uint8
+	}{
+		{export.FeatureStorageBlock, readWrite | flush | discard},
+		{export.FeatureStorageBlockDuration, readWrite},
+		{export.FeatureStorageBlockIo, readWrite},
+		{export.FeatureStorageBlockQueue, readWrite},
+		{export.FeatureStorageBlockErrors, readWrite},
+		{export.FeatureStorageBlockQueueDepth, readWrite},
+		{export.FeatureStorageBlockFlush, flush},
+		{export.FeatureStorageBlockDiscard, discard},
+		{export.FeatureStorageBlockFlush | export.FeatureStorageBlockDiscard, flush | discard},
+		{export.FeatureStorageFS, 0},
+	} {
+		assert.Equal(t, tc.want, blockEmitKinds(tc.features), "features %b", tc.features)
+	}
 }

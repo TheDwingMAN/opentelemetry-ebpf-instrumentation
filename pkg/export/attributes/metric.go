@@ -599,9 +599,9 @@ var (
 		Unit:    "By",
 		Type:    InstrumentCounter,
 	})
-	// Time a request spent queued before being dispatched to the device:
-	// block_rq_insert -> block_rq_issue. Recorded for every block event,
-	// including a zero wait, since zero is a valid (and common) observation.
+	// Time a read or write request spent queued before being dispatched to
+	// the device: block_rq_insert -> block_rq_issue. Requests that never
+	// passed through block_rq_insert are not recorded.
 	StatDiskQueueDuration = metric(Name{
 		Section: "obi.stat.disk.queue.duration",
 		OTEL:    "obi.stat.disk.queue.duration",
@@ -618,12 +618,40 @@ var (
 		Unit:    "{operation}",
 		Type:    InstrumentHistogram,
 	})
-	// Count of block I/O completions with a non-zero error, broken down by
-	// errno via the upstream error.type attribute.
+	// Count of block read and write completions with a non-zero error, broken
+	// down by errno via the upstream error.type attribute. Failed flushes and
+	// discards carry error.type on their own duration histograms instead.
 	StatDiskOperationErrors = metric(Name{
 		Section: "obi.stat.disk.operation.errors",
 		OTEL:    "obi.stat.disk.operation.errors",
 		Unit:    "{error}",
+		Type:    InstrumentCounter,
+	})
+	// Service time of a cache flush request (REQ_OP_FLUSH), from issue to
+	// completion: what fsync and fdatasync wait for at the device. Flushes
+	// move no data, so they have no direction and are not counted as writes;
+	// a failed flush carries its errno in error.type.
+	StatDiskFlushDuration = metric(Name{
+		Section: "obi.stat.disk.flush.duration",
+		OTEL:    "obi.stat.disk.flush.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	// Service time of a discard (or secure erase) request, from issue to
+	// completion. Discards release blocks rather than move data, so they are
+	// not counted as reads or writes; a failed discard carries its errno in
+	// error.type.
+	StatDiskDiscardDuration = metric(Name{
+		Section: "obi.stat.disk.discard.duration",
+		OTEL:    "obi.stat.disk.discard.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	// Bytes released by completed discard (and secure erase) requests.
+	StatDiskDiscardIO = metric(Name{
+		Section: "obi.stat.disk.discard.io",
+		OTEL:    "obi.stat.disk.discard.io",
+		Unit:    "By",
 		Type:    InstrumentCounter,
 	})
 	// Latency of a single filesystem read or write as the application
@@ -652,6 +680,27 @@ var (
 		Type:    InstrumentCounter,
 	})
 )
+
+// StatMetrics lists every StatsO11y metric, so tests can check that each one is
+// wired into the exporters (for instance, that every histogram has a View).
+var StatMetrics = []Name{
+	StatTCPRtt,
+	StatTCPFailedConnections,
+	StatTCPRetransmits,
+	StatTCPIo,
+	StatTCPSuccessfulConnections,
+	StatDiskOperationDuration,
+	StatDiskIO,
+	StatDiskQueueDuration,
+	StatDiskQueueDepth,
+	StatDiskOperationErrors,
+	StatDiskFlushDuration,
+	StatDiskDiscardDuration,
+	StatDiskDiscardIO,
+	StatFsOperationDuration,
+	StatFsIO,
+	StatFsOperationErrors,
+}
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.
 // The user can specify the Prometheus or OTEL notation, and can include or not

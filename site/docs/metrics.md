@@ -1053,9 +1053,47 @@ Ratio [0-1] between the unread messages of an internal Go channel and its total 
 | --- | --- | --- | --- | --- | --- |
 | `subscriber` | string | `required` | development | Name of the pipeline stage consuming the internal queue, as given to msg.SubscriberName when the stage subscribed. Subscribers that do not provide a name fall back to the name of the queue they subscribed to. | discover.CriteriaMatcher; traceAttacher |
 
+## `obi.stat.disk.discard.duration`
+
+Block-layer service time of discard and secure erase requests, measured from `block_rq_issue` to `block_rq_complete`, broken down by device.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `conditionally_required`: if the discard failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.discard.io`
+
+Count of bytes released by completed discard and secure erase requests, broken down by device.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.flush.duration`
+
+Block-layer service time of cache flush requests, measured from `block_rq_issue` to `block_rq_complete`, broken down by device.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `conditionally_required`: if the flush failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
 ## `obi.stat.disk.io`
 
-Count of bytes transferred at the block layer, accumulated per completed disk I/O request and broken down by device and direction.
+Count of bytes transferred at the block layer, accumulated per completed disk read or write request and broken down by device and direction.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1068,7 +1106,7 @@ Count of bytes transferred at the block layer, accumulated per completed disk I/
 
 ## `obi.stat.disk.operation.duration`
 
-Block-layer service latency per disk I/O request, measured from `block_rq_issue` to `block_rq_complete`, broken down by device and direction.
+Block-layer service latency per disk read or write request, measured from `block_rq_issue` to `block_rq_complete`, broken down by device and direction. Flush and discard requests are not included: they have metrics of their own.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1081,7 +1119,7 @@ Block-layer service latency per disk I/O request, measured from `block_rq_issue`
 
 ## `obi.stat.disk.operation.errors`
 
-Count of block I/O requests that completed with a non-zero error, broken down by device, direction and errno.
+Count of block read and write requests that completed with a non-zero error, broken down by device, direction and errno. Failed flushes and discards carry `error.type` on their own duration histograms.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1097,7 +1135,7 @@ Count of block I/O requests that completed with a non-zero error, broken down by
 
 > **obsoleted** — The `storage_block_queue_depth` metrics feature that emits this histogram is deprecated with no replacement.
 
-Number of block I/O requests still in flight on the device immediately after this request completed, observed per completion and broken down by device.
+Number of block I/O requests still in flight on the device immediately after this request completed, observed per read or write completion and broken down by device.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1109,7 +1147,7 @@ Number of block I/O requests still in flight on the device immediately after thi
 
 ## `obi.stat.disk.queue.duration`
 
-Time a disk I/O request spent queued before being dispatched to the device, measured from `block_rq_insert` to `block_rq_issue`, broken down by device and direction. Requests that blk-mq issues directly, without passing through `block_rq_insert`, are not observed: they have no queue wait to report and recording a zero would understate the distribution.
+Time a disk read or write request spent queued before being dispatched to the device, measured from `block_rq_insert` to `block_rq_issue`, broken down by device and direction. Requests that blk-mq issues directly, without passing through `block_rq_insert`, are not observed: they have no queue wait to report and recording a zero would understate the distribution.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |

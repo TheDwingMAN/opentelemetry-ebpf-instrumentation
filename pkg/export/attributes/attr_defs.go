@@ -137,6 +137,7 @@ func getDefinitions(
 
 	// disk queue depth is a per-device gauge; it has no read/write direction
 	// of its own (in-flight requests of both directions are counted together).
+	// Flushes and discards have no direction either.
 	statsDiskDeviceAttributes := AttrReportGroup{
 		Attributes: map[attr.Name]Default{
 			attr.DiskDevice: true,
@@ -830,6 +831,22 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
+		},
+		StatDiskFlushDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskDiscardDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskDiscardIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{},
 		},
 		StatFsOperationDuration.Section: {
 			SubGroups:  []*AttrReportGroup{&statsFsAttributes},

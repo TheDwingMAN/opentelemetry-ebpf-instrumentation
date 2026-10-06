@@ -399,3 +399,112 @@ func TestStatMetricsExporter_DiskOperationErrorsSkipsZeroError(t *testing.T) {
 	// AND the errors counter never does.
 	assert.NotContains(t, seen, "obi.stat.disk.operation.errors", "errors counter must not be recorded for Error == 0")
 }
+
+// Every stat histogram gets a View, so its buckets are the configured ones
+// rather than the SDK defaults.
+func TestStatHistogramsHaveViews(t *testing.T) {
+	buckets := export.DefaultBuckets
+	views := map[string][]float64{}
+	for _, h := range statHistograms(&buckets) {
+		views[h.name.OTEL] = h.buckets
+	}
+	for _, m := range attributes.StatMetrics {
+		if m.Type != attributes.InstrumentHistogram {
+			continue
+		}
+		assert.NotEmpty(t, views[m.OTEL], "no View for the %s histogram", m.OTEL)
+	}
+	assert.Equal(t, buckets.StatDiskOperationDurationHistogram, views[attributes.StatDiskFlushDuration.OTEL])
+	assert.Equal(t, buckets.StatDiskOperationDurationHistogram, views[attributes.StatDiskDiscardDuration.OTEL])
+}
+
+// Flushes and discards have metrics of their own: no direction, error.type
+// only when they fail, and none of them reaches the read/write metrics.
+func TestStatMetricsExporter_DiskFlushAndDiscard(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	otelExporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: cfg}},
+		&StatMetricsConfig{
+			Metrics:     cfg,
+			SelectorCfg: &attributes.SelectorConfig{},
+			CommonCfg:   &perapp.GlobalMetricsConfig{Features: export.FeatureStorageBlock},
+		}, stats)(ctx)
+	require.NoError(t, err)
+
+	go otelExporter(ctx)
+
+	blockStat := func(op ebpf.BlockOpCode, bytes uint64, errno int32) *ebpf.Stat {
+		return &ebpf.Stat{
+			Type: ebpf.StatTypeBlockIo,
+			BlockIo: &ebpf.BlockIo{
+				Dev:       0x800010,
+				Op:        uint8(op),
+				LatencyNs: 3_000_000,
+				QueueNs:   500_000,
+				Bytes:     bytes,
+				Error:     errno,
+			},
+		}
+	}
+	// WHEN it receives a successful flush and a failed discard
+	stats.Send([]*ebpf.Stat{
+		blockStat(ebpf.CodeBlockFlush, 0, 0),
+		blockStat(ebpf.CodeBlockDiscard, 1<<20, -int32(unix.EIO)),
+	})
+
+	seen := map[string]collector.MetricRecord{}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case rec := <-otlp.Records():
+				if _, ok := seen[rec.Name]; !ok {
+					seen[rec.Name] = rec
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.Contains(ct, seen, "obi.stat.disk.flush.duration")
+		assert.Contains(ct, seen, "obi.stat.disk.discard.duration")
+		assert.Contains(ct, seen, "obi.stat.disk.discard.io")
+	}, timeout, 100*time.Millisecond)
+
+	// THEN a successful flush has no error.type at all, not an empty one
+	flush := seen["obi.stat.disk.flush.duration"]
+	assert.Equal(t, map[string]string{"system.device": "8:16"}, flush.Attributes)
+	assert.Equal(t, "s", flush.Unit)
+	assert.InEpsilon(t, 0.003, flush.FloatVal, 0.0001)
+	assert.Equal(t, 1, flush.Count)
+
+	// AND a failed discard carries its errno
+	discard := seen["obi.stat.disk.discard.duration"]
+	assert.Equal(t, map[string]string{"system.device": "8:16", "error.type": "EIO"}, discard.Attributes)
+	assert.Equal(t, 1, discard.Count)
+
+	discardBytes := seen["obi.stat.disk.discard.io"]
+	assert.Equal(t, map[string]string{"system.device": "8:16"}, discardBytes.Attributes)
+	assert.Equal(t, "By", discardBytes.Unit)
+	assert.Equal(t, int64(1<<20), discardBytes.IntVal)
+
+	// AND neither reached the read/write metrics
+	for _, name := range []string{
+		"obi.stat.disk.operation.duration",
+		"obi.stat.disk.io",
+		"obi.stat.disk.queue.duration",
+		"obi.stat.disk.operation.errors",
+	} {
+		assert.NotContains(t, seen, name)
+	}
+}

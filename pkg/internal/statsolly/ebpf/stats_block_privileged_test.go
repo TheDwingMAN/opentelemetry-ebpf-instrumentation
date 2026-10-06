@@ -35,18 +35,18 @@ const (
 	scsiDebugMediumErrorStart = 0x1234
 	loopBlockBytes            = 4096
 	loopWrites                = 64
+	loopDiscardBytes          = 1 << 20
 	kernelMinorBit            = 20 // MINORBITS: the programs name a device major<<20 | minor
-	blkOpWrite                = 1  // blk_op_write in bpf/statsolly/types.h
 )
 
 // Synchronous O_DIRECT writes, each followed by fdatasync (what
 // `fio --fsync=1 --direct=1` does), on a fresh loop device with the block
 // programs attached and the queue depth enabled. Once the device is idle,
-// every request the kernel accounted must have produced exactly one event, no
-// in-flight entry may be left for the device, and its in-flight counter must
-// be back at zero.
+// every request the kernel accounted must have produced exactly one event of
+// its kind, no in-flight entry may be left for the device, and its in-flight
+// counter must be back at zero.
 func TestBlockRequestsBalanceOnLoopDevice(t *testing.T) {
-	fetcher, reader := attachBlockPrograms(t)
+	fetcher, reader := attachBlockPrograms(t, export.FeatureStorageBlock|export.FeatureStorageBlockQueueDepth)
 
 	// The device is created after the programs attached, so every request
 	// it ever sees is seen from its issue on.
@@ -62,15 +62,107 @@ func TestBlockRequestsBalanceOnLoopDevice(t *testing.T) {
 	delta := func(field int) uint64 { return after[field] - before[field] }
 	require.NotZero(t, delta(diskstatWrites), "the workload reached the device")
 	assert.Equal(t, delta(diskstatReads), seen.reads, "one read event per completed read request")
-	assert.Equal(t, delta(diskstatFlushes), seen.flushes, "one event per flush the device completed")
+	require.NotZero(t, delta(diskstatFlushes), "fdatasync flushed the device's write cache")
+	assert.Equal(t, delta(diskstatFlushes), seen.flushes, "one flush event per flush the device completed")
+	assert.Zero(t, seen.flushBytes, "a flush moves no data")
 	// fdatasync submits an empty preflush write, which the device never sees:
 	// the kernel issues a flush request in its place, and diskstats counts
-	// both. Every other write request is one event with its bytes.
-	assert.Equal(t, delta(diskstatWrites)-delta(diskstatFlushes), seen.writes-seen.flushes,
-		"one write event per completed write request")
+	// both. The flush is not a write: every write event is a write request
+	// with its bytes.
+	assert.Equal(t, delta(diskstatWrites)-delta(diskstatFlushes), seen.writes,
+		"one write event per completed write request, and no flush among them")
+	assert.Zero(t, seen.emptyWrites, "no flush is reported as an empty write")
 	assert.Equal(t, delta(diskstatWriteSectors)*diskstatSectorBytes, seen.writeBytes)
 
-	assertDeviceDrained(t, fetcher, loop.kernelDev)
+	assertNothingInFlight(t, fetcher, loop.kernelDev)
+	assertQueueDepthZero(t, fetcher, loop.kernelDev)
+}
+
+// O_DIRECT|O_DSYNC writes on a raw block device are FUA writes. A loop device
+// has no FUA, so the flush machinery emulates it: the data write is issued and
+// completes with its bytes, the machinery issues a post-flush, and only then
+// ends the write, which fires block_rq_complete a second time with no bytes.
+// Each write must be one write event with its bytes, the flushes must be
+// flush events, and the second completion must neither count again nor take
+// the in-flight counter below the issue's.
+func TestBlockFUAWriteOnLoopDevice(t *testing.T) {
+	fetcher, reader := attachBlockPrograms(t, export.FeatureStorageBlock|export.FeatureStorageBlockQueueDepth)
+
+	loop := newLoopDevice(t, loopWrites*loopBlockBytes)
+	if strings.TrimSpace(readString(t, loop.sysQueue("fua"))) != "0" {
+		t.Skip("the loop device supports FUA: no flush sequence to exercise")
+	}
+	events := collectBlockEvents(t, reader, loop.kernelDev)
+
+	before, base := loop.settle(t, events)
+	writeDsync(t, loop.path, loopWrites)
+	after, seen := loop.settle(t, events)
+	seen = seen.since(base)
+
+	delta := func(field int) uint64 { return after[field] - before[field] }
+	t.Logf("diskstats: %d writes, %d flushes; events: %d writes, %d flushes",
+		delta(diskstatWrites), delta(diskstatFlushes), seen.writes, seen.flushes)
+	require.GreaterOrEqual(t, delta(diskstatFlushes), uint64(loopWrites),
+		"each FUA write was emulated with a post-flush")
+	assert.Equal(t, uint64(loopWrites), seen.writes, "one write event per FUA write, not one per completion")
+	assert.Equal(t, uint64(loopWrites*loopBlockBytes), seen.writeBytes)
+	assert.Equal(t, delta(diskstatWriteSectors)*diskstatSectorBytes, seen.writeBytes)
+	assert.Zero(t, seen.emptyWrites, "the second, empty completion is not a write")
+	assert.Equal(t, delta(diskstatFlushes), seen.flushes, "one flush event per flush the device completed")
+
+	assertNothingInFlight(t, fetcher, loop.kernelDev)
+	assertQueueDepthZero(t, fetcher, loop.kernelDev)
+}
+
+// A BLKDISCARD of 1 MiB on a loop device (the loop driver punches a hole in
+// its backing file) is one discard event of 1 MiB, and neither a read nor a
+// write.
+func TestBlockDiscardOnLoopDevice(t *testing.T) {
+	fetcher, reader := attachBlockPrograms(t, export.FeatureStorageBlock)
+
+	loop := newLoopDevice(t, 4*loopDiscardBytes)
+	events := collectBlockEvents(t, reader, loop.kernelDev)
+
+	before, base := loop.settle(t, events)
+	discard(t, loop.path, loopDiscardBytes, loopDiscardBytes)
+	after, seen := loop.settle(t, events)
+	seen = seen.since(base)
+
+	delta := func(field int) uint64 { return after[field] - before[field] }
+	require.Equal(t, uint64(1), delta(diskstatDiscards), "the device completed one discard request")
+	assert.Equal(t, uint64(1), seen.discards, "one discard event per completed discard request")
+	assert.Equal(t, uint64(loopDiscardBytes), seen.discardBytes, "the discard event carries the discarded bytes")
+	assert.Equal(t, delta(diskstatDiscardSectors)*diskstatSectorBytes, seen.discardBytes)
+	assert.Zero(t, seen.discardErrors)
+	assert.Equal(t, delta(diskstatReads), seen.reads, "a discard is not a read")
+	assert.Equal(t, delta(diskstatWrites), seen.writes, "a discard is not a write")
+
+	assertNothingInFlight(t, fetcher, loop.kernelDev)
+}
+
+// With only the read/write metrics enabled, flushes and discards still release
+// their in-flight entries but end in the kernel: no ring buffer event.
+func TestBlockFlushAndDiscardStayInKernelWhenOff(t *testing.T) {
+	fetcher, reader := attachBlockPrograms(t, export.FeatureStorageBlockDuration)
+
+	loop := newLoopDevice(t, 4*loopDiscardBytes)
+	events := collectBlockEvents(t, reader, loop.kernelDev)
+
+	before, base := loop.settle(t, events)
+	writeWithFdatasync(t, loop.path, loopWrites)
+	discard(t, loop.path, loopDiscardBytes, loopDiscardBytes)
+	after, seen := loop.settle(t, events)
+	seen = seen.since(base)
+
+	delta := func(field int) uint64 { return after[field] - before[field] }
+	require.NotZero(t, delta(diskstatFlushes), "the device completed flushes")
+	require.NotZero(t, delta(diskstatDiscards), "the device completed a discard")
+	assert.Zero(t, seen.flushes, "no flush event without storage_block_flush")
+	assert.Zero(t, seen.discards, "no discard event without storage_block_discard")
+	assert.Equal(t, delta(diskstatWrites)-delta(diskstatFlushes), seen.writes,
+		"the write events still arrive")
+
+	assertNothingInFlight(t, fetcher, loop.kernelDev)
 }
 
 // scsi_debug fails reads of its medium error range (sectors 0x1234 to
@@ -83,7 +175,7 @@ func TestBlockMediumErrorPartialCompletion(t *testing.T) {
 	if os.Getenv("OBI_TEST_SCSI_DEBUG") == "" {
 		t.Skip("loads scsi_debug; set OBI_TEST_SCSI_DEBUG=1 on a disposable machine")
 	}
-	fetcher, reader := attachBlockPrograms(t)
+	fetcher, reader := attachBlockPrograms(t, export.FeatureStorageBlock|export.FeatureStorageBlockQueueDepth)
 
 	disk := newScsiDebugDisk(t)
 	events := collectBlockEvents(t, reader, disk.kernelDev)
@@ -101,19 +193,19 @@ func TestBlockMediumErrorPartialCompletion(t *testing.T) {
 	assert.Equal(t, uint64(goodSectors*diskstatSectorBytes), seen.failedReadBytes,
 		"a failed read counts the bytes completed before the failure")
 
-	assertDeviceDrained(t, fetcher, disk.kernelDev)
+	assertNothingInFlight(t, fetcher, disk.kernelDev)
+	assertQueueDepthZero(t, fetcher, disk.kernelDev)
 }
 
 // attachBlockPrograms loads and attaches the block programs the way the agent
-// does, with the queue depth enabled.
-func attachBlockPrograms(t *testing.T) (*StatsFetcher, *ringbuf.Reader) {
+// does, with the given metrics features.
+func attachBlockPrograms(t *testing.T, features export.Features) (*StatsFetcher, *ringbuf.Reader) {
 	t.Helper()
 
 	if os.Geteuid() != 0 {
 		t.Skip("needs root to load eBPF programs and set up block devices")
 	}
 
-	features := export.FeatureStorageBlock | export.FeatureStorageBlockQueueDepth
 	fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
@@ -123,9 +215,9 @@ func attachBlockPrograms(t *testing.T) (*StatsFetcher, *ringbuf.Reader) {
 	return fetcher, reader
 }
 
-// assertDeviceDrained checks an idle device: no in-flight entry left behind
-// and its in-flight counter back at zero.
-func assertDeviceDrained(t *testing.T, fetcher *StatsFetcher, dev uint32) {
+// assertNothingInFlight checks an idle device has no in-flight entry left
+// behind.
+func assertNothingInFlight(t *testing.T, fetcher *StatsFetcher, dev uint32) {
 	t.Helper()
 
 	var (
@@ -137,6 +229,12 @@ func assertDeviceDrained(t *testing.T, fetcher *StatsFetcher, dev uint32) {
 		assert.NotEqual(t, dev, entry.Dev, "in-flight entry left behind for request %#x", key)
 	}
 	require.NoError(t, iter.Err())
+}
+
+// assertQueueDepthZero checks an idle device's in-flight counter is back at
+// zero; it exists only with the queue depth enabled.
+func assertQueueDepthZero(t *testing.T, fetcher *StatsFetcher, dev uint32) {
+	t.Helper()
 
 	var state StatsBlkDevState
 	require.NoError(t, fetcher.objects.BlkDevState.Lookup(dev, &state))
@@ -145,11 +243,13 @@ func assertDeviceDrained(t *testing.T, fetcher *StatsFetcher, dev uint32) {
 
 // The /sys/block/<dev>/stat fields compared with the events.
 const (
-	diskstatReads        = 0
-	diskstatWrites       = 4
-	diskstatWriteSectors = 6
-	diskstatFlushes      = 15
-	diskstatSectorBytes  = 512
+	diskstatReads          = 0
+	diskstatWrites         = 4
+	diskstatWriteSectors   = 6
+	diskstatDiscards       = 11
+	diskstatDiscardSectors = 13
+	diskstatFlushes        = 15
+	diskstatSectorBytes    = 512
 )
 
 type testDisk struct {
@@ -157,6 +257,10 @@ type testDisk struct {
 	sysStat   string
 	sysInfl   string
 	kernelDev uint32
+}
+
+func (l *testDisk) sysQueue(name string) string {
+	return filepath.Join(filepath.Dir(l.sysStat), "queue", name)
 }
 
 func newLoopDevice(t *testing.T, size int64) *testDisk {
@@ -251,10 +355,16 @@ func (l *testDisk) settle(t *testing.T, events *blockEvents) ([]uint64, blockEve
 }
 
 type blockEventCounts struct {
-	reads      uint64
-	writes     uint64
-	writeBytes uint64
-	flushes    uint64
+	reads       uint64
+	writes      uint64
+	writeBytes  uint64
+	emptyWrites uint64
+	flushes     uint64
+	flushBytes  uint64
+
+	discards      uint64
+	discardBytes  uint64
+	discardErrors uint64
 
 	failedReads     uint64
 	failedReadBytes uint64
@@ -270,7 +380,12 @@ func (c blockEventCounts) since(base blockEventCounts) blockEventCounts {
 		reads:           c.reads - base.reads,
 		writes:          c.writes - base.writes,
 		writeBytes:      c.writeBytes - base.writeBytes,
+		emptyWrites:     c.emptyWrites - base.emptyWrites,
 		flushes:         c.flushes - base.flushes,
+		flushBytes:      c.flushBytes - base.flushBytes,
+		discards:        c.discards - base.discards,
+		discardBytes:    c.discardBytes - base.discardBytes,
+		discardErrors:   c.discardErrors - base.discardErrors,
 		failedReads:     c.failedReads - base.failedReads,
 		failedReadBytes: c.failedReadBytes - base.failedReadBytes,
 	}
@@ -305,19 +420,30 @@ func collectBlockEvents(t *testing.T, reader *ringbuf.Reader, dev uint32) *block
 				continue
 			}
 			events.mu.Lock()
-			switch event.Op {
-			case blkOpWrite:
+			switch StatsBlkIoOp(event.Op) {
+			case StatsBlkIoOpBlkOpWrite:
 				events.seen.writes++
 				events.seen.writeBytes += event.Bytes
 				if event.Bytes == 0 {
-					events.seen.flushes++
+					events.seen.emptyWrites++
 				}
-			default:
+			case StatsBlkIoOpBlkOpFlush:
+				events.seen.flushes++
+				events.seen.flushBytes += event.Bytes
+			case StatsBlkIoOpBlkOpDiscard:
+				events.seen.discards++
+				events.seen.discardBytes += event.Bytes
+				if event.Error != 0 {
+					events.seen.discardErrors++
+				}
+			case StatsBlkIoOpBlkOpRead:
 				events.seen.reads++
 				if event.Error != 0 {
 					events.seen.failedReads++
 					events.seen.failedReadBytes += event.Bytes
 				}
+			default:
+				t.Errorf("block event with unknown op %d", event.Op)
 			}
 			events.mu.Unlock()
 		}
@@ -327,6 +453,27 @@ func collectBlockEvents(t *testing.T, reader *ringbuf.Reader, dev uint32) *block
 		<-done
 	})
 	return events
+}
+
+// writeDsync writes blocks with O_DIRECT|O_DSYNC: FUA writes.
+func writeDsync(t *testing.T, path string, writes int) {
+	t.Helper()
+
+	f, err := os.OpenFile(path, os.O_WRONLY|unix.O_DIRECT|unix.O_DSYNC, 0)
+	require.NoError(t, err)
+	defer f.Close()
+
+	buf, err := unix.Mmap(-1, 0, loopBlockBytes, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+	require.NoError(t, err)
+	defer func() { _ = unix.Munmap(buf) }()
+	for i := range buf {
+		buf[i] = byte(i)
+	}
+
+	for i := range writes {
+		_, err := f.WriteAt(buf, int64(i*loopBlockBytes))
+		require.NoError(t, err)
+	}
 }
 
 func writeWithFdatasync(t *testing.T, path string, writes int) {
@@ -349,6 +496,23 @@ func writeWithFdatasync(t *testing.T, path string, writes int) {
 		require.NoError(t, err)
 		require.NoError(t, unix.Fdatasync(int(f.Fd())))
 	}
+}
+
+// discard issues BLKDISCARD for length bytes at offset. A backing filesystem
+// that cannot punch holes leaves the loop device without discard support.
+func discard(t *testing.T, path string, offset, length uint64) {
+	t.Helper()
+
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	defer f.Close()
+
+	byteRange := [2]uint64{offset, length}
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), unix.BLKDISCARD, uintptr(unsafe.Pointer(&byteRange[0])))
+	if errno == unix.EOPNOTSUPP {
+		t.Skipf("the loop device's backing file cannot discard: %v", errno)
+	}
+	require.Zero(t, errno, "BLKDISCARD: %v", errno)
 }
 
 func newScsiDebugDisk(t *testing.T) *testDisk {
