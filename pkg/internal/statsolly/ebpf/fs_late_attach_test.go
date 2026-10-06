@@ -6,10 +6,13 @@
 package ebpf
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"log/slog"
 	"maps"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,6 +37,9 @@ type fakeNode struct {
 	reject       map[FsTypeCode]bool
 	rejectFentry map[FsTypeCode]bool
 
+	// log receives the attacher's logs; slog.Default() when nil.
+	log *slog.Logger
+
 	planned  [][]FsTypeCode
 	attempts []attachAttempt
 	open     map[FsTypeCode]int
@@ -48,7 +54,11 @@ func newFakeNode() *fakeNode {
 }
 
 func (n *fakeNode) attacher() *fsAttacher {
-	a := newFsAttacher(slog.Default(), n.attach, func() (map[FsTypeCode]bool, error) {
+	log := n.log
+	if log == nil {
+		log = slog.Default()
+	}
+	a := newFsAttacher(log, n.attach, func() (map[FsTypeCode]bool, error) {
 		if n.pvErr != nil {
 			return nil, n.pvErr
 		}
@@ -243,6 +253,46 @@ func TestFsAttacherFallsBackToKprobes(t *testing.T) {
 	a.refresh()
 	assert.Equal(t, attachAttempt{CodeFsExt4, false}, n.attempts[len(n.attempts)-1])
 	assert.Len(t, n.attempts, 3)
+
+	closeAttacher(t, a)
+}
+
+// Every filesystem attached after the startup pass is logged with the
+// message operators and the late-mount checks grep for, with its fs; the
+// startup attaches are not.
+func TestFsAttacherLogsLateAttaches(t *testing.T) {
+	var out bytes.Buffer
+	n := newFakeNode()
+	n.log = slog.New(slog.NewTextHandler(&out, nil))
+	n.probeable[CodeFsNFS], n.probeable[CodeFsExt4] = true, true
+	n.loaded["nfs"] = true
+	a := n.attacher()
+
+	// grep -c 'filesystem became probeable after startup; probes attached.*fs=<fs>'
+	lateAttaches := func(fs string) int {
+		re := regexp.MustCompile(regexp.QuoteMeta(lateAttachMessage) + ".*fs=" + fs + "( |$)")
+		count := 0
+		for line := range strings.SplitSeq(out.String(), "\n") {
+			if re.MatchString(line) {
+				count++
+			}
+		}
+		return count
+	}
+
+	a.refresh()
+	require.Contains(t, a.attached, CodeFsNFS)
+	assert.Zero(t, lateAttaches("nfs"), "nfs attached at startup")
+	assert.Contains(t, out.String(), `msg="filesystem probes attached" fs=nfs`)
+
+	// cifs's module loads, then an ext4 kubelet volume is mounted.
+	n.loaded["cifs"], n.probeable[CodeFsCIFS] = true, true
+	a.refresh()
+	n.pvs = map[FsTypeCode]bool{CodeFsExt4: true}
+	a.refresh()
+	assert.Equal(t, 1, lateAttaches("cifs"))
+	assert.Equal(t, 1, lateAttaches("ext4"))
+	assert.Equal(t, "filesystem became probeable after startup; probes attached", lateAttachMessage)
 
 	closeAttacher(t, a)
 }
