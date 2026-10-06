@@ -610,10 +610,13 @@ func TestStorageExpirerOmitsEmptyStrings(t *testing.T) {
 // TCP stat metrics, so an attribute added to it would change their series
 // wherever a collector turns resource attributes into labels; host.name from
 // the container's hostname would also be the OBI pod's name, not the node's.
+// Node identity for storage metrics is k8s.node.name on the data point
+// (step 9), never also promoted onto this resource.
 func TestStatsResourceHasNoHostName(t *testing.T) {
 	attrs := getFilteredStatsResourceAttrs("host-id-1", attributes.Selection{})
 	assert.Contains(t, attrs, semconv.HostID("host-id-1"))
 	for _, kv := range attrs {
 		assert.NotEqual(t, semconv.HostNameKey, kv.Key)
+		assert.NotEqual(t, semconv.K8SNodeNameKey, kv.Key)
 	}
 }

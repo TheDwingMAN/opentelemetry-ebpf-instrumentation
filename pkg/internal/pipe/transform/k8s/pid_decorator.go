@@ -177,6 +177,9 @@ func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs,
 		if containerName != "" {
 			setMetadata(a, attr.K8sContainerName, containerName)
 		}
+		ownerName, ownerKind := topOwnerNameKind(podMeta.Meta)
+		setMetadata(a, attr.K8sOwnerName, ownerName)
+		setMetadata(a, attr.K8sKind, ownerKind)
 	}
 
 	if !mountFound || mountInfo.PVName == "" {

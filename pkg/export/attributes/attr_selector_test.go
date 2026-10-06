@@ -196,6 +196,38 @@ func TestDefault(t *testing.T) {
 	assert.Equal(t, p.For(NetworkFlow), p.For(NetworkFlowPackets))
 }
 
+func TestDefault_StatDiskNodeName(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Contains(t, p.For(StatDiskOperationDuration), attr.K8sNodeName)
+	assert.Contains(t, p.For(StatDiskIO), attr.K8sNodeName)
+	assert.Contains(t, p.For(StatDiskQueueDepth), attr.K8sNodeName)
+}
+
+func TestFor_KubeDisabled_StatDiskOmitsNodeName(t *testing.T) {
+	p, err := NewAttrSelector(0, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.NotContains(t, p.For(StatDiskOperationDuration), attr.K8sNodeName)
+}
+
+func TestDefault_StatFsOwnerAndNodeName(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	got := p.For(StatFsOperationDuration)
+	assert.Contains(t, got, attr.K8sNodeName)
+	assert.Contains(t, got, attr.K8sOwnerName)
+	// k8s.kind is opt-in, to bound cardinality.
+	assert.NotContains(t, got, attr.K8sKind)
+}
+
+func TestFor_KubeDisabled_StatFsOmitsNodeNameAndOwner(t *testing.T) {
+	p, err := NewAttrSelector(0, &SelectorConfig{})
+	require.NoError(t, err)
+	got := p.For(StatFsOperationDuration)
+	assert.NotContains(t, got, attr.K8sNodeName)
+	assert.NotContains(t, got, attr.K8sOwnerName)
+}
+
 func TestDefault_DBClientDuration(t *testing.T) {
 	p, err := NewAttrSelector(0, &SelectorConfig{})
 	require.NoError(t, err)

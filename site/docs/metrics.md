@@ -1213,6 +1213,7 @@ Block-layer service time of discard and secure erase requests, measured from `bl
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `error.type` | string | `conditionally_required`: if the discard failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1226,6 +1227,7 @@ Count of bytes released by discard and secure erase requests that completed succ
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1240,6 +1242,7 @@ Block-layer service time of cache flush requests, measured from `block_rq_issue`
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `error.type` | string | `conditionally_required`: if the flush failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1254,6 +1257,7 @@ Count of bytes transferred at the block layer, accumulated per completed disk re
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1268,6 +1272,7 @@ Block-layer service latency per disk read or write request, measured from `block
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1283,6 +1288,7 @@ Count of block read and write requests that completed with a non-zero error, bro
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
 | `error.type` | string | `recommended` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1298,6 +1304,7 @@ Number of block I/O requests still in flight on the device immediately after thi
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1312,6 +1319,7 @@ Time a disk read or write request spent queued before being dispatched to the de
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1326,6 +1334,9 @@ Count of bytes transferred through filesystem read and write operations, broken 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
 
 ## `obi.stat.fs.operation.duration`
@@ -1339,6 +1350,9 @@ Latency of a single filesystem read, write, fsync or fdatasync as the applicatio
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
 
 ## `obi.stat.fs.operation.errors`
@@ -1353,6 +1367,9 @@ Count of filesystem read or write operations that failed, broken down by filesys
 | --- | --- | --- | --- | --- | --- |
 | `error.type` | string | `recommended` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
 
 ## `obi.stat.tcp.failed.connections`

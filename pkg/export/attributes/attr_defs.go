@@ -127,8 +127,19 @@ func getDefinitions(
 		extraGroupAttributes[GroupStats],
 	)
 
+	// k8s.node.name is a constant for the whole agent run (the node it runs
+	// on, set once by pipeline.go's setNodeName) and is reported on every
+	// storage stat metric, disk and filesystem alike.
+	statsNodeNameAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sNodeName: true,
+		},
+	}
+
 	// disk I/O stat metrics attributes
 	statsDiskAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&statsNodeNameAttributes},
 		Attributes: map[attr.Name]Default{
 			attr.DiskDevice:      true,
 			attr.DiskIODirection: true,
@@ -140,6 +151,7 @@ func getDefinitions(
 	// of its own (in-flight requests of both directions are counted together).
 	// Flushes and discards have no direction either.
 	statsDiskDeviceAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&statsNodeNameAttributes},
 		Attributes: map[attr.Name]Default{
 			attr.DiskDevice:  true,
 			attr.DiskStacked: true,
@@ -273,23 +285,27 @@ func getDefinitions(
 		},
 	}
 
-	// pod/namespace/container attribution for filesystem I/O stat metrics,
-	// only relevant when kubernetes metadata is enabled. A local group
-	// rather than appKubeAttributes: the pid decorator only ever sets these
-	// three fields for filesystem events, not the full application metadata
-	// set (deployment, replica set, node, ...).
+	// pod/namespace/container/owner attribution for filesystem I/O stat
+	// metrics, only relevant when kubernetes metadata is enabled. A local
+	// group rather than appKubeAttributes: the pid decorator only ever sets
+	// these fields for filesystem events, not the full application metadata
+	// set (deployment, replica set, node, ...). k8s.owner.name and k8s.kind
+	// follow the same rule as the network decorator's owner attribution
+	// (topOwnerNameKind); k8s.kind is opt-in to bound cardinality.
 	statsFsPodAttributes := AttrReportGroup{
 		Disabled: !kubeEnabled,
 		Attributes: map[attr.Name]Default{
 			attr.K8sPodName:       true,
 			attr.K8sNamespaceName: true,
 			attr.K8sContainerName: true,
+			attr.K8sOwnerName:     true,
+			attr.K8sKind:          false,
 		},
 	}
 
 	// filesystem I/O stat metrics attributes.
 	statsFsAttributes := AttrReportGroup{
-		SubGroups: []*AttrReportGroup{&statsFsPodAttributes, &statsFsKubeAttributes},
+		SubGroups: []*AttrReportGroup{&statsFsPodAttributes, &statsFsKubeAttributes, &statsNodeNameAttributes},
 		Attributes: map[attr.Name]Default{
 			attr.FsType:      true,
 			attr.FsOperation: true,

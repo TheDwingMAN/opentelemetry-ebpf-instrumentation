@@ -201,10 +201,7 @@ func (n *decorator) decorate(a *pipe.CommonAttrs, prefix, ip string) bool {
 		return false
 	}
 	meta := cachedObj.Meta
-	ownerName, ownerKind := meta.Name, meta.Kind
-	if owner := ikube.TopOwner(meta.Pod); owner != nil {
-		ownerName, ownerKind = owner.Name, owner.Kind
-	}
+	ownerName, ownerKind := topOwnerNameKind(meta)
 
 	a.Metadata[attr.Name(prefix+attrSuffixNs)] = meta.Namespace
 	a.Metadata[attr.Name(prefix+attrSuffixName)] = meta.Name
@@ -238,6 +235,19 @@ func (n *decorator) decorate(a *pipe.CommonAttrs, prefix, ip string) bool {
 		}
 	}
 	return true
+}
+
+// topOwnerNameKind returns an object's top-level Kubernetes owner (the
+// Deployment that owns a ReplicaSet that owns a Pod, ...) name and kind,
+// falling back to the object's own name and kind when no owner is resolved
+// (a bare Pod, or a non-Pod object such as a Node). Shared by every decorator
+// that reports k8s.owner.name / k8s.kind.
+func topOwnerNameKind(meta *informer.ObjectMeta) (name, kind string) {
+	name, kind = meta.Name, meta.Kind
+	if owner := ikube.TopOwner(meta.Pod); owner != nil {
+		name, kind = owner.Name, owner.Kind
+	}
+	return name, kind
 }
 
 func (n *decorator) nodeLabels(a *pipe.CommonAttrs, prefix string, meta *informer.ObjectMeta) {

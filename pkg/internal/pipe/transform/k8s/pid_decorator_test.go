@@ -131,6 +131,84 @@ func TestPIDMetadataDecorator_DecoratesFromPIDPath(t *testing.T) {
 	assert.Equal(t, "my-container", got[0].Metadata[attr.K8sContainerName])
 }
 
+// A pod owned by a ReplicaSet, itself owned by a Deployment, is attributed to
+// its top owner: the Deployment, not the ReplicaSet. A bare pod with no
+// owners is attributed to itself (k8s.owner.name = its own name, k8s.kind =
+// "Pod"), the same rule as the network decorator's topOwnerNameKind.
+func TestPIDMetadataDecorator_OwnerFollowsTopOwnerChain(t *testing.T) {
+	originalInfoForPID := kube.InfoForPID
+	defer func() { kube.InfoForPID = originalInfoForPID }()
+
+	store := newPIDTestStore(t)
+
+	const pidNs = uint32(5100)
+	const hostPID = app.PID(1235)
+
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		if pid == hostPID {
+			return container.Info{ContainerID: "cid-owned", PIDNamespace: pidNs}, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	store.AddProcess(hostPID)
+
+	podMeta := &informer.ObjectMeta{
+		Name: "owned-pod", Namespace: "my-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{
+			Uid:        "pod-uid-owned",
+			Containers: []*informer.ContainerInfo{{Id: "cid-owned", Name: "my-container"}},
+			Owners: []*informer.Owner{
+				{Kind: "ReplicaSet", Name: "my-deploy-abc123"},
+				{Kind: "Deployment", Name: "my-deploy"},
+			},
+		},
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
+
+	bareMeta := &informer.ObjectMeta{
+		Name: "bare-pod", Namespace: "my-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{
+			Uid:        "pod-uid-bare",
+			Containers: []*informer.ContainerInfo{{Id: "cid-bare", Name: "bare-container"}},
+		},
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: bareMeta}))
+
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		switch pid {
+		case hostPID:
+			return container.Info{ContainerID: "cid-owned", PIDNamespace: pidNs}, nil
+		case hostPID + 1:
+			return container.Info{ContainerID: "cid-bare", PIDNamespace: pidNs + 1}, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	store.AddProcess(hostPID + 1)
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	input.Send([]*pidTestItem{
+		{pidNs: pidNs, hostPID: uint32(hostPID), hasPID: true},
+		{pidNs: pidNs + 1, hostPID: uint32(hostPID + 1), hasPID: true},
+	})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 2)
+	assert.Equal(t, "my-deploy", got[0].Metadata[attr.K8sOwnerName], "attributed to the top owner, not the ReplicaSet")
+	assert.Equal(t, "Deployment", got[0].Metadata[attr.K8sKind])
+	assert.Equal(t, "bare-pod", got[1].Metadata[attr.K8sOwnerName], "a bare pod owns itself")
+	assert.Equal(t, "Pod", got[1].Metadata[attr.K8sKind])
+}
+
 func TestPIDMetadataDecorator_FallsBackToMountPodWhenPIDUnresolved(t *testing.T) {
 	originalResolveMount := resolveMount
 	defer func() { resolveMount = originalResolveMount }()
@@ -305,6 +383,8 @@ func TestPIDMetadataDecorator_SharedVolumeKeepsVolumeButNotPod(t *testing.T) {
 	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
 	require.Len(t, got, 1)
 	assert.Empty(t, got[0].Metadata[attr.K8sPodName], "a shared volume must not name the first mounter")
+	assert.Empty(t, got[0].Metadata[attr.K8sOwnerName], "the owner is never guessed from a shared mount either")
+	assert.Empty(t, got[0].Metadata[attr.K8sKind])
 	assert.Equal(t, "pvc-shared", got[0].volume().PVName)
 	assert.Equal(t, "shared-claim", got[0].volume().PVCName)
 	assert.Equal(t, "obi-nfs", got[0].volume().StorageClass)
@@ -341,6 +421,7 @@ func TestPIDMetadataDecorator_UntrackedPIDResolvedFromCgroup(t *testing.T) {
 			Pod: &informer.PodInfo{
 				Uid:        "pod-uid-2",
 				Containers: []*informer.ContainerInfo{{Id: "cid-writer", Name: "io"}},
+				Owners:     []*informer.Owner{{Kind: "Deployment", Name: "writer-deploy"}},
 			},
 		},
 	} {
@@ -373,6 +454,8 @@ func TestPIDMetadataDecorator_UntrackedPIDResolvedFromCgroup(t *testing.T) {
 		assert.Equal(t, "writer", item.Metadata[attr.K8sPodName])
 		assert.Equal(t, "vol-ns", item.Metadata[attr.K8sNamespaceName])
 		assert.Equal(t, "io", item.Metadata[attr.K8sContainerName])
+		assert.Equal(t, "writer-deploy", item.Metadata[attr.K8sOwnerName], "the pod is known via its cgroup, so the owner is attributed even on a shared mount")
+		assert.Equal(t, "Deployment", item.Metadata[attr.K8sKind])
 		assert.Equal(t, "pvc-shared", item.volume().PVName)
 	}
 	assert.Equal(t, 1, reads, "the container ID is cached per PID")

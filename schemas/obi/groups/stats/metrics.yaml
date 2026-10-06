@@ -412,6 +412,9 @@ groups:
         requirement_level: recommended
       - ref: obi.disk.stacked
         requirement_level: recommended
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
 
   # Companion to the latency histogram above: the volume of data moved by the
   # same block requests. Shares the `storage_block` feature gate and attribute
@@ -441,6 +444,9 @@ groups:
         requirement_level: recommended
       - ref: obi.disk.stacked
         requirement_level: recommended
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
 
   # Companion to the service-time histogram above, but for the other half of a
   # request's lifetime: how long it waited before being dispatched. Requires
@@ -466,6 +472,9 @@ groups:
         requirement_level: recommended
       - ref: obi.disk.stacked
         requirement_level: recommended
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
 
   # Queue depth, not queue latency: the count of requests still in flight on
   # the device immediately after this one completed. Observed once per
@@ -494,6 +503,9 @@ groups:
         requirement_level: recommended
       - ref: obi.disk.stacked
         requirement_level: recommended
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
 
   # Failed completions, keyed by the upstream error.type attribute so the
   # failure mode (ENOSPC, EIO, ...) is queryable without an OBI-specific
@@ -517,6 +529,9 @@ groups:
         requirement_level: recommended
       - ref: error.type
         requirement_level: recommended
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
 
   # Cache flushes (REQ_OP_FLUSH): what fsync and fdatasync wait for at the
   # device. A flush moves no data, so it has no direction and is not counted
@@ -543,6 +558,9 @@ groups:
       - ref: error.type
         requirement_level:
           conditionally_required: if the flush failed
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
 
   # Discards (REQ_OP_DISCARD, and REQ_OP_SECURE_ERASE): blocks released by an
   # fstrim, a `discard` mount option or an LV removal. They move no data, so
@@ -566,6 +584,9 @@ groups:
       - ref: error.type
         requirement_level:
           conditionally_required: if the discard failed
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
 
   - id: metric.obi.obi.stat.disk.discard.io
     type: metric
@@ -581,6 +602,9 @@ groups:
         requirement_level: recommended
       - ref: obi.disk.stacked
         requirement_level: recommended
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
 
   # Filesystem stats. Emitted when the `storage_fs` feature is enabled.
   # Probes attach to each of the seven supported filesystems' (nfs, ceph,
@@ -612,6 +636,14 @@ groups:
         requirement_level: recommended
       - ref: fs.operation
         requirement_level: recommended
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the pod is known
+      - ref: k8s.kind
+        requirement_level: opt_in
 
   # Companion to the histogram above: volume of data moved by the same
   # operations. Published under obi.* rather than system.filesystem.* so it
@@ -630,6 +662,14 @@ groups:
         requirement_level: recommended
       - ref: fs.operation
         requirement_level: recommended
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the pod is known
+      - ref: k8s.kind
+        requirement_level: opt_in
 
   # Failed filesystem operations, keyed by the upstream error.type attribute so
   # the failure mode (ESTALE, EIO, ENOSPC, ETIMEDOUT, ...) is queryable without
@@ -653,3 +693,11 @@ groups:
         requirement_level: recommended
       - ref: error.type
         requirement_level: recommended
+      - ref: k8s.node.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the pod is known
+      - ref: k8s.kind
+        requirement_level: opt_in
