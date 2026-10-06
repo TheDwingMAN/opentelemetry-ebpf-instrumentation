@@ -269,15 +269,6 @@ func fsPlanProbes(plan fsAttachPlan) []fsProbe {
 	return probes
 }
 
-// planFsProbes returns the probes of every plan.
-func planFsProbes(plans []fsAttachPlan) []fsProbe {
-	var probes []fsProbe
-	for _, plan := range plans {
-		probes = append(probes, fsPlanProbes(plan)...)
-	}
-	return probes
-}
-
 // keepFsPrograms removes from spec every program no probe uses, so that a
 // load creates only those, and points the fentry/fexit ones at their kernel
 // function: the kernel checks a tracing program against its target at load
@@ -302,6 +293,76 @@ func keepFsPrograms(spec *ebpf.CollectionSpec, probes []fsProbe) error {
 		}
 	}
 	return nil
+}
+
+// fsStandIns are vmlinux functions with the prototypes of the filesystem
+// operations, first present first, for the fentry/fexit programs of a
+// filesystem this kernel cannot point at its own functions. The verifier
+// checks a tracing program against its target's prototype only.
+var fsStandIns = struct{ read, write, fsync, spliceRead []string }{
+	read:       []string{"generic_file_read_iter"},
+	write:      []string{"generic_file_write_iter"},
+	fsync:      []string{"generic_file_fsync", "noop_fsync"},
+	spliceRead: []string{"filemap_splice_read", "generic_file_splice_read"},
+}
+
+// verifierFsProbes returns, for the verifier tests, the fentry/fexit and the
+// kprobe/kretprobe probes of every filesystem and operation, whichever this
+// kernel would plan: a filesystem falls back to kprobes at run time, and a
+// CI kernel without a filesystem's module must still verify its programs. A
+// tracing program points at the filesystem's own function when plans has it
+// on fentry, at a vmlinux stand-in otherwise; with no kernel BTF there is no
+// target at all, and only the kprobe programs are kept.
+func verifierFsProbes(plans []fsAttachPlan, kernel *btf.Spec) []fsProbe {
+	inKernel := func(candidates []string) string {
+		for _, sym := range candidates {
+			var fn *btf.Func
+			if kernel != nil && kernel.TypeByName(sym, &fn) == nil {
+				return sym
+			}
+		}
+		return ""
+	}
+	standIn := fsAttachPlan{
+		ReadSym:       inKernel(fsStandIns.read),
+		WriteSym:      inKernel(fsStandIns.write),
+		FsyncSym:      inKernel(fsStandIns.fsync),
+		SpliceReadSym: inKernel(fsStandIns.spliceRead),
+	}
+	planned := map[FsTypeCode]fsAttachPlan{}
+	for _, plan := range plans {
+		planned[plan.Fs] = plan
+	}
+	or := func(sym, standIn string) string {
+		if sym != "" {
+			return sym
+		}
+		return standIn
+	}
+
+	var probes []fsProbe
+	for _, tgt := range fsTargets {
+		fentry := standIn
+		if plan, ok := planned[tgt.Fs]; ok && plan.UseFentry {
+			fentry = fsAttachPlan{
+				ReadSym: plan.ReadSym, WriteSym: plan.WriteSym,
+				FsyncSym:      or(plan.FsyncSym, standIn.FsyncSym),
+				SpliceReadSym: or(plan.SpliceReadSym, standIn.SpliceReadSym),
+			}
+		}
+		fentry.Fs, fentry.UseFentry = tgt.Fs, true
+		// A kprobe program is only named here; it takes its function at
+		// attach time.
+		kprobe := fsAttachPlan{Fs: tgt.Fs, ReadSym: "read", WriteSym: "write", FsyncSym: "fsync", SpliceReadSym: "splice_read"}
+		if len(tgt.SpliceReadSyms) == 0 {
+			fentry.SpliceReadSym, kprobe.SpliceReadSym = "", ""
+		}
+		if kernel != nil {
+			probes = append(probes, fsPlanProbes(fentry)...)
+		}
+		probes = append(probes, fsPlanProbes(kprobe)...)
+	}
+	return probes
 }
 
 // fsVerifierLogSize is the initial verifier log buffer of a filesystem load,
