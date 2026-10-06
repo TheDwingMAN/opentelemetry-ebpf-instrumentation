@@ -303,12 +303,19 @@ func getDefinitions(
 		},
 	}
 
-	// filesystem I/O stat metrics attributes.
+	// filesystem I/O stat metrics attributes. system.device and
+	// obi.disk.physical_device are "" for a network filesystem (the getter
+	// resolves nothing to walk); server.address is "" for a block-backed one
+	// (3.0's omit-empty rule drops all three then), so all three default on
+	// without one filesystem type crowding out the other's label (step 10).
 	statsFsAttributes := AttrReportGroup{
 		SubGroups: []*AttrReportGroup{&statsFsPodAttributes, &statsFsKubeAttributes, &statsNodeNameAttributes},
 		Attributes: map[attr.Name]Default{
-			attr.FsType:      true,
-			attr.FsOperation: true,
+			attr.FsType:             true,
+			attr.FsOperation:        true,
+			attr.DiskDevice:         true,
+			attr.DiskPhysicalDevice: true,
+			attr.ServerAddr:         true,
 		},
 	}
 

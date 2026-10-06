@@ -74,13 +74,27 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			return attribute.String(string(attr.NetworkIoDirection), networkIoDirectionStr(NetworkIoDirectionCode(direction)))
 		}
 	case attr.DiskDevice:
+		// Block metrics read the request's own device; fs metrics read the
+		// fs join label resolved once per mount (step 10, 3.0), never the
+		// request's own dev_t (there is none: FsIo has no BlockIo).
 		getter = func(s *Stat) attribute.KeyValue {
-			var dev uint32
-			if s.BlockIo != nil {
-				dev = s.BlockIo.Dev
+			switch {
+			case s.BlockIo != nil:
+				return attribute.String(string(attr.DiskDevice), deviceName(s.BlockIo.Dev))
+			case s.FsIo != nil:
+				var device string
+				if s.FsIo.Mount != nil {
+					device = s.FsIo.Mount.SystemDevice
+				}
+				return attribute.String(string(attr.DiskDevice), device)
+			default:
+				return attribute.String(string(attr.DiskDevice), deviceName(0))
 			}
-			return attribute.String(string(attr.DiskDevice), deviceName(dev))
 		}
+	case attr.DiskPhysicalDevice:
+		getter = mountAttrGetter(name, func(m *MountAttrs) string { return m.PhysicalDevice })
+	case attr.ServerAddr:
+		getter = mountAttrGetter(name, func(m *MountAttrs) string { return m.ServerAddress })
 	case attr.DiskIODirection:
 		getter = func(s *Stat) attribute.KeyValue {
 			var op uint8

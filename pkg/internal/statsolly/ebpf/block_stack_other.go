@@ -20,3 +20,9 @@ type devInfo struct {
 func blockStack(dev uint32) devInfo {
 	return devInfo{name: deviceName(dev)}
 }
+
+// FSJoinDevice has no sysfs to resolve off Linux, and no host root to stat a
+// mount source through, so it reports both fs join labels unresolved.
+func FSJoinDevice(uint32, string) (systemDevice, physicalDevice string) {
+	return "", ""
+}

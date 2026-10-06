@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -50,7 +51,18 @@ type MountInfo struct {
 	// device cannot tell them apart.
 	PVName     string
 	VolumeType string
-	Server     string
+	// Addr is the fs join label server.address (step 10): the addr= super
+	// option the kernel reports for nfs and cifs mounts, netip-normalized to
+	// match the NFS RPC side's formatting (2.5), falling back to the mount
+	// source's host when the kernel gives no addr=; "" for ceph (several
+	// monitors, ambiguous) and local filesystems.
+	Addr string
+	// Source is the mount's device or export path as mountinfo reports it
+	// (e.g. "/dev/mapper/vg-lv", "10.0.0.5:/export/pvc-x"). It plays no part
+	// in pod/PV attribution; FSJoinDevice uses it only as the system.device
+	// fallback of a filesystem whose superblock has no sysfs entry of its
+	// own (btrfs, step 10).
+	Source string
 	// Shared is set when more than one pod has this superblock mounted, as
 	// happens with a ReadWriteMany volume. PodUID is then one of several and
 	// must not be used to attribute I/O; the volume itself is still certain.
@@ -243,7 +255,7 @@ func scanForMount(key MountKey) (info MountInfo, found, pending bool) {
 		if m.MajorMinorVer != target {
 			continue
 		}
-		if info, parsed := parseKubeletMount(m.MountPoint, m.Source); parsed {
+		if info, parsed := parseKubeletMount(m); parsed {
 			cands = append(cands, candidate{info: info, mountPoint: m.MountPoint})
 		}
 	}
@@ -429,7 +441,7 @@ func sharedSuperblockMounts(table, added mountSet) []string {
 		if _, ok := touched[m.majMin]; !ok {
 			continue
 		}
-		info, ok := parseKubeletMount(m.mountPoint, m.source)
+		_, _, pvName, ok := kubeletVolumeMatch(m.mountPoint)
 		if !ok {
 			continue
 		}
@@ -437,7 +449,7 @@ func sharedSuperblockMounts(table, added mountSet) []string {
 		if volumes[m.majMin] == nil {
 			volumes[m.majMin] = map[string]struct{}{}
 		}
-		volumes[m.majMin][info.PVName] = struct{}{}
+		volumes[m.majMin][pvName] = struct{}{}
 	}
 
 	var shared []string
@@ -706,29 +718,68 @@ func mountsFrom(path string) ([]*procfs.MountInfo, error) {
 	return proc.MountInfo()
 }
 
-// parseKubeletMount extracts Kubernetes volume identity from a mount point
-// and its source, e.g. "10.96.84.126:/export/pvc-b3befffd".
-func parseKubeletMount(mountPoint, source string) (MountInfo, bool) {
-	match := kubeletVolumeRe.FindStringSubmatch(mountPoint)
-	if match == nil {
+// parseKubeletMount extracts Kubernetes volume identity from a mount point,
+// and the fs join labels (step 10) from the rest of m.
+func parseKubeletMount(m *procfs.MountInfo) (MountInfo, bool) {
+	podUID, volumeType, pvName, ok := kubeletVolumeMatch(m.MountPoint)
+	if !ok {
 		return MountInfo{}, false
 	}
 
 	return MountInfo{
-		PodUID:     match[1],
-		VolumeType: match[2],
-		PVName:     match[3],
-		Server:     mountServer(source),
+		PodUID:     podUID,
+		VolumeType: volumeType,
+		PVName:     pvName,
+		Addr:       mountServerAddress(m.FSType, m.SuperOptions, m.Source),
+		Source:     m.Source,
 	}, true
 }
 
-// mountServer returns the part of a mount source before its first ":", or
-// the whole source when it has none.
-func mountServer(source string) string {
-	if server, _, ok := strings.Cut(source, ":"); ok {
-		return server
+// kubeletVolumeMatch extracts the pod UID, volume plugin, and volume name
+// from a kubelet volume mount point, or ok=false when mountPoint is not one.
+func kubeletVolumeMatch(mountPoint string) (podUID, volumeType, pvName string, ok bool) {
+	match := kubeletVolumeRe.FindStringSubmatch(mountPoint)
+	if match == nil {
+		return "", "", "", false
 	}
-	return source
+	return match[1], match[2], match[3], true
+}
+
+// mountServerAddress returns the fs join label server.address (step 10) for
+// a mount: the addr= super option the kernel prints for nfs and cifs mounts,
+// netip-normalized (v4-mapped unmapped) to match the NFS RPC side's
+// formatting (2.5). It falls back to the mount source's host only when the
+// kernel gives no addr=, and is "" for ceph -- several monitors, ambiguous --
+// and every local filesystem (D4).
+func mountServerAddress(fsType string, superOptions map[string]string, source string) string {
+	switch fsType {
+	case "nfs", "nfs4", "cifs", "smb3":
+	default:
+		return ""
+	}
+
+	if raw, ok := superOptions["addr"]; ok && raw != "" {
+		if ip, err := netip.ParseAddr(raw); err == nil {
+			return ip.Unmap().String()
+		}
+		return raw
+	}
+	return sourceHost(source)
+}
+
+// sourceHost extracts the server host from a mount source when the kernel
+// gives no addr= option: "host:/export" (nfs) or "//host/share" (cifs).
+// Bracketed IPv6 sources ("[::1]:/export") and multi-monitor ceph sources
+// ("mon1,mon2:/path") are left to addr=; this fallback only needs to cover
+// the common single-host case addr= itself covers on every kernel this
+// project supports.
+func sourceHost(source string) string {
+	if share, ok := strings.CutPrefix(source, "//"); ok {
+		host, _, _ := strings.Cut(share, "/")
+		return host
+	}
+	host, _, _ := strings.Cut(source, ":")
+	return host
 }
 
 // WarnIfNoKubeletVolumeMounts scans the current mount table once and warns if

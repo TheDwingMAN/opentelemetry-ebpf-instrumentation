@@ -28,7 +28,8 @@ func TestResolveMountNFS(t *testing.T) {
 		PodUID:     "55293f39-c745-4578-accb-f3e5cfc7b303",
 		PVName:     "pvc-b3befffd-ae0d-4fa0-8cef-4949329d8c3f",
 		VolumeType: "nfs",
-		Server:     "10.96.84.126",
+		Addr:       "10.96.84.126",
+		Source:     "10.96.84.126:/export/pvc-b3befffd",
 	}, info)
 }
 
@@ -49,13 +50,98 @@ func TestResolveMountCSITrailingMountSegment(t *testing.T) {
 	assert.Equal(t, "csi", info.VolumeType)
 }
 
-func TestResolveMountSourceWithoutColon(t *testing.T) {
+// A local filesystem's source never has a server address (D4): Addr is ""
+// however the source is shaped, even one with no colon in it.
+func TestResolveMountLocalFilesystemHasNoServerAddress(t *testing.T) {
 	const line = `77 1 0:41 / /var/lib/kubelet/pods/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/volumes/kubernetes.io~csi/pvc-noserver/mount rw,relatime shared:5 - ext4 /dev/sdb1 rw`
 	withMountInfo(t, line)
 
 	info, ok := resolveMount(MountKey{Dev: 41})
 	require.True(t, ok)
-	assert.Equal(t, "/dev/sdb1", info.Server)
+	assert.Empty(t, info.Addr)
+	assert.Equal(t, "/dev/sdb1", info.Source)
+}
+
+// mountServerAddress table (step 10): the addr= super option, netip-
+// normalized, with the source-host fallback only when the kernel gives no
+// addr=; "" for ceph (several monitors, ambiguous) and every local
+// filesystem (D4).
+func TestMountServerAddress(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		fsType       string
+		superOptions map[string]string
+		source       string
+		want         string
+	}{
+		{
+			name:         "nfs4 addr= IPv4",
+			fsType:       "nfs4",
+			superOptions: map[string]string{"addr": "10.96.84.126", "vers": "4.1"},
+			source:       "10.96.84.126:/export/pvc-x",
+			want:         "10.96.84.126",
+		},
+		{
+			name:         "nfs4 addr= v4-mapped is unmapped",
+			fsType:       "nfs4",
+			superOptions: map[string]string{"addr": "::ffff:10.0.0.5"},
+			source:       "10.0.0.5:/export/pvc-x",
+			want:         "10.0.0.5",
+		},
+		{
+			name:         "nfs addr= IPv6",
+			fsType:       "nfs",
+			superOptions: map[string]string{"addr": "fd00::1"},
+			source:       "[fd00::1]:/export/pvc-x",
+			want:         "fd00::1",
+		},
+		{
+			name:         "cifs addr= present",
+			fsType:       "cifs",
+			superOptions: map[string]string{"addr": "10.0.0.9"},
+			source:       "//10.0.0.9/share",
+			want:         "10.0.0.9",
+		},
+		{
+			name:         "cifs //host/share, no addr=",
+			fsType:       "cifs",
+			superOptions: map[string]string{},
+			source:       "//fileserver/share",
+			want:         "fileserver",
+		},
+		{
+			name:         "nfs4 host name, no addr=",
+			fsType:       "nfs4",
+			superOptions: map[string]string{},
+			source:       "nfs.example.com:/export/pvc-x",
+			want:         "nfs.example.com",
+		},
+		{
+			name:         "ceph multi-mon omitted even with addr=",
+			fsType:       "ceph",
+			superOptions: map[string]string{"addr": "10.0.0.1", "mon_addr": "10.0.0.1,10.0.0.2,10.0.0.3"},
+			source:       "10.0.0.1,10.0.0.2,10.0.0.3:/",
+			want:         "",
+		},
+		{
+			name:         "fuse omitted",
+			fsType:       "fuse.s3fs",
+			superOptions: map[string]string{},
+			source:       "s3fs",
+			want:         "",
+		},
+		{
+			name:         "local ext4 omitted",
+			fsType:       "ext4",
+			superOptions: map[string]string{},
+			source:       "/dev/sdb1",
+			want:         "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, mountServerAddress(tc.fsType, tc.superOptions, tc.source))
+		})
+	}
 }
 
 func TestResolveMountCacheInvalidation(t *testing.T) {
@@ -304,7 +390,7 @@ func TestScanMountsReadsHostInitTable(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, mounts, 1)
-	info, ok := parseKubeletMount(mounts[0].MountPoint, mounts[0].Source)
+	info, ok := parseKubeletMount(mounts[0])
 	require.True(t, ok)
 	assert.Equal(t, "pvc-host", info.PVName)
 }

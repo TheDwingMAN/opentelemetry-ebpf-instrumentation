@@ -47,8 +47,16 @@ const (
 const maxCachedVolumes = 4096
 
 // unboundVolumeRetry is how long a volume whose claim was not found keeps
-// that answer, as long as the PVC lookup caches it.
+// that answer before volumeOf asks the PVC lookup again, matching
+// pvcCacheNegativeTTL so a newly bound claim is picked up promptly.
 const unboundVolumeRetry = 30 * time.Second
+
+// boundVolumeRetry is how long a volume's PV/PVC/storage-class and fs join
+// labels are cached once resolved, before volumeOf asks again, matching
+// pvcCachePositiveTTL: a Retain PV an admin re-binds to a new claim is still
+// picked up, not cached forever (step 10, v2's
+// TestPersistentVolumeOfARecreatedClaim race case).
+const boundVolumeRetry = 10 * time.Minute
 
 // PIDMetadataDecoratorProvider attributes items to their Kubernetes pod,
 // namespace and container, using the PID pair returned by pidOf, and hands
@@ -129,8 +137,8 @@ type volumeEntry struct {
 	// info is the mount resolution attrs was built from; a new one rebuilds it.
 	info  ebpf.MountInfo
 	attrs *ebpf.MountAttrs
-	// retryAt is when a volume whose claim was not found is looked up
-	// again; zero once the claim is known.
+	// retryAt is when attrs is looked up again: unboundVolumeRetry away while
+	// the claim was not found, boundVolumeRetry away once it is.
 	retryAt time.Time
 }
 
@@ -194,27 +202,31 @@ func (d *pidDecorator) decorate(ctx context.Context, a *pipe.CommonAttrs, pidNs,
 }
 
 // volumeOf returns the attributes of the volume a resolved mount belongs to,
-// built once per mount resolution. A volume whose claim is not found (not
-// bound yet, or no RBAC to read PVs) is asked about again after
-// unboundVolumeRetry.
+// built once per mount resolution, including the fs join labels of step 10
+// (system.device, obi.disk.physical_device, server.address), so a getter
+// never takes the block-stack or PVC-cache locks per event (3.0). A volume
+// whose claim is not found (not bound yet, or no RBAC to read PVs) is asked
+// about again after unboundVolumeRetry; one that is found, after
+// boundVolumeRetry, so a claim rebound later is not cached forever.
 func (d *pidDecorator) volumeOf(ctx context.Context, mount ebpf.MountKey, info ebpf.MountInfo) *ebpf.MountAttrs {
-	if e, ok := d.volumes[mount]; ok && e.info == info &&
-		(e.retryAt.IsZero() || time.Now().Before(e.retryAt)) {
+	if e, ok := d.volumes[mount]; ok && e.info == info && time.Now().Before(e.retryAt) {
 		return e.attrs
 	}
 
-	entry := volumeEntry{info: info, attrs: &ebpf.MountAttrs{PVName: info.PVName}}
+	attrs := &ebpf.MountAttrs{PVName: info.PVName, ServerAddress: info.Addr}
+	attrs.SystemDevice, attrs.PhysicalDevice = ebpf.FSJoinDevice(mount.Dev, info.Source)
+
+	retry := unboundVolumeRetry
 	if namespace, claimName, storageClass, ok := d.pvc(ctx, info.PVName); ok {
-		entry.attrs.PVCName, entry.attrs.StorageClass, entry.attrs.PVCNamespace = claimName, storageClass, namespace
-	} else {
-		entry.retryAt = time.Now().Add(unboundVolumeRetry)
+		attrs.PVCName, attrs.StorageClass, attrs.PVCNamespace = claimName, storageClass, namespace
+		retry = boundVolumeRetry
 	}
 
 	if len(d.volumes) >= maxCachedVolumes {
 		clear(d.volumes)
 	}
-	d.volumes[mount] = entry
-	return entry.attrs
+	d.volumes[mount] = volumeEntry{info: info, attrs: attrs, retryAt: time.Now().Add(retry)}
+	return attrs
 }
 
 // setMetadata sets a Metadata entry, creating the map on the first one: a

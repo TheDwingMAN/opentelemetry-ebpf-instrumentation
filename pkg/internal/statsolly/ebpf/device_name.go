@@ -78,3 +78,21 @@ func nameFromTarget(majMin, target string) string {
 func fmtDev(dev uint32) string {
 	return fmt.Sprintf("%d:%d", dev>>devMinorBits, dev&devMinorMask)
 }
+
+// deviceNameForFS resolves a filesystem's superblock dev_t to its
+// system.device attribute (step 10): the sysfs basename of dev, like
+// deviceName, but "" -- never the "<major>:<minor>" fallback -- when major is
+// 0 or sysfs has no entry for it (S5). Major 0 is the kernel's
+// UNNAMED_MAJOR, assigned to anonymous superblocks: nfs, cifs, ceph, fuse,
+// tmpfs, and a btrfs volume spanning more than one device.
+func deviceNameForFS(dev uint32) string {
+	if dev>>devMinorBits == 0 {
+		return ""
+	}
+	majMin := fmtDev(dev)
+	target, _ := os.Readlink(filepath.Join(sysBlockDir, majMin))
+	if target == "" {
+		return ""
+	}
+	return nameFromTarget(majMin, target)
+}

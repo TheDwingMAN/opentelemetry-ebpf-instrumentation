@@ -39,7 +39,7 @@ func localPVDevs(mounts []*procfs.MountInfo) map[uint32]FsTypeCode {
 		if !ok {
 			continue
 		}
-		if _, ok := parseKubeletMount(m.MountPoint, m.Source); !ok {
+		if _, ok := parseKubeletMount(m); !ok {
 			continue
 		}
 		dev, ok := parseDevT(m.MajorMinorVer)

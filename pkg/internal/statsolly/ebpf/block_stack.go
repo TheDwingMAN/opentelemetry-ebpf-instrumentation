@@ -20,6 +20,12 @@ import (
 // (built from this cache, step 10) joins into one comma-separated value.
 const maxPhysicalDevices = 8
 
+// hostStat is unix.Stat, indirected (like procRoot, mountInfoPath and
+// sysBlockDir elsewhere in this package) so tests can synthesize a host
+// path's dev_t instead of depending on the real containing filesystem's
+// major, which containerized test environments cannot control.
+var hostStat = unix.Stat
+
 // devInfo is a block device's place in the stacking model: whether it issues
 // requests to hardware itself, and, when it does not, the physical devices
 // backing it.
@@ -165,12 +171,54 @@ func physicalFromLoop(dir string, visiting map[uint32]bool) []string {
 		return nil
 	}
 
-	var st unix.Stat_t
-	if err := unix.Stat(filepath.Join(procRoot, "1", "root", backing), &st); err != nil {
+	dev, ok := statHostPathDevT(backing)
+	if !ok {
 		return nil
 	}
-	dev := unix.Major(st.Dev)<<devMinorBits | unix.Minor(st.Dev)
 	return blockStackVisiting(dev, visiting).physical
+}
+
+// statHostPathDevT stats an absolute host path -- a loop device's backing
+// file, or a mount's source (step 10's btrfs fallback, FSJoinDevice) --
+// through /proc/1/root, matching how the rest of this package reaches host
+// state (mount_resolver.go), and returns its dev_t. A path that is not
+// absolute, or that does not exist there, is not an error worth logging: a
+// network filesystem's source ("host:/export", a ceph monitor list) is never
+// a host path, and simply fails to resolve.
+func statHostPathDevT(path string) (uint32, bool) {
+	if !filepath.IsAbs(path) {
+		return 0, false
+	}
+	var st unix.Stat_t
+	if err := hostStat(filepath.Join(procRoot, "1", "root", path), &st); err != nil {
+		return 0, false
+	}
+	return unix.Major(st.Dev)<<devMinorBits | unix.Minor(st.Dev), true
+}
+
+// FSJoinDevice resolves the block-backed fs join labels of step 10
+// (system.device, obi.disk.physical_device) for a filesystem stat's
+// superblock dev_t. Most filesystems' sb->s_dev resolves directly through
+// sysfs (deviceNameForFS); an anonymous superblock -- major 0, which is also
+// how a btrfs volume spanning more than one device reports -- falls back to
+// statting the mount's source path, so a btrfs filesystem mounted from a
+// real block device (e.g. /dev/mapper/vg-lv) still resolves. A network
+// filesystem's source ("host:/export", a ceph monitor list) is not a path,
+// so the stat simply fails and both labels come back "".
+func FSJoinDevice(dev uint32, source string) (systemDevice, physicalDevice string) {
+	name := deviceNameForFS(dev)
+	if name == "" {
+		if d, ok := statHostPathDevT(source); ok {
+			dev, name = d, deviceNameForFS(d)
+		}
+	}
+	if name == "" {
+		return "", ""
+	}
+	if physical := blockStack(dev).physical; len(physical) > 0 {
+		physicalDevice = strings.Join(physical, ",")
+	}
+	return name, physicalDevice
 }
 
 // capPhysical sorts, dedups and truncates a physical-device list to

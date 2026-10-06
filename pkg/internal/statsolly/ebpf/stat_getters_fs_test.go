@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 )
@@ -65,6 +66,32 @@ func TestFsIoGetters_MountAttrs(t *testing.T) {
 		assert.Equal(t, want, getter(onVolume).Value.AsString(), name)
 		assert.Empty(t, getter(noVolume).Value.AsString(), name)
 		assert.Empty(t, getter(&Stat{}).Value.AsString(), name)
+	}
+}
+
+// The fs join labels of step 10 (system.device, obi.disk.physical_device,
+// server.address) come from the mount the PID decorator resolved, exactly
+// like the PV/PVC/storage-class attributes, and are "" when there is none.
+func TestFsIoGetters_JoinLabels(t *testing.T) {
+	// system.device also has a block-metrics case (TestBlockIoGetters);
+	// deviceName(0) falls back to "<major>:<minor>" for a stat carrying
+	// neither block nor filesystem I/O, unlike the other two, which are
+	// mount-only attributes with no such fallback.
+	withSysBlockDir(t, t.TempDir())
+
+	mount := &MountAttrs{SystemDevice: "vdb", PhysicalDevice: "vdb", ServerAddress: "10.0.0.5"}
+	onVolume := &Stat{Type: StatTypeFsIo, FsIo: &FsIo{Mount: mount}}
+	noVolume := &Stat{Type: StatTypeFsIo, FsIo: &FsIo{}}
+
+	for name, want := range map[attr.Name]string{
+		attr.DiskDevice:         "vdb",
+		attr.DiskPhysicalDevice: "vdb",
+		attr.ServerAddr:         "10.0.0.5",
+	} {
+		getter, ok := StatGetters(name)
+		require.True(t, ok)
+		assert.Equal(t, want, getter(onVolume).Value.AsString(), name)
+		assert.Empty(t, getter(noVolume).Value.AsString(), name)
 	}
 }
 

@@ -250,6 +250,20 @@ type MountAttrs struct {
 	// PVCNamespace names the pod namespace of I/O whose process is in no
 	// known pod.
 	PVCNamespace string
+	// SystemDevice, PhysicalDevice and ServerAddress are the fs join labels
+	// of step 10 (system.device, obi.disk.physical_device, server.address):
+	// resolved once per mount, alongside the PV/PVC lookup, so a getter
+	// never takes the block-stack or mount-table locks per event.
+	SystemDevice string
+	// PhysicalDevice is "" when SystemDevice could not be resolved to a
+	// block device (a network filesystem, or an anonymous superblock this
+	// mount's source did not resolve either), and otherwise a
+	// comma-separated, sorted, deduplicated list of the physical disks
+	// behind it, capped at 8 members.
+	PhysicalDevice string
+	// ServerAddress is "" for ceph (several monitors, ambiguous) and local
+	// filesystems.
+	ServerAddress string
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.

@@ -51,6 +51,20 @@ func TestDeviceNameCacheFollowsMinorReuse(t *testing.T) {
 	assert.Equal(t, "253:4", deviceName(253<<20|4))
 }
 
+// TestDeviceNameForFS covers the system.device rule for filesystems (S5,
+// step 10): major 0 (an anonymous superblock: nfs, cifs, ceph, fuse, or a
+// btrfs volume spanning more than one device) and a sysfs miss both give ""
+// -- never deviceName's "<major>:<minor>" fallback.
+func TestDeviceNameForFS(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Symlink("../../devices/pci0000:00/block/vdb", filepath.Join(dir, "252:16")))
+	withSysBlockDir(t, dir)
+
+	assert.Equal(t, "vdb", deviceNameForFS(252<<20|16))
+	assert.Empty(t, deviceNameForFS(0), "major 0: anonymous superblock")
+	assert.Empty(t, deviceNameForFS(9<<20), "no sysfs entry: never the M:m fallback")
+}
+
 // withSysBlockDir points the resolver at a fixture directory and clears the
 // name cache for the duration of a test.
 func withSysBlockDir(t *testing.T, dir string) {

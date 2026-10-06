@@ -396,6 +396,7 @@ const (
 	DiskDevice                = Name("system.device")
 	DiskIODirection           = Name("disk.io.direction")
 	DiskStacked               = Name("obi.disk.stacked")
+	DiskPhysicalDevice        = Name("obi.disk.physical_device")
 	FsType                    = Name("system.filesystem.type")
 	FsOperation               = Name("fs.operation")
 )
