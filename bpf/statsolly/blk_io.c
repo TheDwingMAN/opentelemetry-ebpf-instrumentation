@@ -291,7 +291,7 @@ static __always_inline void blk_on_complete(const u32 dev,
         bpf_d_printk("block_io: stats_events ring buffer full, dropping event");
         return;
     }
-    se->flags = k_event_stat_block_io;
+    se->flags = k_stat_type_block_io;
     se->op = kind == blk_req_write ? blk_op_write : blk_op_read;
     se->_pad[0] = 0;
     se->_pad[1] = 0;

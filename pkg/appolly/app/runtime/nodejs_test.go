@@ -37,3 +37,96 @@ func TestParseNodejsEventLoopEvent(t *testing.T) {
 	assert.Equal(t, values, event.NodejsEventLoopValues)
 	require.WithinDuration(t, timing.KernelTime(ktime), event.Time, 100*time.Millisecond)
 }
+
+// The GC type strings are the semconv v8js.gc.type values; the numeric
+// codes are the OBI wire codes assigned in fdextractor.js — deliberately
+// not the version-dependent Node constants.
+func TestNodejsGCTypeSemconvValues(t *testing.T) {
+	assert.Equal(t, "minor", NodejsGCTypeMinor.String())
+	assert.Equal(t, "major", NodejsGCTypeMajor.String())
+	assert.Equal(t, "incremental", NodejsGCTypeIncremental.String())
+	assert.Equal(t, "weakcb", NodejsGCTypeWeakCB.String())
+	assert.Equal(t, "unknown", NodejsGCTypeUnknown.String())
+	assert.Equal(t, "unknown", NodejsGCType(200).String())
+}
+
+func TestParseNodejsGCEvent(t *testing.T) {
+	const ktime = 2 * 3600 * 1_000_000_000
+
+	event := ParseNodejsGCEvent(ktime, 55, 99, 2, 350_000_000)
+
+	assert.Equal(t, app.PID(55), event.PID)
+	assert.Equal(t, uint32(99), event.PIDNamespaceID)
+	assert.Equal(t, NodejsGCTypeMajor, event.GCType)
+	assert.Equal(t, uint64(350_000_000), event.DurationNs)
+	require.WithinDuration(t, timing.KernelTime(ktime), event.Time, 100*time.Millisecond)
+
+	// unknown wire codes decode to Unknown; the dispatch layer drops them
+	assert.Equal(t, NodejsGCTypeUnknown, ParseNodejsGCEvent(ktime, 55, 99, 9, 1).GCType)
+}
+
+// Only the well-known members of the semconv v8js.heap.space.name enum are
+// exported. V8 reports more spaces (read_only_space, shared_space,
+// trusted_space, ...) depending on the engine version; those are dropped
+// before export (see semconvHeapSpaces for the rationale).
+func TestIsSemconvHeapSpace(t *testing.T) {
+	for _, name := range []string{"new_space", "old_space", "code_space", "map_space", "large_object_space"} {
+		assert.True(t, IsSemconvHeapSpace(name), name)
+	}
+	for _, name := range []string{"read_only_space", "shared_space", "new_large_object_space", ""} {
+		assert.False(t, IsSemconvHeapSpace(name), name)
+	}
+}
+
+// Same policy as heap spaces: only the well-known enum members are
+// exported, everything else is dropped before export.
+func TestIsSemconvResourceType(t *testing.T) {
+	for _, name := range []string{"Immediate", "TCPServerWrap", "TCPWrap", "Timeout", "TTYWrap"} {
+		assert.True(t, IsSemconvResourceType(name), name)
+	}
+	for _, name := range []string{"FSReqCallback", "MessagePort", "TCPSocketWrap", "timeout", ""} {
+		assert.False(t, IsSemconvResourceType(name), name)
+	}
+}
+
+func TestSemconvResourceTypes(t *testing.T) {
+	types := SemconvResourceTypes()
+	assert.Equal(t, []string{"Immediate", "TCPServerWrap", "TCPWrap", "TTYWrap", "Timeout"}, types)
+	for _, name := range types {
+		assert.True(t, IsSemconvResourceType(name), name)
+	}
+}
+
+func TestParseNodejsResourceEvent(t *testing.T) {
+	const ktime = 2 * 3600 * 1_000_000_000
+
+	event := ParseNodejsResourceEvent(ktime, 55, 99, "Timeout", 5)
+
+	assert.Equal(t, app.PID(55), event.PID)
+	assert.Equal(t, uint32(99), event.PIDNamespaceID)
+	assert.Equal(t, "Timeout", event.ResourceType)
+	assert.Equal(t, uint64(5), event.Count)
+	require.WithinDuration(t, timing.KernelTime(ktime), event.Time, 100*time.Millisecond)
+
+	// the runtime spelling for TCP connections is canonicalized to the
+	// semconv member, which never occurs verbatim in real output
+	assert.Equal(t, "TCPWrap", ParseNodejsResourceEvent(ktime, 55, 99, "TCPSocketWrap", 2).ResourceType)
+}
+
+func TestParseNodejsHeapSpaceEvent(t *testing.T) {
+	const ktime = 2 * 3600 * 1_000_000_000
+
+	values := NodejsHeapSpaceValues{
+		SpaceSize:          200 << 20,
+		SpaceUsedSize:      150 << 20,
+		SpaceAvailableSize: 30 << 20,
+		PhysicalSpaceSize:  200 << 20,
+	}
+	event := ParseNodejsHeapSpaceEvent(ktime, 55, 99, "old_space", values)
+
+	assert.Equal(t, app.PID(55), event.PID)
+	assert.Equal(t, uint32(99), event.PIDNamespaceID)
+	assert.Equal(t, "old_space", event.SpaceName)
+	assert.Equal(t, values, event.NodejsHeapSpaceValues)
+	require.WithinDuration(t, timing.KernelTime(ktime), event.Time, 100*time.Millisecond)
+}

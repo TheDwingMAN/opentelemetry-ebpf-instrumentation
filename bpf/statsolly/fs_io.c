@@ -106,7 +106,7 @@ static __always_inline void fs_probe_exit(const long ret) {
         return;
     }
 
-    se->flags = k_event_stat_fs_io;
+    se->flags = k_stat_type_fs_io;
     se->fs = fs;
     se->op = op;
     se->_pad[0] = 0;

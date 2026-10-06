@@ -42,6 +42,34 @@ test('SDK already registered before injection: bridge stays inert', () => {
   assert.deepStrictEqual(r.app, ['s1'], 'the app SDK captures its own span');
 });
 
+// Every other test in this suite stubs the transport, so this is the only
+// place the real fs.existsSync runs. The whole mechanism rests on it answering
+// a path that cannot resolve by returning rather than throwing, and this file
+// runs on the CI Node matrix, so that assumption is checked per version here
+// instead of only in the author's harness.
+test('the real fs.existsSync answers a sentinel path without throwing', () => {
+  const realFs = require('fs');
+  let threw = null;
+  let result;
+  try {
+    result = realFs.existsSync('/dev/null/obi-span/{"name":"probe"}');
+  } catch (e) {
+    threw = String((e && e.message) || e);
+  }
+  assert.strictEqual(threw, null, 'fs.existsSync must not throw on a sentinel path');
+  assert.strictEqual(result, false, 'a sentinel path must not resolve');
+});
+
+test('throwing transport: span.end() never throws into the app', () => {
+  // fs.existsSync does not throw for a path that simply does not exist, but it
+  // can under Node's permission model. The guard around the emit is the only
+  // thing keeping that out of application code, so it is exercised here rather
+  // than left to the transport never failing.
+  const r = runScenario('throwing-transport');
+  assert.strictEqual(r.threw, null, 'span.end() must not throw when the transport does');
+  assert.deepStrictEqual(r.bridge, ['s1'], 'the span is still emitted before the transport fails');
+});
+
 test('hostile attribute/name: span.end() never throws into the app', () => {
   // A value whose toString() throws must not escape span.end() — the baseline
   // (no SDK) is a silent NoopSpan, so a throw here would be a regression that
@@ -122,6 +150,44 @@ test('multibyte strings truncate on a valid UTF-8 byte boundary', () => {
   assert.ok(r.valueOK, 'value must be whole characters (42 x €), no split sequence');
   assert.ok(r.nameBytes <= 128, `name must fit its 128-byte budget (got ${r.nameBytes})`);
   assert.ok(r.nameOK, 'name must be whole characters (42 x €), no split sequence');
+});
+
+test('explicit span.end(t) rides as endWallNs; absent otherwise', () => {
+  // A valid TimeInput (Date, epoch millis, hrtime tuple) must be carried in
+  // the payload as epoch nanoseconds; no argument or an unusable one must
+  // omit the field so user space keeps the kernel-side sentinel anchor.
+  const r = runScript('scenario_end_time.js');
+  assert.deepStrictEqual(r.names, [
+    'end-bogus',
+    'end-date',
+    'end-frac',
+    'end-hrtime',
+    'end-huge',
+    'end-millis',
+    'end-near-origin',
+    'end-none',
+    'end-perf',
+  ]);
+  assert.strictEqual(r.date, r.dateExpected, 'Date end time must convert to epoch ns');
+  assert.strictEqual(r.millis, r.millisExpected, 'epoch-millis end time must convert to epoch ns');
+  assert.strictEqual(r.hrtime, r.hrtimeExpected, 'hrtime tuple must convert to epoch ns');
+  assert.strictEqual(r.none, undefined, 'no explicit end -> no endWallNs');
+  assert.strictEqual(r.bogus, undefined, 'unusable explicit end -> no endWallNs');
+  assert.ok(
+    r.perf !== undefined && BigInt(r.perf) >= BigInt(r.perfLowerBoundNs),
+    'performance.now()-style end must resolve against timeOrigin, not 1970'
+  );
+  const fracRemainderNs = Number(BigInt(r.frac) - BigInt(r.fracWholeMsNs));
+  assert.ok(
+    Math.abs(fracRemainderNs - 456000) < 1000,
+    `fractional epoch millis keep sub-ms precision (got remainder ${fracRemainderNs}ns)`
+  );
+  assert.strictEqual(r.huge, undefined, 'int64-unrepresentable end -> no endWallNs');
+  assert.strictEqual(
+    r.nearOrigin,
+    r.nearOriginExpected,
+    'an epoch-millis end just below timeOrigin is still an epoch timestamp'
+  );
 });
 
 test('versioned pre-acquired tracer keeps name/version/options through the handoff', () => {

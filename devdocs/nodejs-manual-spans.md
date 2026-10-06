@@ -31,7 +31,7 @@ spanbridge.js ──────────── injected over the inspector p
    │                       copy's ProxyTracerProvider. It does NOT write to the
    │                       API global registry (that would block the app's SDK).
    ▼
-fs.accessSync('/dev/null/obi-span/<json>')      ── sentinel uv_fs_access path
+fs.existsSync('/dev/null/obi-span/<json>')      ── sentinel uv_fs_access path
    ▼
 obi_uv_fs_access uprobe (bpf/generictracer/nodejs.c)
    │  '-span/' branch: copies the JSON payload into a node_span_event_t,
@@ -60,7 +60,7 @@ request.Span{Type: EventTypeManualSpan}  → existing exporter path, unchanged
   fragmented websocket frames, so the dialer write buffer must stay larger
   than the combined script).
 - **`bpf/generictracer/nodejs.c`** — the existing `uv_fs_access` uprobe with
-  a third sentinel format. `fs.accessSync()` is safe to call from anywhere in
+  a third sentinel format. `fs.existsSync()` is safe to call from anywhere in
   JS (synchronous fs ops do not create AsyncWrap objects, so it cannot
   re-enter async_hooks), the kernel fails the call immediately with
   `ENOTDIR`, and the uprobe reads the raw path string before path resolution.
@@ -70,7 +70,9 @@ request.Span{Type: EventTypeManualSpan}  → existing exporter path, unchanged
 - **`pkg/ebpf/common/node_otel_transform.go`** — decoder. Produces the same
   `request.Span` shape as the Go path: name in `Method`, status message in
   `Path`, attributes as the `SpanAttr` JSON array in `Statement` (the exact
-  encoding `tracesgen.manualSpanAttributes` consumes), kind Internal.
+  encoding `tracesgen.manualSpanAttributes` consumes), and the span kind
+  mapped from the payload (the JS SpanKind enum is zero-based while Go's is
+  shifted by one; unknown values fall back to Internal).
 
 ### Sentinel path formats (all handled by `obi_uv_fs_access`)
 
@@ -88,6 +90,8 @@ bridge), `extParent` (present and `true` only when `psid` refers to a parent
 context the bridge does not own — an app/remote parent; user space flattens
 such spans under the OBI request parent when re-anchoring, instead of
 exporting a cross-trace parent reference), `kind`, `startNs`/`durNs`,
+`endWallNs` (present only when the app passed an explicit end time to
+`span.end(t)`; epoch nanoseconds),
 `status`/`statusMsg`, `attrs` (flat map, string/number/bool). Budgets, chosen
 to mirror the Go path and fit the payload buffer — all measured in UTF-8
 BYTES and truncated on a valid sequence boundary (the Go side copies into
@@ -109,14 +113,30 @@ The sentinel fires inside `span.end()`, so BPF's `bpf_ktime_get_ns()` at
 that moment *is* the span end in the same monotonic domain the rest of the
 pipeline uses (`request.Span.Timings()` converts to wall clock at export
 time). The start time is reconstructed as `end - durNs`, with the duration
-measured in-process by `process.hrtime.bigint()`. Explicit end timestamps
-passed to `span.end(t)` are ignored.
+measured in-process by `process.hrtime.bigint()`.
+
+An explicit end timestamp passed to `span.end(t)` (Date, epoch milliseconds,
+or `[seconds, nanos]` hrtime tuple) travels as `endWallNs`. Matching
+`@opentelemetry/core`, a number below half of `performance.timeOrigin` is
+interpreted as a `performance.now()`-style offset; values the decoder cannot
+represent (int64 ns) are never emitted. It only moves the span **end**: the
+start stays at `anchor - durNs` (the span's actual start), so the exported
+duration becomes `explicit end - start`. The explicit end is honored only
+when, translated into the monotonic domain, it lands within a bounded skew
+(5 minutes, `maxNodeExplicitEndSkew`) of the kernel-side sentinel anchor and
+not before the start — an unbounded app wall clock must not corrupt the
+monotonic-domain consistency the pipeline assumes. Otherwise (or on any
+unusable input) the sentinel anchor is used, as before.
 
 ### Trace-context correlation
 
 At sentinel time, BPF looks up `traces_ctx_v1` for the current thread — the
 same map the `-ctx/` sentinels maintain, pointing at the trace context of
-the in-flight request being processed by the current async context:
+the in-flight request being processed by the current async context. Manual
+spans are one of the readers that turn that map's population on, so enabling
+`nodejs.manual_spans` also installs the `async_hooks` before hook that emits
+the `-ctx/` sentinels (see
+[When the map is populated](trace-log-correlation.md#when-the-map-is-populated)):
 
 - If found, the span is **re-anchored**: it inherits the request's trace ID,
   and bridge-root spans (no in-bridge parent) are parented under OBI's
@@ -276,14 +296,17 @@ would otherwise leave two providers active in one process.
   the syscall off the hot path.
 - **Payload budgets** (above). Span events, instrumentation scope, links,
   non-primitive attribute values and `traceState` are not forwarded in v1.
-- **Span kind** is captured in the payload but currently exported as
-  Internal (same as the Go path).
+- **Span kind** is exported from the payload (`spanKind()` in tracesgen
+  consumes `request.Span.SpanKind` for manual spans, as on the Go Auto path).
 - **One bridge per process.** A `globalThis` marker makes re-injection a
   no-op.
 - **Never breaks the app.** All bridge failure paths are swallowed; the
-  sentinel syscall cost is ~1–2 µs per finished span, zero when the feature
-  is off. The one thing the bridge wraps is the CommonJS module loader
-  (`Module._load`), used only to wire `@opentelemetry/api` copies loaded after
+  sentinel costs ~0.6 µs per finished span, zero when the feature is off.
+  The `fs.accessSync` it replaced rejected every call, and building that
+  rejection cost several times the call itself. Both figures were measured
+  outside this repository and nothing in CI re-establishes them. The one
+  thing the bridge wraps is the CommonJS module loader (`Module._load`),
+  used only to wire `@opentelemetry/api` copies loaded after
   injection; the wrapper always calls the original loader first and guards its
   own work, so it composes with other loader patches and can never break a
   `require`. It does *not* use require-in-the-middle/import-in-the-middle, and

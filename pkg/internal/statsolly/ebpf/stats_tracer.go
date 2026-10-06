@@ -34,20 +34,21 @@ type probe struct {
 
 // Program names
 const (
-	progObiStatsKprobeTCPCloseSrtt                    = "obi_stats_kprobe_tcp_close_srtt"
-	progObiStatsKprobeTCPCloseIoFlush                 = "obi_stats_kprobe_tcp_close_io_flush"
-	progObiStatsTpInetSockSetStateConnRole            = "obi_stats_tp_inet_sock_set_state_conn_role"
-	progObiStatsTpInetSockSetStateTCPFailedConnection = "obi_stats_tp_inet_sock_set_state_tcp_failed_connection"
-	progObiStatsRawTpTCPRetransmitSkb                 = "obi_stats_raw_tp_tcp_retransmit_skb"
-	progObiStatsKprobeTCPSendmsg                      = "obi_stats_kprobe_tcp_sendmsg"
-	progObiStatsKretprobeTCPSendmsg                   = "obi_stats_kretprobe_tcp_sendmsg"
-	progObiStatsKprobeTCPCleanupRbuf                  = "obi_stats_kprobe_tcp_cleanup_rbuf"
-	progObiStatsTpBlockRqInsert                       = "obi_stats_tp_block_rq_insert"
-	progObiStatsTpBlockRqIssue                        = "obi_stats_tp_block_rq_issue"
-	progObiStatsTpBlockRqComplete                     = "obi_stats_tp_block_rq_complete"
-	progObiStatsRawTpBlockRqInsert                    = "obi_stats_raw_tp_block_rq_insert"
-	progObiStatsRawTpBlockRqIssue                     = "obi_stats_raw_tp_block_rq_issue"
-	progObiStatsRawTpBlockRqComplete                  = "obi_stats_raw_tp_block_rq_complete"
+	progObiStatsKprobeTCPCloseSrtt                        = "obi_stats_kprobe_tcp_close_srtt"
+	progObiStatsKprobeTCPCloseIoFlush                     = "obi_stats_kprobe_tcp_close_io_flush"
+	progObiStatsTpInetSockSetStateConnRole                = "obi_stats_tp_inet_sock_set_state_conn_role"
+	progObiStatsTpInetSockSetStateTCPFailedConnection     = "obi_stats_tp_inet_sock_set_state_tcp_failed_connection"
+	progObiStatsTpInetSockSetStateTCPSuccessfulConnection = "obi_stats_tp_inet_sock_set_state_tcp_successful_connection"
+	progObiStatsRawTpTCPRetransmitSkb                     = "obi_stats_raw_tp_tcp_retransmit_skb"
+	progObiStatsKprobeTCPSendmsg                          = "obi_stats_kprobe_tcp_sendmsg"
+	progObiStatsKretprobeTCPSendmsg                       = "obi_stats_kretprobe_tcp_sendmsg"
+	progObiStatsKprobeTCPCleanupRbuf                      = "obi_stats_kprobe_tcp_cleanup_rbuf"
+	progObiStatsTpBlockRqInsert                           = "obi_stats_tp_block_rq_insert"
+	progObiStatsTpBlockRqIssue                            = "obi_stats_tp_block_rq_issue"
+	progObiStatsTpBlockRqComplete                         = "obi_stats_tp_block_rq_complete"
+	progObiStatsRawTpBlockRqInsert                        = "obi_stats_raw_tp_block_rq_insert"
+	progObiStatsRawTpBlockRqIssue                         = "obi_stats_raw_tp_block_rq_issue"
+	progObiStatsRawTpBlockRqComplete                      = "obi_stats_raw_tp_block_rq_complete"
 
 	progObiStatsFentryNFSRead   = "obi_stats_fentry_nfs_read"
 	progObiStatsFexitNFSRead    = "obi_stats_fexit_nfs_read"
@@ -178,7 +179,7 @@ const (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type block_io_t -type fs_io_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -type block_io_t -type fs_io_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -208,6 +209,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 
 	// OR across both metrics: a single shared probe writes sock_role for both consumers,
 	// so the probe is needed if either metric has the attribute enabled.
+	// Note: tcp successful connection probe derives role from oldstate and never reads sock_role
 	connRoleAttrSelected := slices.Contains(attrSel.For(attributes.StatTCPRtt), attr.NetworkTCPHandshakeRole) ||
 		slices.Contains(attrSel.For(attributes.StatTCPFailedConnections), attr.NetworkTCPHandshakeRole)
 	connRoleUsed := (features.StatsTCPFailedConnections() || features.StatsTCPRtt()) && connRoleAttrSelected
@@ -215,6 +217,9 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	var toDisable []string
 	if !features.StatsTCPFailedConnections() {
 		toDisable = append(toDisable, progObiStatsTpInetSockSetStateTCPFailedConnection)
+	}
+	if !features.StatsTCPSuccessfulConnections() {
+		toDisable = append(toDisable, progObiStatsTpInetSockSetStateTCPSuccessfulConnection)
 	}
 	if !connRoleUsed {
 		toDisable = append(toDisable, progObiStatsTpInetSockSetStateConnRole)
@@ -331,6 +336,11 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	// Swapping the order would cause tcp_failed_conn or any other probes
 	// to see NULL on the same TCP_CLOSE event that conn_role is cleaning up.
 	for _, t := range []probe{
+		{
+			name:    TracepointInetSockSetState,
+			program: objects.ObiStatsTpInetSockSetStateTcpSuccessfulConnection,
+			enabled: features.StatsTCPSuccessfulConnections(),
+		},
 		{
 			name:    TracepointInetSockSetState,
 			program: objects.ObiStatsTpInetSockSetStateTcpFailedConnection,

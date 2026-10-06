@@ -1,7 +1,7 @@
 var express = require("express");
 const http = require("http");
 const https = require("https");
-const { trace, SpanStatusCode } = require("@opentelemetry/api");
+const { trace, SpanKind, SpanStatusCode } = require("@opentelemetry/api");
 var app = express();
 const port = 3030;
 
@@ -20,20 +20,20 @@ app.get("/manual", (req, res, next) => {
   // Root manual span. OBI re-anchors it onto the in-flight request context,
   // i.e. it becomes a child of OBI's automatic "processing" sub-span.
   tracer.startActiveSpan("checkout", (checkout) => {
-    checkout.setAttribute("cart.items", 3);
+    checkout.setAttribute("obitest.cart.items", 3);
 
     // Plain (non-active) child of checkout.
     const validate = tracer.startSpan("validate-cart");
-    validate.setAttribute("valid", true);
-    validate.end();
+    validate.setAttribute("obitest.valid", true);
+    validate.end(new Date()); // explicit end timestamp -> endWallNs path
 
     // Nested active span, so its own children nest under it.
-    tracer.startActiveSpan("charge-card", (charge) => {
-      charge.setAttribute("amount.cents", 4999);
+    tracer.startActiveSpan("charge-card", { kind: SpanKind.CLIENT }, (charge) => {
+      charge.setAttribute("obitest.amount.cents", 4999);
       charge.setStatus({ code: SpanStatusCode.ERROR, message: "card declined" });
 
       const ledger = tracer.startSpan("ledger-write");
-      ledger.setAttribute("account", "acct-1");
+      ledger.setAttribute("obitest.account", "acct-1");
       ledger.updateName("ledger-commit");
       ledger.end();
 

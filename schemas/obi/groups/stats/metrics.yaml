@@ -1,0 +1,565 @@
+groups:
+  - id: metric.obi.obi.stat.tcp.rtt
+    type: metric
+    metric_name: obi.stat.tcp.rtt
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Smoothed round-trip time observed per TCP connection.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: src.address
+        requirement_level: recommended
+      - ref: dst.address
+        requirement_level: recommended
+      - ref: src.port
+        requirement_level: opt_in
+      - ref: dst.port
+        requirement_level: opt_in
+      - ref: src.name
+        requirement_level: opt_in
+      - ref: dst.name
+        requirement_level: opt_in
+      - ref: src.zone
+        requirement_level: opt_in
+      - ref: dst.zone
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.src.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.owner.type
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.namespace
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.name
+        requirement_level: opt_in
+      - ref: k8s.src.type
+        requirement_level: opt_in
+      - ref: k8s.src.node.ip
+        requirement_level: opt_in
+      - ref: k8s.src.node.name
+        requirement_level: opt_in
+      - ref: k8s.dst.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.owner.type
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.namespace
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.name
+        requirement_level: opt_in
+      - ref: k8s.dst.type
+        requirement_level: opt_in
+      - ref: k8s.dst.node.ip
+        requirement_level: opt_in
+      - ref: k8s.dst.node.name
+        requirement_level: opt_in
+      - ref: service.name
+        requirement_level: opt_in
+      - ref: service.namespace
+        requirement_level: opt_in
+      - ref: service.peer.name
+        requirement_level: opt_in
+      - ref: service.peer.namespace
+        requirement_level: opt_in
+      - ref: network.tcp.handshake.role
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.tcp.retransmits
+    type: metric
+    metric_name: obi.stat.tcp.retransmits
+    instrument: counter
+    unit: ""
+    stability: development
+    brief: >
+      Count of TCP retransmissions observed per connection.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: src.address
+        requirement_level: recommended
+      - ref: dst.address
+        requirement_level: recommended
+      - ref: src.port
+        requirement_level: opt_in
+      - ref: dst.port
+        requirement_level: opt_in
+      - ref: src.name
+        requirement_level: opt_in
+      - ref: dst.name
+        requirement_level: opt_in
+      - ref: src.zone
+        requirement_level: opt_in
+      - ref: dst.zone
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.src.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.owner.type
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.namespace
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.name
+        requirement_level: opt_in
+      - ref: k8s.src.type
+        requirement_level: opt_in
+      - ref: k8s.src.node.ip
+        requirement_level: opt_in
+      - ref: k8s.src.node.name
+        requirement_level: opt_in
+      - ref: k8s.dst.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.owner.type
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.namespace
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.name
+        requirement_level: opt_in
+      - ref: k8s.dst.type
+        requirement_level: opt_in
+      - ref: k8s.dst.node.ip
+        requirement_level: opt_in
+      - ref: k8s.dst.node.name
+        requirement_level: opt_in
+      - ref: service.name
+        requirement_level: opt_in
+      - ref: service.namespace
+        requirement_level: opt_in
+      - ref: service.peer.name
+        requirement_level: opt_in
+      - ref: service.peer.namespace
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.tcp.io
+    type: metric
+    metric_name: obi.stat.tcp.io
+    instrument: counter
+    unit: "By"
+    stability: development
+    brief: >
+      Count of bytes transferred at the socket layer per TCP connection,
+      broken down by direction.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: src.address
+        requirement_level: recommended
+      - ref: dst.address
+        requirement_level: recommended
+      - ref: src.port
+        requirement_level: opt_in
+      - ref: dst.port
+        requirement_level: opt_in
+      - ref: src.name
+        requirement_level: opt_in
+      - ref: dst.name
+        requirement_level: opt_in
+      - ref: src.zone
+        requirement_level: opt_in
+      - ref: dst.zone
+        requirement_level: opt_in
+      - ref: network.io.direction
+        requirement_level: recommended
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.src.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.owner.type
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.namespace
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.name
+        requirement_level: opt_in
+      - ref: k8s.src.type
+        requirement_level: opt_in
+      - ref: k8s.src.node.ip
+        requirement_level: opt_in
+      - ref: k8s.src.node.name
+        requirement_level: opt_in
+      - ref: k8s.dst.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.owner.type
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.namespace
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.name
+        requirement_level: opt_in
+      - ref: k8s.dst.type
+        requirement_level: opt_in
+      - ref: k8s.dst.node.ip
+        requirement_level: opt_in
+      - ref: k8s.dst.node.name
+        requirement_level: opt_in
+      - ref: service.name
+        requirement_level: opt_in
+      - ref: service.namespace
+        requirement_level: opt_in
+      - ref: service.peer.name
+        requirement_level: opt_in
+      - ref: service.peer.namespace
+        requirement_level: opt_in
+
+  # Counter has no explicit OTLP unit set; mirror that here so live-check
+  # doesn't complain "Unit should be '1', but found ''".
+  - id: metric.obi.obi.stat.tcp.failed.connections
+    type: metric
+    metric_name: obi.stat.tcp.failed.connections
+    instrument: counter
+    unit: ""
+    stability: development
+    brief: >
+      Count of TCP connections that failed to establish, broken down by
+      `reason`.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: src.address
+        requirement_level: recommended
+      - ref: dst.address
+        requirement_level: recommended
+      - ref: src.port
+        requirement_level: opt_in
+      - ref: dst.port
+        requirement_level: opt_in
+      - ref: src.name
+        requirement_level: opt_in
+      - ref: dst.name
+        requirement_level: opt_in
+      - ref: src.zone
+        requirement_level: opt_in
+      - ref: dst.zone
+        requirement_level: opt_in
+      - ref: reason
+        requirement_level: opt_in
+      - ref: network.tcp.handshake.role
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.src.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.owner.type
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.namespace
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.name
+        requirement_level: opt_in
+      - ref: k8s.src.type
+        requirement_level: opt_in
+      - ref: k8s.src.node.ip
+        requirement_level: opt_in
+      - ref: k8s.src.node.name
+        requirement_level: opt_in
+      - ref: k8s.dst.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.owner.type
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.namespace
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.name
+        requirement_level: opt_in
+      - ref: k8s.dst.type
+        requirement_level: opt_in
+      - ref: k8s.dst.node.ip
+        requirement_level: opt_in
+      - ref: k8s.dst.node.name
+        requirement_level: opt_in
+      - ref: service.name
+        requirement_level: opt_in
+      - ref: service.namespace
+        requirement_level: opt_in
+      - ref: service.peer.name
+        requirement_level: opt_in
+      - ref: service.peer.namespace
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.tcp.successful.connections
+    type: metric
+    metric_name: obi.stat.tcp.successful.connections
+    instrument: counter
+    unit: ""
+    stability: development
+    brief: >
+      Count of TCP connections that completed the three-way handshake,
+      broken down by `network.tcp.handshake.role`.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: src.address
+        requirement_level: recommended
+      - ref: dst.address
+        requirement_level: recommended
+      - ref: src.port
+        requirement_level: opt_in
+      - ref: dst.port
+        requirement_level: opt_in
+      - ref: src.name
+        requirement_level: opt_in
+      - ref: dst.name
+        requirement_level: opt_in
+      - ref: src.zone
+        requirement_level: opt_in
+      - ref: dst.zone
+        requirement_level: opt_in
+      - ref: network.tcp.handshake.role
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.src.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.owner.type
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.namespace
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.src.name
+        requirement_level: opt_in
+      - ref: k8s.src.type
+        requirement_level: opt_in
+      - ref: k8s.src.node.ip
+        requirement_level: opt_in
+      - ref: k8s.src.node.name
+        requirement_level: opt_in
+      - ref: k8s.dst.owner.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.owner.type
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.namespace
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled
+      - ref: k8s.dst.name
+        requirement_level: opt_in
+      - ref: k8s.dst.type
+        requirement_level: opt_in
+      - ref: k8s.dst.node.ip
+        requirement_level: opt_in
+      - ref: k8s.dst.node.name
+        requirement_level: opt_in
+      - ref: service.name
+        requirement_level: opt_in
+      - ref: service.namespace
+        requirement_level: opt_in
+      - ref: service.peer.name
+        requirement_level: opt_in
+      - ref: service.peer.namespace
+        requirement_level: opt_in
+
+  # Disk / storage block-layer stats. Emitted when the `storage_block`
+  # feature is enabled. Both attributes are reused from upstream semconv
+  # (`system.device` + `disk.io.direction`), so no OBI-specific attribute is
+  # introduced here. The metric name follows the OBI `obi.stat.*` convention
+  # used by the TCP stats above, rather than the upstream `system.disk.*`
+  # namespace.
+  #
+  # `operation.duration` rather than `io.latency`: semconv reserves `duration`
+  # for a histogram of a discrete operation's elapsed time, and a name must not
+  # be both a leaf and a namespace -- `obi.stat.disk.io` is a metric in its own
+  # right below.
+  - id: metric.obi.obi.stat.disk.operation.duration
+    type: metric
+    metric_name: obi.stat.disk.operation.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Block-layer service latency per disk I/O request, measured from
+      `block_rq_issue` to `block_rq_complete`, broken down by device and
+      direction.
+    attributes:
+      - ref: system.device
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended
+
+  # Companion to the latency histogram above: the volume of data moved by the
+  # same block requests. Shares the `storage_block` feature gate and attribute
+  # set, so enabling the feature yields both metrics.
+  #
+  # This carries the same semantics as upstream semconv's `system.disk.io` but
+  # is published under the OBI namespace on purpose: emitting `system.disk.io`
+  # would collide with the OTel Collector's `hostmetrics` receiver, which
+  # publishes that metric with these same attributes, so a host running both
+  # agents would get two writers on one series.
+  #
+  # The unit is not repeated in the metric name: semconv states that metrics
+  # carrying their unit in OTEL metadata SHOULD NOT include it in the name.
+  - id: metric.obi.obi.stat.disk.io
+    type: metric
+    metric_name: obi.stat.disk.io
+    instrument: counter
+    unit: "By"
+    stability: development
+    brief: >
+      Count of bytes transferred at the block layer, accumulated per completed
+      disk I/O request and broken down by device and direction.
+    attributes:
+      - ref: system.device
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended
+
+  # Companion to the service-time histogram above, but for the other half of a
+  # request's lifetime: how long it waited before being dispatched. Requires
+  # the `block_rq_insert` tracepoint in addition to `block_rq_issue` /
+  # `block_rq_complete`, gated separately as `storage_block_queue` since it is
+  # extra kernel-side overhead the base duration/io metrics don't pay.
+  - id: metric.obi.obi.stat.disk.queue.duration
+    type: metric
+    metric_name: obi.stat.disk.queue.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Time a disk I/O request spent queued before being dispatched to the
+      device, measured from `block_rq_insert` to `block_rq_issue`, broken down
+      by device and direction. Requests that blk-mq issues directly, without
+      passing through `block_rq_insert`, are not observed: they have no queue
+      wait to report and recording a zero would understate the distribution.
+    attributes:
+      - ref: system.device
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended
+
+  # Queue depth, not queue latency: the count of requests still in flight on
+  # the device immediately after this one completed. Observed once per
+  # completion rather than time-averaged, so it approximates instantaneous
+  # saturation rather than a true utilization integral. Shares the
+  # `storage_block_queue` feature gate with the queue duration metric above.
+  - id: metric.obi.obi.stat.disk.queue.depth
+    type: metric
+    metric_name: obi.stat.disk.queue.depth
+    instrument: histogram
+    unit: "{operation}"
+    stability: development
+    brief: >
+      Number of block I/O requests still in flight on the device immediately
+      after this request completed, observed per completion and broken down
+      by device.
+    attributes:
+      - ref: system.device
+        requirement_level: recommended
+
+  # Failed completions, keyed by the upstream error.type attribute so the
+  # failure mode (ENOSPC, EIO, ...) is queryable without an OBI-specific
+  # attribute. Emitted when the `storage_block_errors` feature is enabled.
+  - id: metric.obi.obi.stat.disk.operation.errors
+    type: metric
+    metric_name: obi.stat.disk.operation.errors
+    instrument: counter
+    unit: "{error}"
+    stability: development
+    brief: >
+      Count of block I/O requests that completed with a non-zero error,
+      broken down by device, direction and errno.
+    attributes:
+      - ref: system.device
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: error.type
+        requirement_level: recommended
+
+  # Filesystem stats. Emitted when the `storage_fs` feature is enabled.
+  # Probes attach to each of the seven supported filesystems' (nfs, ceph,
+  # cifs, fuse, ext4, xfs, btrfs) own file_operations read, write and fsync
+  # implementations rather than to generic VFS, so a node not using a given
+  # filesystem pays nothing for it.
+  #
+  # system.filesystem.type is an open enum upstream (the semconv member list
+  # is fat32, exfat, ntfs, refs, hfsplus, ext4): OBI emits nfs, ceph, cifs,
+  # fuse, xfs and btrfs in addition to the upstream ext4 member.
+  #
+  # Semantics note: buffered writes return once data is in the page cache, so
+  # this is application-perceived latency, not server round-trip time -- the
+  # RPC happens later on a writeback thread.
+  - id: metric.obi.obi.stat.fs.operation.duration
+    type: metric
+    metric_name: obi.stat.fs.operation.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Latency of a single filesystem read or write as the application
+      experiences it, broken down by filesystem type and operation.
+    attributes:
+      - ref: system.filesystem.type
+        requirement_level: recommended
+      - ref: fs.operation
+        requirement_level: recommended
+
+  # Companion to the histogram above: volume of data moved by the same
+  # operations. Published under obi.* rather than system.filesystem.* so it
+  # cannot double-count against the Collector's hostmetrics receiver.
+  - id: metric.obi.obi.stat.fs.io
+    type: metric
+    metric_name: obi.stat.fs.io
+    instrument: counter
+    unit: "By"
+    stability: development
+    brief: >
+      Count of bytes transferred through filesystem read and write
+      operations, broken down by filesystem type and operation.
+    attributes:
+      - ref: system.filesystem.type
+        requirement_level: recommended
+      - ref: fs.operation
+        requirement_level: recommended
+
+  # Failed filesystem operations, keyed by the upstream error.type attribute so
+  # the failure mode (ESTALE, EIO, ENOSPC, ETIMEDOUT, ...) is queryable without
+  # an OBI-specific attribute. Emitted when the `storage_fs_errors` feature is
+  # enabled. The async io_uring completion marker (-EIOCBQUEUED) is excluded at
+  # the probe: it is not a failure, just a deferred completion OBI does not
+  # observe.
+  - id: metric.obi.obi.stat.fs.operation.errors
+    type: metric
+    metric_name: obi.stat.fs.operation.errors
+    instrument: counter
+    unit: "{error}"
+    stability: development
+    brief: >
+      Count of filesystem read or write operations that failed,
+      broken down by filesystem type, operation and errno.
+    attributes:
+      - ref: system.filesystem.type
+        requirement_level: recommended
+      - ref: fs.operation
+        requirement_level: recommended
+      - ref: error.type
+        requirement_level: recommended

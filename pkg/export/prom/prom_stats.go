@@ -31,39 +31,41 @@ type StatsPrometheusConfig struct {
 
 // Enabled returns whether the node needs to be activated
 func (p StatsPrometheusConfig) Enabled() bool {
-	return p.Config != nil && p.Config.EndpointEnabled() && (p.CommonCfg.Features.StatMetrics())
+	return p.Config != nil && p.Config.EndpointEnabled() && p.CommonCfg.Features.StatMetrics()
 }
 
 type statMetricsReporter struct {
 	cfg *PrometheusConfig
 
-	tcpRtt               *Expirer[prometheus.Histogram]
-	tcpFailedConnections *Expirer[prometheus.Counter]
-	tcpRetransmits       *Expirer[prometheus.Counter]
-	tcpIo                *Expirer[prometheus.Counter]
-	diskOpDuration       *Expirer[prometheus.Histogram]
-	diskIOBytes          *Expirer[prometheus.Counter]
-	diskQueueDuration    *Expirer[prometheus.Histogram]
-	diskQueueDepth       *Expirer[prometheus.Histogram]
-	diskOpErrors         *Expirer[prometheus.Counter]
-	fsOpDuration         *Expirer[prometheus.Histogram]
-	fsIOBytes            *Expirer[prometheus.Counter]
-	fsOpErrors           *Expirer[prometheus.Counter]
+	tcpRtt                   *Expirer[prometheus.Histogram]
+	tcpFailedConnections     *Expirer[prometheus.Counter]
+	tcpRetransmits           *Expirer[prometheus.Counter]
+	tcpIo                    *Expirer[prometheus.Counter]
+	tcpSuccessfulConnections *Expirer[prometheus.Counter]
+	diskOpDuration           *Expirer[prometheus.Histogram]
+	diskIOBytes              *Expirer[prometheus.Counter]
+	diskQueueDuration        *Expirer[prometheus.Histogram]
+	diskQueueDepth           *Expirer[prometheus.Histogram]
+	diskOpErrors             *Expirer[prometheus.Counter]
+	fsOpDuration             *Expirer[prometheus.Histogram]
+	fsIOBytes                *Expirer[prometheus.Counter]
+	fsOpErrors               *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
-	tcpRttAttrs               []attributes.Field[*ebpf.Stat, string]
-	tcpFailedConnectionsAttrs []attributes.Field[*ebpf.Stat, string]
-	tcpRetransmitsAttrs       []attributes.Field[*ebpf.Stat, string]
-	tcpIoAttrs                []attributes.Field[*ebpf.Stat, string]
-	diskOpDurationAttrs       []attributes.Field[*ebpf.Stat, string]
-	diskIOBytesAttrs          []attributes.Field[*ebpf.Stat, string]
-	diskQueueDurationAttrs    []attributes.Field[*ebpf.Stat, string]
-	diskQueueDepthAttrs       []attributes.Field[*ebpf.Stat, string]
-	diskOpErrorsAttrs         []attributes.Field[*ebpf.Stat, string]
-	fsOpDurationAttrs         []attributes.Field[*ebpf.Stat, string]
-	fsIOBytesAttrs            []attributes.Field[*ebpf.Stat, string]
-	fsOpErrorsAttrs           []attributes.Field[*ebpf.Stat, string]
+	tcpRttAttrs                   []attributes.Field[*ebpf.Stat, string]
+	tcpFailedConnectionsAttrs     []attributes.Field[*ebpf.Stat, string]
+	tcpRetransmitsAttrs           []attributes.Field[*ebpf.Stat, string]
+	tcpIoAttrs                    []attributes.Field[*ebpf.Stat, string]
+	tcpSuccessfulConnectionsAttrs []attributes.Field[*ebpf.Stat, string]
+	diskOpDurationAttrs           []attributes.Field[*ebpf.Stat, string]
+	diskIOBytesAttrs              []attributes.Field[*ebpf.Stat, string]
+	diskQueueDurationAttrs        []attributes.Field[*ebpf.Stat, string]
+	diskQueueDepthAttrs           []attributes.Field[*ebpf.Stat, string]
+	diskOpErrorsAttrs             []attributes.Field[*ebpf.Stat, string]
+	fsOpDurationAttrs             []attributes.Field[*ebpf.Stat, string]
+	fsIOBytesAttrs                []attributes.Field[*ebpf.Stat, string]
+	fsOpErrorsAttrs               []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -174,6 +176,21 @@ func newStatsReporter(
 		}, labelNames(mr.tcpFailedConnectionsAttrs)).MetricVec, timeNow, cfg.Config.TTL)
 
 		register = append(register, mr.tcpFailedConnections)
+	}
+
+	if cfg.CommonCfg.Features.StatsTCPSuccessfulConnections() {
+		log.Debug("registering stat tcp successful connections metric")
+
+		mr.tcpSuccessfulConnectionsAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatTCPSuccessfulConnections))
+
+		mr.tcpSuccessfulConnections = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatTCPSuccessfulConnections.Prom,
+			Help: "counts the TCP successful connections between 2 endpoints",
+		}, labelNames(mr.tcpSuccessfulConnectionsAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+
+		register = append(register, mr.tcpSuccessfulConnections)
 	}
 
 	if cfg.CommonCfg.Features.StorageBlockDuration() {
@@ -320,6 +337,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 		for _, stat := range stats {
 			r.observeTCPRtt(stat)
 			r.observeTCPFailedConnections(stat)
+			r.observeTCPSuccessfulConnections(stat)
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
 			r.observeDiskOpDuration(stat)
@@ -347,6 +365,14 @@ func (r *statMetricsReporter) observeTCPFailedConnections(stat *ebpf.Stat) {
 		return
 	}
 	r.tcpFailedConnections.WithLabelValues(labelValues(stat, r.tcpFailedConnectionsAttrs)...).
+		Metric.Add(1)
+}
+
+func (r *statMetricsReporter) observeTCPSuccessfulConnections(stat *ebpf.Stat) {
+	if r.tcpSuccessfulConnections == nil || stat.TCPSuccessfulConnection == nil {
+		return
+	}
+	r.tcpSuccessfulConnections.WithLabelValues(labelValues(stat, r.tcpSuccessfulConnectionsAttrs)...).
 		Metric.Add(1)
 }
 

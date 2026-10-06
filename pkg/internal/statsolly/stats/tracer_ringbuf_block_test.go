@@ -16,7 +16,7 @@ import (
 
 func TestReadBlockIoIntoStat(t *testing.T) {
 	ev := ebpf.StatsBlockIo{
-		Flags:     5,
+		Flags:     uint8(ebpf.StatTypeBlockIo),
 		Op:        uint8(ebpf.CodeDirectionWrite),
 		Dev:       0x800010,
 		LatencyNs: 1_500_000,
