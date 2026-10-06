@@ -101,6 +101,57 @@ static void test_requeue_overwrites_the_entry(void) {
     assert_true(cur.bytes_done == 0, "a stale entry of another kind leaks no bytes");
 }
 
+// The per-device in-flight count as blk_io.c keeps it, over two disks.
+struct dev_counts {
+    long long vda;
+    long long vdb;
+};
+
+static long long *dev_count(struct dev_counts *const c, const u32 dev) {
+    return dev == k_dev_vda ? &c->vda : &c->vdb;
+}
+
+// blk_on_issue on an entry that is still present.
+static void reissue_counted(struct dev_counts *const c,
+                            struct blk_rq_inflight *const cur,
+                            const struct blk_rq_inflight *const issued) {
+    const u32 prev_dev = blk_rq_reissue(cur, issued);
+    if (prev_dev != issued->dev) {
+        (*dev_count(c, prev_dev))--;
+        (*dev_count(c, issued->dev))++;
+    }
+}
+
+static void test_reissue_moves_the_count(void) {
+    struct dev_counts counts = {};
+
+    // Issued on vda; its completion is missed, so the entry stays.
+    struct blk_rq_inflight cur = inflight(100, 0, 0, k_dev_vda, blk_req_write);
+    (*dev_count(&counts, cur.dev))++;
+
+    // The tag set is shared by both disks: the same request struct is issued
+    // for vdb, then completes.
+    const struct blk_rq_inflight on_vdb = inflight(900, 0, 0, k_dev_vdb, blk_req_write);
+    struct blk_rq_inflight probe = cur;
+    assert_true(blk_rq_reissue(&probe, &on_vdb) == k_dev_vda,
+                "a reissue returns the device the entry was counted on");
+    reissue_counted(&counts, &cur, &on_vdb);
+    (*dev_count(&counts, cur.dev))--;
+
+    assert_true(counts.vda == 0, "a reused request struct releases the stale issue's disk");
+    assert_true(counts.vdb == 0, "the other disk's completion does not take it below zero");
+
+    // A requeue on the same disk is not a new request in flight.
+    counts = (struct dev_counts){};
+    cur = inflight(100, 0, 0, k_dev_vda, blk_req_write);
+    (*dev_count(&counts, cur.dev))++;
+    const struct blk_rq_inflight requeued = inflight(900, 0, 0, k_dev_vda, blk_req_write);
+    reissue_counted(&counts, &cur, &requeued);
+    assert_true(counts.vda == 1 && counts.vdb == 0, "a requeue leaves the count alone");
+    (*dev_count(&counts, cur.dev))--;
+    assert_true(counts.vda == 0, "the requeued request's completion brings it back to zero");
+}
+
 struct req_op_case {
     const char *name;
     u32 value;
@@ -225,6 +276,7 @@ int main(void) {
     test_status_to_errno();
     test_final_chunk();
     test_requeue_overwrites_the_entry();
+    test_reissue_moves_the_count();
     test_req_op_tables();
     test_kernel_without_zone_append();
     test_rwbs();
