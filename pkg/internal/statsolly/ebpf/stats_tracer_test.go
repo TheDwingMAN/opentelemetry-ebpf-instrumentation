@@ -298,21 +298,29 @@ func TestBlockTracepointLayoutFromBTF(t *testing.T) {
 	require.Error(t, err, "an unexpected prototype is an error, not a guess")
 }
 
-// The request flags were macros, then numbered by an enum that some kernels leave anonymous
+// The request flags were macros, then numbered by an enum that some kernels leave anonymous, and
+// that some older kernels have backported (RHEL 9.6)
 func TestRequestFlushSeqFlag(t *testing.T) {
 	flags := func(name string) *btf.Enum {
 		return &btf.Enum{Name: name, Size: 4, Values: []btf.EnumValue{
 			{Name: "__RQF_STARTED", Value: 0}, {Name: "__RQF_FLUSH_SEQ", Value: 1},
 		}}
 	}
+	noEnum := &btf.Int{Name: "int", Size: 4}
 	for _, tc := range []struct {
-		name string
-		typ  btf.Type
-		want uint32
+		name         string
+		typ          btf.Type
+		major, minor int
+		want         uint32
 	}{
-		{"macros", &btf.Int{Name: "int", Size: 4}, 1 << 4},
-		{"anonymous enum", flags(""), 1 << 1},
-		{"named enum", flags("rqf_flags"), 1 << 1},
+		{"macros", noEnum, 6, 10, 1 << 4},
+		{"macros, RHEL 8", noEnum, 4, 18, 1 << 4},
+		{"anonymous enum", flags(""), 6, 12, 1 << 1},
+		{"named enum", flags("rqf_flags"), 6, 18, 1 << 1},
+		{"backported enum", flags(""), 5, 14, 1 << 1},
+		// the bit of the macros is RQF_SCHED_TAGS in the enum: no flag rather than a wrong one
+		{"enum kernel without the enum in its BTF", noEnum, 6, 11, 0},
+		{"later enum kernel without the enum in its BTF", noEnum, 7, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			builder, err := btf.NewBuilder([]btf.Type{tc.typ}, nil)
@@ -321,7 +329,7 @@ func TestRequestFlushSeqFlag(t *testing.T) {
 			require.NoError(t, err)
 			spec, err := btf.LoadSpecFromReader(bytes.NewReader(raw))
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, requestFlushSeqFlag(enumerator(spec)))
+			assert.Equal(t, tc.want, requestFlushSeqFlag(enumerator(spec), tc.major, tc.minor))
 		})
 	}
 }

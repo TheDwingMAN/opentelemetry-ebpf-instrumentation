@@ -23,6 +23,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 
 	"go.opentelemetry.io/obi/pkg/config"
+	ebpfcommon "go.opentelemetry.io/obi/pkg/ebpf/common"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
@@ -631,7 +632,12 @@ func kernelBlockTracepointLayout(log *slog.Logger) blockTracepointLayout {
 	if err == nil {
 		var layout blockTracepointLayout
 		if layout, err = blockTracepointLayoutFrom(tracepointProto(spec)); err == nil {
-			layout.flushSeqFlag = requestFlushSeqFlag(enumerator(spec))
+			major, minor := ebpfcommon.KernelVersion()
+			layout.flushSeqFlag = requestFlushSeqFlag(enumerator(spec), major, minor)
+			if layout.flushSeqFlag == 0 {
+				log.Warn("can't find the RQF_FLUSH_SEQ request flag in the kernel BTF: the writes with a cache " +
+					"flush before or after them may be counted twice")
+			}
 			return layout
 		}
 	}
@@ -655,15 +661,28 @@ func tracepointProto(spec *btf.Spec) func(string) (*btf.FuncProto, error) {
 	}
 }
 
-// rqfFlushSeqBitBeforeEnum is the bit of RQF_FLUSH_SEQ when the request flags were macros
+// rqfFlushSeqBitBeforeEnum is the bit of RQF_FLUSH_SEQ when the request flags were macros, before
+// Linux 6.11
 const rqfFlushSeqBitBeforeEnum = 4
 
-// requestFlushSeqFlag is the RQF_FLUSH_SEQ flag of the block requests. Newer kernels number the
-// request flags with an enum, which is anonymous in some versions (e.g. 6.12): the BPF programs
-// can't relocate its enumerators, so they get the flag from userspace.
-func requestFlushSeqFlag(enumerator func(string) (uint64, bool)) uint32 {
+// The first Linux version that numbers the request flags with an enum
+const (
+	rqfEnumKernelMajor = 6
+	rqfEnumKernelMinor = 11
+)
+
+// requestFlushSeqFlag is the RQF_FLUSH_SEQ flag of the block requests. Linux 6.11 and later, and
+// backports such as RHEL 9.6, number the request flags with an enum, which is anonymous in some
+// versions (e.g. 6.12): the BPF programs can't relocate its enumerators, so they get the flag from
+// userspace. The flag is only assumed from the kernel version when the BTF has no such enumerator,
+// and 0 (unknown) for an enum kernel: the bit of the macros is another flag there, which would
+// drop all the requests of the devices with an I/O scheduler.
+func requestFlushSeqFlag(enumerator func(string) (uint64, bool), kernelMajor, kernelMinor int) uint32 {
 	if bit, ok := enumerator("__RQF_FLUSH_SEQ"); ok {
 		return 1 << bit
+	}
+	if kernelMajor > rqfEnumKernelMajor || (kernelMajor == rqfEnumKernelMajor && kernelMinor >= rqfEnumKernelMinor) {
+		return 0
 	}
 	return 1 << rqfFlushSeqBitBeforeEnum
 }
