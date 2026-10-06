@@ -4,6 +4,7 @@
 package statagg // import "go.opentelemetry.io/obi/pkg/internal/statsolly/statagg"
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -33,6 +34,17 @@ const (
 	// collections wait on is held for a bounded time; the rest wait for the
 	// next poll.
 	DefaultMaxDeletesPerPoll = 1024
+	// DefaultNewKeyInterval is the period of the new-key check, which lists
+	// the keys of the map, without their values, and polls only when one is
+	// new: a key is decorated within about a second of its first count,
+	// while the pod it counts for, and its cgroup, still exist, rather than
+	// at the next tick or scrape, when a pod shorter than that gap is gone.
+	DefaultNewKeyInterval = time.Second
+	// DefaultRetryPendingFor is how long after a key first appears a
+	// decoration that is not final yet (a pod the Kubernetes store does not
+	// know yet, a container whose ID it has not seen yet) has the new-key
+	// check poll again, so the key is decorated again while its pod lives.
+	DefaultRetryPendingFor = 10 * time.Second
 )
 
 // DefaultIdleAfter is how long a key must count nothing before it is deleted
@@ -179,8 +191,24 @@ type Config struct {
 	MinPollInterval time.Duration
 	TickInterval    time.Duration
 	RedecorateAfter time.Duration
-	// IdleAfter defaults to DefaultIdleAfter(TickInterval).
+	// IdleAfter defaults to DefaultIdleAfter(TickInterval), whatever
+	// NewKeyInterval: the new-key check's polls do not make keys idle
+	// sooner.
 	IdleAfter time.Duration
+	// NewKeyInterval is the period of the new-key check
+	// (DefaultNewKeyInterval when 0); a negative one disables the check,
+	// for a map whose keys need nothing that may be gone by the next tick.
+	NewKeyInterval time.Duration
+	// RetryPendingFor is how long after it first appears a key whose
+	// decoration is not final (Stat's final=false, or Pending) has the
+	// new-key check poll again (DefaultRetryPendingFor when 0).
+	RetryPendingFor time.Duration
+	// Learn, when set, is called by the new-key check with the keys it
+	// found new, before the poll that decorates them, without the family
+	// lock, so it may block scrapes no longer than the check does: e.g.
+	// for the cgroup index to learn their cgroups while they exist. The
+	// keys are copies it may keep.
+	Learn func(keys [][]byte)
 	// MaxDeletesPerPoll defaults to DefaultMaxDeletesPerPoll.
 	MaxDeletesPerPoll int
 	Clock             func() time.Time
@@ -224,6 +252,13 @@ type Family struct {
 	stopped  bool
 	lastPoll time.Time
 	pollErr  bool
+	// polls counts the reads of the map.
+	polls uint64
+	// pending holds the keys younger than RetryPendingFor whose decoration
+	// is not final: the new-key check polls while there is one.
+	pending map[*kernelKey]struct{}
+	// checkErr is set while the new-key check cannot list the map.
+	checkErr bool
 }
 
 // NewFamily validates cfg and fills in its defaults.
@@ -252,6 +287,12 @@ func NewFamily(cfg Config) (*Family, error) {
 	if cfg.IdleAfter == 0 {
 		cfg.IdleAfter = DefaultIdleAfter(cfg.TickInterval)
 	}
+	if cfg.NewKeyInterval == 0 {
+		cfg.NewKeyInterval = DefaultNewKeyInterval
+	}
+	if cfg.RetryPendingFor == 0 {
+		cfg.RetryPendingFor = DefaultRetryPendingFor
+	}
 	if cfg.MaxDeletesPerPoll == 0 {
 		cfg.MaxDeletesPerPoll = DefaultMaxDeletesPerPoll
 	}
@@ -262,15 +303,18 @@ func NewFamily(cfg Config) (*Family, error) {
 		cfg.Deletable = func([]byte) bool { return true }
 	}
 	return &Family{
-		cfg:    cfg,
-		reader: reader,
-		log:    slog.With("component", "statagg.Family", "family", cfg.Name),
+		cfg:     cfg,
+		reader:  reader,
+		log:     slog.With("component", "statagg.Family", "family", cfg.Name),
+		pending: map[*kernelKey]struct{}{},
 	}, nil
 }
 
-// Run starts reading the kernel map, every TickInterval and whenever an
-// exporter collects, until ctx is done. Attach every exporter
-// before: one attached later misses what the map counted until then.
+// Run starts reading the kernel map, every TickInterval, whenever an
+// exporter collects, and whenever the new-key check, every NewKeyInterval,
+// finds a key the family has not decorated yet, until ctx is done. Attach
+// every exporter before: one attached later misses what the map counted
+// until then.
 //
 // Once ctx is done, Run reads the map one last time, so what the kernel
 // counted until then reaches the exporters, and returns: from then on the
@@ -280,6 +324,12 @@ func (f *Family) Run(ctx context.Context) {
 	defer f.stop()
 	ticker := time.NewTicker(f.cfg.TickInterval)
 	defer ticker.Stop()
+	var newKeys <-chan time.Time
+	if f.cfg.NewKeyInterval > 0 {
+		check := time.NewTicker(f.cfg.NewKeyInterval)
+		defer check.Stop()
+		newKeys = check.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -288,8 +338,73 @@ func (f *Family) Run(ctx context.Context) {
 			f.mu.Lock()
 			f.poll(f.cfg.Clock())
 			f.mu.Unlock()
+		case <-newKeys:
+			f.checkNewKeys()
 		}
 	}
+}
+
+// checkNewKeys lists the keys of the map, without their values, and polls
+// when one of them is new, or when a young key's decoration is not final
+// yet: a key decorated a second after its first count still finds its
+// process, its cgroup and its pod, where the next tick, or scrape, may be
+// too late for a short-lived pod. With no new key it reads nothing else, so
+// the steady state costs one key listing per NewKeyInterval.
+func (f *Family) checkNewKeys() {
+	f.mu.Lock()
+	if !f.started || f.stopped {
+		f.mu.Unlock()
+		return
+	}
+	fresh, due := f.newKeys(f.cfg.Clock())
+	polls := f.polls
+	f.mu.Unlock()
+	if !due {
+		return
+	}
+	if len(fresh) > 0 && f.cfg.Learn != nil {
+		f.cfg.Learn(fresh)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// A collection that read the map since has decorated the new keys.
+	if f.stopped || f.polls != polls {
+		return
+	}
+	f.poll(f.cfg.Clock())
+}
+
+// newKeys returns the keys of the map the Reader has not seen, and whether
+// a poll is due: for them, for a young key whose decoration is not final,
+// or for a young key that has not counted anything yet (found between the
+// kernel's creation of its zeroed value and its first count).
+func (f *Family) newKeys(now time.Time) (fresh [][]byte, due bool) {
+	for k := range f.pending {
+		if now.Sub(k.born) >= f.cfg.RetryPendingFor || f.reader.keys[k.key] != k {
+			delete(f.pending, k)
+		}
+	}
+	due = len(f.pending) > 0
+	err := forEachKey(f.cfg.Source, func(key []byte) {
+		k, known := f.reader.keys[string(key)]
+		switch {
+		case !known:
+			fresh = append(fresh, bytes.Clone(key))
+			due = true
+		case k.decorated.IsZero() && now.Sub(k.born) < f.cfg.RetryPendingFor:
+			due = true
+		}
+	})
+	if err != nil {
+		if !f.checkErr {
+			f.checkErr = true
+			f.log.Debug("can't list the keys of the kernel aggregation map", "error", err)
+		}
+		return nil, due
+	}
+	f.checkErr = false
+	return fresh, due
 }
 
 // stop reads the map a last time, without deleting idle keys, which would
@@ -339,6 +454,7 @@ func (f *Family) poll(now time.Time) {
 // whether the map could be read.
 func (f *Family) read(now time.Time) bool {
 	f.lastPoll = now
+	f.polls++
 	if err := f.reader.Poll(now, f.visitor(now)); err != nil {
 		f.logPollError(err)
 		return false
@@ -410,6 +526,11 @@ func (f *Family) decorate(k *kernelKey, values []byte, now time.Time) {
 		final = false
 	}
 	k.decorated, k.final, k.sinkGen = now, final, len(f.sinks)
+	if !final && now.Sub(k.born) < f.cfg.RetryPendingFor {
+		f.pending[k] = struct{}{}
+	} else {
+		delete(f.pending, k)
+	}
 
 	if len(k.links) != len(f.sinks) {
 		k.links = make([][][]*seriesCore, len(f.sinks))

@@ -14,6 +14,8 @@ import (
 	cebpf "github.com/cilium/ebpf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 )
 
 // blkAggValue has the shape of the step 6 blk_agg value: 148 bytes, which a
@@ -215,5 +217,113 @@ func BenchmarkMapSource_BlkAgg(b *testing.B) {
 			require.Equal(b, int(keys), visited)
 			b.ReportMetric(float64(src.CPUs()), "cpus")
 		})
+	}
+}
+
+// putKeys creates keys 0 to n-1, each having counted one byte, in a
+// blk_agg-shaped map.
+func putKeys(tb testing.TB, m *cebpf.Map, src *MapSource, n uint32) {
+	tb.Helper()
+	for i := range n {
+		var err error
+		if src.perCPU {
+			vals := make([]blkAggValue, src.CPUs())
+			vals[0].Bytes = 1
+			err = m.Put(mapKey(i), vals)
+		} else {
+			err = m.Put(mapKey(i), blkAggValue{Bytes: 1})
+		}
+		require.NoError(tb, err)
+	}
+}
+
+func TestMapSource_ForEachKey(t *testing.T) {
+	for _, typ := range []cebpf.MapType{cebpf.PerCPUHash, cebpf.Hash} {
+		t.Run(typ.String(), func(t *testing.T) {
+			m := newTestMap(t, typ, 512)
+			src, err := NewMapSource(m)
+			require.NoError(t, err)
+			require.NoError(t, src.ForEachKey(func([]byte) { t.Fatal("an empty map has no key") }))
+
+			putKeys(t, m, src, 300)
+			seen := map[string]int{}
+			require.NoError(t, src.ForEachKey(func(key []byte) { seen[string(key)]++ }))
+			assert.Len(t, seen, 300)
+			for i := range uint32(300) {
+				assert.Equal(t, 1, seen[string(mapKey(i))], "key %d", i)
+			}
+		})
+	}
+}
+
+// The new-key check of a family over a real map with no new key: the steady
+// state cost, once a second, of a family whose keys all have been decorated.
+// The per-CPU map is listed with NextKey, the shared one with batch lookups.
+// fs_io_accum is a shared map of 8192 entries, blk_cg_agg a per-CPU one.
+func BenchmarkFamily_NewKeyCheck(b *testing.B) {
+	for _, typ := range []cebpf.MapType{cebpf.PerCPUHash, cebpf.Hash} {
+		for _, keys := range []uint32{100, 4096} {
+			b.Run(typ.String()+"/"+strconv.Itoa(int(keys)), func(b *testing.B) {
+				f, src := realMapFamily(b, typ, keys)
+				f.checkNewKeys()
+				require.Equal(b, uint64(1), f.polls, "the first check polls the new keys")
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					f.checkNewKeys()
+				}
+				b.StopTimer()
+				require.Equal(b, uint64(1), f.polls, "no new key: no poll")
+				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(keys), "ns/key")
+				b.ReportMetric(float64(src.CPUs()), "cpus")
+			})
+		}
+	}
+}
+
+func realMapFamily(b *testing.B, typ cebpf.MapType, keys uint32) (*Family, *MapSource) {
+	b.Helper()
+	m, err := cebpf.NewMap(&cebpf.MapSpec{Type: typ, KeySize: testKeySize, ValueSize: blkAggValueSize, MaxEntries: 1 << 13})
+	require.NoError(b, err)
+	b.Cleanup(func() { m.Close() })
+	src, err := NewMapSource(m)
+	require.NoError(b, err)
+	putKeys(b, m, src, keys)
+	f, err := NewFamily(Config{
+		Name: "bench", Source: src, Layout: ValueLayout{Counters: 2, Buckets: 33},
+		Stat: func([]byte, []byte) (*ebpf.Stat, bool) { return nil, true },
+	})
+	require.NoError(b, err)
+	f.start()
+	return f, src
+}
+
+// Listing the keys of a map, one NextKey call per key against batch lookups
+// that copy the values too, for the choice ForEachKey makes per map type.
+func BenchmarkMapSource_ListKeys(b *testing.B) {
+	for _, typ := range []cebpf.MapType{cebpf.PerCPUHash, cebpf.Hash} {
+		for _, keys := range []uint32{100, 4096} {
+			for _, walk := range []string{"nextkey", "batch"} {
+				b.Run(typ.String()+"/"+strconv.Itoa(int(keys))+"/"+walk, func(b *testing.B) {
+					_, src := realMapFamily(b, typ, keys)
+					list := src.nextKeys
+					if walk == "batch" {
+						list = func(fn func([]byte)) error { return src.ForEach(func(k, _ []byte) { fn(k) }) }
+					}
+					n := 0
+					b.ReportAllocs()
+					b.ResetTimer()
+					for range b.N {
+						n = 0
+						if err := list(func([]byte) { n++ }); err != nil {
+							b.Fatal(err)
+						}
+					}
+					b.StopTimer()
+					require.Equal(b, int(keys), n)
+					b.ReportMetric(float64(src.CPUs()), "cpus")
+				})
+			}
+		}
 	}
 }

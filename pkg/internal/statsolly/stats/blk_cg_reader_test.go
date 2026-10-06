@@ -56,6 +56,7 @@ const (
 type fakeIndex struct {
 	ids        map[uint64]statagg.CgroupIdentity
 	tombstoned map[uint64]bool
+	learnt     []uint64
 }
 
 func (x *fakeIndex) Lookup(id uint64) (statagg.CgroupIdentity, bool) {
@@ -67,6 +68,8 @@ func (x *fakeIndex) Lookup(id uint64) (statagg.CgroupIdentity, bool) {
 }
 
 func (x *fakeIndex) Tombstoned(id uint64) bool { return x.tombstoned[id] }
+
+func (x *fakeIndex) Learn(ids ...uint64) { x.learnt = append(x.learnt, ids...) }
 
 type fakeStore struct {
 	byContainer map[string]*ikube.CachedObjMeta
@@ -226,6 +229,15 @@ func TestBlockPodResolver(t *testing.T) {
 // A key is deleted only once its cgroup's tombstone expired (spec 2.3): the
 // next writeback charged to a removed pod's cgroup would otherwise create it
 // again, unresolved.
+// The new-key check has the index learn the cgroups of new keys.
+func TestBlockPodResolver_LearnsTheCgroupsOfNewKeys(t *testing.T) {
+	index, _, r, _ := newPodFixture()
+	r.learn([][]byte{cgKey(cgNew, 8, 8, ebpf.CodeBlockWrite), cgKey(cgWriter, 8, 8, ebpf.CodeBlockRead), {1, 2}})
+	assert.Equal(t, []uint64{cgNew, cgWriter}, index.learnt, "a short key has no cgroup")
+
+	NewBlockPodResolver(nil, nil).learn([][]byte{cgKey(cgNew, 8, 8, ebpf.CodeBlockWrite)})
+}
+
 func TestBlockPodResolver_KeysStayWhileTombstoned(t *testing.T) {
 	index, _, r, _ := newPodFixture()
 	key := cgKey(cgWriter, vdb, 0, ebpf.CodeBlockWrite)

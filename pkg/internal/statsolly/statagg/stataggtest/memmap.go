@@ -19,6 +19,8 @@ type MemMap struct {
 	stride  int
 	cpus    int
 	entries map[string][]byte
+	// reads and listings count the calls of ForEach and ForEachKey.
+	reads, listings int
 }
 
 // NewMemMap returns an empty map. A per-CPU map (cpus > 1) strides its
@@ -39,15 +41,46 @@ func (m *MemMap) CPUs() int        { return m.cpus }
 func (m *MemMap) ForEach(fn func(key, values []byte)) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.reads++
+	for _, k := range m.sortedKeys() {
+		fn([]byte(k), m.entries[k])
+	}
+	return nil
+}
+
+// ForEachKey visits the keys in order, without their values: the
+// statagg.KeyLister of a per-CPU map.
+func (m *MemMap) ForEachKey(fn func(key []byte)) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.listings++
+	for _, k := range m.sortedKeys() {
+		fn([]byte(k))
+	}
+	return nil
+}
+
+func (m *MemMap) sortedKeys() []string {
 	keys := make([]string, 0, len(m.entries))
 	for k := range m.entries {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
-	for _, k := range keys {
-		fn([]byte(k), m.entries[k])
-	}
-	return nil
+	return keys
+}
+
+// Reads is the number of ForEach calls: full reads of keys and values.
+func (m *MemMap) Reads() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reads
+}
+
+// Listings is the number of ForEachKey calls: key-only listings.
+func (m *MemMap) Listings() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.listings
 }
 
 func (m *MemMap) LookupAndDelete(key, values []byte) (bool, error) {

@@ -275,6 +275,70 @@ func (x *CgroupIndex) Lookup(id uint64) (identity CgroupIdentity, final bool) {
 	return CgroupIdentity{}, false
 }
 
+// Learn scans the hierarchy now, and returns once the scan is done, when
+// one of ids is unknown to the index: a family calls it for the cgroups of
+// the keys its new-key check found, before decorating them, so a cgroup that
+// lives a few seconds is indexed while it exists and keeps its pod as a
+// tombstone once removed. Lookup only asks Run for a scan, which may come
+// after the cgroup is gone. An id a scan has missed since it was first
+// looked up or learnt was removed before: it is not scanned for again, and
+// has no pod. Calls for the same new cgroup wait for one another, and the
+// scan of the first answers the others.
+func (x *CgroupIndex) Learn(ids ...uint64) {
+	if !x.needsScan(ids) {
+		return
+	}
+	x.scanMu.Lock()
+	defer x.scanMu.Unlock()
+	if !x.needsScan(ids) {
+		return
+	}
+	if err := x.scan(); err != nil {
+		x.log.Debug("can't scan the cgroup hierarchy", "error", err)
+	}
+}
+
+// needsScan reports whether one of ids is unknown and no scan has missed it
+// since it was first asked about, and records when each was first asked.
+func (x *CgroupIndex) needsScan(ids []uint64) bool {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	now := x.clock()
+	unknown := false
+	for _, id := range ids {
+		if id <= rootCgroupID {
+			continue
+		}
+		if _, known := x.ids[id]; known {
+			continue
+		}
+		asked, wasAsked := x.asked[id]
+		if !wasAsked {
+			x.asked[id] = askedID{at: now, scans: x.started}
+		} else if x.scans > asked.scans {
+			continue
+		}
+		unknown = true
+	}
+	return unknown
+}
+
+// LearnKeys returns the Config.Learn of a family whose keys count for the
+// cgroup cgroupOf reads from them: the index learns the cgroups of its new
+// keys. It is nil for a nil index.
+func (x *CgroupIndex) LearnKeys(cgroupOf func(key []byte) uint64) func(keys [][]byte) {
+	if x == nil {
+		return nil
+	}
+	return func(keys [][]byte) {
+		ids := make([]uint64, len(keys))
+		for i, key := range keys {
+			ids[i] = cgroupOf(key)
+		}
+		x.Learn(ids...)
+	}
+}
+
 // Tombstoned reports whether id is a removed cgroup of a pod whose tombstone
 // lasts: a kernel key of that cgroup must not be deleted yet, or the next I/O
 // charged to it would create the key again with no labels.
@@ -292,7 +356,11 @@ func (x *CgroupIndex) Tombstoned(id uint64) bool {
 func (x *CgroupIndex) Scan() error {
 	x.scanMu.Lock()
 	defer x.scanMu.Unlock()
+	return x.scan()
+}
 
+// scan is Scan with scanMu held.
+func (x *CgroupIndex) scan() error {
 	x.mu.Lock()
 	x.started++
 	seq := x.started

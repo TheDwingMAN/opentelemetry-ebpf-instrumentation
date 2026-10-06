@@ -34,6 +34,24 @@ type Source interface {
 	LookupAndDelete(key, values []byte) (bool, error)
 }
 
+// KeyLister is a Source that lists its keys without reading their values:
+// what the new-key check of a Family reads every NewKeyInterval, so it must
+// cost far less than ForEach (a per-CPU map must not copy its per-CPU
+// values for it). A Source that is no KeyLister is listed with ForEach.
+type KeyLister interface {
+	// ForEachKey calls fn for every key of the map; a key may come twice
+	// when the walk restarts. The slice may not be used after fn returns.
+	ForEachKey(fn func(key []byte)) error
+}
+
+// forEachKey lists the keys of src, with ForEachKey when it has it.
+func forEachKey(src Source, fn func(key []byte)) error {
+	if l, ok := src.(KeyLister); ok {
+		return l.ForEachKey(fn)
+	}
+	return src.ForEach(func(key, _ []byte) { fn(key) })
+}
+
 // ValueLayout describes the counting part of a kernel value: Counters u64
 // words followed by Buckets u32 words. Anything after them (padding, a sample
 // PID) is not counted.
@@ -86,6 +104,8 @@ type kernelKey struct {
 	prev []byte
 	// changed is when a poll last found the key changed, or first found it.
 	changed time.Time
+	// born is when a poll first found the key.
+	born time.Time
 	// seen is the poll generation that last found the key in the map.
 	seen uint64
 
@@ -147,7 +167,7 @@ func (r *Reader) Poll(now time.Time, visit func(k *kernelKey, d Delta, values []
 		}
 		if !ok {
 			// A key enters the map zeroed, so all of its first values are new.
-			k = &kernelKey{key: string(key), prev: make([]byte, r.layout.size()), changed: now}
+			k = &kernelKey{key: string(key), prev: make([]byte, r.layout.size()), changed: now, born: now}
 			r.keys[k.key] = k
 		}
 		k.seen = r.gen

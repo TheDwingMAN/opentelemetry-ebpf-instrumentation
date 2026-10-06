@@ -302,3 +302,27 @@ func BenchmarkPollCPUs_AllChanged(b *testing.B) {
 		})
 	}
 }
+
+// The new-key check with no new key, on an in-memory map: the userspace
+// part of the steady cost, once a second, of a family whose keys all have
+// been decorated (BenchmarkFamily_NewKeyCheck, privileged, adds the
+// syscalls of a real map).
+func BenchmarkNewKeyCheck_NoNewKey(b *testing.B) {
+	for _, keys := range []int{100, 4096} {
+		b.Run(strconv.Itoa(keys), func(b *testing.B) {
+			tf, _ := benchFamily(b, keys)
+			tf.family.checkNewKeys()
+			polls := tf.family.polls
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				tf.family.checkNewKeys()
+			}
+			b.StopTimer()
+			if tf.family.polls != polls {
+				b.Fatal("a check with no new key polled")
+			}
+			perKey(b, keys)
+		})
+	}
+}

@@ -71,6 +71,7 @@ func blockCgroupFamily(src statagg.Source, features export.Features, pods *Block
 		Stat:      pods.stat,
 		Decorate:  decorate,
 		Deletable: pods.deletable,
+		Learn:     pods.learn,
 		Metrics:   metrics,
 		Clock:     clock,
 	})
@@ -80,6 +81,7 @@ func blockCgroupFamily(src statagg.Source, features export.Features, pods *Block
 type cgroupIndex interface {
 	Lookup(id uint64) (statagg.CgroupIdentity, bool)
 	Tombstoned(id uint64) bool
+	Learn(ids ...uint64)
 }
 
 // podLabels are the Kubernetes attributes of the I/O charged to one cgroup.
@@ -150,6 +152,21 @@ func (r *BlockPodResolver) deletable(key []byte) bool {
 		return true
 	}
 	return !r.index.Tombstoned(binary.NativeEndian.Uint64(key[cgKeyCgid:]))
+}
+
+// learn has the index learn the cgroups of new keys before they are
+// decorated (statagg.Config.Learn).
+func (r *BlockPodResolver) learn(keys [][]byte) {
+	if r.index == nil {
+		return
+	}
+	ids := make([]uint64, 0, len(keys))
+	for _, key := range keys {
+		if len(key) >= cgKeySize {
+			ids = append(ids, binary.NativeEndian.Uint64(key[cgKeyCgid:]))
+		}
+	}
+	r.index.Learn(ids...)
 }
 
 func (r *BlockPodResolver) resolve(cgid uint64) (*podLabels, bool) {

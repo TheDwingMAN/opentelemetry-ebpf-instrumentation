@@ -169,7 +169,7 @@ func (s *Stats) newBlockCgroupFamily(ctx context.Context, m *ciliumebpf.Map, fea
 	}
 	var pods *stats.BlockPodResolver
 	if s.aggDeps.store != nil {
-		pods = stats.NewBlockPodResolver(s.cgroupIndex(), s.aggDeps.store)
+		pods = stats.NewBlockPodResolver(s.cgroupIndex(), s.podMemory())
 	} else {
 		pods = stats.NewBlockPodResolver(nil, nil)
 	}

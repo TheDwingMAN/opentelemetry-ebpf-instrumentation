@@ -563,3 +563,88 @@ func TestCgroupV2(t *testing.T) {
 	assert.False(t, cgroupV2([]string{v1}))
 	assert.False(t, cgroupV2([]string{missing}))
 }
+
+// A Job's pod, created after the last background scan.
+const (
+	jobPod = "kubepods.slice/kubepods-besteffort.slice/kubepods-besteffort-pod0f6b2d4e_8c1a_4b7e_9d3f_2a5c7e9b1d4f.slice"
+	jobUID = "0f6b2d4e-8c1a-4b7e-9d3f-2a5c7e9b1d4f"
+	jobCtr = "5e8a1c3f7b9d2e4a6c8f0b1d3e5a7c9f1b3d5e7a9c1f3b5d7e9a1c3f5b7d9e1a"
+)
+
+// countWalks counts the walks of x's scans.
+func countWalks(x *CgroupIndex) *atomic.Int32 {
+	var walks atomic.Int32
+	x.walk = func() (map[uint64]CgroupIdentity, error) {
+		walks.Add(1)
+		return x.walkRoots()
+	}
+	return &walks
+}
+
+// A short-lived pod's cgroup is learnt at its keys' first decoration, while
+// it exists, and keeps its pod as a tombstone once it is removed.
+func TestCgroupIndex_LearnIndexesANewCgroupWhileItExists(t *testing.T) {
+	root := makeTree(t, crioFixture)
+	clock := newFakeClock()
+	x := NewCgroupIndex(WithCgroupRoots(root), WithCgroupClock(clock.Now))
+	require.NoError(t, x.Scan())
+	walks := countWalks(x)
+
+	scope := filepath.Join(root, jobPod, "cri-containerd-"+jobCtr+".scope")
+	require.NoError(t, os.MkdirAll(scope, 0o755))
+	id := inoOf(t, scope)
+	x.Learn(id, inoOf(t, filepath.Join(root, burstablePod)))
+	assert.Equal(t, int32(1), walks.Load(), "an unknown id: one scan, before Learn returns")
+	got, final := x.Lookup(id)
+	assert.True(t, final)
+	assert.Equal(t, CgroupIdentity{PodUID: jobUID, ContainerID: jobCtr}, got)
+	assert.False(t, rescanAsked(x))
+
+	// The Job completes: its cgroup is removed before the next scan.
+	require.NoError(t, os.RemoveAll(filepath.Join(root, jobPod)))
+	clock.Advance(DefaultCgroupScanInterval)
+	require.NoError(t, x.Scan())
+	got, final = x.Lookup(id)
+	assert.True(t, final)
+	assert.Equal(t, CgroupIdentity{PodUID: jobUID, ContainerID: jobCtr}, got, "a tombstone keeps the identity")
+	assert.True(t, x.Tombstoned(id))
+
+	x.Learn(id)
+	assert.Equal(t, int32(2), walks.Load(), "a tombstone is known: no scan")
+}
+
+// Learn scans for no id the index knows, nor for one a scan has missed: a
+// cgroup removed before the scan has no pod, and is not looked for again.
+func TestCgroupIndex_LearnScansOnlyForUnknownIDs(t *testing.T) {
+	root := makeTree(t, crioFixture)
+	x := NewCgroupIndex(WithCgroupRoots(root))
+	require.NoError(t, x.Scan())
+	walks := countWalks(x)
+
+	x.Learn(0, rootCgroupID, inoOf(t, filepath.Join(root, bestEffortPod)), inoOf(t, filepath.Join(root, "system.slice")))
+	assert.Zero(t, walks.Load())
+
+	const removed = 1 << 40
+	x.Learn(removed)
+	assert.Equal(t, int32(1), walks.Load())
+	x.Learn(removed)
+	assert.Equal(t, int32(1), walks.Load(), "missed by a scan since it was learnt: not scanned for again")
+	got, final := x.Lookup(removed)
+	assert.True(t, final)
+	assert.Equal(t, CgroupIdentity{}, got)
+}
+
+func TestCgroupIndex_LearnKeys(t *testing.T) {
+	var none *CgroupIndex
+	assert.Nil(t, none.LearnKeys(func([]byte) uint64 { return 0 }))
+
+	root := makeTree(t, crioFixture)
+	x := NewCgroupIndex(WithCgroupRoots(root))
+	scope := filepath.Join(root, jobPod, "cri-containerd-"+jobCtr+".scope")
+	require.NoError(t, os.MkdirAll(scope, 0o755))
+	learn := x.LearnKeys(binary.NativeEndian.Uint64)
+	learn([][]byte{binary.NativeEndian.AppendUint64(nil, inoOf(t, scope))})
+	got, final := x.Lookup(inoOf(t, scope))
+	assert.True(t, final)
+	assert.Equal(t, CgroupIdentity{PodUID: jobUID, ContainerID: jobCtr}, got)
+}

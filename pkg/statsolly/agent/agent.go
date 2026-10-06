@@ -98,6 +98,9 @@ type Stats struct {
 	// it, and on a cgroup v1 host); Run starts both.
 	families []*statagg.Family
 	cgroups  *statagg.CgroupIndex
+	// pods is the Kubernetes store as the families' decoration sees it,
+	// remembering the pods it deleted for a while (podMemory).
+	pods *statagg.PodMemory
 	// the running families, which stop waits for before closing their maps
 	familiesRunning sync.WaitGroup
 	// blockLayout is the kernel histogram layout of the block aggregation

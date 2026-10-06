@@ -100,6 +100,21 @@ func (s *Stats) cgroupIndex() *statagg.CgroupIndex {
 	return s.cgroups
 }
 
+// podMemory returns the Kubernetes store as the families' decoration of pods
+// sees it, built on first use and shared: it remembers a pod the store
+// deleted once it completed, so a key of that pod decorated after the
+// deletion (a writeback charged to its cgroup, a redecoration) keeps its
+// pod. It is nil without a store.
+func (s *Stats) podMemory() *statagg.PodMemory {
+	if s.aggDeps.store == nil {
+		return nil
+	}
+	if s.pods == nil {
+		s.pods = statagg.NewPodMemory(s.aggDeps.store, 0, nil)
+	}
+	return s.pods
+}
+
 // buildAggregation builds the families of the kernel aggregation maps the
 // fetcher created, each with its own newAggregatedStatDecorator, and returns
 // the registry the exporters emit them from: nil when there is none. It
@@ -154,7 +169,19 @@ func (s *Stats) nfsFamily(ctx context.Context) (*statagg.Family, error) {
 	if err != nil {
 		return nil, err
 	}
-	return stats.NewNFSRPCFamily(src, s.nfsLayout, s.cfg.Metrics.Features, decorate)
+	return stats.NewNFSRPCFamily(src, s.nfsLayout, s.cfg.Metrics.Features, decorate, s.learnNFSOwners())
+}
+
+// learnNFSOwners has the NFS family's new-key check get the cgroup index to
+// learn the owner cgroups of new keys, when the decoration resolves owners
+// through it.
+func (s *Stats) learnNFSOwners() func(*statagg.Config) {
+	return func(c *statagg.Config) {
+		if !s.nfsOwner || s.aggDeps.store == nil || s.nfsCgroupV1 {
+			return
+		}
+		c.Learn = s.cgroupIndex().LearnKeys(func(key []byte) uint64 { return ebpf.DecodeNFSRPCKey(key).Owner })
+	}
 }
 
 // runAggregation reads the kernel aggregation maps, and the kernel counters

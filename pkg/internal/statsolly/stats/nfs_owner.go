@@ -19,7 +19,7 @@ import (
 // trio and k8s.owner.name in CommonAttrs.Metadata. It is nil without a
 // store: nothing to resolve an owner against. A stat with no owner (not a
 // pod attribute selected, or the kernel could not read one) is left alone.
-func NewNFSOwnerDecorator(store *kube.Store, index *statagg.CgroupIndex, cgroupV1 bool) func(*ebpf.Stat) {
+func NewNFSOwnerDecorator(store statagg.PodStore, index *statagg.CgroupIndex, cgroupV1 bool) func(*ebpf.Stat) {
 	if store == nil {
 		return nil
 	}
@@ -41,7 +41,7 @@ func NewNFSOwnerDecorator(store *kube.Store, index *statagg.CgroupIndex, cgroupV
 // for the host's cgroup mode: the cgroup index on cgroup v2, the pid path on
 // v1. pending means the answer may change: the index has not scanned the
 // cgroup yet, or it names a container or pod the Store does not know yet.
-func nfsOwnerResolver(store *kube.Store, index *statagg.CgroupIndex, cgroupV1 bool) func(uint64) (*ikube.CachedObjMeta, string, bool) {
+func nfsOwnerResolver(store statagg.PodStore, index *statagg.CgroupIndex, cgroupV1 bool) func(uint64) (*ikube.CachedObjMeta, string, bool) {
 	if cgroupV1 {
 		return func(owner uint64) (*ikube.CachedObjMeta, string, bool) { return nfsOwnerByPID(store, owner) }
 	}
@@ -64,7 +64,7 @@ func nfsOwnerResolver(store *kube.Store, index *statagg.CgroupIndex, cgroupV1 bo
 // decorator reads for a process the Store does not track. A process that has
 // already exited resolves to nothing: cgroup v1 keeps no equivalent of the
 // cgroup v2 side map's "survives the process's exit" property (2.5).
-func nfsOwnerByPID(store *kube.Store, tgid uint64) (*ikube.CachedObjMeta, string, bool) {
+func nfsOwnerByPID(store statagg.PodStore, tgid uint64) (*ikube.CachedObjMeta, string, bool) {
 	info, err := kube.InfoForPID(app.PID(tgid))
 	if err != nil || info.ContainerID == "" {
 		return nil, "", false

@@ -82,7 +82,7 @@ func (s *Stats) fsFamily(ctx context.Context) (*statagg.Family, error) {
 
 	fs := stats.FsAccum{Source: s.fsAccum, Layout: s.fsLayout, Decorate: decorate}
 	if s.aggDeps.store != nil {
-		fs.Pods = s.aggDeps.store
+		fs.Pods = s.podMemory()
 	}
 	if cgroupV2() {
 		fs.Cgroups = s.cgroupIndex()

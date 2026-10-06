@@ -94,6 +94,7 @@ func fsFamilyConfig(cfg FsAccum) (statagg.Config, error) {
 		Stat:      d.stat,
 		Decorate:  cfg.Decorate,
 		Deletable: fsDeletable(cfg.Cgroups),
+		Learn:     cfg.Cgroups.LearnKeys(fsKeyCgroup),
 		Metrics: []*statagg.Metric{
 			{
 				Name: attributes.StatFsOperationDuration, Kind: statagg.KindHistogram,
@@ -156,8 +157,9 @@ func (d *fsDecoder) stat(key, values []byte) (*ebpf.Stat, bool) {
 }
 
 // setPod sets the pod and container of the cgroup cgid on stat, and reports
-// false when they may still come: a cgroup the index does not know yet, or
-// a pod the store does not know yet.
+// false when they may still come: a cgroup the index does not know yet, a
+// pod the store does not know yet, or a live container whose ID it has not
+// seen yet.
 func (d *fsDecoder) setPod(stat *ebpf.Stat, cgid uint64) bool {
 	identity, final := d.cgroups.Lookup(cgid)
 	if identity.PodUID == "" && identity.ContainerID == "" {
@@ -186,5 +188,6 @@ func (d *fsDecoder) setPod(stat *ebpf.Stat, cgid uint64) bool {
 	if container != "" {
 		stat.CommonAttrs.Metadata[attr.K8sContainerName] = container
 	}
-	return final
+	complete := identity.ContainerID == "" || container != ""
+	return final && (complete || d.cgroups.Tombstoned(cgid))
 }

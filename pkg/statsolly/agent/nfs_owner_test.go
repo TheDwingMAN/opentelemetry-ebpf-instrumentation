@@ -12,6 +12,7 @@ import (
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/imetrics"
+	"go.opentelemetry.io/obi/pkg/internal/statsolly/statagg"
 	"go.opentelemetry.io/obi/pkg/kube"
 	"go.opentelemetry.io/obi/pkg/kube/kubecache/meta"
 )
@@ -123,4 +124,40 @@ func TestNewNFSOwnerDecorateCgroupV1NeedsNoIndex(t *testing.T) {
 	decorate := s.newNFSOwnerDecorate()
 	require.NotNil(t, decorate)
 	assert.Nil(t, s.cgroups)
+}
+
+// The NFS family's new-key check has the shared cgroup index learn the
+// owner cgroups of new keys only when owners are resolved through it.
+func TestLearnNFSOwners(t *testing.T) {
+	store := newNFSOwnerDecorateTestStore(t)
+	for name, tc := range map[string]struct {
+		s     *Stats
+		learn bool
+	}{
+		"no pod attribute": {s: &Stats{}},
+		"cgroup v1":        {s: &Stats{nfsOwner: true, nfsCgroupV1: true}},
+		"cgroup v2":        {s: &Stats{nfsOwner: true}, learn: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tc.s.aggDeps.store = store
+			var c statagg.Config
+			tc.s.learnNFSOwners()(&c)
+			assert.Equal(t, tc.learn, c.Learn != nil)
+			assert.Equal(t, tc.learn, tc.s.cgroups != nil)
+		})
+	}
+
+	s := &Stats{nfsOwner: true}
+	var c statagg.Config
+	s.learnNFSOwners()(&c)
+	assert.Nil(t, c.Learn, "no store: no owner to resolve")
+}
+
+// The families share one memory of the store's pods.
+func TestPodMemoryIsShared(t *testing.T) {
+	s := &Stats{}
+	assert.Nil(t, s.podMemory(), "no store")
+	s.aggDeps.store = newNFSOwnerDecorateTestStore(t)
+	pods := s.podMemory()
+	assert.Same(t, pods, s.podMemory())
 }

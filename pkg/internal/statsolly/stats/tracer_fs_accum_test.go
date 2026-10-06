@@ -216,6 +216,15 @@ func TestFsAccumCgroupAttribution(t *testing.T) {
 		})
 	}
 
+	t.Run("container not in the store yet", func(t *testing.T) {
+		d := d
+		d.pods = fakePods{podUID: podUID}
+		stat, final := d.stat(fsKey(container, &ebpf.FsIo{}), values)
+		assert.Equal(t, "db-0", stat.CommonAttrs.Metadata[attr.K8sPodName], "its pod, by UID")
+		assert.NotContains(t, stat.CommonAttrs.Metadata, attr.K8sContainerName)
+		assert.False(t, final, "decorated again once the store knows the container")
+	})
+
 	t.Run("pod not in the store yet", func(t *testing.T) {
 		d := d
 		d.pods = fakePods{}
@@ -311,4 +320,89 @@ func TestFsAccumKeepsTombstonedCgroupKeys(t *testing.T) {
 	assert.False(t, deletable(fsKey(container, &ebpf.FsIo{})), "removed container, tombstoned")
 	assert.True(t, deletable(fsKey(system, &ebpf.FsIo{})), "live cgroup")
 	assert.Nil(t, fsDeletable(nil), "cgroup v1: every idle key")
+}
+
+// endingPods is a Kubernetes store of one pod that completes: the store then
+// deletes it.
+type endingPods struct {
+	fakePods
+	gone atomic.Bool
+}
+
+func (p *endingPods) PodContainerByContainerID(id string) (*ikube.CachedObjMeta, string) {
+	if p.gone.Load() {
+		return nil, ""
+	}
+	return p.fakePods.PodContainerByContainerID(id)
+}
+
+func (p *endingPods) PodByUID(uid string) *ikube.CachedObjMeta {
+	if p.gone.Load() {
+		return nil
+	}
+	return p.fakePods.PodByUID(uid)
+}
+
+// A pod shorter than the gap between scrapes and background scans (the lab's
+// verify-paths Job, about 15 s): the new-key check has the cgroup index learn
+// its cgroup and decorates its key while it runs, so what it did is the
+// pod's even though, by the first scrape, its cgroup is removed and the
+// store has deleted it.
+func TestFsAccumAttributesAShortLivedPod(t *testing.T) {
+	const podUID = "3f0c6a2e-5d1b-4c8e-a7f9-1b2d3e4f5a6b"
+	containerID := strings.Repeat("ef", 32)
+	root, _, container, _ := cgroupTree(t, podUID, containerID)
+	// The pod started after the last background scan: the index has not
+	// seen its cgroup.
+	index := statagg.NewCgroupIndex(statagg.WithCgroupRoots(root))
+	store := &endingPods{fakePods: fakePods{podUID: podUID, containerID: containerID}}
+	m := newFsTestMap(t, fsLayout(t))
+	var decorated atomic.Int32
+	config, err := fsFamilyConfig(FsAccum{
+		Source: m.m, Layout: m.layout, Cgroups: index, Pods: statagg.NewPodMemory(store, 0, nil),
+		Decorate: func(*ebpf.Stat) bool { decorated.Add(1); return true },
+	})
+	require.NoError(t, err)
+	config.NewKeyInterval = 10 * time.Millisecond
+	config.MinPollInterval = time.Nanosecond
+	family, err := statagg.NewFamily(config)
+	require.NoError(t, err)
+	registry, err := statagg.NewRegistry(family)
+	require.NoError(t, err)
+	collector := statagg.NewCollector(registry, time.Hour)
+	require.NoError(t, collector.Add(attributes.StatFsIO, statagg.PromMetric{
+		LabelNames: []string{"k8s_pod_name", "k8s_container_name"},
+		Project: func(s *ebpf.Stat) (string, []string) {
+			v := []string{s.CommonAttrs.Metadata[attr.K8sPodName], s.CommonAttrs.Metadata[attr.K8sContainerName]}
+			return statagg.SeriesKey(v), v
+		},
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	go family.Run(ctx)
+
+	io := &ebpf.FsIo{Fs: uint8(ebpf.CodeFsXFS), Op: uint8(ebpf.CodeFsOpWrite), Bytes: 4096, LatencyNs: 1000}
+	m.record(container, io)
+	require.Eventually(t, func() bool { return decorated.Load() == 1 }, 5*time.Second, 5*time.Millisecond)
+
+	// The Job completes: its cgroup goes, the store deletes the pod.
+	m.record(container, io)
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "kubepods.slice")))
+	require.NoError(t, index.Scan())
+	store.gone.Store(true)
+
+	ch := make(chan prometheus.Metric, 10)
+	collector.Collect(ch)
+	close(ch)
+	got := map[string]float64{}
+	for metric := range ch {
+		var pb dto.Metric
+		require.NoError(t, metric.Write(&pb))
+		var labels []string
+		for _, l := range pb.GetLabel() {
+			labels = append(labels, l.GetName()+"="+l.GetValue())
+		}
+		got[strings.Join(labels, " ")] = pb.GetCounter().GetValue()
+	}
+	assert.Equal(t, map[string]float64{"k8s_container_name=app k8s_pod_name=db-0": 2 * 4096}, got)
 }

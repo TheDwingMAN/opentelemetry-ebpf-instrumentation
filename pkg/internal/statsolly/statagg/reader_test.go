@@ -271,3 +271,13 @@ func TestReader_ForwardsASumOnlyChange(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, []uint64{0, 0, 0, 0, 1}, got[0].delta, "its bucket arrives in the next poll")
 }
+
+// A Source that is no KeyLister is listed through ForEach.
+func TestForEachKey_ListsASourceWithoutKeyListerThroughForEach(t *testing.T) {
+	m := newFakeMap(4, readerStride, 2)
+	m.addU64([]byte("key1"), 0, 0, 1)
+	m.addU64([]byte("key2"), 1, 0, 1)
+	var keys []string
+	require.NoError(t, forEachKey(m, func(key []byte) { keys = append(keys, string(key)) }))
+	assert.Equal(t, []string{"key1", "key2"}, keys)
+}

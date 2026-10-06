@@ -78,5 +78,5 @@ func (s *Stats) newNFSOwnerDecorate() func(*ebpf.Stat) {
 	if !s.nfsCgroupV1 {
 		index = s.cgroupIndex()
 	}
-	return stats.NewNFSOwnerDecorator(s.aggDeps.store, index, s.nfsCgroupV1)
+	return stats.NewNFSOwnerDecorator(s.podMemory(), index, s.nfsCgroupV1)
 }

@@ -45,6 +45,10 @@ type MapSource struct {
 	cpuValues    reflect.Value
 	cpuValuesOut any
 
+	// keyA and keyB are the key buffers of nextKeys, boxed once: the key a
+	// NextKey call starts from, and the one it returns.
+	keyA, keyB any
+
 	noLookupAndDelete bool
 }
 
@@ -123,6 +127,7 @@ func newMapSource(m *cebpf.Map, perCPU bool) (*MapSource, error) {
 		s.cpuValues = byteArrays(s.valueSize, cpus)
 		s.cpuValuesOut = s.cpuValues.Interface()
 	}
+	s.keyA, s.keyB = make([]byte, s.keySize), make([]byte, s.keySize)
 	s.resize(min(max(batchBytes/(s.stride*s.cpus), minBatchKeys), int(m.MaxEntries())))
 	return s, nil
 }
@@ -165,6 +170,37 @@ func (s *MapSource) ForEach(fn func(key, values []byte)) error {
 			return err
 		}
 	}
+}
+
+// ForEachKey lists the keys of the map. A per-CPU map is walked one
+// BPF_MAP_GET_NEXT_KEY call per key, which copies no value: a batch lookup
+// would copy every CPU's copy of every value. A map shared by all CPUs is
+// read in batches, as ForEach does, which costs a few syscalls for the
+// whole map and copies one value per key. A walk whose key is deleted
+// under it restarts from the first key; it stops after MaxEntries keys.
+func (s *MapSource) ForEachKey(fn func(key []byte)) error {
+	if !s.perCPU {
+		return s.ForEach(func(key, _ []byte) { fn(key) })
+	}
+	return s.nextKeys(fn)
+}
+
+// nextKeys walks the keys one BPF_MAP_GET_NEXT_KEY call each.
+func (s *MapSource) nextKeys(fn func(key []byte)) error {
+	var from any // nil: the first key
+	cur, next := s.keyA, s.keyB
+	for range s.m.MaxEntries() {
+		err := s.m.NextKey(from, next)
+		if errors.Is(err, cebpf.ErrKeyNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		fn(next.([]byte))
+		from, cur, next = next, next, cur
+	}
+	return nil
 }
 
 // LookupAndDelete removes key with its last values. Kernels before 5.14 do

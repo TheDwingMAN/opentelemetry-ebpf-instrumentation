@@ -107,6 +107,9 @@ func blockFamilies(
 		f, err := statagg.NewFamily(statagg.Config{
 			Name: name, Source: src, Layout: layoutWords, Stat: blockStat, Decorate: decorate, Metrics: metrics,
 			Clock: clock,
+			// A device's key has no pod or process that a later
+			// decoration could miss: the tick decorates it as well.
+			NewKeyInterval: -1,
 		})
 		if err != nil {
 			return err
