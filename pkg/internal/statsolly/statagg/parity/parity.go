@@ -49,6 +49,10 @@ const sumTolerance = 1e-9
 type Setup struct {
 	Features  export.Features
 	Selection attributes.Selection
+	// Groups are the attribute groups both exporters run with
+	// (ContextInfo.MetricAttributeGroups): GroupKubernetes enables the
+	// Kubernetes attributes, k8s.node.name among them.
+	Groups attributes.AttrGroups
 	// Filters is filters.stats: the per-event path drops the events it
 	// rejects, as the pipeline's attribute filter does; the aggregated path
 	// hands it to the kernel as the families' decoration.
@@ -75,8 +79,11 @@ type Kernel struct {
 // emit the same OTLP data points and Prometheus samples: same series and
 // attributes, counters, counts and bucket counts exactly, and histogram sums
 // within sumTolerance. Timestamps and OTLP min/max, which the kernel does
-// not track, are left out.
-func Run(t *testing.T, setup Setup, events []*ebpf.Stat, newKernel func(decorate func(*ebpf.Stat) bool) Kernel) {
+// not track, are left out. It returns what the per-event path exported, for
+// a caller to check the series themselves.
+func Run(
+	t *testing.T, setup Setup, events []*ebpf.Stat, newKernel func(decorate func(*ebpf.Stat) bool) Kernel,
+) (otlp, samples []string) {
 	t.Helper()
 	matchers, err := filter.NewMatcherSet(setup.Filters, nil, nil, ebpf.StatStringGetters)
 	require.NoError(t, err)
@@ -112,6 +119,7 @@ func Run(t *testing.T, setup Setup, events []*ebpf.Stat, newKernel func(decorate
 		assert.NotEmpty(t, perEventOther, "per-event histograms with %s", other)
 	}
 	assert.Empty(t, aggOther, "aggregated histograms without %s", other)
+	return perEventOTel, perEventProm
 }
 
 func hasHistograms(samples []string) bool {
@@ -158,7 +166,10 @@ func export1(t *testing.T, setup Setup, aggregated *statagg.Registry, events []*
 
 	input := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(len(events) + 1))
 	otelRun, err := otel.StatMetricsExporterProvider(
-		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: otelMetrics}},
+		&global.ContextInfo{
+			OTELMetricsExporter:   &otelcfg.MetricsExporterInstancer{Cfg: otelMetrics},
+			MetricAttributeGroups: setup.Groups,
+		},
 		&otel.StatMetricsConfig{Metrics: otelMetrics, CommonCfg: common, SelectorCfg: selector(), Aggregated: aggregated},
 		input)(ctx)
 	require.NoError(t, err)
@@ -170,7 +181,7 @@ func export1(t *testing.T, setup Setup, aggregated *statagg.Registry, events []*
 		// coarser scale's: the client picks schema = scale from it.
 		nativeFactor = math.Exp2(1.5 * math.Exp2(-float64(statagg.DefaultExponentialScale)))
 	}
-	promRun, err := prom.StatsPrometheusEndpoint(&global.ContextInfo{}, &prom.StatsPrometheusConfig{
+	promRun, err := prom.StatsPrometheusEndpoint(&global.ContextInfo{MetricAttributeGroups: setup.Groups}, &prom.StatsPrometheusConfig{
 		Config: &prom.PrometheusConfig{
 			Registry: registry,
 			Buckets:  setup.PromBuckets,
