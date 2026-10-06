@@ -393,6 +393,7 @@ const (
 	statsFeatureNFSClientProcedureDuration = "nfs_client_procedure_duration"
 	statsFeatureNFSClientIO                = "nfs_client_io"
 	statsFeatureDiskPodVolumes             = "disk_pod_volumes"
+	statsFeatureDiskVolumeDevices          = "disk_volume_devices"
 )
 
 func statsFeatures(features featureexport.Features) []string {
@@ -450,6 +451,9 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsDiskPodVolumes() {
 		out = append(out, statsFeatureDiskPodVolumes)
+	}
+	if features.StatsDiskVolumeDevices() {
+		out = append(out, statsFeatureDiskVolumeDevices)
 	}
 	return out
 }

@@ -44,6 +44,14 @@ var newDiskTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 	return s.diskTracer.TraceLoop(out)
 }
 
+// newDiskVolumesTracer reports the disks of the stacked volumes of the node
+var newDiskVolumesTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+	if !s.cfg.Metrics.Features.StatsDiskVolumeDevices() {
+		return func(_ context.Context) { out.MarkCloseable() }
+	}
+	return stats.NewDiskVolumesTracer().TraceLoop(out)
+}
+
 // newPodVolumesTracer reports the devices of the volumes of the pods of the node. It needs the
 // Kubernetes metadata.
 var newPodVolumesTracer = func(ctx context.Context, s *Stats, out *msg.Queue[[]*ebpf.Stat]) (swarm.RunFunc, error) {
@@ -127,12 +135,15 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
 		swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
 
+		diskVolumeStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskVolumeStats")
+		swi.Add(swarm.DirectInstance(newDiskVolumesTracer(s, diskVolumeStats)), swarm.WithID("DiskVolumesTracer"))
+
 		podVolumeStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "podVolumeStats")
 		swi.Add(func(ctx context.Context) (swarm.RunFunc, error) { return newPodVolumesTracer(ctx, s, podVolumeStats) },
 			swarm.WithID("PodVolumesTracer"))
 
 		storageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "storageStats")
-		swi.Add(mergeStats(diskStats, podVolumeStats, storageStats), swarm.WithID("StorageStatsMerger"))
+		swi.Add(mergeStats(storageStats, diskStats, diskVolumeStats, podVolumeStats), swarm.WithID("StorageStatsMerger"))
 
 		selectedStorageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "selectedStorageStats")
 		swi.Add(filter.ByDynamicContainer(dynamicSelector, s.ctxInfo.K8sInformer, selectsStorageStat,
@@ -148,7 +159,7 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 			swarm.WithID("DiskStatsDecorator"))
 
 		allStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "allStats")
-		swi.Add(mergeStats(dynamicFilteredStats, decoratedDiskStats, allStats), swarm.WithID("StatsMerger"))
+		swi.Add(mergeStats(allStats, dynamicFilteredStats, decoratedDiskStats), swarm.WithID("StatsMerger"))
 	}
 
 	filteredStats := s.ctxInfo.OverrideStatsExportQueue
@@ -179,16 +190,17 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	return swi.Instance(ctx)
 }
 
-// storageStatsEnabled tells whether any disk, file sync, NFS or pod volume stat is enabled. Their
+// storageStatsEnabled tells whether any disk, file sync, NFS or volume stat is enabled. Their
 // branch of the pipeline, and its Kubernetes decorator, is only added then.
 func (s *Stats) storageStatsEnabled() bool {
 	features := s.cfg.Metrics.Features
-	return features.StatsDisk() || features.StatsFsSyncDuration() || features.StatsNFS() || features.StatsDiskPodVolumes()
+	return features.StatsDisk() || features.StatsFsSyncDuration() || features.StatsNFS() ||
+		features.StatsDiskVolumeDevices() || features.StatsDiskPodVolumes()
 }
 
 // selectsStorageStat tells whether a storage stat belongs to a dynamically selected application: a
 // pod volume, to a selected pod, and any other stat, to a selected container. The stats of devices,
-// like their requests in flight, belong to no application.
+// like their requests in flight or the disks of the stacked volumes, belong to no application.
 func selectsStorageStat(containers *selection.DynamicAppContainers, stat *ebpf.Stat) bool {
 	if volume := stat.PodVolume; volume != nil {
 		owner := kube.WorkloadOwner{Namespace: volume.Namespace, Kind: volume.OwnerKind, Name: volume.OwnerName}
@@ -197,18 +209,18 @@ func selectsStorageStat(containers *selection.DynamicAppContainers, stat *ebpf.S
 	return containers.AllowsContainer(stat.ContainerID())
 }
 
-// mergeStats forwards the stats of both inputs to the output, and closes the output once both
+// mergeStats forwards the stats of all the inputs to the output, and closes the output once all the
 // inputs are closed.
-func mergeStats(first, second, out *msg.Queue[[]*ebpf.Stat]) swarm.InstanceFunc {
+func mergeStats(out *msg.Queue[[]*ebpf.Stat], inputs ...*msg.Queue[[]*ebpf.Stat]) swarm.InstanceFunc {
 	return func(_ context.Context) (swarm.RunFunc, error) {
-		inputs := []<-chan []*ebpf.Stat{
-			first.Subscribe(msg.SubscriberName("StatsMerger")),
-			second.Subscribe(msg.SubscriberName("StatsMerger")),
+		subscriptions := make([]<-chan []*ebpf.Stat, 0, len(inputs))
+		for _, input := range inputs {
+			subscriptions = append(subscriptions, input.Subscribe(msg.SubscriberName("StatsMerger")))
 		}
 		return func(ctx context.Context) {
 			defer out.Close()
 			var wg sync.WaitGroup
-			for _, in := range inputs {
+			for _, in := range subscriptions {
 				wg.Go(func() {
 					swarms.ForEachInput(ctx, in, nil, func(stats []*ebpf.Stat) {
 						out.SendCtx(ctx, stats)

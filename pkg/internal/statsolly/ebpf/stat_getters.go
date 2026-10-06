@@ -120,9 +120,25 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return semconvFilesystemType(s.FsSync.FilesystemType)
 		}
-	case attr.K8sVolumeName, attr.K8sVolumeType, attr.K8sPersistentVolumeClaimName, attr.K8sPersistentVolumeName,
-		attr.DiskVolumeDevice:
+	case attr.K8sVolumeName, attr.K8sVolumeType, attr.K8sPersistentVolumeClaimName, attr.K8sPersistentVolumeName:
 		getter = podVolumeGetter(name)
+	case attr.DiskVolumeDevice:
+		getter = func(s *Stat) attribute.KeyValue {
+			switch {
+			case s.PodVolume != nil:
+				return attribute.String(string(attr.DiskVolumeDevice), s.PodVolume.MountedDevice)
+			case s.DiskVolume != nil:
+				return attribute.String(string(attr.DiskVolumeDevice), s.DiskVolume.Volume)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.DiskVolumeName:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.DiskVolume == nil || s.DiskVolume.Name == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.DiskVolumeName), s.DiskVolume.Name)
+		}
 	case attr.ServerAddr:
 		getter = func(s *Stat) attribute.KeyValue {
 			if server := nfsServer(s); server != "" {
@@ -232,7 +248,7 @@ func diskIODirectionStr(op DiskOpCode) string {
 	return ""
 }
 
-// diskDevice is the device of a block I/O or pod volume stat, empty for any other stat
+// diskDevice is the device of a block I/O, pod volume or disk volume stat, empty for any other stat
 func diskDevice(s *Stat) string {
 	switch {
 	case s.DiskIO != nil:
@@ -241,6 +257,8 @@ func diskDevice(s *Stat) string {
 		return s.DiskPending.Device
 	case s.PodVolume != nil:
 		return s.PodVolume.Device
+	case s.DiskVolume != nil:
+		return s.DiskVolume.Device
 	}
 	return ""
 }
@@ -263,8 +281,6 @@ func podVolumeGetter(name attr.Name) attributes.Getter[*Stat, attribute.KeyValue
 			value = s.PodVolume.ClaimName
 		case attr.K8sPersistentVolumeName:
 			value = s.PodVolume.PersistentVolume
-		case attr.DiskVolumeDevice:
-			value = s.PodVolume.MountedDevice
 		}
 		return attribute.String(string(name), value)
 	}

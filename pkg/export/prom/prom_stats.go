@@ -55,6 +55,7 @@ type statMetricsReporter struct {
 	nfsProcedureDuration     *Expirer[prometheus.Histogram]
 	nfsIO                    *Expirer[prometheus.Counter]
 	k8sPodVolumeDevice       *Expirer[prometheus.Gauge]
+	diskVolumeDevice         *Expirer[prometheus.Gauge]
 
 	promConnect *connector.PrometheusManager
 
@@ -76,6 +77,7 @@ type statMetricsReporter struct {
 	nfsProcedureDurationAttrs     []attributes.Field[*ebpf.Stat, string]
 	nfsIOAttrs                    []attributes.Field[*ebpf.Stat, string]
 	k8sPodVolumeDeviceAttrs       []attributes.Field[*ebpf.Stat, string]
+	diskVolumeDeviceAttrs         []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -264,6 +266,7 @@ func newStatsReporter(
 	register = append(register, mr.registerDiskOperationMetrics(cfg, provider)...)
 	register = append(register, mr.registerNFSMetrics(cfg, provider)...)
 	register = append(register, mr.registerPodVolumeMetrics(cfg, provider)...)
+	register = append(register, mr.registerDiskVolumeMetrics(cfg, provider)...)
 
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
@@ -296,6 +299,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 		}
 		r.observeDiskPendingOperations(stats)
 		r.observePodVolumes(stats)
+		r.observeDiskVolumes(stats)
 	}
 }
 
@@ -337,6 +341,19 @@ func (r *statMetricsReporter) registerPodVolumeMetrics(cfg *StatsPrometheusConfi
 		Help: "1 for each disk that a volume that a pod mounts from a PersistentVolumeClaim is on",
 	}, labelNames(r.k8sPodVolumeDeviceAttrs)).MetricVec, timeNow, cfg.Config.TTL)
 	return []prometheus.Collector{r.k8sPodVolumeDevice}
+}
+
+// registerDiskVolumeMetrics creates the metric of the disks of the stacked volumes
+func (r *statMetricsReporter) registerDiskVolumeMetrics(cfg *StatsPrometheusConfig, provider *attributes.AttrSelector) []prometheus.Collector {
+	if !cfg.CommonCfg.Features.StatsDiskVolumeDevices() {
+		return nil
+	}
+	r.diskVolumeDeviceAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskVolumeDevice))
+	r.diskVolumeDevice = NewExpirer[prometheus.Gauge](prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: attributes.StatDiskVolumeDevice.Prom,
+		Help: "1 for each disk that a stacked volume, such as an LVM, md RAID or loop device, is on",
+	}, labelNames(r.diskVolumeDeviceAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+	return []prometheus.Collector{r.diskVolumeDevice}
 }
 
 // registerDiskOperationMetrics creates the metrics of the block requests beyond reads and
@@ -532,6 +549,18 @@ func (r *statMetricsReporter) observePodVolumes(stats []*ebpf.Stat) {
 			return 0, false
 		}
 		return float64(stat.PodVolume.Value), true
+	})
+}
+
+func (r *statMetricsReporter) observeDiskVolumes(stats []*ebpf.Stat) {
+	if r.diskVolumeDevice == nil {
+		return
+	}
+	setGaugeSums(r.diskVolumeDevice, r.diskVolumeDeviceAttrs, stats, func(stat *ebpf.Stat) (float64, bool) {
+		if stat.DiskVolume == nil {
+			return 0, false
+		}
+		return float64(stat.DiskVolume.Value), true
 	})
 }
 

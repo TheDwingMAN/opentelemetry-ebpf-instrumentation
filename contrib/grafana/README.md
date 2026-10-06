@@ -6,7 +6,7 @@ source:
 
 - **Devices**: IOPS, throughput, errors, service and queue time, average queue
   size, requests in flight, flushes, discards, stacked volumes (LVM, md RAID)
-  and partitions.
+  and the disks they are on, and partitions.
 - **Workloads**: the workloads that read and write the most, and their service
   time.
 - **File syncs** and **NFS client**: rates and 99th percentiles, per call, per

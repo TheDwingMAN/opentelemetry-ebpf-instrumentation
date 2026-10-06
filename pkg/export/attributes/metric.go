@@ -745,6 +745,12 @@ var (
 		Unit:    "{volume}",
 		Type:    InstrumentUpDownCounter,
 	})
+	StatDiskVolumeDevice = metric(Name{
+		Section: "obi.stat.disk.volume.device",
+		OTEL:    "obi.stat.disk.volume.device",
+		Unit:    "{volume}",
+		Type:    InstrumentUpDownCounter,
+	})
 )
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.

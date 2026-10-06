@@ -350,6 +350,16 @@ func TestDefault_StatK8sPodVolumeDevice(t *testing.T) {
 	}, p.For(StatK8sPodVolumeDevice))
 }
 
+func TestDefault_StatDiskVolumeDevice(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.DiskVolumeDevice,
+		attr.DiskVolumeName,
+		attr.SystemDevice,
+	}, p.For(StatDiskVolumeDevice), "the volumes are not charged to workloads")
+}
+
 func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{
 		SelectionCfg: Selection{

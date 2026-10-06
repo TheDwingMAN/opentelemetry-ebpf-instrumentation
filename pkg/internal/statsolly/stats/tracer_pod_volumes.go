@@ -42,10 +42,9 @@ type PodVolumesTracer struct {
 	store    podVolumeSource
 	nodeName string
 	// mounts returns the mount table of the host
-	mounts func() ([]*procfs.MountInfo, error)
-	// deviceOf returns the device of a path of the host
-	deviceOf func(path string) (major, minor uint32, err error)
+	mounts   func() ([]*procfs.MountInfo, error)
 	devices  *deviceNames
+	stack    *deviceStack
 	interval time.Duration
 
 	// reported are the volume devices of the previous resolution, to report the ones that are gone
@@ -57,20 +56,25 @@ func NewPodVolumesTracer(store podVolumeSource, nodeName string) *PodVolumesTrac
 		store:    store,
 		nodeName: nodeName,
 		mounts:   func() ([]*procfs.MountInfo, error) { return procfs.GetProcMounts(1) },
-		deviceOf: hostPathDevice,
 		devices:  &deviceNames{sysRoot: "/sys"},
+		stack:    newDeviceStack("/sys"),
 		interval: podVolumesInterval,
 		reported: map[ebpf.PodVolume]bool{},
 	}
 }
 
 func (p *PodVolumesTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+	return readEvery(p.interval, p.readStats, out)
+}
+
+// readEvery forwards the stats that read returns now, and then every interval
+func readEvery(interval time.Duration, read func() []*ebpf.Stat, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 	return func(ctx context.Context) {
 		defer out.MarkCloseable()
-		ticker := time.NewTicker(p.interval)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
-			if stats := p.readStats(); len(stats) > 0 {
+			if stats := read(); len(stats) > 0 {
 				out.SendCtx(ctx, stats)
 			}
 			select {
@@ -119,13 +123,13 @@ func (p *PodVolumesTracer) volumeDevices(pod *informer.ObjectMeta, claim *inform
 	major, minor, ok := volumeMountDevice(mounts, pod.Pod.Uid, pv.Name)
 	if !ok && pv.GetPersistentVolume().GetLocalPath() != "" {
 		var err error
-		major, minor, err = p.deviceOf(pv.PersistentVolume.LocalPath)
+		major, minor, err = p.stack.deviceOf(pv.PersistentVolume.LocalPath)
 		ok = err == nil
 	}
 	if !ok {
 		return nil
 	}
-	dir, ok := p.blockDeviceDir(major, minor)
+	dir, ok := p.stack.blockDeviceDir(major, minor)
 	if !ok {
 		return nil
 	}
@@ -135,7 +139,7 @@ func (p *PodVolumesTracer) volumeDevices(pod *informer.ObjectMeta, claim *inform
 		ownerName, ownerKind = owner.Name, owner.Kind
 	}
 	var volumes []ebpf.PodVolume
-	for _, disk := range p.physicalDisks(dir, maxDeviceStackDepth) {
+	for _, disk := range p.stack.physicalDisks(dir, maxDeviceStackDepth) {
 		volumes = append(volumes, ebpf.PodVolume{
 			Namespace:        pod.Namespace,
 			PodName:          pod.Name,
@@ -185,26 +189,37 @@ func volumeMountDevice(mounts []*procfs.MountInfo, podUID, pvName string) (major
 	return 0, 0, false
 }
 
+// deviceStack walks sysfs from the block devices of the host to the disks below them
+type deviceStack struct {
+	sysRoot string
+	// deviceOf returns the device of a path of the host
+	deviceOf func(path string) (major, minor uint32, err error)
+}
+
+func newDeviceStack(sysRoot string) *deviceStack {
+	return &deviceStack{sysRoot: sysRoot, deviceOf: hostPathDevice}
+}
+
 // blockDeviceDir returns the sysfs directory of a block device, and false for the devices of the
 // filesystems on no block device, like overlay, tmpfs or network filesystems
-func (p *PodVolumesTracer) blockDeviceDir(major, minor uint32) (string, bool) {
-	dir := filepath.Join(p.devices.sysRoot, "dev", "block", fmt.Sprintf("%d:%d", major, minor))
+func (s *deviceStack) blockDeviceDir(major, minor uint32) (string, bool) {
+	dir := filepath.Join(s.sysRoot, "dev", "block", fmt.Sprintf("%d:%d", major, minor))
 	return dir, exists(dir)
 }
 
 // physicalDisks returns the names of the disks that a block device is on, from its sysfs
 // directory: the disk of a partition, the disks of the filesystem that holds the file of a loop
 // device, or the disks below the slaves of a stacked device
-func (p *PodVolumesTracer) physicalDisks(dir string, depth int) []string {
+func (s *deviceStack) physicalDisks(dir string, depth int) []string {
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil || depth == 0 {
 		return nil
 	}
 	if exists(filepath.Join(resolved, "partition")) {
-		return p.physicalDisks(filepath.Dir(resolved), depth-1)
+		return s.physicalDisks(filepath.Dir(resolved), depth-1)
 	}
-	if backing, ok := p.loopBackingDevice(resolved); ok {
-		return p.physicalDisks(backing, depth-1)
+	if backing, ok := s.loopBackingDevice(resolved); ok {
+		return s.physicalDisks(backing, depth-1)
 	}
 	slaves, _ := filepath.Glob(filepath.Join(resolved, "slaves", "*"))
 	if len(slaves) == 0 {
@@ -212,7 +227,7 @@ func (p *PodVolumesTracer) physicalDisks(dir string, depth int) []string {
 	}
 	var disks []string
 	for _, slave := range slaves {
-		for _, disk := range p.physicalDisks(slave, depth-1) {
+		for _, disk := range s.physicalDisks(slave, depth-1) {
 			if !slices.Contains(disks, disk) {
 				disks = append(disks, disk)
 			}
@@ -225,7 +240,7 @@ func (p *PodVolumesTracer) physicalDisks(dir string, depth int) []string {
 // the file of a loop device, which it finds by its path on the host. It returns false for other
 // devices, and when the file was deleted, isn't at that path on the host (e.g. a loop device set
 // up in the mount namespace of a container), or is on no block device.
-func (p *PodVolumesTracer) loopBackingDevice(dir string) (string, bool) {
+func (s *deviceStack) loopBackingDevice(dir string) (string, bool) {
 	content, err := os.ReadFile(filepath.Join(dir, "loop", "backing_file"))
 	if err != nil {
 		return "", false
@@ -235,9 +250,9 @@ func (p *PodVolumesTracer) loopBackingDevice(dir string) (string, bool) {
 	if deleted {
 		return "", false
 	}
-	major, minor, err := p.deviceOf(path)
+	major, minor, err := s.deviceOf(path)
 	if err != nil {
 		return "", false
 	}
-	return p.blockDeviceDir(major, minor)
+	return s.blockDeviceDir(major, minor)
 }

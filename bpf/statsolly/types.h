@@ -23,6 +23,8 @@ enum stat_type : u8 {
     k_stat_type_nfs_io = 10,
     // produced in userspace, from the Kubernetes metadata and the host mounts
     k_stat_type_pod_volume = 11,
+    // produced in userspace, from the stacked block devices in sysfs
+    k_stat_type_disk_volume = 12,
 };
 
 // batch size used in tcp io metric

@@ -445,6 +445,9 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsDiskPodVolumes() {
 		want = append(want, "disk_pod_volumes")
 	}
+	if features.StatsDiskVolumeDevices() {
+		want = append(want, "disk_volume_devices")
+	}
 
 	got := toStringSlice(featuresValue)
 	if !sameStringSet(got, want) {

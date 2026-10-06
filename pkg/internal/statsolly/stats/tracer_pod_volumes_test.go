@@ -38,8 +38,9 @@ func (f *fakePodVolumes) PersistentVolumeByClaim(namespace, claimName string) *i
 }
 
 // fakeSysDevice creates the sysfs directory of a block device, under /devices like the kernel
-// does, with /dev/block/<maj:min> linking to it. Partitions are subdirectories of their disk, and
-// slaves link to the directories of the devices below.
+// does, with /dev/block/<maj:min> linking to it, and /block/<name> for the devices that are not
+// partitions. Partitions are subdirectories of their disk, and slaves link to the directories of
+// the devices below.
 func fakeSysDevice(t *testing.T, root, path, numbers string, slaves ...string) {
 	t.Helper()
 	dir := filepath.Join(root, "devices", path)
@@ -48,6 +49,9 @@ func fakeSysDevice(t *testing.T, root, path, numbers string, slaves ...string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "uevent"), []byte("DEVNAME="+name+"\n"), 0o644))
 	if filepath.Base(filepath.Dir(path)) != "block" {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "partition"), []byte("1\n"), 0o644))
+	} else {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "block"), 0o755))
+		require.NoError(t, os.Symlink(dir, filepath.Join(root, "block", name)))
 	}
 	for _, slave := range slaves {
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, "slaves"), 0o755))
@@ -100,6 +104,14 @@ var fakeHostPaths = map[string][2]uint32{
 	"/run/on-tmpfs.img": {0, 45},
 }
 
+// fakeHostDeviceOf returns the device of a path of the fake host
+func fakeHostDeviceOf(path string) (major, minor uint32, err error) {
+	if device, ok := fakeHostPaths[path]; ok {
+		return device[0], device[1], nil
+	}
+	return 0, 0, errors.New("no such path")
+}
+
 func testPod(name, uid string, claims ...*informer.VolumeClaim) *informer.ObjectMeta {
 	return &informer.ObjectMeta{
 		Name: name, Namespace: "default", Kind: "Pod",
@@ -121,14 +133,10 @@ func testPV(name, claim, localPath string) *informer.ObjectMeta {
 
 func newTestPodVolumesTracer(t *testing.T, store *fakePodVolumes, mounts []*procfs.MountInfo) *PodVolumesTracer {
 	tracer := NewPodVolumesTracer(store, "node-1")
-	tracer.devices = &deviceNames{sysRoot: fakeVolumeHost(t)}
+	root := fakeVolumeHost(t)
+	tracer.devices = &deviceNames{sysRoot: root}
+	tracer.stack = &deviceStack{sysRoot: root, deviceOf: fakeHostDeviceOf}
 	tracer.mounts = func() ([]*procfs.MountInfo, error) { return mounts, nil }
-	tracer.deviceOf = func(path string) (uint32, uint32, error) {
-		if device, ok := fakeHostPaths[path]; ok {
-			return device[0], device[1], nil
-		}
-		return 0, 0, errors.New("no such path")
-	}
 	return tracer
 }
 
@@ -204,9 +212,9 @@ func TestPodVolumesTracer(t *testing.T) {
 }
 
 func TestPhysicalDisks(t *testing.T) {
-	tracer := newTestPodVolumesTracer(t, &fakePodVolumes{}, nil)
+	stack := &deviceStack{sysRoot: fakeVolumeHost(t), deviceOf: fakeHostDeviceOf}
 	disks := func(numbers string) []string {
-		return tracer.physicalDisks(filepath.Join(tracer.devices.sysRoot, "dev", "block", numbers), maxDeviceStackDepth)
+		return stack.physicalDisks(filepath.Join(stack.sysRoot, "dev", "block", numbers), maxDeviceStackDepth)
 	}
 	assert.Equal(t, []string{"sda"}, disks("8:0"), "a disk")
 	assert.Equal(t, []string{"sda"}, disks("8:1"), "a partition")

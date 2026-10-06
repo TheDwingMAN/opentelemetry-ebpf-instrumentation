@@ -458,8 +458,62 @@ func TestPodVolumeStats(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// fakeDiskVolumesTracer replaces the tracer of the disks of the stacked volumes, and returns the
+// channel to send its stats through
+func fakeDiskVolumesTracer(t *testing.T) chan<- []*ebpf.Stat {
+	volumes := make(chan []*ebpf.Stat, 10)
+	defaultDiskVolumesTracer := newDiskVolumesTracer
+	t.Cleanup(func() { newDiskVolumesTracer = defaultDiskVolumesTracer })
+	newDiskVolumesTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+		return func(ctx context.Context) {
+			defer out.MarkCloseable()
+			for i := range volumes {
+				out.SendCtx(ctx, i)
+			}
+		}
+	}
+	return volumes
+}
+
+func TestDiskVolumeStats(t *testing.T) {
+	volumes := fakeDiskVolumesTracer(t)
+	_, promURL := startDiskPipeline(t, export.FeatureStatsDiskVolumeDevices)
+
+	lvm := ebpf.DiskVolume{Volume: "dm-0", Name: "rhel-root", Device: "sda", Value: 1}
+	raid := ebpf.DiskVolume{Volume: "md0", Device: "sdb", Value: 1}
+	volumes <- []*ebpf.Stat{
+		{Type: ebpf.StatTypeDiskVolume, DiskVolume: &lvm},
+		{Type: ebpf.StatTypeDiskVolume, DiskVolume: &raid},
+	}
+
+	lvmLabels := map[string]string{"obi_disk_volume_device": "dm-0", "obi_disk_volume_name": "rhel-root", "system_device": "sda"}
+	raidLabels := map[string]string{"obi_disk_volume_device": "md0", "obi_disk_volume_name": "", "system_device": "sdb"}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_volume_device", Value: 1, Labels: lvmLabels},
+			{Name: "obi_stat_disk_volume_device", Value: 1, Labels: raidLabels},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_volume_device"))
+	}, timeout, 100*time.Millisecond)
+
+	// the LVM volume is gone: the tracer reports it once more, with 0
+	gone := lvm
+	gone.Value = 0
+	volumes <- []*ebpf.Stat{
+		{Type: ebpf.StatTypeDiskVolume, DiskVolume: &gone},
+		{Type: ebpf.StatTypeDiskVolume, DiskVolume: &raid},
+	}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_volume_device", Value: 0, Labels: lvmLabels},
+			{Name: "obi_stat_disk_volume_device", Value: 1, Labels: raidLabels},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_volume_device"))
+	}, timeout, 100*time.Millisecond)
+}
+
 func TestStorageStatsOfUnselectedApplicationsUnderDynamicSelection(t *testing.T) {
-	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskOperations|export.FeatureStatsDiskPendingOperations,
+	volumes := fakeDiskVolumesTracer(t)
+	diskEvents, promURL := startDiskPipeline(t,
+		export.FeatureStatsDiskOperations|export.FeatureStatsDiskPendingOperations|export.FeatureStatsDiskVolumeDevices,
 		func(s *Stats) { s.ctxInfo.DynamicSelector = discover.NewDynamicSelector() })
 
 	ofContainer := fakeDiskRecord("vda", ebpf.CodeDiskOpWrite, "")
@@ -467,6 +521,7 @@ func TestStorageStatsOfUnselectedApplicationsUnderDynamicSelection(t *testing.T)
 	ofNoContainer := fakeDiskRecord("vda", ebpf.CodeDiskOpRead, "")
 	pending := &ebpf.Stat{Type: ebpf.StatTypeDiskPending, DiskPending: &ebpf.DiskPending{Device: "vda", Op: ebpf.CodeDiskOpRead, Requests: 2}}
 	diskEvents <- []*ebpf.Stat{ofContainer, ofNoContainer, pending}
+	volumes <- []*ebpf.Stat{{Type: ebpf.StatTypeDiskVolume, DiskVolume: &ebpf.DiskVolume{Volume: "dm-0", Device: "vda", Value: 1}}}
 
 	exported := func() bool {
 		allMetrics, err := promtest.Scrape(promURL)

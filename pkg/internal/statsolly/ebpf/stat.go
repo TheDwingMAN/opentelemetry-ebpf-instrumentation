@@ -25,6 +25,7 @@ const (
 	StatTypeNFSProcedure            = StatType(StatsStatTypeK_statTypeNfsProcedure)
 	StatTypeNFSIO                   = StatType(StatsStatTypeK_statTypeNfsIo)
 	StatTypePodVolume               = StatType(StatsStatTypeK_statTypePodVolume)
+	StatTypeDiskVolume              = StatType(StatsStatTypeK_statTypeDiskVolume)
 )
 
 type TCPFailReasonType string
@@ -129,6 +130,7 @@ type Stat struct {
 	NFSProcedure            *NFSProcedure            `json:"-"`
 	NFSIO                   *NFSIO                   `json:"-"`
 	PodVolume               *PodVolume               `json:"-"`
+	DiskVolume              *DiskVolume              `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -271,6 +273,19 @@ type PodVolume struct {
 	// Device is a disk that MountedDevice is on
 	Device string
 	// Value is 1 while the pod mounts the volume, and 0 once it no longer does
+	Value int64
+}
+
+// DiskVolume links a stacked volume of the host, such as an LVM, md RAID or loop device, to a disk
+// it is on
+type DiskVolume struct {
+	// Volume is the kernel name of the stacked volume, e.g. dm-0
+	Volume string
+	// Name is the device mapper name of the volume, e.g. rhel-root, empty for other volumes
+	Name string
+	// Device is a disk that Volume is on
+	Device string
+	// Value is 1 while the volume is on the disk, and 0 once it no longer is
 	Value int64
 }
 

@@ -537,13 +537,59 @@
       "options": {}
     },
     {
+      "id": 30,
+      "type": "table",
+      "title": "Stacked volumes and their disks",
+      "description": "The disks that each LVM, md RAID and loop device is on, with the name of the device mapper volumes in /dev/mapper.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (obi_ip, obi_disk_volume_device, obi_disk_volume_name, system_device) (obi_stat_disk_volume_device{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\"} == 1)",
+          "legendFormat": "",
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true
+            }
+          }
+        }
+      ]
+    },
+    {
       "id": 14,
       "type": "row",
       "title": "Workloads",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 36,
+        "y": 44,
         "w": 24,
         "h": 1
       },
@@ -560,7 +606,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 37,
+        "y": 45,
         "w": 8,
         "h": 8
       },
@@ -608,7 +654,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 37,
+        "y": 45,
         "w": 8,
         "h": 8
       },
@@ -643,7 +689,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 37,
+        "y": 45,
         "w": 8,
         "h": 8
       },
@@ -674,7 +720,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 45,
+        "y": 53,
         "w": 24,
         "h": 1
       },
@@ -691,7 +737,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 46,
+        "y": 54,
         "w": 8,
         "h": 8
       },
@@ -726,7 +772,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 46,
+        "y": 54,
         "w": 8,
         "h": 8
       },
@@ -761,7 +807,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 46,
+        "y": 54,
         "w": 8,
         "h": 8
       },
@@ -792,7 +838,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 54,
+        "y": 62,
         "w": 24,
         "h": 1
       },
@@ -809,7 +855,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 55,
+        "y": 63,
         "w": 8,
         "h": 8
       },
@@ -844,7 +890,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 55,
+        "y": 63,
         "w": 8,
         "h": 8
       },
@@ -879,7 +925,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 55,
+        "y": 63,
         "w": 8,
         "h": 8
       },
@@ -914,7 +960,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 63,
+        "y": 71,
         "w": 24,
         "h": 8
       },
@@ -945,7 +991,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 71,
+        "y": 79,
         "w": 24,
         "h": 1
       },
@@ -962,7 +1008,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 72,
+        "y": 80,
         "w": 24,
         "h": 14
       },
@@ -1048,7 +1094,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 86,
+        "y": 94,
         "w": 24,
         "h": 8
       },

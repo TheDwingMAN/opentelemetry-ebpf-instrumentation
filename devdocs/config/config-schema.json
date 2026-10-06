@@ -1218,6 +1218,7 @@
               "stats_disk_pod_volumes",
               "stats_disk_queue_duration",
               "stats_disk_stacked_volumes",
+              "stats_disk_volume_devices",
               "stats_fs_sync_duration",
               "stats_nfs",
               "stats_nfs_client_io",

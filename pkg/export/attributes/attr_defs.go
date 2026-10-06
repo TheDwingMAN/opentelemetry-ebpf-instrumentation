@@ -230,6 +230,19 @@ func getDefinitions(
 		nil,
 	)
 
+	// the stacked volumes of the host and the disks they are on, which are not charged to workloads
+	statsDiskVolumeAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:            false,
+			attr.DiskVolumeDevice: true,
+			attr.DiskVolumeName:   true,
+			attr.SystemDevice:     true,
+		},
+		nil,
+	)
+
 	// the pods of the volumes: the metric only exists with kubernetes metadata
 	statsPodVolumeKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
@@ -1093,6 +1106,10 @@ func getDefinitions(
 		},
 		StatK8sPodVolumeDevice.Section: {
 			SubGroups:  []*AttrReportGroup{&statsPodVolumeAttributes, &statsPodVolumeKubeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskVolumeDevice.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskVolumeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
 		StatDiskQueueDuration.Section: {

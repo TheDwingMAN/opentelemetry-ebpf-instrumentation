@@ -117,6 +117,18 @@ func TestFeatureStatsDiskPodVolumesIsOptIn(t *testing.T) {
 	}
 }
 
+func TestFeatureStatsDiskVolumeDevices(t *testing.T) {
+	volumes, err := LoadFeatures([]string{"stats_disk_volume_devices"})
+	require.NoError(t, err)
+	assert.True(t, volumes.StatsDiskVolumeDevices())
+	assert.True(t, volumes.StatMetrics(), "a volume devices only selection must still enable the stats pipeline")
+	assert.False(t, volumes.StatsDisk(), "it loads no block I/O probes")
+
+	stats, err := LoadFeatures([]string{"stats"})
+	require.NoError(t, err)
+	assert.False(t, stats.StatsDiskVolumeDevices(), "the stats aggregate must not enable any disk stat")
+}
+
 func TestFeatureStatsDiskAggregate(t *testing.T) {
 	disk, err := LoadFeatures([]string{"stats_disk"})
 	require.NoError(t, err)
@@ -128,6 +140,7 @@ func TestFeatureStatsDiskAggregate(t *testing.T) {
 	assert.True(t, disk.StatsDiskFlush())
 	assert.True(t, disk.StatsDiskDiscard())
 	assert.True(t, disk.StatsDiskPendingOperations())
+	assert.True(t, disk.StatsDiskVolumeDevices())
 	assert.False(t, disk.StatsTCPIo(), "the disk aggregate doesn't enable TCP stats")
 
 	for _, feature := range []string{"stats_disk_queue_duration", "stats_disk_flush", "stats_disk_discard", "stats_disk_pending_operations"} {

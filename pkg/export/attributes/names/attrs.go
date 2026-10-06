@@ -410,4 +410,6 @@ const (
 	// DiskVolumeDevice is the block device that a volume is mounted from, e.g. a partition or an
 	// LVM volume on the disk that system.device names
 	DiskVolumeDevice = Name("obi.disk.volume.device")
+	// DiskVolumeName is the device mapper name of the volume of DiskVolumeDevice, e.g. rhel-root
+	DiskVolumeName = Name("obi.disk.volume.name")
 )

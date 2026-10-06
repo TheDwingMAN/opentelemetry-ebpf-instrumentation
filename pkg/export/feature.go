@@ -69,6 +69,7 @@ const (
 	FeatureStatsNFSClientProcedureDuration
 	FeatureStatsNFSClientIO
 	FeatureStatsDiskPodVolumes
+	FeatureStatsDiskVolumeDevices
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
@@ -78,11 +79,12 @@ const (
 // If overhead is a concern, enable the lower-frequency metrics individually and opt into stats_tcp_io explicitly.
 const FeatureStats = FeatureStatsTCPRtt | FeatureStatsTCPFailedConnections | FeatureStatsTCPRetransmits | FeatureStatsTCPIo | FeatureStatsTCPSuccessfulConnections
 
-// FeatureStatsDisk groups the block I/O stat metrics. They are not part of the `stats` aggregate:
-// their probes fire on every block request, so they have to be enabled explicitly.
+// FeatureStatsDisk groups the block I/O stat metrics, and the disks of the stacked volumes. They are
+// not part of the `stats` aggregate: the block probes fire on every block request, so they have to
+// be enabled explicitly.
 const FeatureStatsDisk = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskOperationTime |
 	FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard | FeatureStatsDiskPendingOperations |
-	FeatureStatsDiskStackedVolumes
+	FeatureStatsDiskStackedVolumes | FeatureStatsDiskVolumeDevices
 
 // FeatureStatsNFS groups the NFS client stat metrics. They are not part of the `stats` aggregate.
 const FeatureStatsNFS = FeatureStatsNFSClientProcedureDuration | FeatureStatsNFSClientIO
@@ -111,6 +113,7 @@ var FeatureMapper = map[string]Features{
 	"stats_nfs_client_procedure_duration": FeatureStatsNFSClientProcedureDuration,
 	"stats_nfs_client_io":                 FeatureStatsNFSClientIO,
 	"stats_disk_pod_volumes":              FeatureStatsDiskPodVolumes,
+	"stats_disk_volume_devices":           FeatureStatsDiskVolumeDevices,
 	"network":                             FeatureNetwork,
 	"network_inter_zone":                  FeatureNetworkInterZone,
 	"network_flow_packets":                FeatureNetworkFlowPackets,
@@ -435,9 +438,9 @@ func (f Features) StatsTCPIo() bool {
 	return f.any(FeatureStatsTCPIo)
 }
 
-// StatsDisk reports whether any block I/O stat metric is enabled
+// StatsDisk reports whether any block I/O stat metric is enabled, which the block probes measure
 func (f Features) StatsDisk() bool {
-	return f.any(FeatureStatsDisk)
+	return f.any(FeatureStatsDisk &^ FeatureStatsDiskVolumeDevices)
 }
 
 func (f Features) StatsDiskIO() bool {
@@ -499,6 +502,12 @@ func (f Features) StatsNFSClientIO() bool {
 // part of stats_disk: it needs to watch the Kubernetes PersistentVolumes.
 func (f Features) StatsDiskPodVolumes() bool {
 	return f.any(FeatureStatsDiskPodVolumes)
+}
+
+// StatsDiskVolumeDevices reports whether the disks of the stacked volumes are reported. They are
+// read from sysfs, without the block probes.
+func (f Features) StatsDiskVolumeDevices() bool {
+	return f.any(FeatureStatsDiskVolumeDevices)
 }
 
 func (f Features) NetworkInterZone() bool {

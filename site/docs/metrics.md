@@ -1507,6 +1507,21 @@ Time block I/O requests wait between their allocation and their issue to the dev
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
+## `obi.stat.disk.volume.device`
+
+1 for each disk that a stacked volume of the node, such as an LVM, md RAID or loop device, is on, and 0 once it no longer is.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| updowncounter | {volume} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `obi.disk.volume.device` | string | `recommended` | development | Block device of a volume, such as the one that a pod volume is mounted from: the disk that `system.device` names, or a partition or a stacked device (such as an LVM volume) on it. | dm-0; nvme0n1p1; sdb |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the volume is a device mapper volume | development | Name of the device mapper volume (`obi.disk.volume.device`), as `/dev/mapper` and `dmsetup ls` list it. | rhel-root; vg0-data |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
 ## `obi.stat.fs.sync.duration`
 
 Duration of file syncs (fsync, fdatasync, sync, syncfs and sync_file_range), per call, outcome and workload that synced.
@@ -1549,7 +1564,7 @@ Duration of file syncs (fsync, fdatasync, sync, syncfs and sync_file_range), per
 | `k8s.pod.name` | string | `recommended` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `k8s.volume.name` | string | `recommended` | development | The name of the K8s volume. | volume0 |
 | `k8s.volume.type` | enum | `recommended` | development | The type of the K8s volume. | emptyDir; persistentVolumeClaim |
-| `obi.disk.volume.device` | string | `recommended` | development | Block device that a volume is mounted from: the disk that `system.device` names, or a partition or a stacked device (such as an LVM volume) on it. | dm-0; nvme0n1p1; sdb |
+| `obi.disk.volume.device` | string | `recommended` | development | Block device of a volume, such as the one that a pod volume is mounted from: the disk that `system.device` names, or a partition or a stacked device (such as an LVM volume) on it. | dm-0; nvme0n1p1; sdb |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 

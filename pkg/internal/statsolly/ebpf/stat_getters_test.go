@@ -182,6 +182,25 @@ func TestStatGetters_PodVolume(t *testing.T) {
 	assert.False(t, volumeName(&Stat{DiskIO: &DiskIO{Device: "sda"}}).Valid(), "block I/O has no volume")
 }
 
+func TestStatGetters_DiskVolume(t *testing.T) {
+	lvm := &Stat{Type: StatTypeDiskVolume, DiskVolume: &DiskVolume{Volume: "dm-0", Name: "rhel-root", Device: "sda", Value: 1}}
+	for name, expected := range map[attr.Name]string{
+		attr.DiskVolumeDevice: "dm-0",
+		attr.DiskVolumeName:   "rhel-root",
+		attr.SystemDevice:     "sda",
+	} {
+		getter, ok := StatGetters(name)
+		require.True(t, ok)
+		assert.Equal(t, expected, getter(lvm).Value.AsString(), name)
+	}
+
+	volumeName, ok := StatGetters(attr.DiskVolumeName)
+	require.True(t, ok)
+	raid := &Stat{Type: StatTypeDiskVolume, DiskVolume: &DiskVolume{Volume: "md0", Device: "sdb", Value: 1}}
+	assert.False(t, volumeName(raid).Valid(), "only device mapper volumes have a name")
+	assert.False(t, volumeName(&Stat{DiskIO: &DiskIO{Device: "sda"}}).Valid(), "block I/O has no volume")
+}
+
 func TestStatContainerID(t *testing.T) {
 	assert.Equal(t, "aaaa", (&Stat{DiskIO: &DiskIO{ContainerID: "aaaa"}}).ContainerID())
 	assert.Equal(t, "bbbb", (&Stat{FsSync: &FsSync{ContainerID: "bbbb"}}).ContainerID(),

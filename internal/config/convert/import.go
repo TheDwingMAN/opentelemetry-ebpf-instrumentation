@@ -2541,6 +2541,8 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsNFSClientIO
 		case statsFeatureDiskPodVolumes:
 			out |= export.FeatureStatsDiskPodVolumes
+		case statsFeatureDiskVolumeDevices:
+			out |= export.FeatureStatsDiskVolumeDevices
 		}
 	}
 	return out

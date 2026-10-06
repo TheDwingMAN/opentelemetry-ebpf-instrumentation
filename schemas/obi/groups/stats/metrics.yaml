@@ -820,6 +820,31 @@ groups:
       - ref: k8s.container.name
         requirement_level: opt_in
 
+  - id: metric.obi.obi.stat.disk.volume.device
+    type: metric
+    metric_name: obi.stat.disk.volume.device
+    instrument: updowncounter
+    unit: "{volume}"
+    stability: development
+    brief: >
+      1 for each disk that a stacked volume of the node, such as an LVM, md
+      RAID or loop device, is on, and 0 once it no longer is.
+    note: >
+      It links the stacked volumes to the block I/O metrics of the disks below
+      them (`system.device`). A volume over several disks, such as an md RAID1
+      volume, has one series per disk, and a volume over another stacked
+      volume has the disks of the bottom one.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: obi.disk.volume.device
+        requirement_level: recommended
+      - ref: obi.disk.volume.name
+        requirement_level:
+          conditionally_required: if the volume is a device mapper volume
+      - ref: system.device
+        requirement_level: recommended
+
   - id: metric.obi.obi.stat.k8s.pod.volume.device
     type: metric
     metric_name: obi.stat.k8s.pod.volume.device
