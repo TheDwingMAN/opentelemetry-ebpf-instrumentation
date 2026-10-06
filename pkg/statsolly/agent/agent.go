@@ -10,7 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"slices"
 	"time"
 
 	ciliumebpf "github.com/cilium/ebpf"
@@ -126,7 +125,13 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	// dynamic selection keeps only the storage stats of the workloads of the selected applications
 	readWorkloads := ctxInfo.DynamicSelector != nil
 
-	statsFetcher, err = newFetcher(&cfg.EBPF, &features, ctxInfo.MetricAttributeGroups, selectorCfg, latencyHistograms(cfg),
+	histograms, approximated := latencyHistograms(cfg)
+	if len(approximated) > 0 {
+		alog.Warn("more histogram buckets than the kernel can keep: these histograms are approximated",
+			"histograms", approximated)
+	}
+
+	statsFetcher, err = newFetcher(&cfg.EBPF, &features, ctxInfo.MetricAttributeGroups, selectorCfg, histograms,
 		readWorkloads)
 	if err != nil {
 		return nil, err
@@ -143,8 +148,10 @@ func newFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups at
 
 // latencyHistograms returns the boundaries the kernel buckets latencies with: the union of the
 // boundaries of the enabled histograms in the enabled exporters, so that the kernel buckets refine
-// all of them. The kernel buckets all the block request latencies with the same boundaries.
-func latencyHistograms(cfg *obi.Config) ebpf.LatencyHistograms {
+// all of them. The kernel buckets all the block request latencies with the same boundaries. It
+// also returns the configuration names of the histograms that have more boundaries than the kernel
+// keeps, which are approximated.
+func latencyHistograms(cfg *obi.Config) (ebpf.LatencyHistograms, []string) {
 	var exporters []export.Buckets
 	if cfg.Prometheus.EndpointEnabled() {
 		exporters = append(exporters, cfg.Prometheus.Buckets)
@@ -174,15 +181,22 @@ func latencyHistograms(cfg *obi.Config) ebpf.LatencyHistograms {
 			histograms.NFS = append(histograms.NFS, buckets.StatNFSClientProcedureDurationHistogram...)
 		}
 	}
-	histograms.Disk = sortedUnique(histograms.Disk)
-	histograms.FsSyncDuration = sortedUnique(histograms.FsSyncDuration)
-	histograms.NFS = sortedUnique(histograms.NFS)
-	return histograms
-}
-
-func sortedUnique(bounds []float64) []float64 {
-	slices.Sort(bounds)
-	return slices.Compact(bounds)
+	var approximated []string
+	for _, group := range []struct {
+		bounds *[]float64
+		names  string
+	}{
+		{&histograms.Disk, "stat_disk_operation_duration_histogram, stat_disk_queue_duration_histogram, " +
+			"stat_disk_flush_duration_histogram and stat_disk_discard_duration_histogram"},
+		{&histograms.FsSyncDuration, "stat_fs_sync_duration_histogram"},
+		{&histograms.NFS, "stat_nfs_client_procedure_duration_histogram"},
+	} {
+		var exact bool
+		if *group.bounds, exact = ebpf.KernelLatencyBounds(*group.bounds); !exact {
+			approximated = append(approximated, group.names)
+		}
+	}
+	return histograms, approximated
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests
@@ -201,7 +215,7 @@ func statsAgent(
 		if interval <= 0 {
 			interval = defaultDiskReadInterval
 		}
-		histograms := latencyHistograms(cfg)
+		histograms, _ := latencyHistograms(cfg)
 		diskTracer = stats.NewDiskMapTracer(&stats.DiskMapTracerConfig{
 			DiskIOAccum:           statsFetcher.DiskIOAccumMap(),
 			DiskPending:           cfg.Metrics.Features.StatsDiskPendingOperations(),

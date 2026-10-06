@@ -108,10 +108,6 @@ const (
 	RawTracepointBlockBioComplete = "block_bio_complete"
 )
 
-// maxDiskLatencyBounds is the number of histogram boundaries the kernel can bucket latencies with:
-// one less than the number of buckets, the last one being the overflow bucket.
-const maxDiskLatencyBounds = len(StatsDiskIoAccumT{}.LatencyCount) - 1
-
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
 //go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_rq_start_t -type disk_cgroup_name_t -type fs_sync_type -type fs_sync_key_t -type fs_sync_accum_t -type nfs_procedure_key_t -type nfs_procedure_accum_t -type nfs_io_key_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
