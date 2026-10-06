@@ -27,8 +27,11 @@ type PromMetric struct {
 
 // Collector is a Prometheus collector of aggregated metrics: const counters,
 // gauges, classic histograms (explicit layouts) and native histograms
-// (exponential layouts, schema = scale). Add every metric before registering
-// it, since Describe reports what was added.
+// (exponential layouts, schema = scale). An explicit layout gives classic
+// buckets only, whatever the exporter's native histogram settings, and an
+// exponential one native buckets only; the per-event histograms carry both.
+// Add every metric before registering it, since Describe reports what was
+// added.
 type Collector struct {
 	registry *Registry
 	ttl      time.Duration

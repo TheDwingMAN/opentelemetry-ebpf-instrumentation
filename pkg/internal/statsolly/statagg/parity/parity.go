@@ -55,7 +55,9 @@ type Setup struct {
 	OTelBuckets export.Buckets
 	PromBuckets export.Buckets
 	// Exponential exports OTel base-2 exponential histograms and compares
-	// Prometheus native histograms, both at the kernel's scale.
+	// Prometheus native histograms, both at the kernel's scale. Otherwise
+	// the Prometheus exporter keeps its default native histogram settings,
+	// and classic buckets are compared.
 	Exponential bool
 }
 
@@ -84,22 +86,47 @@ func Run(t *testing.T, setup Setup, events []*ebpf.Stat, newKernel func(decorate
 			kept = append(kept, e)
 		}
 	}
-	perEventOTel, perEventProm := export1(t, setup, nil, kept, nil)
+	perEventOTel, perEventProm, perEventOther := export1(t, setup, nil, kept, nil)
 
 	kernel := newKernel(matchers.Matches)
 	for _, e := range events {
 		kernel.Record(e)
 	}
-	aggOTel, aggProm := export1(t, setup, kernel.Registry, nil, kernel.Families)
+	aggOTel, aggProm, aggOther := export1(t, setup, kernel.Registry, nil, kernel.Families)
 
 	require.NotEmpty(t, perEventOTel, "the per-event path exported nothing")
 	assert.Equal(t, perEventOTel, aggOTel, "OTLP data points")
 	assert.Equal(t, perEventProm, aggProm, "Prometheus samples")
+
+	// The one difference by design: a per-event Prometheus histogram
+	// carries classic buckets and, with native histograms configured (the
+	// default), native ones; an aggregated one carries the kind of its
+	// kernel layout only. Explicit layouts lose the native part, exponential
+	// ones the classic buckets.
+	other := "native buckets"
+	if setup.Exponential {
+		other = "classic buckets"
+	}
+	if hasHistograms(perEventProm) {
+		assert.NotEmpty(t, perEventOther, "per-event histograms with %s", other)
+	}
+	assert.Empty(t, aggOther, "aggregated histograms without %s", other)
+}
+
+func hasHistograms(samples []string) bool {
+	for _, s := range samples {
+		if strings.Contains(s, " type=HISTOGRAM ") {
+			return true
+		}
+	}
+	return false
 }
 
 // export1 runs the OTel and Prometheus stats exporters, fed with events or
-// with the aggregated registry, and returns their normalized output.
-func export1(t *testing.T, setup Setup, aggregated *statagg.Registry, events []*ebpf.Stat, families []*statagg.Family) ([]string, []string) {
+// with the aggregated registry, and returns their normalized output, and the
+// Prometheus histogram series that also carry the kind of buckets not
+// compared.
+func export1(t *testing.T, setup Setup, aggregated *statagg.Registry, events []*ebpf.Stat, families []*statagg.Family) (otlp, samples, other []string) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -187,7 +214,8 @@ func export1(t *testing.T, setup Setup, aggregated *statagg.Registry, events []*
 	}
 	mfs, err := registry.Gather()
 	require.NoError(t, err)
-	return otlpPoints(last), promSamples(mfs, setup.Exponential)
+	samples, other = promSamples(mfs, setup.Exponential)
+	return otlpPoints(last), samples, other
 }
 
 // otlpPoints flattens an OTLP export into sorted, comparable lines.
@@ -254,10 +282,10 @@ func roundSum(v float64) string {
 }
 
 // promSamples flattens gathered Prometheus families into sorted lines:
-// classic histograms, or native ones when native is set. The per-event
-// histograms carry both; kernel aggregation emits one of them.
-func promSamples(mfs []*dto.MetricFamily, native bool) []string {
-	var out []string
+// classic histograms, or native ones when native is set. It also returns the
+// histogram series that carry the other kind of buckets: the per-event
+// histograms carry both, kernel aggregation emits one of them.
+func promSamples(mfs []*dto.MetricFamily, native bool) (out, other []string) {
 	for _, mf := range mfs {
 		head := fmt.Sprintf("%s type=%s help=%q", mf.GetName(), mf.GetType(), mf.GetHelp())
 		for _, m := range mf.GetMetric() {
@@ -272,14 +300,24 @@ func promSamples(mfs []*dto.MetricFamily, native bool) []string {
 			case dto.MetricType_GAUGE:
 				line += fmt.Sprintf(" value=%v", m.GetGauge().GetValue())
 			case dto.MetricType_HISTOGRAM:
-				line += histogramSample(m.GetHistogram(), native)
+				h := m.GetHistogram()
+				line += histogramSample(h, native)
+				if (native && hasClassic(h)) || (!native && hasNative(h)) {
+					other = append(other, line)
+				}
 			}
 			out = append(out, line)
 		}
 	}
 	sort.Strings(out)
-	return out
+	return out, other
 }
+
+// hasNative reports whether h carries native histogram buckets: a schema.
+func hasNative(h *dto.Histogram) bool { return h.Schema != nil }
+
+// hasClassic reports whether h carries classic buckets, besides +Inf.
+func hasClassic(h *dto.Histogram) bool { return len(h.GetBucket()) > 0 }
 
 func histogramSample(h *dto.Histogram, native bool) string {
 	s := fmt.Sprintf(" count=%d sum=%s", h.GetSampleCount(), roundSum(h.GetSampleSum()))

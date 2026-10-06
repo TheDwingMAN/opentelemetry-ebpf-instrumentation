@@ -171,8 +171,8 @@ func TestExponentialLayout(t *testing.T) {
 	assert.GreaterOrEqual(t, l.Bounds[len(l.Bounds)-1], 100.0)
 	assert.True(t, sort.Float64sAreSorted(l.Bounds))
 
-	_, err = NewExponentialLayout(3)
-	require.ErrorIs(t, err, ErrTooManyBounds, "scale 3 needs more than 128 bounds over 1us..100s")
+	_, err = NewExponentialLayout(MaxExponentialScale + 1)
+	require.ErrorIs(t, err, ErrTooManyBounds, "scale 3 is finer than the kernel layouts go")
 	_, err = NewExponentialLayout(-2)
 	require.NoError(t, err)
 }
@@ -201,4 +201,24 @@ func TestExponentialLayout_IndexMatchesTheBase2Buckets(t *testing.T) {
 				"scale %d: %v s in bucket %d (%v, %v]", scale, secs, k, lower, upper)
 		}
 	}
+}
+
+func TestHistogramChoice(t *testing.T) {
+	explicit := []float64{0.001, 0.01, 0.1}
+	for name, c := range map[string]HistogramChoice{
+		"OTel exponential": {OTelExponential: true},
+		"opt-in":           {OptIn: true},
+	} {
+		l, err := c.NewLayout(explicit)
+		require.NoError(t, err, name)
+		assert.Equal(t, LayoutExponential, l.Kind, name)
+		assert.Equal(t, DefaultExponentialScale, l.Scale, name)
+	}
+
+	// The default, whatever the Prometheus exporter's native histogram
+	// settings: they are not an input.
+	l, err := HistogramChoice{}.NewLayout(explicit, []float64{0.005})
+	require.NoError(t, err)
+	assert.Equal(t, LayoutExplicit, l.Kind)
+	assert.Equal(t, []float64{0.001, 0.005, 0.01, 0.1}, l.Bounds)
 }

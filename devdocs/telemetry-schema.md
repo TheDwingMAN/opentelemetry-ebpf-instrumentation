@@ -143,6 +143,14 @@ section empty once drained.
   carry no `k8s.persistentvolume.name`, claim or storage class: the mount root's inode, which
   tells the volumes apart, is now looked up in the background instead of holding up the
   pipeline.
+- Storage histograms that OBI aggregates in the kernel lose the native part of their
+  Prometheus histograms: OBI's Prometheus endpoint emits them with classic buckets only,
+  whatever `prometheus_export.native_histogram` says, where the per-event histograms carried
+  both classic and native buckets by default. To get native histograms, opt into exponential
+  kernel histograms, which OBI also selects when the OTLP exporter's `histogram_aggregation`
+  is `base2_exponential_bucket_histogram`; those are emitted as native (Prometheus) and
+  exponential (OTLP) histograms only, with no classic buckets, at a fixed scale of 2, coarser
+  than the schema 3 per-event native histograms had with the default bucket factor.
 
 - A span attribute OBI parses but could not determine is no longer emitted as an empty
   string. It covers every such attribute the span exporter appends, among them

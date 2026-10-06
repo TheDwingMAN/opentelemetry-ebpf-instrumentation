@@ -30,8 +30,15 @@ const (
 // exponential boundaries of their scale. Values below the lowest boundary
 // share its bucket (0 keeps a bucket of its own), values above the highest
 // share the overflow bucket.
+//
+// MaxExponentialScale is the finest scale: 2, whose buckets are twice as wide
+// as those of schema 3, what the Prometheus client picks for per-event native
+// histograms with the default bucket_factor of 1.1, and far coarser than the
+// OTel SDK's adaptive scale (up to 20). Scale 3 would need about 215 bounds
+// over the range.
 const (
 	DefaultExponentialScale int32 = 2
+	MaxExponentialScale     int32 = 2
 	exponentialLowest             = time.Microsecond
 	exponentialHighest            = 100 * time.Second
 )
@@ -106,9 +113,12 @@ func NewExplicitLayout(sets ...[]float64) (*Layout, error) {
 	return &Layout{Kind: LayoutExplicit, Bounds: bounds, BoundsNs: boundsNs}, nil
 }
 
-// NewExponentialLayout returns the exponential layout at scale over the
-// kernel's fixed duration range.
+// NewExponentialLayout returns the exponential layout at scale, at most
+// MaxExponentialScale, over the kernel's fixed duration range.
 func NewExponentialLayout(scale int32) (*Layout, error) {
+	if scale > MaxExponentialScale {
+		return nil, fmt.Errorf("%w: exponential scale %d, at most %d", ErrTooManyBounds, scale, MaxExponentialScale)
+	}
 	first, expBounds := export.Base2ExponentialBounds(scale,
 		exponentialLowest.Seconds(), exponentialHighest.Seconds())
 	bounds := append([]float64{0}, expBounds...)
@@ -127,6 +137,34 @@ func NewExponentialLayout(scale int32) (*Layout, error) {
 		Scale:      scale,
 		FirstIndex: first,
 	}, nil
+}
+
+// HistogramChoice is what selects the kernel layout of a family's
+// histograms.
+type HistogramChoice struct {
+	// OTelExponential is set when the OTel exporter's histogram_aggregation
+	// is base2_exponential_bucket_histogram.
+	OTelExponential bool
+	// OptIn is the user's explicit request for exponential kernel
+	// histograms, e.g. to get Prometheus native histograms.
+	OptIn bool
+}
+
+// Exponential reports whether the kernel counts in the exponential layout.
+// Prometheus native histograms being configured (native_histogram
+// .bucket_factor, which is set by default) never selects it: in the explicit
+// layout, the Prometheus exporter emits classic buckets only, and a user who
+// wants native histograms from kernel aggregation opts into exponential.
+func (c HistogramChoice) Exponential() bool { return c.OTelExponential || c.OptIn }
+
+// NewLayout returns the kernel layout c selects: exponential at
+// DefaultExponentialScale, or explicit over the union of the exporters'
+// bound sets.
+func (c HistogramChoice) NewLayout(sets ...[]float64) (*Layout, error) {
+	if c.Exponential() {
+		return NewExponentialLayout(DefaultExponentialScale)
+	}
+	return NewExplicitLayout(sets...)
 }
 
 func boundsToNs(bounds []float64) ([]uint64, error) {
