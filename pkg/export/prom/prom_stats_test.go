@@ -391,6 +391,29 @@ func TestStatsReporterRecordsDiskFlushAndDiscard(t *testing.T) {
 		"discard shares the disk operation duration buckets")
 }
 
+// A failed discard released nothing: it is timed, with its error.type, but
+// adds no bytes.
+func TestStatsReporterFailedDiscardReleasesNoBytes(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter := newDiskStatsReporter(t, registry)
+
+	reporter.observeDiskDiscard(blockIoKindStat(ebpf.CodeBlockDiscard, 1<<20, -int32(unix.EIO)))
+
+	failed := gatheredMetric(t, registry, "obi_stat_disk_discard_duration_seconds",
+		map[string]string{"system_device": "8:16", "error_type": "EIO"})
+	require.NotNil(t, failed, "a failed discard is still timed")
+	assert.Equal(t, uint64(1), failed.GetHistogram().GetSampleCount())
+	assert.Nil(t, gatheredMetric(t, registry, "obi_stat_disk_discard_io_bytes_total",
+		map[string]string{"system_device": "8:16"}), "a failed discard released no bytes")
+
+	reporter.observeDiskDiscard(blockIoKindStat(ebpf.CodeBlockDiscard, 4096, 0))
+
+	discardBytes := gatheredMetric(t, registry, "obi_stat_disk_discard_io_bytes_total",
+		map[string]string{"system_device": "8:16"})
+	require.NotNil(t, discardBytes)
+	assert.InEpsilon(t, float64(4096), discardBytes.GetCounter().GetValue(), 0)
+}
+
 // The read/write metrics see reads and writes only: a flush is not a 0-byte
 // write and a discard is not a read.
 func TestStatsReporterReadWriteMetricsSkipFlushAndDiscard(t *testing.T) {

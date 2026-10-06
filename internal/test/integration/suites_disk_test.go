@@ -22,6 +22,7 @@ func TestStat_DiskMetrics(t *testing.T) {
 	t.Run("Disk Metrics operation duration write", testDiskMetricsOpDurationWrite)
 	t.Run("Disk Metrics IO bytes", testDiskMetricsIOBytes)
 	t.Run("Disk Metrics IO bytes write volume", testDiskMetricsIOBytesWriteVolume)
+	t.Run("Disk Metrics flush duration", testDiskMetricsFlushDuration)
 	t.Run("Disk Metrics Prometheus exposition", testDiskMetricsPromExposition)
 	require.NoError(t, compose.Close())
 }

@@ -1055,7 +1055,7 @@ Ratio [0-1] between the unread messages of an internal Go channel and its total 
 
 ## `obi.stat.disk.discard.duration`
 
-Block-layer service time of discard and secure erase requests, measured from `block_rq_issue` to `block_rq_complete`, broken down by device.
+Block-layer service time of discard and secure erase requests, measured from `block_rq_issue` to `block_rq_complete`, broken down by device. `/proc/diskstats` counts a secure erase as a write instead.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1068,7 +1068,7 @@ Block-layer service time of discard and secure erase requests, measured from `bl
 
 ## `obi.stat.disk.discard.io`
 
-Count of bytes released by completed discard and secure erase requests, broken down by device.
+Count of bytes released by discard and secure erase requests that completed successfully, broken down by device.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1080,7 +1080,7 @@ Count of bytes released by completed discard and secure erase requests, broken d
 
 ## `obi.stat.disk.flush.duration`
 
-Block-layer service time of cache flush requests, measured from `block_rq_issue` to `block_rq_complete`, broken down by device.
+Block-layer service time of cache flush requests, measured from `block_rq_issue` to `block_rq_complete`, broken down by device. The count matches the flushes in `/proc/diskstats`.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1106,7 +1106,7 @@ Count of bytes transferred at the block layer, accumulated per completed disk re
 
 ## `obi.stat.disk.operation.duration`
 
-Block-layer service latency per disk read or write request, measured from `block_rq_issue` to `block_rq_complete`, broken down by device and direction. Flush and discard requests are not included: they have metrics of their own.
+Block-layer service latency per disk read or write request, measured from `block_rq_issue` to `block_rq_complete`, broken down by device and direction. Flush and discard requests are not included: they have metrics of their own. The write count matches the writes in `/proc/diskstats`, except that diskstats also counts as a write an empty preflush write (0 bytes, such as a dm-thin metadata commit or a flush passed through a loop device), counted here only as the flush issued for it, and a secure erase, counted here as a discard.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |

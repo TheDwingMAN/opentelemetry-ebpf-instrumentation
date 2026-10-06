@@ -38,11 +38,22 @@ enum {
     k_req_op_absent = k_req_op_mask + 1,
 };
 
-// Writes are what /proc/diskstats counts as writes. A data write that
-// carries REQ_PREFLUSH is still a write: the flush machinery issues the flush
-// as a request of its own (REQ_OP_FLUSH), which is what counts as a flush. A
-// secure erase is counted as a discard: both release blocks rather than move
-// data.
+// A data write that carries REQ_PREFLUSH is still a write: the flush machinery
+// issues the flush as a request of its own (REQ_OP_FLUSH), which is what
+// counts as a flush. A secure erase is counted as a discard: both release
+// blocks rather than move data.
+//
+// Against /proc/diskstats: flushes match its flushes. Writes match its writes
+// with two exceptions. diskstats also counts as a write an empty REQ_PREFLUSH
+// write (0 bytes, such as a dm-thin metadata commit or a flush passed through a
+// loop device); such a request never reaches block_rq_issue, only the flush
+// issued for it does (none on a device without a write-back cache), so it is
+// counted here as a flush only. And diskstats counts a secure erase as a
+// write, where it is a discard here.
+//
+// The classic-tracepoint fallback classifies from rwbs instead (below), which
+// has no letter for REQ_OP_WRITE_ZEROES or REQ_OP_ZONE_APPEND: they are
+// ignored there, while this raw path counts them as writes.
 static __always_inline enum blk_req_kind blk_kind_from_cmd_flags(const u32 cmd_flags,
                                                                  const u32 zone_append) {
     const u32 op = cmd_flags & k_req_op_mask;
@@ -66,7 +77,8 @@ static __always_inline enum blk_req_kind blk_kind_from_cmd_flags(const u32 cmd_f
 // an 'F' for REQ_PREFLUSH comes first, then the operation's letter: 'W'
 // write, 'R' read, 'D' discard (secure erase is "DE"), 'F' flush and 'N' any
 // operation without a letter of its own. So "FW" is a write with a preflush,
-// and an 'F' followed by anything else is a flush.
+// and an 'F' followed by anything else is a flush. REQ_OP_WRITE_ZEROES and
+// REQ_OP_ZONE_APPEND are 'N', so this path ignores them.
 static __always_inline enum blk_req_kind blk_kind_from_rwbs(const char rwbs0, const char rwbs1) {
     switch (rwbs0) {
     case 'R':
