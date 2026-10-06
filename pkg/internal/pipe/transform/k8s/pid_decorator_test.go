@@ -41,7 +41,7 @@ func pidTestPidOf(item *pidTestItem) (uint32, uint32, uint32, bool) {
 	return item.pidNs, item.hostPID, item.sDev, item.hasPID
 }
 
-func noopPVCLookup(context.Context, string) (string, string, bool) { return "", "", false }
+func noopPVCLookup(context.Context, string) (string, string, string, bool) { return "", "", "", false }
 
 func newPIDTestStore(t *testing.T) *kube.Store {
 	t.Helper()
@@ -139,9 +139,9 @@ func TestPIDMetadataDecorator_FallsBackToMountPodWhenPIDUnresolved(t *testing.T)
 	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
 	outCh := output.Subscribe()
 
-	pvc := func(_ context.Context, pvName string) (string, string, bool) {
+	pvc := func(_ context.Context, pvName string) (string, string, string, bool) {
 		assert.Equal(t, "pvc-abc", pvName)
-		return "vol-ns", "my-claim", true
+		return "vol-ns", "my-claim", "", true
 	}
 
 	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
@@ -160,6 +160,52 @@ func TestPIDMetadataDecorator_FallsBackToMountPodWhenPIDUnresolved(t *testing.T)
 	assert.Empty(t, got[0].Metadata[attr.K8sContainerName])
 	assert.Equal(t, "pvc-abc", got[0].Metadata[attr.K8sPersistentVolumeName])
 	assert.Equal(t, "my-claim", got[0].Metadata[attr.K8sPersistentVolumeClaimName])
+	// Storage class attribute must be absent when PVC lookup returns empty string
+	assert.Empty(t, got[0].Metadata[attr.K8sStorageClassName])
+}
+
+func TestPIDMetadataDecorator_AttributesStorageClass(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	store := newPIDTestStore(t)
+
+	podMeta := &informer.ObjectMeta{
+		Name: "vol-pod", Namespace: "vol-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{Uid: "pod-uid-3"},
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
+
+	resolveMount = func(_ uint32) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-3", PVName: "pvc-def", VolumeType: "nfs"}, true
+	}
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	pvc := func(_ context.Context, pvName string) (string, string, string, bool) {
+		assert.Equal(t, "pvc-def", pvName)
+		return "vol-ns", "my-claim", "fast-ssd", true
+	}
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		t.Context(), store, pidTestAttrs, pidTestPidOf, pvc, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	input.Send([]*pidTestItem{{pidNs: 1, hostPID: 1, sDev: 43, hasPID: true}})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Equal(t, "vol-pod", got[0].Metadata[attr.K8sPodName])
+	assert.Equal(t, "vol-ns", got[0].Metadata[attr.K8sNamespaceName])
+	assert.Equal(t, "pvc-def", got[0].Metadata[attr.K8sPersistentVolumeName])
+	assert.Equal(t, "my-claim", got[0].Metadata[attr.K8sPersistentVolumeClaimName])
+	// Storage class attribute must be present and equal to the non-empty value returned by PVC lookup
+	assert.Equal(t, "fast-ssd", got[0].Metadata[attr.K8sStorageClassName])
 }
 
 func TestPIDMetadataDecorator_NoMountFoundSkipsVolumeAttrs(t *testing.T) {

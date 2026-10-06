@@ -14,59 +14,62 @@ import (
 
 func TestCachedPVCLookup_CachesSuccess(t *testing.T) {
 	calls := 0
-	lookup := func(_ context.Context, pvName string) (string, string, bool) {
+	lookup := func(_ context.Context, pvName string) (string, string, string, bool) {
 		calls++
-		return "ns-" + pvName, "claim-" + pvName, true
+		return "ns-" + pvName, "claim-" + pvName, "sc-" + pvName, true
 	}
 	cached := CachedPVCLookup(lookup)
 
-	namespace, claimName, ok := cached(context.Background(), "pv-a")
+	namespace, claimName, storageClass, ok := cached(context.Background(), "pv-a")
 	require.True(t, ok)
 	assert.Equal(t, "ns-pv-a", namespace)
 	assert.Equal(t, "claim-pv-a", claimName)
+	assert.Equal(t, "sc-pv-a", storageClass)
 
-	namespace, claimName, ok = cached(context.Background(), "pv-a")
+	namespace, claimName, storageClass, ok = cached(context.Background(), "pv-a")
 	require.True(t, ok)
 	assert.Equal(t, "ns-pv-a", namespace)
 	assert.Equal(t, "claim-pv-a", claimName)
+	assert.Equal(t, "sc-pv-a", storageClass)
 
 	assert.Equal(t, 1, calls, "a repeat hit must not call through twice")
 }
 
 func TestCachedPVCLookup_RetriesFailure(t *testing.T) {
 	calls := 0
-	lookup := func(_ context.Context, _ string) (string, string, bool) {
+	lookup := func(_ context.Context, _ string) (string, string, string, bool) {
 		calls++
-		return "", "", calls > 1
+		return "", "", "", calls > 1
 	}
 	cached := CachedPVCLookup(lookup)
 
-	_, _, ok := cached(context.Background(), "pv-b")
+	_, _, _, ok := cached(context.Background(), "pv-b")
 	assert.False(t, ok, "first lookup is expected to fail")
 
-	namespace, claimName, ok := cached(context.Background(), "pv-b")
+	namespace, claimName, storageClass, ok := cached(context.Background(), "pv-b")
 	assert.True(t, ok, "a failed lookup must be retried, not cached")
 	assert.Equal(t, "", namespace)
 	assert.Equal(t, "", claimName)
+	assert.Equal(t, "", storageClass)
 	assert.Equal(t, 2, calls)
 }
 
 func TestCachedPVCLookup_BoundsCacheSize(t *testing.T) {
 	calls := 0
-	lookup := func(_ context.Context, pvName string) (string, string, bool) {
+	lookup := func(_ context.Context, pvName string) (string, string, string, bool) {
 		calls++
-		return "ns", pvName, true
+		return "ns", pvName, "", true
 	}
 	cached := CachedPVCLookup(lookup)
 
 	firstPV := "pv-0"
-	_, _, ok := cached(context.Background(), firstPV)
+	_, _, _, ok := cached(context.Background(), firstPV)
 	require.True(t, ok)
 	require.Equal(t, 1, calls)
 
 	// Fill the cache past its bound with distinct keys.
 	for i := 1; i <= maxCachedPVCLookups; i++ {
-		_, _, ok := cached(context.Background(), fmt.Sprintf("pv-%d", i))
+		_, _, _, ok := cached(context.Background(), fmt.Sprintf("pv-%d", i))
 		require.True(t, ok)
 	}
 
@@ -74,7 +77,7 @@ func TestCachedPVCLookup_BoundsCacheSize(t *testing.T) {
 
 	// The cache must have been reset at least once while filling, so the
 	// very first entry is no longer cached and gets resolved again.
-	_, _, ok = cached(context.Background(), firstPV)
+	_, _, _, ok = cached(context.Background(), firstPV)
 	require.True(t, ok)
 	assert.Greater(t, calls, callsBeforeRecheck, "cache should have evicted the first entry once it grew past its bound")
 }

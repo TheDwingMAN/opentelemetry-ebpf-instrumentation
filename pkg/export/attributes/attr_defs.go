@@ -258,6 +258,7 @@ func getDefinitions(
 		Attributes: map[attr.Name]Default{
 			attr.K8sPersistentVolumeName:      true,
 			attr.K8sPersistentVolumeClaimName: true,
+			attr.K8sStorageClassName:          true,
 		},
 	}
 
