@@ -171,6 +171,7 @@ Attributes carried on OBI's per-connection TCP statistics and filesystem I/O sta
 | --- | --- | --- | --- | --- |
 | `fs.operation` | enum | development | Filesystem operation performed. | read; write; fsync; fdatasync |
 | `network.tcp.handshake.role` | enum | development | Role of the local endpoint in the TCP three-way handshake (`client` initiated the SYN, `server` was awaiting it). | client; server; unknown |
+| `obi.disk.physical_device` | string | development | Physical disk(s) behind a filesystem's block device: sorted, comma-joined, at most 8. Omitted when the filesystem is not block-backed, or the walk cannot resolve one. | vdb; nvme0n1,nvme1n1 |
 | `obi.disk.stacked` | boolean | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `reason` | enum | development | Classification of why a TCP connection failed. | refused; reset; timed-out; host-unreachable; net-unreachable; other; unknown |
 

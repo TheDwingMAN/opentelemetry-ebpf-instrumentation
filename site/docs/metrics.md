@@ -1334,9 +1334,18 @@ Count of bytes transferred through filesystem read and write operations, broken 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
+| `k8s.container.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
 | `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
+| `k8s.namespace.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.persistentvolume.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the volume is a known PersistentVolume | development | The name of the PersistentVolume. | pv-data-01 |
+| `k8s.persistentvolumeclaim.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of the PersistentVolumeClaim. | pvc-data-01 |
+| `k8s.pod.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `k8s.storageclass.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of K8s [StorageClass](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#storageclass-v1-storage-k8s-io) object. | gold.storageclass.storage.k8s.io |
+| `obi.disk.physical_device` | string | `recommended` | development | Physical disk(s) behind a filesystem's block device: sorted, comma-joined, at most 8. Omitted when the filesystem is not block-backed, or the walk cannot resolve one. | vdb; nvme0n1,nvme1n1 |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
 
 ## `obi.stat.fs.operation.duration`
@@ -1350,9 +1359,18 @@ Latency of a single filesystem read, write, fsync or fdatasync as the applicatio
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
+| `k8s.container.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
 | `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
+| `k8s.namespace.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.persistentvolume.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the volume is a known PersistentVolume | development | The name of the PersistentVolume. | pv-data-01 |
+| `k8s.persistentvolumeclaim.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of the PersistentVolumeClaim. | pvc-data-01 |
+| `k8s.pod.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `k8s.storageclass.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of K8s [StorageClass](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#storageclass-v1-storage-k8s-io) object. | gold.storageclass.storage.k8s.io |
+| `obi.disk.physical_device` | string | `recommended` | development | Physical disk(s) behind a filesystem's block device: sorted, comma-joined, at most 8. Omitted when the filesystem is not block-backed, or the walk cannot resolve one. | vdb; nvme0n1,nvme1n1 |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
 
 ## `obi.stat.fs.operation.errors`
@@ -1367,9 +1385,18 @@ Count of filesystem read or write operations that failed, broken down by filesys
 | --- | --- | --- | --- | --- | --- |
 | `error.type` | string | `recommended` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync |
+| `k8s.container.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
 | `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
+| `k8s.namespace.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.persistentvolume.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the volume is a known PersistentVolume | development | The name of the PersistentVolume. | pv-data-01 |
+| `k8s.persistentvolumeclaim.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of the PersistentVolumeClaim. | pvc-data-01 |
+| `k8s.pod.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `k8s.storageclass.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of K8s [StorageClass](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#storageclass-v1-storage-k8s-io) object. | gold.storageclass.storage.k8s.io |
+| `obi.disk.physical_device` | string | `recommended` | development | Physical disk(s) behind a filesystem's block device: sorted, comma-joined, at most 8. Omitted when the filesystem is not block-backed, or the walk cannot resolve one. | vdb; nvme0n1,nvme1n1 |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 | `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
 
 ## `obi.stat.tcp.failed.connections`

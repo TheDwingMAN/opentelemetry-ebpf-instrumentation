@@ -636,14 +636,41 @@ groups:
         requirement_level: recommended
       - ref: fs.operation
         requirement_level: recommended
+      - ref: system.device
+        requirement_level: recommended
+        note: Block-backed filesystems only; omitted for network filesystems.
+      - ref: obi.disk.physical_device
+        requirement_level: recommended
+        note: Block-backed filesystems only; omitted for network filesystems.
+      - ref: server.address
+        requirement_level: recommended
+        note: Network filesystems only (nfs, cifs); omitted for ceph and local filesystems.
       - ref: k8s.node.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the pod is known
+      - ref: k8s.pod.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the pod is known
+      - ref: k8s.container.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the pod is known
       - ref: k8s.owner.name
         requirement_level:
           conditionally_required: if Kubernetes decoration is enabled and the pod is known
       - ref: k8s.kind
         requirement_level: opt_in
+      - ref: k8s.persistentvolume.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the volume is a known PersistentVolume
+      - ref: k8s.persistentvolumeclaim.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the PersistentVolume is Bound
+      - ref: k8s.storageclass.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the PersistentVolume is Bound
 
   # Companion to the histogram above: volume of data moved by the same
   # operations. Published under obi.* rather than system.filesystem.* so it
@@ -662,14 +689,41 @@ groups:
         requirement_level: recommended
       - ref: fs.operation
         requirement_level: recommended
+      - ref: system.device
+        requirement_level: recommended
+        note: Block-backed filesystems only; omitted for network filesystems.
+      - ref: obi.disk.physical_device
+        requirement_level: recommended
+        note: Block-backed filesystems only; omitted for network filesystems.
+      - ref: server.address
+        requirement_level: recommended
+        note: Network filesystems only (nfs, cifs); omitted for ceph and local filesystems.
       - ref: k8s.node.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the pod is known
+      - ref: k8s.pod.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the pod is known
+      - ref: k8s.container.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the pod is known
       - ref: k8s.owner.name
         requirement_level:
           conditionally_required: if Kubernetes decoration is enabled and the pod is known
       - ref: k8s.kind
         requirement_level: opt_in
+      - ref: k8s.persistentvolume.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the volume is a known PersistentVolume
+      - ref: k8s.persistentvolumeclaim.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the PersistentVolume is Bound
+      - ref: k8s.storageclass.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the PersistentVolume is Bound
 
   # Failed filesystem operations, keyed by the upstream error.type attribute so
   # the failure mode (ESTALE, EIO, ENOSPC, ETIMEDOUT, ...) is queryable without
@@ -693,11 +747,38 @@ groups:
         requirement_level: recommended
       - ref: error.type
         requirement_level: recommended
+      - ref: system.device
+        requirement_level: recommended
+        note: Block-backed filesystems only; omitted for network filesystems.
+      - ref: obi.disk.physical_device
+        requirement_level: recommended
+        note: Block-backed filesystems only; omitted for network filesystems.
+      - ref: server.address
+        requirement_level: recommended
+        note: Network filesystems only (nfs, cifs); omitted for ceph and local filesystems.
       - ref: k8s.node.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the pod is known
+      - ref: k8s.pod.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the pod is known
+      - ref: k8s.container.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the pod is known
       - ref: k8s.owner.name
         requirement_level:
           conditionally_required: if Kubernetes decoration is enabled and the pod is known
       - ref: k8s.kind
         requirement_level: opt_in
+      - ref: k8s.persistentvolume.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the volume is a known PersistentVolume
+      - ref: k8s.persistentvolumeclaim.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the PersistentVolume is Bound
+      - ref: k8s.storageclass.name
+        requirement_level:
+          conditionally_required: if Kubernetes decoration is enabled and the PersistentVolume is Bound

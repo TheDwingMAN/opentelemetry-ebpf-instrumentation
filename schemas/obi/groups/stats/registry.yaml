@@ -94,3 +94,18 @@ groups:
           RAID, loop, or an NVMe multipath head) rather than one that issues
           requests directly to hardware.
         examples: [true, false]
+      # The fs join label of step 10 (FEATURES-V3-SPEC.md section 1.2):
+      # userspace sysfs walk from a filesystem's block device to the disks
+      # that do not themselves issue requests to hardware
+      # (obi.disk.stacked=false), through device-mapper, software RAID,
+      # NVMe multipath and loop backing files. Lets a filesystem series be
+      # joined to the disk series of the physical hardware underneath it,
+      # without a topology metric.
+      - id: obi.disk.physical_device
+        type: string
+        stability: development
+        brief: >
+          Physical disk(s) behind a filesystem's block device: sorted,
+          comma-joined, at most 8. Omitted when the filesystem is not
+          block-backed, or the walk cannot resolve one.
+        examples: ["vdb", "nvme0n1,nvme1n1"]
