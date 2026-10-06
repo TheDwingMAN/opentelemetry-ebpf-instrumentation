@@ -96,7 +96,7 @@ func TestStatMetricsExporter_DiskMetrics(t *testing.T) {
 			Type: ebpf.StatTypeBlockIo,
 			BlockIo: &ebpf.BlockIo{
 				Dev:       0x800010,
-				Op:        ebpf.BlockOpWrite,
+				Op:        uint8(ebpf.CodeDirectionWrite),
 				LatencyNs: 2_000_000,
 				Bytes:     4096,
 			},
@@ -128,7 +128,7 @@ func TestStatMetricsExporter_DiskMetrics(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 
 	// Both metrics carry the same device/direction attributes, decoded from
-	// dev 0x800010 (major 8, minor 16) and BlockOpWrite.
+	// dev 0x800010 (major 8, minor 16) and a write.
 	diskAttrs := map[string]string{
 		"system.device":     "8:16",
 		"disk.io.direction": "write",

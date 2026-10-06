@@ -12,6 +12,7 @@ enum {
     k_event_stat_tcp_retransmit = 3,        // StatTypeTCPRetransmit
     k_event_stat_tcp_io = 4,                // StatTypeTCPIo
     k_event_stat_block_io = 5,              // StatTypeBlockIo
+    k_event_stat_fs_io = 6,                 // StatTypeFsIo
 };
 
 // batch size used in tcp io metric
@@ -41,18 +42,46 @@ enum network_io_direction : u8 {
 };
 
 enum blk_io_op : u8 {
-    k_blk_op_read = 0,
-    k_blk_op_write = 1,
+    blk_op_read = 0,
+    blk_op_write = 1,
 };
 
 typedef struct block_io {
     u8 flags; // Must be first, we use it to tell what kind of event we have on the ring buffer
-    enum blk_io_op op; // 0=read, 1=write (from rwbs[0])
+    enum blk_io_op op; // derived from rwbs[0]
     unsigned char _pad[2];
     u32 dev;        // kernel dev_t (major<<20 | minor)
     u64 latency_ns; // issue -> complete
-    u64 bytes;      // nr_sector * 512
+    u64 bytes;
 } block_io_t;
 
 // Force struct into the ELF for automatic creation of Golang struct
 const block_io_t *unused_block_io __attribute__((unused));
+
+enum fs_type : u8 {
+    fs_type_unknown = 0,
+    fs_type_nfs = 1,
+    fs_type_ceph = 2,
+    fs_type_cifs = 3,
+    fs_type_fuse = 4,
+};
+
+enum fs_op : u8 {
+    fs_op_read = 0,
+    fs_op_write = 1,
+};
+
+typedef struct fs_io {
+    u8 flags; // Must be first, we use it to tell what kind of event we have on the ring buffer
+    enum fs_type fs;
+    enum fs_op op;
+    unsigned char _pad[1];
+    u32 s_dev; // superblock dev_t; anonymous (major 0) for network filesystems
+    u32 host_pid;
+    u32 pid_ns;
+    u64 latency_ns;
+    u64 bytes;
+} fs_io_t;
+
+// Force struct into the ELF for automatic creation of Golang struct
+const fs_io_t *unused_fs_io __attribute__((unused));

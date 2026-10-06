@@ -5,5 +5,6 @@
 #include "k_tcp.c"
 #include "tp_tcp.c"
 #include "blk_io.c"
+#include "fs_io.c"
 
 char __license[] SEC("license") = "Dual MIT/GPL";

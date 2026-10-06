@@ -4,9 +4,16 @@
 package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+)
+
+// Layout of a Linux dev_t, as encoded by the kernel's MAJOR()/MINOR() macros.
+const (
+	devMinorBits = 20
+	devMinorMask = (1 << devMinorBits) - 1
 )
 
 // sysBlockDir is the sysfs directory whose "<major>:<minor>" entries symlink to
@@ -21,12 +28,10 @@ var (
 	devNameCache = map[uint32]string{}
 )
 
-// deviceName resolves a Linux dev_t to its block device name (for example
-// "nvme0n1" or "sda1") by reading the /sys/dev/block/<major>:<minor> symlink,
-// so the system.device attribute is human-readable rather than a raw
-// "<major>:<minor>" number. It falls back to the "<major>:<minor>" form when
-// sysfs is unavailable or the device cannot be resolved, so the attribute is
-// always populated.
+// deviceName resolves a Linux dev_t to its block device name, for example
+// "nvme0n1", so the system.device attribute is human-readable. It falls back to
+// the "<major>:<minor>" form when sysfs is unavailable or the device cannot be
+// resolved, so the attribute is always populated.
 func deviceName(dev uint32) string {
 	devNameMu.RLock()
 	name, ok := devNameCache[dev]
@@ -49,4 +54,9 @@ func deviceName(dev uint32) string {
 		devNameMu.Unlock()
 	}
 	return name
+}
+
+// fmtDev formats a Linux dev_t value as "<major>:<minor>".
+func fmtDev(dev uint32) string {
+	return fmt.Sprintf("%d:%d", dev>>devMinorBits, dev&devMinorMask)
 }

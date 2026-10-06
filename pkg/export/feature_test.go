@@ -249,6 +249,20 @@ func TestStorageBlockFeatureParsing(t *testing.T) {
 	assert.True(t, f.StatMetrics()) // storage rides the stats pipeline
 }
 
+func TestStorageFSFeatureParsing(t *testing.T) {
+	var f Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_fs"]`), &f))
+	assert.True(t, f.StorageFS())
+	assert.True(t, f.StorageFSDuration())
+	assert.True(t, f.StorageFSIo())
+	assert.True(t, f.StatMetrics(), "storage_fs rides the stats pipeline")
+
+	var d Features
+	require.NoError(t, yaml.Unmarshal([]byte(`["storage_fs_duration"]`), &d))
+	assert.True(t, d.StorageFS())
+	assert.False(t, d.StorageFSIo())
+}
+
 func TestFeatureUndefined(t *testing.T) {
 	t.Run("undefined YAML", func(t *testing.T) {
 		doc := struct {

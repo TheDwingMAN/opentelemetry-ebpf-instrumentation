@@ -15,7 +15,7 @@ import (
 )
 
 func TestReadBlockIoIntoStat(t *testing.T) {
-	ev := ebpf.StatsBlockIo{Flags: 5, Op: ebpf.BlockOpWrite, Dev: 0x800010, LatencyNs: 1_500_000, Bytes: 4096}
+	ev := ebpf.StatsBlockIo{Flags: 5, Op: uint8(ebpf.CodeDirectionWrite), Dev: 0x800010, LatencyNs: 1_500_000, Bytes: 4096}
 	raw := (*[unsafe.Sizeof(ev)]byte)(unsafe.Pointer(&ev))[:]
 
 	stat, err := readBlockIoIntoStat(&ringbuf.Record{RawSample: raw})
@@ -23,7 +23,7 @@ func TestReadBlockIoIntoStat(t *testing.T) {
 	require.NotNil(t, stat.BlockIo)
 	assert.Equal(t, ebpf.StatTypeBlockIo, stat.Type)
 	assert.Equal(t, uint32(0x800010), stat.BlockIo.Dev)
-	assert.Equal(t, ebpf.BlockOpWrite, stat.BlockIo.Op)
+	assert.Equal(t, uint8(ebpf.CodeDirectionWrite), stat.BlockIo.Op)
 	assert.Equal(t, uint64(1_500_000), stat.BlockIo.LatencyNs)
 	assert.Equal(t, uint64(4096), stat.BlockIo.Bytes)
 }
