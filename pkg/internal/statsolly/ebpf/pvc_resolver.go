@@ -29,6 +29,11 @@ const maxCachedPVCLookups = 4096
 // filesystem event.
 const pvcCacheNegativeTTL = 30 * time.Second
 
+// pvLookupTimeout bounds one PersistentVolume GET. It runs on the decorator's
+// goroutine, so a slow API server would otherwise stall every storage event
+// behind it.
+const pvLookupTimeout = 2 * time.Second
+
 type pvcCacheEntry struct {
 	namespace    string
 	claimName    string
@@ -119,6 +124,8 @@ func pvcLog() *slog.Logger {
 
 func K8sPVCLookup(client kubernetes.Interface) PVCLookup {
 	return func(ctx context.Context, pvName string) (string, string, string, bool) {
+		ctx, cancel := context.WithTimeout(ctx, pvLookupTimeout)
+		defer cancel()
 		pv, err := client.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
