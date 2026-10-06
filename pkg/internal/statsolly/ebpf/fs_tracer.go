@@ -30,7 +30,7 @@ import (
 // filesystem the kernel rejects then disables only itself, and a load copies
 // no TCP or block map.
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type fs_emit_kind -type fs_drop_reason -target amd64,arm64 -output-stem stats_fsio FsIo ../../../../bpf/statsolly/fs_io.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type fs_emit_kind -type fs_drop_reason -target $BPF_TARGETS -output-stem stats_fsio FsIo ../../../../bpf/statsolly/fs_io.c -- -I../../../../bpf
 
 // Program names of the FsIo object.
 const (

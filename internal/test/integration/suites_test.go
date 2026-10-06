@@ -442,6 +442,22 @@ func TestSuite_NodeJS(t *testing.T) {
 	require.NoError(t, compose.Close())
 }
 
+// With context propagation on, the outgoing call's parent is resolved by the
+// tpinjector rather than by the generic tracer, so manual-span nesting runs
+// through a different helper. Same assertions, second code path.
+func TestSuite_NodeJSManualSpansPropagation(t *testing.T) {
+	compose, err := docker.ComposeSuite("docker-compose-nodejs-manual-prop.yml",
+		path.Join(pathOutput, "test-suite-nodejs-manual-prop.log"))
+	require.NoError(t, err)
+
+	compose.Env = append(compose.Env, `OTEL_EBPF_OPEN_PORT=3030`, `OTEL_EBPF_EXECUTABLE_PATH=`, `NODE_APP=app`)
+	require.NoError(t, compose.Up())
+	waitForTestComponents(t, "http://localhost:3031")
+	t.Run("HTTP manual spans (OTel API bridge)", testHTTPTracesNodeManualSpans)
+	runWeaverValidation(t)
+	require.NoError(t, compose.Close())
+}
+
 func TestSuite_Deno(t *testing.T) {
 	compose, err := docker.ComposeSuite("docker-compose-deno.yml", path.Join(pathOutput, "test-suite-deno.log"))
 	require.NoError(t, err)
@@ -1063,6 +1079,7 @@ func TestSuite_PythonMCP(t *testing.T) {
 	t.Run("Python MCP client span", testPythonMCPClient)
 	t.Run("Python MCP client resource span", testPythonMCPClientResource)
 	t.Run("Python MCP operation metrics", testPythonMCPMetrics)
+	t.Run("Python MCP session metrics", testPythonMCPSessionMetrics)
 	runWeaverValidation(t)
 	require.NoError(t, compose.Close())
 }
@@ -1338,6 +1355,9 @@ func logEnricherGoGRPCSuite(t *testing.T, configSuffix string) {
 		t.Run("Log Enricher plain text", func(t *testing.T) {
 			testLogEnricherPlainText(t, logEnricherGoGRPCConstants)
 		})
+		t.Run("Log Enricher short write", func(t *testing.T) {
+			testLogEnricherShortWrite(t, logEnricherGoGRPCConstants)
+		})
 		t.Run("Log Enricher nested spans", func(t *testing.T) {
 			testLogEnricherNestedSpans(t, logEnricherGoGRPCConstants)
 		})
@@ -1494,6 +1514,22 @@ func TestSuite_LogEnricherMultiSegWritev(t *testing.T) {
 
 func TestSuite_LogEnricherMultiSegWritevConfigV2(t *testing.T) {
 	logEnricherMultiSegWritevSuite(t, logEnricherConfigV2)
+}
+
+func logEnricherTTYSuite(t *testing.T, configSuffix string) {
+	logEnricherSuite(t, "tty", configSuffix, []string{`OTEL_EBPF_OPEN_PORT=8389`, `OTEL_EBPF_EXECUTABLE_PATH=`}, func(t *testing.T) {
+		t.Run("Log Enricher terminal stdout", func(t *testing.T) {
+			testLogEnricherTTY(t)
+		})
+	})
+}
+
+func TestSuite_LogEnricherTTY(t *testing.T) {
+	logEnricherTTYSuite(t, "")
+}
+
+func TestSuite_LogEnricherTTYConfigV2(t *testing.T) {
+	logEnricherTTYSuite(t, logEnricherConfigV2)
 }
 
 func logEnricherUnselectedServiceSuite(t *testing.T, configSuffix string) {

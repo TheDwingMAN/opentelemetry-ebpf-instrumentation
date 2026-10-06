@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/logger"
+	"go.opentelemetry.io/obi/pkg/internal/ebpf/tracefs"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/statagg"
 	stats "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
@@ -219,7 +220,7 @@ func (s *Stats) Run(ctx context.Context) error {
 
 	s.graph = graph
 
-	s.graph.Start(ctx, swarm.WithCancelTimeout(s.cfg.ShutdownTimeout))
+	s.graph.Start(ctx, swarm.WithCancelTimeout(tracefs.EffectiveShutdownTimeout(s.cfg.ShutdownTimeout)))
 	// After the pipeline is built: the exporters are attached to the
 	// families, so none misses a delta.
 	s.runAggregation(runCtx)
@@ -266,7 +267,7 @@ func (s *Stats) stop() error {
 	}()
 
 	select {
-	case <-time.After(s.cfg.ShutdownTimeout):
+	case <-time.After(tracefs.EffectiveShutdownTimeout(s.cfg.ShutdownTimeout)):
 		return errShutdownTimeout
 	case err := <-stopped:
 		// err might be nil

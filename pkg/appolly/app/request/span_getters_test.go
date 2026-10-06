@@ -1047,6 +1047,73 @@ func TestSpanOTELGetters_ErrorTypeOmitted(t *testing.T) {
 	assert.Equal(t, "SERVER_ERROR", kv.Value.AsString())
 }
 
+func TestSpanGetters_ErrorTypeOnHTTPSpans(t *testing.T) {
+	otelGetter, ok := spanOTELGetters(attr.ErrorType)
+	require.True(t, ok)
+	promGetter := spanPromGetters(attr.ErrorType)
+	require.NotNil(t, promGetter)
+
+	for _, tc := range []struct {
+		name     string
+		span     *Span
+		expected string
+	}{
+		{name: "server 200", span: &Span{Type: EventTypeHTTP, Status: 200}, expected: ""},
+		{name: "server 404", span: &Span{Type: EventTypeHTTP, Status: 404}, expected: ""},
+		{name: "server 500", span: &Span{Type: EventTypeHTTP, Status: 500}, expected: "500"},
+		{name: "server 503", span: &Span{Type: EventTypeHTTP, Status: 503}, expected: "503"},
+		{name: "server no response", span: &Span{Type: EventTypeHTTP, Status: 500, ResponseObservation: ResponseSilent}, expected: ""},
+		{name: "client 200", span: &Span{Type: EventTypeHTTPClient, Status: 200}, expected: ""},
+		{name: "client 404", span: &Span{Type: EventTypeHTTPClient, Status: 404}, expected: "404"},
+		{name: "client 500", span: &Span{Type: EventTypeHTTPClient, Status: 500}, expected: "500"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kv := otelGetter(tc.span)
+			if tc.expected == "" {
+				assert.False(t, kv.Valid(), "attribute should be omitted, got %v", kv)
+			} else {
+				require.True(t, kv.Valid())
+				assert.Equal(t, string(attr.ErrorType), string(kv.Key))
+				assert.Equal(t, tc.expected, kv.Value.AsString())
+			}
+			assert.Equal(t, tc.expected, promGetter(tc.span))
+		})
+	}
+}
+
+func TestSpanGettersForHTTP_ErrorTypeIgnoresProtocolCodes(t *testing.T) {
+	otelGetter, ok := SpanOTELGettersForHTTP(UnresolvedNames{})(attr.ErrorType)
+	require.True(t, ok)
+	promGetter, ok := SpanPromGettersForHTTP(UnresolvedNames{})(attr.ErrorType)
+	require.True(t, ok)
+
+	for _, tc := range []struct {
+		name     string
+		span     *Span
+		expected string
+	}{
+		{name: "json-rpc error in 200", span: &Span{Type: EventTypeHTTP, SubType: HTTPSubtypeJSONRPC, Status: 200, JSONRPC: &JSONRPC{ErrorCode: -32601}}, expected: ""},
+		{name: "mcp error in 200", span: &Span{Type: EventTypeHTTP, SubType: HTTPSubtypeMCP, Status: 200, GenAI: &GenAI{MCP: &MCPCall{ErrorCode: -32602}}}, expected: ""},
+		{name: "sns batch failure in 200", span: &Span{Type: EventTypeHTTPClient, SubType: HTTPSubtypeAWSSNS, Status: 200, AWS: &AWS{SNS: AWSSNS{ErrorCode: "InvalidParameter"}}}, expected: ""},
+		{name: "json-rpc error in 500", span: &Span{Type: EventTypeHTTP, SubType: HTTPSubtypeJSONRPC, Status: 500, JSONRPC: &JSONRPC{ErrorCode: -32603}}, expected: "500"},
+		{name: "server 404", span: &Span{Type: EventTypeHTTP, Status: 404}, expected: ""},
+		{name: "client 404", span: &Span{Type: EventTypeHTTPClient, Status: 404}, expected: "404"},
+		{name: "server no response", span: &Span{Type: EventTypeHTTP, Status: 500, ResponseObservation: ResponseSilent}, expected: ""},
+		{name: "no status", span: &Span{Type: EventTypeHTTPClient}, expected: ErrorTypeOther},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kv := otelGetter(tc.span)
+			if tc.expected == "" {
+				assert.False(t, kv.Valid(), "attribute should be omitted, got %v", kv)
+			} else {
+				require.True(t, kv.Valid())
+				assert.Equal(t, tc.expected, kv.Value.AsString())
+			}
+			assert.Equal(t, tc.expected, promGetter(tc.span))
+		})
+	}
+}
+
 // TestSpanOTELGetters_GenAIOperationNameClamped ensures gen_ai.operation.name
 // clamps to _OTHER — not an empty string — on a GenAI span whose operation
 // could not be derived, stays absent on spans that carry no GenAI data, and
@@ -1533,6 +1600,13 @@ func TestSpanOTELGetters_DBNamespace(t *testing.T) {
 	assert.Equal(t, string(attr.DBNamespace), string(kv.Key))
 	assert.Equal(t, "1", kv.Value.AsString())
 
+	kv = getter(&Span{Type: EventTypeHTTPClient, SubType: HTTPSubtypeElasticsearch, DBNamespace: "cluster-a", Elasticsearch: &Elasticsearch{DBSystemName: "elasticsearch"}})
+	require.True(t, kv.Valid())
+	assert.Equal(t, "cluster-a", kv.Value.AsString())
+
+	kv = getter(&Span{Type: EventTypeHTTPClient, SubType: HTTPSubtypeElasticsearch, Elasticsearch: &Elasticsearch{DBSystemName: "elasticsearch"}})
+	assert.False(t, kv.Valid(), "expected db.namespace to be omitted, got %v", kv)
+
 	// spans without an available namespace must omit the attribute
 	// instead of emitting an empty value
 	kv = getter(&Span{Type: EventTypeSQLClient, SubType: int(DBMySQL)})
@@ -1599,4 +1673,25 @@ func TestSpanOTELGetters_DBResponseStatusCode(t *testing.T) {
 			assert.Equal(t, tt.expected, kv.Value.AsString())
 		})
 	}
+}
+
+func TestSpanOTELGetters_MessagingConsumerGroup(t *testing.T) {
+	getter, ok := spanOTELGetters(attr.MessagingConsumerGroup)
+	require.True(t, ok, "getter should be found for MessagingConsumerGroup")
+
+	consumer := &Span{Type: EventTypeKafkaClient, Method: MessagingProcess, MessagingInfo: &MessagingInfo{ConsumerGroup: "my-group"}}
+	kv := getter(consumer)
+	require.True(t, kv.Valid())
+	assert.Equal(t, string(attr.MessagingConsumerGroup), string(kv.Key))
+	assert.Equal(t, "my-group", kv.Value.AsString())
+
+	// unknown group and producers: attribute omitted, Prometheus label empty
+	for _, span := range []*Span{
+		{Type: EventTypeKafkaClient, Method: MessagingProcess, MessagingInfo: &MessagingInfo{}},
+		{Type: EventTypeKafkaClient, Method: MessagingSend},
+	} {
+		assert.False(t, getter(span).Valid())
+		assert.Empty(t, spanPromGetters(attr.MessagingConsumerGroup)(span))
+	}
+	assert.Equal(t, "my-group", spanPromGetters(attr.MessagingConsumerGroup)(consumer))
 }

@@ -39,7 +39,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 )
 
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -target amd64,arm64 -type protocol_type -type event_type -type http_request_trace_t -type sql_request_trace_t -type http_info_t -type connection_info_t -type http2_grpc_request_t -type tcp_req_t -type kafka_client_req_t -type kafka_go_req_t -type redis_client_req_t -type tcp_large_buffer_t -type otel_span_t -type channel_link_trace_t -type go_auto_span_t -type mongo_go_client_req_t -type dns_req_t -type node_span_event_t Bpf ../../../bpf/common/common.c -- -I../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -target $BPF_TARGETS -type protocol_type -type event_type -type http_request_trace_t -type sql_request_trace_t -type http_info_t -type connection_info_t -type http2_grpc_request_t -type tcp_req_t -type kafka_client_req_t -type kafka_go_req_t -type redis_client_req_t -type tcp_large_buffer_t -type otel_span_t -type channel_link_trace_t -type go_auto_span_t -type mongo_go_client_req_t -type dns_req_t -type node_span_event_t Bpf ../../../bpf/common/common.c -- -I../../../bpf
 
 // HTTPRequestTrace contains information from an HTTP request as directly received from the
 // eBPF layer. This contains low-level C structures for accurate binary read from ring buffer.
@@ -323,6 +323,7 @@ type EBPFParseContext struct {
 	postgresDBNames             *simplelru.LRU[BpfConnectionInfoT, string]
 	mssqlPreparedStatements     *simplelru.LRU[mssqlPreparedStatementsKey, string]
 	kafkaTopicUUIDToName        *simplelru.LRU[kafkaparser.UUID, string]
+	kafkaConsumerGroups         *KafkaConsumerGroups
 	payloadExtraction           config.PayloadExtraction
 	httpEnricher                *ebpfhttp.HTTPEnricher
 	dnsEvents                   *expirable.LRU[dnsparser.DNSId, *request.Span]
@@ -415,6 +416,7 @@ func NewEBPFParseContext(cfg *config.EBPFTracer, spansChan *msg.Queue[[]request.
 		postgresPortals            *simplelru.LRU[postgresPortalsKey, string]
 		mssqlPreparedStatements    *simplelru.LRU[mssqlPreparedStatementsKey, string]
 		kafkaTopicUUIDToName       *simplelru.LRU[kafkaparser.UUID, string]
+		kafkaConsumerGroups        *KafkaConsumerGroups
 		mongoRequestCache          PendingMongoDBRequests
 		payloadExtraction          config.PayloadExtraction
 		dnsEvents                  *expirable.LRU[dnsparser.DNSId, *request.Span]
@@ -480,6 +482,8 @@ func NewEBPFParseContext(cfg *config.EBPFTracer, spansChan *msg.Queue[[]request.
 			ptlog().Error("failed to create Kafka topic UUID to name cache", "error", err)
 		}
 
+		kafkaConsumerGroups = NewKafkaConsumerGroups(cfg.KafkaConsumerGroupCacheSize, cfg.KafkaConsumerGroupTTL)
+
 		mongoRequestCache = expirable.NewLRU[MongoRequestKey, *MongoRequestValue](cfg.MongoRequestsCacheSize, nil, 0)
 
 		payloadExtraction = cfg.PayloadExtraction
@@ -505,6 +509,7 @@ func NewEBPFParseContext(cfg *config.EBPFTracer, spansChan *msg.Queue[[]request.
 		postgresDBNames:            postgresDBNames,
 		mssqlPreparedStatements:    mssqlPreparedStatements,
 		kafkaTopicUUIDToName:       kafkaTopicUUIDToName,
+		kafkaConsumerGroups:        kafkaConsumerGroups,
 		payloadExtraction:          payloadExtraction,
 		httpEnricher:               httpEnricher,
 		dnsEvents:                  dnsEvents,
@@ -646,7 +651,7 @@ func ReadBPFTraceAsSpan(parseCtx *EBPFParseContext, cfg *config.EBPFTracer, reco
 		span, ignore, err := ReadTCPRequestIntoSpan(parseCtx, cfg, record, filter)
 		return finalizeParsedSpan(parseCtx, span, ignore, err)
 	case EventTypeGoSarama:
-		span, ignore, err := ReadGoSaramaRequestIntoSpan(record)
+		span, ignore, err := ReadGoSaramaRequestIntoSpan(parseCtx, record)
 		return finalizeParsedSpan(parseCtx, span, ignore, err)
 	case EventTypeGoRedis:
 		span, ignore, err := ReadGoRedisRequestIntoSpan(parseCtx, record)

@@ -26,7 +26,7 @@ import (
 // when an NFS metric is enabled and sunrpc is there, and a load failure
 // disables the NFS metrics only.
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -target amd64,arm64 -output-stem stats_nfsrpc NfsRpc ../../../../bpf/statsolly/nfs_rpc.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -target $BPF_TARGETS -output-stem stats_nfsrpc NfsRpc ../../../../bpf/statsolly/nfs_rpc.c -- -I../../../../bpf
 
 const (
 	progObiStatsTpBtfRPCStatsLatency = "obi_stats_tp_btf_rpc_stats_latency"

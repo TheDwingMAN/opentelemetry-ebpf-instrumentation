@@ -31,6 +31,7 @@ import (
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	ebpfconvenience "go.opentelemetry.io/obi/pkg/internal/ebpf/convenience"
+	"go.opentelemetry.io/obi/pkg/internal/ebpf/kprobe"
 )
 
 type probe struct {
@@ -82,7 +83,7 @@ const (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -type blk_io_op -type block_io_t -type fs_io_t -target amd64,arm64 Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -type blk_io_op -type block_io_t -type fs_io_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -202,7 +203,7 @@ func NewStatsFetcher(
 			continue
 		}
 
-		l, err := link.Kprobe(k.name, k.program, nil)
+		l, err := kprobe.Attach(k.name, k.program, false)
 		if err != nil {
 			closeAll(closables)
 			return nil, fmt.Errorf("failed kprobe attachment %s: %w", k.name, err)
@@ -221,7 +222,7 @@ func NewStatsFetcher(
 		if !k.enabled {
 			continue
 		}
-		l, err := link.Kretprobe(k.name, k.program, nil)
+		l, err := kprobe.Attach(k.name, k.program, true)
 		if err != nil {
 			closeAll(closables)
 			return nil, fmt.Errorf("failed kretprobe attachment %s: %w", k.name, err)

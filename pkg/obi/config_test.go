@@ -227,6 +227,8 @@ discovery:
 			MSSQLPreparedStatementsCacheSize:    1024,
 			MongoRequestsCacheSize:              1024,
 			KafkaTopicUUIDCacheSize:             1024,
+			KafkaConsumerGroupCacheSize:         4096,
+			KafkaConsumerGroupTTL:               2 * time.Minute,
 			CouchbaseDBCacheSize:                1024,
 			PayloadExtraction: config.PayloadExtraction{
 				HTTP: config.HTTPConfig{
@@ -400,9 +402,9 @@ discovery:
 			Sources:  []transform.Source{transform.SourceK8s, transform.SourceDNS},
 			CacheLen: 1024,
 			CacheTTL: 5 * time.Minute,
-			ECS: transform.ECSNameResolverConfig{
-				RefreshInterval: 30 * time.Second,
-			},
+		},
+		CloudMetadata: transform.CloudMetadataConfig{
+			RefreshInterval: 30 * time.Second,
 		},
 		Discovery: services.DiscoveryConfig{
 			ExcludeOTelInstrumentedServices: true,
@@ -507,7 +509,8 @@ func TestConfig_NameResolverSources(t *testing.T) {
 	// no yaml, no env: DefaultConfig value
 	cfg, err := LoadConfig(bytes.NewReader(nil))
 	require.NoError(t, err)
-	assert.Equal(t, []transform.Source{transform.SourceK8s}, cfg.NameResolver.Sources)
+	assert.Equal(t, []transform.Source{transform.SourceK8s, transform.SourceECS},
+		cfg.NameResolver.Sources)
 
 	// yaml must survive env.Parse when the env var is unset
 	cfg, err = LoadConfig(bytes.NewBufferString("name_resolver:\n  sources: [k8s, dns, rdns]\n"))
@@ -525,17 +528,16 @@ func TestConfig_NameResolverECS(t *testing.T) {
 	const config = `cloud_metadata:
   cluster_name: beyla-nonk8s-poc
   region: us-east-2
+  refresh_interval: 45s
 name_resolver:
   sources: [ecs]
-  ecs:
-    refresh_interval: 45s
 `
 	cfg, err := LoadConfig(bytes.NewBufferString(config))
 	require.NoError(t, err)
 	assert.Equal(t, []transform.Source{transform.SourceECS}, cfg.NameResolver.Sources)
 	assert.Equal(t, "beyla-nonk8s-poc", cfg.CloudMetadata.ClusterName)
 	assert.Equal(t, "us-east-2", cfg.CloudMetadata.Region)
-	assert.Equal(t, 45*time.Second, cfg.NameResolver.ECS.RefreshInterval)
+	assert.Equal(t, 45*time.Second, cfg.CloudMetadata.RefreshInterval)
 
 	t.Setenv("OTEL_EBPF_CLUSTER_NAME", "env-cluster")
 	t.Setenv("OTEL_EBPF_CLOUD_REGION", "eu-west-1")

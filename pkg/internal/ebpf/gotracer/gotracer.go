@@ -49,7 +49,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 )
 
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -target amd64,arm64 Bpf ../../../../bpf/gotracer/gotracer.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -target $BPF_TARGETS Bpf ../../../../bpf/gotracer/gotracer.c -- -I../../../../bpf
 
 type runtimeMetricTargetKey struct {
 	pid app.PID
@@ -1726,6 +1726,15 @@ func (p *Tracer) GoProbes() map[string][]*ebpfcommon.ProbeDesc {
 		}},
 		"net/http/internal/http2.(*serverConn).processHeaders": {{
 			Start: p.bpfObjects.ObiUprobeHttp2ServerProcessHeaders,
+		}},
+		"golang.org/x/net/http2.(*serverConn).newWriterAndRequest": {{
+			End: p.bpfObjects.ObiUprobeHttp2serverConnNewWriterAndRequestReturns, // hands the traceparent to the stream
+		}},
+		"net/http.(*http2serverConn).newWriterAndRequest": {{
+			End: p.bpfObjects.ObiUprobeHttp2serverConnNewWriterAndRequestReturns,
+		}},
+		"net/http/internal/http2.(*serverConn).newWriterAndRequest": {{
+			End: p.bpfObjects.ObiUprobeHttp2serverConnNewWriterAndRequestReturns,
 		}},
 		// tracking of tcp connections for black-box propagation
 		"net/http.(*conn).serve": {{ // http server

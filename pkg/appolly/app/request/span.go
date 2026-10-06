@@ -351,6 +351,10 @@ func (e *SQLError) ResponseStatusCode() string {
 type MessagingInfo struct {
 	Offset    int64 `json:"offset"`
 	Partition int   `json:"partition"`
+	// HasPartition reports whether Partition and Offset were read from the wire. The
+	// consumer group can be known while the partition list was cut by the kernel buffer.
+	HasPartition  bool   `json:"hasPartition"`
+	ConsumerGroup string `json:"consumerGroup"`
 }
 
 type GraphQL struct {
@@ -1650,6 +1654,7 @@ func spanAttributes(s *Span) SpanAttributes {
 		if s.SubType == HTTPSubtypeElasticsearch && s.Elasticsearch != nil {
 			attrs["dbCollectionName"] = s.Elasticsearch.DBCollectionName
 			attrs["nodeName"] = s.Elasticsearch.NodeName
+			attrs["dbNamespace"] = s.DBNamespace
 			attrs["dbOperationName"] = s.Elasticsearch.DBOperationName
 			attrs["dbQueryText"] = s.Elasticsearch.DBQueryText
 			attrs["dbSystemName"] = s.Elasticsearch.DBSystemName
@@ -1666,7 +1671,6 @@ func spanAttributes(s *Span) SpanAttributes {
 		if s.SubType == HTTPSubtypeAWSSQS && s.AWS != nil {
 			sqs := s.AWS.SQS
 			attrs["awsRequestID"] = sqs.Meta.RequestID
-			attrs["awsExtendedRequestID"] = sqs.Meta.ExtendedRequestID
 			attrs["awsRegion"] = sqs.Meta.Region
 			attrs["awsSQSOperationName"] = sqs.OperationName
 			attrs["awsSQSOperationType"] = sqs.OperationType
@@ -1759,9 +1763,14 @@ func spanAttributes(s *Span) SpanAttributes {
 			"topic":      s.Path,
 		}
 		if s.MessagingInfo != nil {
-			attrs["partition"] = strconv.FormatUint(uint64(s.MessagingInfo.Partition), 10)
-			if s.Method == MessagingProcess {
-				attrs["offset"] = strconv.FormatUint(uint64(s.MessagingInfo.Offset), 10)
+			if s.MessagingInfo.HasPartition {
+				attrs["partition"] = strconv.FormatUint(uint64(s.MessagingInfo.Partition), 10)
+				if s.Method == MessagingProcess {
+					attrs["offset"] = strconv.FormatUint(uint64(s.MessagingInfo.Offset), 10)
+				}
+			}
+			if s.MessagingInfo.ConsumerGroup != "" {
+				attrs["consumerGroup"] = s.MessagingInfo.ConsumerGroup
 			}
 		}
 		return attrs
@@ -2057,21 +2066,24 @@ func HTTPSpanStatusCode(span *Span) string {
 		return StatusCodeError
 	}
 
-	if span.Type == EventTypeHTTPClient {
-		if span.Status < 400 {
-			// A provider can report a failure inside a 2xx response, per the OTel
-			// GenAI spec: https://opentelemetry.io/docs/specs/semconv/gen-ai/openai/
-			if span.GenAIFailed() {
-				return StatusCodeError
-			}
-
-			return StatusCodeUnset
-		}
-	} else if span.Status < 500 {
-		return StatusCodeUnset
+	if httpStatusFailed(span) {
+		return StatusCodeError
 	}
 
-	return StatusCodeError
+	// A provider can report a failure inside a 2xx response, per the OTel
+	// GenAI spec: https://opentelemetry.io/docs/specs/semconv/gen-ai/openai/
+	if span.Type == EventTypeHTTPClient && span.GenAIFailed() {
+		return StatusCodeError
+	}
+
+	return StatusCodeUnset
+}
+
+func httpStatusFailed(span *Span) bool {
+	if span.Type == EventTypeHTTPClient {
+		return span.Status >= 400
+	}
+	return span.Status >= 500
 }
 
 var (

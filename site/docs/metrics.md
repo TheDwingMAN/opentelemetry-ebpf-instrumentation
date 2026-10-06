@@ -109,6 +109,16 @@ Number of loaded .NET assemblies.
 
 No attributes.
 
+## `dotnet.gc.heap.total_allocated`
+
+Total bytes allocated on the .NET managed heap since the collector baseline.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | stable |
+
+No attributes.
+
 ## `dotnet.gc.last_collection.memory.committed_size`
 
 Committed .NET GC memory observed during the latest collection.
@@ -116,6 +126,56 @@ Committed .NET GC memory observed during the latest collection.
 | Instrument | Unit | Stability |
 | --- | --- | --- |
 | updowncounter | By | stable |
+
+No attributes.
+
+## `dotnet.gc.pause.time`
+
+Total .NET GC pause time since the collector baseline.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | s | stable |
+
+No attributes.
+
+## `dotnet.jit.compilation.time`
+
+Total .NET JIT compilation time since the collector baseline.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | s | stable |
+
+No attributes.
+
+## `dotnet.jit.compiled_il.size`
+
+Total bytes of intermediate language compiled by the .NET JIT compiler.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | stable |
+
+No attributes.
+
+## `dotnet.jit.compiled_methods`
+
+Total methods compiled by the .NET JIT compiler.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {method} | stable |
+
+No attributes.
+
+## `dotnet.monitor.lock_contentions`
+
+Total .NET monitor lock contentions since the collector baseline.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {contention} | stable |
 
 No attributes.
 
@@ -146,6 +206,16 @@ Number of .NET thread-pool threads that currently exist.
 | Instrument | Unit | Stability |
 | --- | --- | --- |
 | updowncounter | {thread} | stable |
+
+No attributes.
+
+## `dotnet.thread_pool.work_item.count`
+
+Total completed .NET thread-pool work items since the collector baseline.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {work_item} | stable |
 
 No attributes.
 
@@ -541,6 +611,7 @@ OBI-emitted http.client.request.body.size
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `conditionally_required`: if the request ended in an error | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `http.request.method` | enum | `required` | stable | HTTP request method. | GET; POST; HEAD |
 | `http.response.status_code` | int | `recommended`: if a response was observed | stable | [HTTP response status code](https://tools.ietf.org/html/rfc7231#section-6). | 200 |
 | `http.route` | string | `recommended`: if route collection is enabled and the route was matched | stable | The matched route template for the request. This MUST be low-cardinality and include all static path segments, with dynamic path segments represented with placeholders. | /users/:userID?; my-controller/my-action/{id?} |
@@ -559,6 +630,7 @@ OBI-emitted http.client.request.duration
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `conditionally_required`: if the request ended in an error | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `http.request.method` | enum | `required` | stable | HTTP request method. | GET; POST; HEAD |
 | `http.response.status_code` | int | `recommended`: if a response was observed | stable | [HTTP response status code](https://tools.ietf.org/html/rfc7231#section-6). | 200 |
 | `http.route` | string | `recommended`: if route collection is enabled and the route was matched | stable | The matched route template for the request. This MUST be low-cardinality and include all static path segments, with dynamic path segments represented with placeholders. | /users/:userID?; my-controller/my-action/{id?} |
@@ -577,6 +649,7 @@ OBI-emitted http.client.response.body.size
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `conditionally_required`: if the request ended in an error | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `http.request.method` | enum | `required` | stable | HTTP request method. | GET; POST; HEAD |
 | `http.response.status_code` | int | `recommended`: if a response was observed | stable | [HTTP response status code](https://tools.ietf.org/html/rfc7231#section-6). | 200 |
 | `http.route` | string | `recommended`: if route collection is enabled and the route was matched | stable | The matched route template for the request. This MUST be low-cardinality and include all static path segments, with dynamic path segments represented with placeholders. | /users/:userID?; my-controller/my-action/{id?} |
@@ -596,6 +669,7 @@ OBI-emitted http.server.request.body.size
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `client.address` | string | `opt_in` | stable | Client address - domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | client.example.com; 10.1.2.80; /tmp/my.sock |
+| `error.type` | string | `conditionally_required`: if the request ended in an error | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `http.request.method` | enum | `required` | stable | HTTP request method. | GET; POST; HEAD |
 | `http.response.status_code` | int | `recommended`: if a response was observed | stable | [HTTP response status code](https://tools.ietf.org/html/rfc7231#section-6). | 200 |
 | `http.route` | string | `recommended`: if route collection is enabled and the route was matched | stable | The matched route template for the request. This MUST be low-cardinality and include all static path segments, with dynamic path segments represented with placeholders. | /users/:userID?; my-controller/my-action/{id?} |
@@ -615,6 +689,7 @@ OBI-emitted http.server.request.duration
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `client.address` | string | `opt_in` | stable | Client address - domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | client.example.com; 10.1.2.80; /tmp/my.sock |
+| `error.type` | string | `conditionally_required`: if the request ended in an error | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `http.request.method` | enum | `required` | stable | HTTP request method. | GET; POST; HEAD |
 | `http.response.status_code` | int | `recommended`: if a response was observed | stable | [HTTP response status code](https://tools.ietf.org/html/rfc7231#section-6). | 200 |
 | `http.route` | string | `recommended`: if route collection is enabled and the route was matched | stable | The matched route template for the request. This MUST be low-cardinality and include all static path segments, with dynamic path segments represented with placeholders. | /users/:userID?; my-controller/my-action/{id?} |
@@ -634,6 +709,7 @@ OBI-emitted http.server.response.body.size
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `client.address` | string | `opt_in` | stable | Client address - domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | client.example.com; 10.1.2.80; /tmp/my.sock |
+| `error.type` | string | `conditionally_required`: if the request ended in an error | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `http.request.method` | enum | `required` | stable | HTTP request method. | GET; POST; HEAD |
 | `http.response.status_code` | int | `recommended`: if a response was observed | stable | [HTTP response status code](https://tools.ietf.org/html/rfc7231#section-6). | 200 |
 | `http.route` | string | `recommended`: if route collection is enabled and the route was matched | stable | The matched route template for the request. This MUST be low-cardinality and include all static path segments, with dynamic path segments represented with placeholders. | /users/:userID?; my-controller/my-action/{id?} |
@@ -799,6 +875,21 @@ OBI-emitted mcp.client.operation.duration
 | `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
 | `server.port` | int | `recommended` | stable | Server port number. | 80; 8080; 443 |
 
+## `mcp.client.session.duration`
+
+The duration of the MCP session as observed on the MCP client.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `conditionally_required`: If and only if the session ends with an error. | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `mcp.protocol.version` | string | `recommended`: if the peer reported a protocol version | development | The [version](https://modelcontextprotocol.io/specification/versioning) of the Model Context Protocol used. | 2025-06-18 |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+| `server.port` | int | `recommended` | stable | Server port number. | 80; 8080; 443 |
+
 ## `mcp.server.operation.duration`
 
 OBI-emitted mcp.server.operation.duration
@@ -816,6 +907,19 @@ OBI-emitted mcp.server.operation.duration
 | `mcp.protocol.version` | string | `recommended`: if the peer reported a protocol version | development | The [version](https://modelcontextprotocol.io/specification/versioning) of the Model Context Protocol used. | 2025-06-18 |
 | `mcp.resource.uri` | string | `opt_in` | development | The value of the resource uri. | postgres://database/customers/schema; file:///home/user/documents/report.pdf |
 | `rpc.response.status_code` | string | `conditionally_required`: if the response carried a JSON-RPC error code | release_candidate | Status code of the RPC returned by the RPC server or generated by the client | OK; DEADLINE_EXCEEDED; -32602 |
+
+## `mcp.server.session.duration`
+
+The duration of the MCP session as observed on the MCP server.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `conditionally_required`: If and only if the session ends with an error. | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `mcp.protocol.version` | string | `recommended`: if the peer reported a protocol version | development | The [version](https://modelcontextprotocol.io/specification/versioning) of the Model Context Protocol used. | 2025-06-18 |
 
 ## `messaging.client.operation.duration`
 
@@ -844,6 +948,7 @@ OBI-emitted messaging.process.duration
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `error.type` | string | `conditionally_required`: if the operation ended in an error, which OBI cannot yet determine for a consume operation | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `messaging.consumer.group.name` | string | `conditionally_required`: if OBI attributed the fetch to a single consumer group of the process | development | The name of the consumer group with which a consumer is associated. | my-group; indexer |
 | `messaging.destination.name` | string | `conditionally_required`: if the exchange named a destination | development | The message destination name | MyQueue; MyTopic |
 | `messaging.operation.name` | string | `required` | development | The system-specific name of the messaging operation. | ack; nack; send |
 | `messaging.system` | enum | `required` | development | The messaging system as identified by the client instrumentation. | activemq; aws.sns; aws_sqs; eventgrid; eventhubs; servicebus; gcp_pubsub; jms; … |
@@ -1742,8 +1847,16 @@ OBI-emitted rpc.server.call.duration
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `cloud.account.id` | string | `recommended`: if cloud metadata could be resolved | development | The cloud account ID the resource is assigned to. | 111111111111; opentelemetry |
+| `cloud.availability_zone` | string | `recommended`: if cloud metadata could be resolved | development | Cloud regions often have multiple, isolated locations known as zones to increase availability. Availability zone represents the zone where the resource is running. | us-east-1c |
+| `cloud.platform` | enum | `recommended`: if cloud metadata could be resolved | development | The cloud platform in use. | akamai_cloud.compute; alibaba_cloud_ecs; alibaba_cloud_fc; alibaba_cloud_openshift; aws_ec2; aws_ecs; aws_eks; aws_lambda; … |
+| `cloud.provider` | enum | `recommended`: if cloud metadata could be resolved | development | Name of the cloud provider. | akamai_cloud; alibaba_cloud; aws; azure; gcp; heroku; hetzner; ibm_cloud; … |
+| `cloud.region` | string | `recommended`: if cloud metadata could be resolved | development | The geographical region within a cloud provider. When associated with a resource, this attribute specifies the region where the resource operates. When calling services or APIs deployed on a cloud, this attribute identifies the region where the called destination is deployed. | us-central1; us-east-1 |
+| `cloud.resource_id` | string | `recommended`: if cloud metadata could be resolved | development | Cloud provider-specific native identifier of the monitored cloud resource (e.g. an [ARN](https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html) on AWS, a [fully qualified resource ID](https://learn.microsoft.com/rest/api/resources/resources/get-by-id) on Azure, a [full resource name](https://google.aip.dev/122#full-resource-names) on GCP) | arn:aws:lambda:REGION:ACCOUNT_ID:function:my-function; //run.googleapis.com/projects/PROJECT_ID/locations/LOCATION_ID/services/SERVICE_ID; /subscriptions/<SUBSCRIPTION_GUID>/resourceGroups/<RG>/providers/Microsoft.Web/sites/<FUNCAPP>/functions/<FUNC> |
 | `container.id` | string | `recommended`: if container metadata is available | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
 | `container.name` | string | `recommended`: if container metadata is available | development | Container name used by container runtime. | opentelemetry-autoconf |
+| `gcp.gce.instance.hostname` | string | `recommended`: if the host is a GCE instance and cloud metadata could be resolved | development | The hostname of a GCE instance. This is the full value of the default or [custom hostname](https://cloud.google.com/compute/docs/instances/custom-hostname-vm). | my-host1234.example.com; sample-vm.us-west1-b.c.my-project.internal |
+| `gcp.gce.instance.name` | string | `recommended`: if the host is a GCE instance and cloud metadata could be resolved | development | The instance name of a GCE instance. This is the value provided by `host.name`, the visible name of the instance in the Cloud Console UI, and the prefix for the default hostname of the instance as defined by the [default internal DNS name](https://cloud.google.com/compute/docs/internal-dns#instance-fully-qualified-domain-names). | instance-1; my-vm-name |
 | `host.id` | string | `recommended` | development | Unique host ID. For Cloud, this must be the instance_id assigned by the cloud provider. For non-containerized systems, this should be the `machine-id`. See the table below for the sources to use to determine the `machine-id` based on operating system. | fdbf79e8af94cb7f9e8df36789187052 |
 | `host.image.id` | string | `recommended`: if host metadata could be resolved | development | VM image ID or host OS image ID. For Cloud, this value is from the provider. | ami-07b06b442921831e5 |
 | `host.name` | string | `recommended`: if host metadata could be resolved | development | Name of the host. On Unix systems, it may contain what the hostname command returns, or the fully qualified hostname, or another name specified by the user. | opentelemetry-test |
@@ -1825,8 +1938,16 @@ OBI counterpart of `target.info` for the traces pipeline. Carries the resource a
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `cloud.account.id` | string | `recommended`: if cloud metadata could be resolved | development | The cloud account ID the resource is assigned to. | 111111111111; opentelemetry |
+| `cloud.availability_zone` | string | `recommended`: if cloud metadata could be resolved | development | Cloud regions often have multiple, isolated locations known as zones to increase availability. Availability zone represents the zone where the resource is running. | us-east-1c |
+| `cloud.platform` | enum | `recommended`: if cloud metadata could be resolved | development | The cloud platform in use. | akamai_cloud.compute; alibaba_cloud_ecs; alibaba_cloud_fc; alibaba_cloud_openshift; aws_ec2; aws_ecs; aws_eks; aws_lambda; … |
+| `cloud.provider` | enum | `recommended`: if cloud metadata could be resolved | development | Name of the cloud provider. | akamai_cloud; alibaba_cloud; aws; azure; gcp; heroku; hetzner; ibm_cloud; … |
+| `cloud.region` | string | `recommended`: if cloud metadata could be resolved | development | The geographical region within a cloud provider. When associated with a resource, this attribute specifies the region where the resource operates. When calling services or APIs deployed on a cloud, this attribute identifies the region where the called destination is deployed. | us-central1; us-east-1 |
+| `cloud.resource_id` | string | `recommended`: if cloud metadata could be resolved | development | Cloud provider-specific native identifier of the monitored cloud resource (e.g. an [ARN](https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html) on AWS, a [fully qualified resource ID](https://learn.microsoft.com/rest/api/resources/resources/get-by-id) on Azure, a [full resource name](https://google.aip.dev/122#full-resource-names) on GCP) | arn:aws:lambda:REGION:ACCOUNT_ID:function:my-function; //run.googleapis.com/projects/PROJECT_ID/locations/LOCATION_ID/services/SERVICE_ID; /subscriptions/<SUBSCRIPTION_GUID>/resourceGroups/<RG>/providers/Microsoft.Web/sites/<FUNCAPP>/functions/<FUNC> |
 | `container.id` | string | `recommended`: if container metadata is available | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
 | `container.name` | string | `recommended`: if container metadata is available | development | Container name used by container runtime. | opentelemetry-autoconf |
+| `gcp.gce.instance.hostname` | string | `recommended`: if the host is a GCE instance and cloud metadata could be resolved | development | The hostname of a GCE instance. This is the full value of the default or [custom hostname](https://cloud.google.com/compute/docs/instances/custom-hostname-vm). | my-host1234.example.com; sample-vm.us-west1-b.c.my-project.internal |
+| `gcp.gce.instance.name` | string | `recommended`: if the host is a GCE instance and cloud metadata could be resolved | development | The instance name of a GCE instance. This is the value provided by `host.name`, the visible name of the instance in the Cloud Console UI, and the prefix for the default hostname of the instance as defined by the [default internal DNS name](https://cloud.google.com/compute/docs/internal-dns#instance-fully-qualified-domain-names). | instance-1; my-vm-name |
 | `host.id` | string | `recommended` | development | Unique host ID. For Cloud, this must be the instance_id assigned by the cloud provider. For non-containerized systems, this should be the `machine-id`. See the table below for the sources to use to determine the `machine-id` based on operating system. | fdbf79e8af94cb7f9e8df36789187052 |
 | `host.image.id` | string | `recommended`: if host metadata could be resolved | development | VM image ID or host OS image ID. For Cloud, this value is from the provider. | ami-07b06b442921831e5 |
 | `host.type` | string | `recommended`: if host metadata could be resolved | development | Type of host. For Cloud, this must be the machine type. | n1-standard-1 |

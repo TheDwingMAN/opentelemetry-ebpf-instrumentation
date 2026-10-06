@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path"
@@ -105,6 +106,13 @@ var (
 		containerImage: "hatest-testserver-logenricher-multiseg-writev",
 		message:        "this is a json log via multi-seg writev",
 	}
+	logEnricherTTYConstants = testServerConstants{
+		url:            "http://localhost:8389",
+		smokeEndpoint:  "/smoke",
+		logEndpoint:    "/json_logger",
+		containerImage: "hatest-testserver-logenricher-multiseg-writev-tty",
+		message:        "this is a json log via multi-seg writev",
+	}
 )
 
 const logEnricherGoWritevRegressionLeakMarker = "writev-leak-marker-should-never-appear"
@@ -168,6 +176,27 @@ func containerLogs(t assert.TestingT, cl *client.Client, containerID string) []s
 	}
 
 	return lines
+}
+
+// a terminal's log stream is not multiplexed, and its lines end in CRLF
+func ttyContainerLogs(t assert.TestingT, cl *client.Client, containerID string) []string {
+	reader, err := cl.ContainerLogs(context.TODO(), containerID, client.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+	})
+	if err != nil {
+		assert.NoError(t, err)
+		return nil
+	}
+	defer reader.Close()
+
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		assert.NoError(t, err)
+		return nil
+	}
+
+	return strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
 }
 
 func testContainerID(t assert.TestingT, cl *client.Client, image string) string {
@@ -771,6 +800,69 @@ func testLogEnricherMultiSegWritev(t *testing.T) {
 				assert.NotEmpty(ct, spanID, "span_id missing for trace_id %s", tp.traceID)
 			}
 		}
+	}, testTimeout, 500*time.Millisecond)
+}
+
+// a write shorter than 8 bytes is suppressed like any other, so its enriched
+// copy must arrive
+func testLogEnricherShortWrite(t *testing.T, constants testServerConstants) {
+	waitForTestComponentsNoMetrics(t, constants.url+constants.smokeEndpoint)
+
+	cl, err := client.New(client.FromEnv)
+	require.NoError(t, err)
+	defer cl.Close()
+
+	enriched := regexp.MustCompile(`^short trace_id=[0-9a-f]{32} span_id=[0-9a-f]{16}$`)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		ti.DoHTTPGet(ct, constants.url+"/log_short", 200)
+
+		containerID := testContainerID(ct, cl, constants.containerImage)
+		if !assert.NotEmpty(ct, containerID, "could not find test container ID") {
+			return
+		}
+
+		found := slices.ContainsFunc(containerLogs(ct, cl, containerID), enriched.MatchString)
+		assert.True(ct, found, "no enriched line for the short write")
+	}, 2*testTimeout, time.Second)
+}
+
+// the enriched line must reach the container's own terminal, not OBI's /dev/pts/N
+func testLogEnricherTTY(t *testing.T) {
+	waitForTestComponentsNoMetrics(t, logEnricherTTYConstants.url+logEnricherTTYConstants.smokeEndpoint)
+
+	cl, err := client.New(client.FromEnv)
+	require.NoError(t, err)
+	defer cl.Close()
+
+	tp := logEnricherTestTraceparents[0]
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		req, err := http.NewRequest(http.MethodGet, logEnricherTTYConstants.url+logEnricherTTYConstants.logEndpoint, nil)
+		if !assert.NoError(ct, err) {
+			return
+		}
+		req.Header.Set("traceparent", fmt.Sprintf("00-%s-%s-01", tp.traceID, tp.parentID))
+		resp, err := http.DefaultClient.Do(req)
+		if !assert.NoError(ct, err) {
+			return
+		}
+		resp.Body.Close()
+
+		containerID := testContainerID(ct, cl, logEnricherTTYConstants.containerImage)
+		if !assert.NotEmpty(ct, containerID, "could not find test container ID") {
+			return
+		}
+
+		enriched := false
+		for _, line := range ttyContainerLogs(ct, cl, containerID) {
+			var fields map[string]string
+			if json.Unmarshal([]byte(line), &fields) != nil {
+				continue
+			}
+			if fields["message"] == logEnricherTTYConstants.message && fields["trace_id"] == tp.traceID && fields["span_id"] != "" {
+				enriched = true
+			}
+		}
+		assert.True(ct, enriched, "no enriched line on the container's terminal")
 	}, testTimeout, 500*time.Millisecond)
 }
 

@@ -182,11 +182,11 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 	// The dynamic PID trackers are built here rather than by their nodes so
 	// that aggregated stats go through the same ones; the nodes run them.
 	s.aggDeps = aggregationDeps{store: pidK8sStore, pvc: pvcLookup, mountpoints: mountpoints}
-	if s.ctxInfo.DynamicPIDSelector != nil {
-		dynamicSelector := s.ctxInfo.DynamicPIDSelector.StatsMetrics()
-		s.aggDeps.dynamicAttrs = selection.NewDynamicFlowAttrs(s.ctxInfo.DynamicPIDSelector, dynamicSelector, pidK8sStore)
+	if s.ctxInfo.DynamicSelector != nil {
+		dynamicSelector := s.ctxInfo.DynamicSelector.StatsMetrics()
+		s.aggDeps.dynamicAttrs = selection.NewDynamicFlowAttrs(s.ctxInfo.DynamicSelector, dynamicSelector, pidK8sStore)
 		if dynamicSelector != nil {
-			s.aggDeps.dynamicIPs = selection.NewDynamicAppIPs(dynamicSelector, pidK8sStore)
+			s.aggDeps.dynamicIPs = selection.NewDynamicAppIPs("stats", dynamicSelector, pidK8sStore)
 		}
 	}
 	aggregated, err := s.buildAggregation(ctx)

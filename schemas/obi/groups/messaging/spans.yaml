@@ -66,21 +66,9 @@ groups:
       - ref: messaging.kafka.offset
         requirement_level:
           recommended: if the record carried partition metadata
-
-  - id: span.obi.messaging.kafka.client
-    type: span
-    span_kind: client
-    stability: development
-    extends: span.obi.messaging.common
-    brief: OBI Kafka span for a receive or a settle operation.
-    attributes:
-      - ref: messaging.destination.name
-        requirement_level: required
-      - ref: messaging.client.id
-        requirement_level: recommended
-      - ref: messaging.destination.partition.id
+      - ref: messaging.consumer.group.name
         requirement_level:
-          conditionally_required: if the record carried partition metadata
+          conditionally_required: if OBI attributed the fetch to a single consumer group of the process
 
   - id: span.obi.messaging.mqtt.producer
     type: span
@@ -100,18 +88,6 @@ groups:
     stability: development
     extends: span.obi.messaging.common
     brief: OBI MQTT span for a process operation.
-    attributes:
-      - ref: messaging.destination.name
-        requirement_level: required
-      - ref: messaging.client.id
-        requirement_level: recommended
-
-  - id: span.obi.messaging.mqtt.client
-    type: span
-    span_kind: client
-    stability: development
-    extends: span.obi.messaging.common
-    brief: OBI MQTT span for a receive or a settle operation.
     attributes:
       - ref: messaging.destination.name
         requirement_level: required
@@ -146,20 +122,6 @@ groups:
       - ref: messaging.message.envelope.size
         requirement_level: recommended
 
-  - id: span.obi.messaging.nats.client
-    type: span
-    span_kind: client
-    stability: development
-    extends: span.obi.messaging.common
-    brief: OBI NATS span for a receive or a settle operation.
-    attributes:
-      - ref: messaging.destination.name
-        requirement_level: required
-      - ref: messaging.client.id
-        requirement_level: recommended
-      - ref: messaging.message.envelope.size
-        requirement_level: recommended
-
   - id: span.obi.messaging.amqp.producer
     type: span
     span_kind: producer
@@ -173,10 +135,3 @@ groups:
     stability: development
     extends: span.obi.messaging.common
     brief: OBI AMQP span for a process operation.
-
-  - id: span.obi.messaging.amqp.client
-    type: span
-    span_kind: client
-    stability: development
-    extends: span.obi.messaging.common
-    brief: OBI AMQP span for a receive or a settle operation.

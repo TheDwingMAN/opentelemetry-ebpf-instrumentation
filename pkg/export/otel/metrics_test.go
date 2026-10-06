@@ -790,6 +790,68 @@ func TestAppMetrics_MCPOperationDuration(t *testing.T) {
 	}
 }
 
+func TestAppMetrics_MCPSessionDurationExportsDuringShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	metricRecords := make(chan collector.MetricRecord, 100)
+	metricsInput := msg.NewQueue[[]request.Span](msg.ChannelBufferLen(1))
+	processEvents := msg.NewQueue[exec.ProcessEvent](msg.ChannelBufferLen(1))
+	mcfg := &otelcfg.MetricsConfig{
+		Interval:          10 * time.Millisecond,
+		TTL:               time.Hour,
+		ReportersCacheLen: 1,
+		Instrumentations:  []instrumentations.Instrumentation{instrumentations.InstrumentationGenAI},
+		MetricsConsumer:   testMetricsConsumer(metricRecords),
+	}
+	reporter, err := newMetricsReporter(
+		ctx,
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: mcfg}},
+		mcfg,
+		&perapp.GlobalMetricsConfig{Features: export.FeatureApplicationRED},
+		&attributes.SelectorConfig{},
+		request.UnresolvedNames{},
+		metricsInput,
+		processEvents,
+	)
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		reporter.reportMetrics(ctx)
+		close(done)
+	}()
+
+	metricsInput.Send([]request.Span{{
+		Service:      svc.Attrs{Features: export.FeatureApplicationRED, UID: svc.UID{Instance: "mcp"}},
+		Type:         request.EventTypeHTTPClient,
+		SubType:      request.HTTPSubtypeMCP,
+		RequestStart: 100,
+		End:          200,
+		GenAI: &request.GenAI{MCP: &request.MCPCall{
+			SessionID: "session-1",
+		}},
+	}})
+
+	// The per-operation metric is exported periodically, so seeing it proves the span
+	// was processed before the context is canceled.
+	readMetricsByName(t, metricRecords, 5*time.Second, attributes.MCPClientOperationDuration.OTEL)
+
+	// Canceling the reporter context is the normal process-shutdown path: ctx.Done()
+	// exits reportMetrics, so the final collection/export runs with mr.ctx canceled.
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "reportMetrics did not finish")
+	}
+
+	records := readMetricsByName(t, metricRecords, time.Second, attributes.MCPClientSessionDuration.OTEL)
+	require.Len(t, records, 1)
+	assert.Equal(t, 1, records[0].Count)
+}
+
 func TestAppMetrics_DBClientAttributes(t *testing.T) {
 	ctx := t.Context()
 	metricRecords := make(chan collector.MetricRecord, 10)
@@ -841,6 +903,74 @@ func TestAppMetrics_DBClientAttributes(t *testing.T) {
 	// the DBMS default port is still reported because the user explicitly
 	// included server.port in the selection
 	assert.Equal(t, "5432", records[0].Attributes[string(attr.ServerPort)])
+}
+
+func TestAppMetrics_HTTPErrorType(t *testing.T) {
+	features := export.FeatureApplicationRED | export.FeatureApplicationSizes
+	ctx := t.Context()
+	metricRecords := make(chan collector.MetricRecord, 20)
+	metrics := msg.NewQueue[[]request.Span](msg.ChannelBufferLen(10))
+	processEvents := msg.NewQueue[exec.ProcessEvent](msg.ChannelBufferLen(10))
+	mcfg := &otelcfg.MetricsConfig{
+		Interval:          50 * time.Millisecond,
+		TTL:               30 * time.Minute,
+		ReportersCacheLen: 10,
+		Instrumentations:  []instrumentations.Instrumentation{instrumentations.InstrumentationHTTP},
+		MetricsConsumer:   testMetricsConsumer(metricRecords),
+	}
+
+	reporter, err := newMetricsReporter(
+		ctx,
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: mcfg}},
+		mcfg,
+		&perapp.GlobalMetricsConfig{Features: features},
+		&attributes.SelectorConfig{},
+		request.UnresolvedNames{},
+		metrics,
+		processEvents,
+	)
+	require.NoError(t, err)
+	go reporter.reportMetrics(ctx)
+
+	svcAttrs := svc.Attrs{Features: features, UID: svc.UID{Instance: "foo"}}
+	metrics.Send([]request.Span{
+		{Service: svcAttrs, Type: request.EventTypeHTTP, Method: "GET", Status: 500, RequestStart: 100, End: 200},
+		{Service: svcAttrs, Type: request.EventTypeHTTP, SubType: request.HTTPSubtypeJSONRPC, Method: "POST", Status: 200, RequestStart: 100, End: 200, JSONRPC: &request.JSONRPC{Method: "missing", Version: "2.0", ErrorCode: -32601}},
+		{Service: svcAttrs, Type: request.EventTypeHTTPClient, Method: "GET", Status: 200, RequestStart: 100, End: 200},
+		{Service: svcAttrs, Type: request.EventTypeHTTPClient, Method: "GET", Status: 404, RequestStart: 100, End: 200},
+	})
+
+	serverMetrics := []string{attributes.HTTPServerDuration.OTEL, attributes.HTTPServerRequestSize.OTEL, attributes.HTTPServerResponseSize.OTEL}
+	clientMetrics := []string{attributes.HTTPClientDuration.OTEL, attributes.HTTPClientRequestSize.OTEL, attributes.HTTPClientResponseSize.OTEL}
+	pending := map[string]string{}
+	for _, name := range serverMetrics {
+		pending[name+"/500"] = "500"
+		pending[name+"/200"] = ""
+	}
+	for _, name := range clientMetrics {
+		pending[name+"/404"] = "404"
+		pending[name+"/200"] = ""
+	}
+
+	deadline := time.After(timeout)
+	for len(pending) > 0 {
+		select {
+		case record := <-metricRecords:
+			key := record.Name + "/" + record.Attributes[string(attr.HTTPResponseStatusCode)]
+			want, ok := pending[key]
+			if !ok {
+				continue
+			}
+			if want == "" {
+				assert.NotContains(t, record.Attributes, string(attr.ErrorType), key)
+			} else {
+				assert.Equal(t, want, record.Attributes[string(attr.ErrorType)], key)
+			}
+			delete(pending, key)
+		case <-deadline:
+			require.Failf(t, "timeout while waiting for metric records", "missing: %v", pending)
+		}
+	}
 }
 
 func TestAppMetrics_DBClientServerPortDefaultSelection(t *testing.T) {

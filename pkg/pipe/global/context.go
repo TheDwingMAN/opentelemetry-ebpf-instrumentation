@@ -12,7 +12,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/export/connector"
 	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	"go.opentelemetry.io/obi/pkg/export/otel/otelcfg"
-	"go.opentelemetry.io/obi/pkg/internal/ecs"
+	"go.opentelemetry.io/obi/pkg/internal/cloud"
 	netebpf "go.opentelemetry.io/obi/pkg/internal/netolly/ebpf"
 	statsebpf "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/kube"
@@ -43,6 +43,9 @@ type ContextInfo struct {
 	K8sInformer *kube.MetadataProvider
 	// DockerMetadata stores per-PID information of docker containers
 	DockerMetadata *docker.ContainerStore
+	// ECSInventory is shared by endpoint resolution and process metadata enrichment.
+	// TODO: add AWS name resolution features to network metrics
+	CloudMetaInventory *cloud.Inventory
 
 	// OverrideAppExportQueue allows overriding the output queue of the application exporter
 	// to connect your own application exporters outside the OBI code base. If left unset, OBI will
@@ -68,15 +71,13 @@ type ContextInfo struct {
 	// OTELMetricsExporter allows sharing the same OTEL exporter through diverse metrics export nodes (Application, Network...)
 	OTELMetricsExporter *otelcfg.MetricsExporterInstancer
 
-	// DynamicPIDSelector, when set, restricts App O11y, NetO11y, and StatsO11y signals to
-	// the runtime-selected PIDs for each signal view. Pass via instrumenter.WithDynamicPIDSelector.
-	DynamicPIDSelector selection.MultiSignalPIDSelector
+	// DynamicSelector, when set, restricts App O11y, NetO11y, and StatsO11y signals to
+	// the runtime-selected targets for each signal view. Pass via instrumenter.WithDynamicSelector.
+	DynamicSelector selection.MultiSignalPIDSelector
 }
 
 // AppO11y stores context information that is only required for application observability.
 type AppO11y struct {
-	// ECSInventory is shared by endpoint resolution and process metadata enrichment.
-	ECSInventory *ecs.Inventory
 	// ReportRoutes sets whether the metrics should set the http.route attribute
 	ReportRoutes bool
 }

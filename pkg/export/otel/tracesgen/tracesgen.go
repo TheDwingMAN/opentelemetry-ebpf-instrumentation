@@ -861,7 +861,6 @@ func traceAttributesSelectorInternal(span *request.Span, optionalAttrs map[attr.
 			attrs = appendIfSet(attrs, request.MessagingMessageID, sqs.MessageID)
 			attrs = appendIfSet(attrs, semconv.CloudRegion, sqs.Meta.Region)
 			attrs = appendIfSet(attrs, semconv.AWSRequestID, sqs.Meta.RequestID)
-			attrs = appendIfSet(attrs, request.AWSExtendedRequestID, sqs.Meta.ExtendedRequestID)
 			attrs = appendIfSet(attrs, request.AWSSQSQueueURL, sqs.QueueURL)
 		}
 
@@ -1517,9 +1516,14 @@ func traceAttributesSelectorInternal(span *request.Span, optionalAttrs map[attr.
 		}
 
 		if span.MessagingInfo != nil {
-			attrs = append(attrs, request.MessagingPartition(span.MessagingInfo.Partition))
-			if span.Method == request.MessagingProcess {
-				attrs = append(attrs, request.MessagingKafkaOffset(span.MessagingInfo.Offset))
+			if span.MessagingInfo.HasPartition {
+				attrs = append(attrs, request.MessagingPartition(span.MessagingInfo.Partition))
+				if span.Method == request.MessagingProcess {
+					attrs = append(attrs, request.MessagingKafkaOffset(span.MessagingInfo.Offset))
+				}
+			}
+			if group := span.MessagingInfo.ConsumerGroup; group != "" {
+				attrs = append(attrs, request.MessagingConsumerGroupName(group))
 			}
 		}
 	case request.EventTypeMQTTServer, request.EventTypeMQTTClient:
