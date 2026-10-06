@@ -1106,6 +1106,41 @@ prometheus_export:
 	require.False(t, plainRoundTripped.Metrics.Features.AppSizes())
 }
 
+// The storage stats are enabled in v2 with the stats features. Their custom buckets, like the custom
+// buckets of every other histogram, have no v2 field, so the migration refuses them.
+func TestMigrateConfigCarriesStorageStats(t *testing.T) {
+	v1 := func(prometheus string) []byte {
+		return []byte(`
+discovery:
+  instrument:
+    - exe_path: "/srv/*"
+metrics:
+  features: [application, stats_disk, stats_fs_sync_duration, stats_nfs, stats_disk_pod_volumes]
+prometheus_export:
+  port: 9090
+` + prometheus)
+	}
+
+	output, _, err := migrateConfig(v1(""))
+	require.NoError(t, err)
+	doc, ext, err := schema.ParseStandaloneYAML(output)
+	require.NoError(t, err)
+	require.Contains(t, ext.Capture.Network.Stats.Features, "disk_operation_duration")
+	require.Contains(t, ext.Capture.Network.Stats.Features, "fs_sync_duration")
+
+	roundTripped, err := convert.DocumentToRuntime(doc)
+	require.NoError(t, err)
+	features := roundTripped.Metrics.Features
+	require.True(t, features.StatsDiskOperationDuration())
+	require.True(t, features.StatsDiskPendingOperations())
+	require.True(t, features.StatsFsSyncDuration())
+	require.True(t, features.StatsNFS())
+	require.True(t, features.StatsDiskPodVolumes())
+
+	_, _, err = migrateConfig(v1("  buckets:\n    stat_disk_operation_duration_histogram: [0.001, 0.01]\n"))
+	require.ErrorContains(t, err, "prometheus_export.buckets.stat_disk_operation_duration_histogram")
+}
+
 func TestMigrateConfigExpandsGlobalRoutes(t *testing.T) {
 	output, report, err := migrateConfig([]byte(`
 routes:
