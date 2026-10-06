@@ -47,12 +47,8 @@ func registryMembers(t *testing.T, attrID string) map[string]bool {
 	var reg struct {
 		Groups []struct {
 			Attributes []struct {
-				ID   string `yaml:"id"`
-				Type struct {
-					Members []struct {
-						Value string `yaml:"value"`
-					} `yaml:"members"`
-				} `yaml:"type"`
+				ID   string    `yaml:"id"`
+				Type yaml.Node `yaml:"type"`
 			} `yaml:"attributes"`
 		} `yaml:"groups"`
 	}
@@ -63,8 +59,18 @@ func registryMembers(t *testing.T, attrID string) map[string]bool {
 			if a.ID != attrID {
 				continue
 			}
+			// A scalar type (e.g. "boolean", like obi.disk.stacked) has no
+			// members; only an enum's mapping type does.
+			var enumType struct {
+				Members []struct {
+					Value string `yaml:"value"`
+				} `yaml:"members"`
+			}
+			if a.Type.Kind == yaml.MappingNode {
+				require.NoError(t, a.Type.Decode(&enumType))
+			}
 			members := map[string]bool{}
-			for _, m := range a.Type.Members {
+			for _, m := range enumType.Members {
 				members[m.Value] = true
 			}
 			return members

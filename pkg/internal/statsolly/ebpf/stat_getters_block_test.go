@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 )
 
@@ -25,6 +27,33 @@ func TestBlockIoGetters(t *testing.T) {
 	opGetter, ok := StatGetters(attr.DiskIODirection)
 	assert.True(t, ok)
 	assert.Equal(t, "write", opGetter(s).Value.Emit())
+}
+
+// TestBlockIoStackedGetter covers the OTLP Bool vs Prometheus string split
+// the step 8 device model needs: the same KeyValue carries a real boolean
+// for OTLP and "true"/"false" for Prometheus.
+func TestBlockIoStackedGetter(t *testing.T) {
+	// Point device-name resolution at an empty dir so 0x800010 resolves to no
+	// device, and the getter falls back to its unresolved default (false).
+	withSysBlockDir(t, t.TempDir())
+
+	s := &Stat{Type: StatTypeBlockIo, BlockIo: &BlockIo{Dev: 0x800010}}
+
+	stackedGetter, ok := StatGetters(attr.DiskStacked)
+	assert.True(t, ok)
+	kv := stackedGetter(s)
+	assert.Equal(t, attribute.BOOL, kv.Value.Type())
+	assert.False(t, kv.Value.AsBool())
+
+	stringGetter, ok := StatStringGetters(attr.DiskStacked)
+	assert.True(t, ok)
+	assert.Equal(t, "false", stringGetter(s))
+
+	// A stat that carries no block I/O event resolves dev 0, which is also
+	// unresolvable in the fixture, so the getter still returns a value
+	// rather than panicking.
+	notBlockIo := &Stat{Type: StatTypeTCPRtt, TCPRtt: &TCPRtt{}}
+	assert.False(t, stackedGetter(notBlockIo).Value.AsBool())
 }
 
 // TestBlockIoErrorTypeGetter covers the platform-independent paths: no error,

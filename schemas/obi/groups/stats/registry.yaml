@@ -82,3 +82,15 @@ groups:
               stability: development
         stability: development
         brief: Filesystem operation performed.
+      # Mirrors the devInfo cache in pkg/internal/statsolly/ebpf/block_stack.go.
+      # A device is stacked when it does not issue requests to hardware
+      # itself (device-mapper, software RAID, loop, or an NVMe native
+      # multipath head); a partition inherits its whole disk's value.
+      - id: obi.disk.stacked
+        type: boolean
+        stability: development
+        brief: >
+          Whether the disk is a stacked device (device-mapper, software
+          RAID, loop, or an NVMe multipath head) rather than one that issues
+          requests directly to hardware.
+        examples: [true, false]

@@ -136,7 +136,7 @@ func TestStatMetricsExporter_DiskMetrics(t *testing.T) {
 	// Both metrics carry the same device/direction attributes, decoded from
 	// dev 0x800010 (major 8, minor 16) and a write.
 	diskAttrs := map[string]string{
-		"system.device":     "8:16",
+		"system.device": "8:16", "obi.disk.stacked": "false",
 		"disk.io.direction": "write",
 	}
 
@@ -233,7 +233,7 @@ func TestStatMetricsExporter_DiskQueueAndErrorMetrics(t *testing.T) {
 	assert.NotContains(t, seen, "obi.stat.disk.io")
 
 	diskAttrs := map[string]string{
-		"system.device":     "8:16",
+		"system.device": "8:16", "obi.disk.stacked": "false",
 		"disk.io.direction": "write",
 	}
 
@@ -243,13 +243,13 @@ func TestStatMetricsExporter_DiskQueueAndErrorMetrics(t *testing.T) {
 	assert.Equal(t, 1, queueDuration.Count)
 
 	queueDepth := seen["obi.stat.disk.queue.depth"]
-	assert.Equal(t, map[string]string{"system.device": "8:16"}, queueDepth.Attributes)
+	assert.Equal(t, map[string]string{"system.device": "8:16", "obi.disk.stacked": "false"}, queueDepth.Attributes)
 	assert.InEpsilon(t, 3.0, queueDepth.FloatVal, 0.0001)
 	assert.Equal(t, 1, queueDepth.Count)
 
 	opErrors := seen["obi.stat.disk.operation.errors"]
 	assert.Equal(t, map[string]string{
-		"system.device":     "8:16",
+		"system.device": "8:16", "obi.disk.stacked": "false",
 		"disk.io.direction": "write",
 		"error.type":        "ENOSPC",
 	}, opErrors.Attributes)
@@ -487,14 +487,14 @@ func TestStatMetricsExporter_DiskFlushAndDiscard(t *testing.T) {
 
 	// THEN a successful flush has no error.type at all, not an empty one
 	flush := seen["obi.stat.disk.flush.duration"]
-	assert.Equal(t, map[string]string{"system.device": "8:16"}, flush.Attributes)
+	assert.Equal(t, map[string]string{"system.device": "8:16", "obi.disk.stacked": "false"}, flush.Attributes)
 	assert.Equal(t, "s", flush.Unit)
 	assert.InEpsilon(t, 0.003, flush.FloatVal, 0.0001)
 	assert.Equal(t, 1, flush.Count)
 
 	// AND a failed discard carries its errno
 	discard := seen["obi.stat.disk.discard.duration"]
-	assert.Equal(t, map[string]string{"system.device": "8:16", "error.type": "EIO"}, discard.Attributes)
+	assert.Equal(t, map[string]string{"system.device": "8:16", "obi.disk.stacked": "false", "error.type": "EIO"}, discard.Attributes)
 	assert.Equal(t, 1, discard.Count)
 
 	// AND neither reached the read/write metrics
@@ -566,7 +566,7 @@ func TestStatMetricsExporter_FailedDiscardReleasesNoBytes(t *testing.T) {
 		}
 		discardBytes, ok := latest["obi.stat.disk.discard.io/"]
 		require.True(ct, ok, "discard bytes not exported yet")
-		assert.Equal(ct, map[string]string{"system.device": "8:16"}, discardBytes.Attributes)
+		assert.Equal(ct, map[string]string{"system.device": "8:16", "obi.disk.stacked": "false"}, discardBytes.Attributes)
 		assert.Equal(ct, "By", discardBytes.Unit)
 		assert.Equal(ct, int64(4096), discardBytes.IntVal)
 

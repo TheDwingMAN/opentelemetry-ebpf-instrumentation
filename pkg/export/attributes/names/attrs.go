@@ -395,6 +395,7 @@ const (
 	NetworkIoDirection        = Name(semconv.NetworkIODirectionKey)
 	DiskDevice                = Name("system.device")
 	DiskIODirection           = Name("disk.io.direction")
+	DiskStacked               = Name("obi.disk.stacked")
 	FsType                    = Name("system.filesystem.type")
 	FsOperation               = Name("fs.operation")
 )

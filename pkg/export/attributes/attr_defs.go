@@ -132,6 +132,7 @@ func getDefinitions(
 		Attributes: map[attr.Name]Default{
 			attr.DiskDevice:      true,
 			attr.DiskIODirection: true,
+			attr.DiskStacked:     true,
 		},
 	}
 
@@ -140,7 +141,8 @@ func getDefinitions(
 	// Flushes and discards have no direction either.
 	statsDiskDeviceAttributes := AttrReportGroup{
 		Attributes: map[attr.Name]Default{
-			attr.DiskDevice: true,
+			attr.DiskDevice:  true,
+			attr.DiskStacked: true,
 		},
 	}
 

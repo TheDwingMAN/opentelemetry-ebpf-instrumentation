@@ -410,6 +410,8 @@ groups:
         requirement_level: recommended
       - ref: disk.io.direction
         requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
 
   # Companion to the latency histogram above: the volume of data moved by the
   # same block requests. Shares the `storage_block` feature gate and attribute
@@ -437,6 +439,8 @@ groups:
         requirement_level: recommended
       - ref: disk.io.direction
         requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
 
   # Companion to the service-time histogram above, but for the other half of a
   # request's lifetime: how long it waited before being dispatched. Requires
@@ -459,6 +463,8 @@ groups:
       - ref: system.device
         requirement_level: recommended
       - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: obi.disk.stacked
         requirement_level: recommended
 
   # Queue depth, not queue latency: the count of requests still in flight on
@@ -486,6 +492,8 @@ groups:
     attributes:
       - ref: system.device
         requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
 
   # Failed completions, keyed by the upstream error.type attribute so the
   # failure mode (ENOSPC, EIO, ...) is queryable without an OBI-specific
@@ -504,6 +512,8 @@ groups:
       - ref: system.device
         requirement_level: recommended
       - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: obi.disk.stacked
         requirement_level: recommended
       - ref: error.type
         requirement_level: recommended
@@ -528,6 +538,8 @@ groups:
     attributes:
       - ref: system.device
         requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
       - ref: error.type
         requirement_level:
           conditionally_required: if the flush failed
@@ -549,6 +561,8 @@ groups:
     attributes:
       - ref: system.device
         requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
       - ref: error.type
         requirement_level:
           conditionally_required: if the discard failed
@@ -564,6 +578,8 @@ groups:
       completed successfully, broken down by device.
     attributes:
       - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.stacked
         requirement_level: recommended
 
   # Filesystem stats. Emitted when the `storage_fs` feature is enabled.

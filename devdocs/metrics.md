@@ -135,14 +135,14 @@ Storage metrics have two independent layers: block-layer I/O from the `block_rq_
 
 | Metric (OTel / Prometheus) | Instrument | Unit | Attributes | Feature flag |
 |---|---|---|---|---|
-| `obi.stat.disk.operation.duration` / `obi_stat_disk_operation_duration_seconds` | histogram | `s` | `system.device`, `disk.io.direction` | `storage_block_duration` |
-| `obi.stat.disk.io` / `obi_stat_disk_io_bytes_total` | counter | `By` | `system.device`, `disk.io.direction` | `storage_block_io` |
-| `obi.stat.disk.queue.duration` / `obi_stat_disk_queue_duration_seconds` | histogram | `s` | `system.device`, `disk.io.direction` | `storage_block_queue` |
-| `obi.stat.disk.queue.depth` / `obi_stat_disk_queue_depth` (deprecated) | histogram | `{operation}` | `system.device` | `storage_block_queue_depth` |
-| `obi.stat.disk.operation.errors` / `obi_stat_disk_operation_errors_total` | counter | `{error}` | `system.device`, `disk.io.direction`, `error.type` | `storage_block_errors` |
-| `obi.stat.disk.flush.duration` / `obi_stat_disk_flush_duration_seconds` | histogram | `s` | `system.device`, `error.type` (failed flushes only) | `storage_block_flush` |
-| `obi.stat.disk.discard.duration` / `obi_stat_disk_discard_duration_seconds` | histogram | `s` | `system.device`, `error.type` (failed discards only) | `storage_block_discard` |
-| `obi.stat.disk.discard.io` / `obi_stat_disk_discard_io_bytes_total` | counter | `By` | `system.device` | `storage_block_discard` |
+| `obi.stat.disk.operation.duration` / `obi_stat_disk_operation_duration_seconds` | histogram | `s` | `system.device`, `disk.io.direction`, `obi.disk.stacked` | `storage_block_duration` |
+| `obi.stat.disk.io` / `obi_stat_disk_io_bytes_total` | counter | `By` | `system.device`, `disk.io.direction`, `obi.disk.stacked` | `storage_block_io` |
+| `obi.stat.disk.queue.duration` / `obi_stat_disk_queue_duration_seconds` | histogram | `s` | `system.device`, `disk.io.direction`, `obi.disk.stacked` | `storage_block_queue` |
+| `obi.stat.disk.queue.depth` / `obi_stat_disk_queue_depth` (deprecated) | histogram | `{operation}` | `system.device`, `obi.disk.stacked` | `storage_block_queue_depth` |
+| `obi.stat.disk.operation.errors` / `obi_stat_disk_operation_errors_total` | counter | `{error}` | `system.device`, `disk.io.direction`, `obi.disk.stacked`, `error.type` | `storage_block_errors` |
+| `obi.stat.disk.flush.duration` / `obi_stat_disk_flush_duration_seconds` | histogram | `s` | `system.device`, `obi.disk.stacked`, `error.type` (failed flushes only) | `storage_block_flush` |
+| `obi.stat.disk.discard.duration` / `obi_stat_disk_discard_duration_seconds` | histogram | `s` | `system.device`, `obi.disk.stacked`, `error.type` (failed discards only) | `storage_block_discard` |
+| `obi.stat.disk.discard.io` / `obi_stat_disk_discard_io_bytes_total` | counter | `By` | `system.device`, `obi.disk.stacked` | `storage_block_discard` |
 | `obi.stat.fs.operation.duration` / `obi_stat_fs_operation_duration_seconds` | histogram | `s` | `system.filesystem.type`, `fs.operation`, + pod/PV/PVC/storage-class (below) | `storage_fs_duration` |
 | `obi.stat.fs.io` / `obi_stat_fs_io_bytes_total` | counter | `By` | `system.filesystem.type`, `fs.operation`, + pod/PV/PVC/storage-class (below) | `storage_fs_io` |
 | `obi.stat.fs.operation.errors` / `obi_stat_fs_operation_errors_total` | counter | `{error}` | `system.filesystem.type`, `fs.operation`, `error.type`, + pod/PV/PVC/storage-class (below) | `storage_fs_errors` |
@@ -191,9 +191,11 @@ Storage metrics set an attribute only when it applies. Over OTLP, a string attri
 
 The PV, PVC and storage class of a filesystem stat depend only on the mount the I/O went through, so the PID decorator resolves them once per mount, looking the claim up once per mount resolution, and the stat carries a pointer to the result (`FsIo.Mount`); the getters read its fields. Telling apart the volumes that share a superblock needs the inode of each candidate mount point's root. That lookup runs in the background and never holds up the pipeline: until it returns, the first events of such a mount carry no volume attributes, and the mount is resolved again once the inode is known. It used to wait for the lookup, up to 1 s per mount point. A lookup still running after 30 s (a hard NFS mount of a server that does not answer) is logged as a warning naming the mount point, and at most 64 lookups run at once: past that, the volumes of further mounts on a shared superblock stay unnamed until one returns. A change to the mount table drops only the resolutions of the devices whose mounts it added or removed, and the root inodes of those mount points, rather than every resolution on the node.
 
-#### Device-mapper coverage
+#### Device-mapper coverage and `obi.disk.stacked`
 
-Block metrics attach to the request-queue tracepoints, which see the underlying physical device, not any layer stacked on top of it. For LVM, LVM-S, or dm-crypt-backed volumes, `obi.stat.disk.*` reports against the physical device (`sda`, `nvme0n1`, …), never the `dm-N` device on top of it. Those volumes are still observed per pod/PVC, but only at the filesystem layer — ext4/xfs/btrfs mounted on the logical volume, through the PV-mount allowlist described next.
+Block metrics attach to the request-queue tracepoints, which see the underlying physical device, not any layer stacked on top of it. For a bio-based device-mapper or software-RAID volume — ordinary LVM, dm-crypt, dm-thin, md software RAID — `obi.stat.disk.*` reports against the physical device (`sda`, `nvme0n1`, …), never the `dm-N`/`mdN` device on top of it: those devices never get their own `block_rq_issue`/`block_rq_complete` event, only the physical disk their clones land on does. Those volumes are still observed per pod/PVC, but only at the filesystem layer — ext4/xfs/btrfs mounted on the logical volume, through the PV-mount allowlist described next.
+
+Every disk metric carries `obi.disk.stacked`: true when the device does not issue requests to hardware itself (it has a `dm/`, `md/` or `loop/` sysfs directory, or is an NVMe native-multipath head with a `multipath/` directory); a partition inherits its whole disk's value (`devInfo` cache, [pkg/internal/statsolly/ebpf/block_stack.go](../pkg/internal/statsolly/ebpf/block_stack.go)). Given the paragraph above, on the current request-based tracer `obi.disk.stacked=true` can only actually be observed for the two device kinds that get their own block-layer events despite being stacked: a request-based dm-multipath device (whose slaves are its SCSI paths) and an NVMe native-multipath head (whose `multipath/` directory lists its path namespaces). Ordinary bio-based LVM and md volumes stay `obi.disk.stacked=false` under this tracer, reporting as their physical device, until the bio-based volume tracer (`storage_block_volumes`) adds probes that see the stacked device itself.
 
 #### Filesystem coverage and the PV-mount allowlist
 

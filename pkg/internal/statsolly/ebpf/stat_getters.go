@@ -89,6 +89,14 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.DiskIODirection), diskIoDirectionStr(DiskIoDirectionCode(op)))
 		}
+	case attr.DiskStacked:
+		getter = func(s *Stat) attribute.KeyValue {
+			var dev uint32
+			if s.BlockIo != nil {
+				dev = s.BlockIo.Dev
+			}
+			return attribute.Bool(string(attr.DiskStacked), blockStack(dev).stacked)
+		}
 	case attr.FsType:
 		getter = func(s *Stat) attribute.KeyValue {
 			if s.FsIo == nil {

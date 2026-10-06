@@ -1213,6 +1213,7 @@ Block-layer service time of discard and secure erase requests, measured from `bl
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `error.type` | string | `conditionally_required`: if the discard failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.discard.io`
@@ -1225,6 +1226,7 @@ Count of bytes released by discard and secure erase requests that completed succ
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.flush.duration`
@@ -1238,6 +1240,7 @@ Block-layer service time of cache flush requests, measured from `block_rq_issue`
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `error.type` | string | `conditionally_required`: if the flush failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.io`
@@ -1251,6 +1254,7 @@ Count of bytes transferred at the block layer, accumulated per completed disk re
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.operation.duration`
@@ -1264,6 +1268,7 @@ Block-layer service latency per disk read or write request, measured from `block
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.operation.errors`
@@ -1278,6 +1283,7 @@ Count of block read and write requests that completed with a non-zero error, bro
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
 | `error.type` | string | `recommended` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.queue.depth`
@@ -1292,6 +1298,7 @@ Number of block I/O requests still in flight on the device immediately after thi
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.queue.duration`
@@ -1305,6 +1312,7 @@ Time a disk read or write request spent queued before being dispatched to the de
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.fs.io`

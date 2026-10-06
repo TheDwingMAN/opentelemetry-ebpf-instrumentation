@@ -87,7 +87,7 @@ func TestStatsReporterRecordsDiskMetrics(t *testing.T) {
 	reporter.observeDiskIOBytes(blockIoStat())
 
 	diskLabels := map[string]string{
-		"system_device":     "8:16",
+		"system_device": "8:16", "obi_disk_stacked": "false",
 		"disk_io_direction": "write",
 	}
 
@@ -113,7 +113,7 @@ func TestStatsReporterDiskBytesAccumulates(t *testing.T) {
 	}
 
 	ioBytes := gatheredMetric(t, registry, "obi_stat_disk_io_bytes_total", map[string]string{
-		"system_device":     "8:16",
+		"system_device": "8:16", "obi_disk_stacked": "false",
 		"disk_io_direction": "write",
 	})
 	require.NotNil(t, ioBytes)
@@ -143,7 +143,7 @@ func TestStatsReporterDiskFeatureGating(t *testing.T) {
 			reporter.observeDiskIOBytes(blockIoStat())
 
 			diskLabels := map[string]string{
-				"system_device":     "8:16",
+				"system_device": "8:16", "obi_disk_stacked": "false",
 				"disk_io_direction": "write",
 			}
 
@@ -204,7 +204,7 @@ func TestStatsReporterRecordsDiskQueueMetrics(t *testing.T) {
 	reporter.observeDiskQueueDepth(blockIoStat())
 
 	queueDuration := gatheredMetric(t, registry, "obi_stat_disk_queue_duration_seconds", map[string]string{
-		"system_device":     "8:16",
+		"system_device": "8:16", "obi_disk_stacked": "false",
 		"disk_io_direction": "write",
 	})
 	require.NotNil(t, queueDuration, "queue duration histogram not registered or not observed")
@@ -212,7 +212,7 @@ func TestStatsReporterRecordsDiskQueueMetrics(t *testing.T) {
 	assert.InEpsilon(t, 0.0005, queueDuration.GetHistogram().GetSampleSum(), 0.0001)
 
 	queueDepth := gatheredMetric(t, registry, "obi_stat_disk_queue_depth", map[string]string{
-		"system_device": "8:16",
+		"system_device": "8:16", "obi_disk_stacked": "false",
 	})
 	require.NotNil(t, queueDepth, "queue depth histogram not registered or not observed")
 	assert.Equal(t, uint64(1), queueDepth.GetHistogram().GetSampleCount())
@@ -230,7 +230,7 @@ func TestStatsReporterRecordsDiskOperationErrors(t *testing.T) {
 	reporter.observeDiskOpErrors(blockIoErrorStat())
 
 	opErrors := gatheredMetric(t, registry, "obi_stat_disk_operation_errors_total", map[string]string{
-		"system_device":     "8:16",
+		"system_device": "8:16", "obi_disk_stacked": "false",
 		"disk_io_direction": "write",
 		"error_type":        "ENOSPC",
 	})
@@ -268,7 +268,7 @@ func TestStatsReporterSkipsQueueDurationForZeroQueueNs(t *testing.T) {
 	reporter.observeDiskQueueDuration(blockIoNoQueueStat())
 
 	diskLabels := map[string]string{
-		"system_device":     "8:16",
+		"system_device": "8:16", "obi_disk_stacked": "false",
 		"disk_io_direction": "write",
 	}
 
@@ -305,17 +305,17 @@ func TestStatsReporterDiskQueueAndErrorsFeatureGating(t *testing.T) {
 			reporter.observeDiskOpErrors(blockIoErrorStat())
 
 			queueDuration := gatheredMetric(t, registry, "obi_stat_disk_queue_duration_seconds", map[string]string{
-				"system_device":     "8:16",
+				"system_device": "8:16", "obi_disk_stacked": "false",
 				"disk_io_direction": "write",
 			})
 			opErrors := gatheredMetric(t, registry, "obi_stat_disk_operation_errors_total", map[string]string{
-				"system_device":     "8:16",
+				"system_device": "8:16", "obi_disk_stacked": "false",
 				"disk_io_direction": "write",
 				"error_type":        "ENOSPC",
 			})
 
 			queueDepth := gatheredMetric(t, registry, "obi_stat_disk_queue_depth", map[string]string{
-				"system_device": "8:16",
+				"system_device": "8:16", "obi_disk_stacked": "false",
 			})
 
 			assert.Equal(t, tc.wantQueue, queueDuration != nil, "queue duration histogram presence")
@@ -353,8 +353,8 @@ func TestStatsReporterRecordsDiskFlushAndDiscard(t *testing.T) {
 	reporter.observeDiskDiscard(blockIoKindStat(ebpf.CodeBlockDiscard, 1<<20, 0))
 	reporter.observeDiskDiscard(blockIoKindStat(ebpf.CodeBlockDiscard, 1<<20, 0))
 
-	ok := map[string]string{"system_device": "8:16", "error_type": ""}
-	failed := map[string]string{"system_device": "8:16", "error_type": "EIO"}
+	ok := map[string]string{"system_device": "8:16", "obi_disk_stacked": "false", "error_type": ""}
+	failed := map[string]string{"system_device": "8:16", "obi_disk_stacked": "false", "error_type": "EIO"}
 
 	flush := gatheredMetric(t, registry, "obi_stat_disk_flush_duration_seconds", ok)
 	require.NotNil(t, flush, "flush histogram not registered or not observed")
@@ -363,7 +363,7 @@ func TestStatsReporterRecordsDiskFlushAndDiscard(t *testing.T) {
 
 	reporter.observeDiskOpDuration(blockIoStat())
 	opDuration := gatheredMetric(t, registry, "obi_stat_disk_operation_duration_seconds",
-		map[string]string{"system_device": "8:16", "disk_io_direction": "write"})
+		map[string]string{"system_device": "8:16", "obi_disk_stacked": "false", "disk_io_direction": "write"})
 	require.NotNil(t, opDuration)
 	upperBounds := func(h *dto.Histogram) []float64 {
 		bounds := []float64{}
@@ -384,7 +384,7 @@ func TestStatsReporterRecordsDiskFlushAndDiscard(t *testing.T) {
 	assert.Equal(t, uint64(2), discard.GetHistogram().GetSampleCount())
 
 	discardBytes := gatheredMetric(t, registry, "obi_stat_disk_discard_io_bytes_total",
-		map[string]string{"system_device": "8:16"})
+		map[string]string{"system_device": "8:16", "obi_disk_stacked": "false"})
 	require.NotNil(t, discardBytes, "discard bytes counter not registered or not observed")
 	assert.InEpsilon(t, float64(2<<20), discardBytes.GetCounter().GetValue(), 0)
 	assert.Equal(t, upperBounds(opDuration.GetHistogram()), upperBounds(discard.GetHistogram()),
@@ -400,16 +400,16 @@ func TestStatsReporterFailedDiscardReleasesNoBytes(t *testing.T) {
 	reporter.observeDiskDiscard(blockIoKindStat(ebpf.CodeBlockDiscard, 1<<20, -int32(unix.EIO)))
 
 	failed := gatheredMetric(t, registry, "obi_stat_disk_discard_duration_seconds",
-		map[string]string{"system_device": "8:16", "error_type": "EIO"})
+		map[string]string{"system_device": "8:16", "obi_disk_stacked": "false", "error_type": "EIO"})
 	require.NotNil(t, failed, "a failed discard is still timed")
 	assert.Equal(t, uint64(1), failed.GetHistogram().GetSampleCount())
 	assert.Nil(t, gatheredMetric(t, registry, "obi_stat_disk_discard_io_bytes_total",
-		map[string]string{"system_device": "8:16"}), "a failed discard released no bytes")
+		map[string]string{"system_device": "8:16", "obi_disk_stacked": "false"}), "a failed discard released no bytes")
 
 	reporter.observeDiskDiscard(blockIoKindStat(ebpf.CodeBlockDiscard, 4096, 0))
 
 	discardBytes := gatheredMetric(t, registry, "obi_stat_disk_discard_io_bytes_total",
-		map[string]string{"system_device": "8:16"})
+		map[string]string{"system_device": "8:16", "obi_disk_stacked": "false"})
 	require.NotNil(t, discardBytes)
 	assert.InEpsilon(t, float64(4096), discardBytes.GetCounter().GetValue(), 0)
 }
@@ -462,10 +462,10 @@ func TestStatsReporterDiskFlushDiscardFeatureGating(t *testing.T) {
 		reporter.observeDiskDiscard(blockIoKindStat(ebpf.CodeBlockDiscard, 4096, 0))
 
 		assert.Equal(t, tc.wantFlush, gatheredMetric(t, registry, "obi_stat_disk_flush_duration_seconds",
-			map[string]string{"system_device": "8:16", "error_type": ""}) != nil)
+			map[string]string{"system_device": "8:16", "obi_disk_stacked": "false", "error_type": ""}) != nil)
 		assert.Equal(t, tc.wantDiscard, gatheredMetric(t, registry, "obi_stat_disk_discard_duration_seconds",
-			map[string]string{"system_device": "8:16", "error_type": ""}) != nil)
+			map[string]string{"system_device": "8:16", "obi_disk_stacked": "false", "error_type": ""}) != nil)
 		assert.Equal(t, tc.wantDiscard, gatheredMetric(t, registry, "obi_stat_disk_discard_io_bytes_total",
-			map[string]string{"system_device": "8:16"}) != nil)
+			map[string]string{"system_device": "8:16", "obi_disk_stacked": "false"}) != nil)
 	}
 }
