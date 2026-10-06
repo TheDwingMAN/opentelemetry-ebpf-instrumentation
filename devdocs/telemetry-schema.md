@@ -133,8 +133,10 @@ section empty once drained.
 - `storage_block` now also enables `storage_block_flush`, `storage_block_discard` and
   `storage_block_pending` (`obi.stat.disk.pending_operations`), `storage_fs` also enables
   `storage_fs_sync` (its own set of probes), and `*`/`all` also enable the new `storage_nfs*`
-  metrics (`obi.stat.nfs.client.*`), each adding probes and series where a configuration used
-  those umbrellas. List the sub-flags to keep them off.
+  metrics (`obi.stat.nfs.client.*`), `storage_block_volumes` (programs on every bio submitted
+  on the node) and `storage_block_pod` (`obi.stat.disk.operations`, `obi.stat.disk.operation_time`
+  and pod attributes on `obi.stat.disk.io`), each adding probes and series where a configuration
+  used those umbrellas. List the sub-flags to keep them off.
 - The block metrics (`obi.stat.disk.*`) are now counted in the kernel by default, which
   brings the kernel-aggregated histogram change above to them, and their OTLP histograms no
   longer carry `min` and `max`: the kernel does not track them.

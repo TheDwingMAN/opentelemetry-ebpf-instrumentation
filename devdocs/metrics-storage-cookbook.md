@@ -18,7 +18,8 @@ Conventions used below:
 - Histogram queries need classic buckets. They are there by default; with
   `ebpf.storage_aggregation.exponential_histograms` the storage histograms are native only, and
   `histogram_quantile(q, sum by (...) (rate(metric[5m])))` replaces the `_bucket` form.
-- The block layer is node-wide: it has no pod, PV or PVC. Per-pod and per-PV numbers come
+- The block layer is node-wide: it has no PV or PVC, and no pod except in the counters of
+  `storage_block_pod` (see [Per-pod block I/O](#per-pod-block-io)). Per-PV numbers come
   from the filesystem layer (`obi_stat_fs_*`); disks are reached through the join labels
   (see [Joining filesystem to disk](#joining-filesystem-series-to-the-disk-underneath)).
 
@@ -136,12 +137,23 @@ sum by (k8s_node_name, system_device) (
 
 ### Pending operations
 
-Requests in flight now, per disk. Gauge: no `rate()`. Available with the block merge
-(`storage_block_pending`, see the placeholder in [metrics.md](metrics.md#storage-metrics)):
+Requests in flight now, per disk (`storage_block_pending`, part of `storage_block`): a
+snapshot of the kernel's in-flight map at each collection. Gauge: no `rate()`.
 
 ```promql
 sum by (k8s_node_name, system_device) (obi_stat_disk_pending_operations)
 ```
+
+Average queue size over a window, the closest to iostat's `aqu-sz`. Requests that start and
+complete between two collections are not seen, so it undercounts on fast devices:
+
+```promql
+avg_over_time(obi_stat_disk_pending_operations{system_device="nvme0n1"}[5m])
+```
+
+Reads and writes apart need `disk.io.direction`, which is opt-in on this metric
+(`attributes.select: {obi_stat_disk_pending_operations: {include: ["disk.io.direction"]}}`);
+flushes and discards in flight then have an empty direction.
 
 The deprecated `obi_stat_disk_queue_depth` histogram (`storage_block_queue_depth`, off by
 default) samples the in-flight count at each completion; its mean is:
@@ -430,9 +442,97 @@ client, and both report the first-mounted address. A subdirectory provisioner pu
 PVs on one NFS superblock, and RPC series carry no PV, so the RPC side is per server, not
 per PV.
 
-## Block volumes and pod attribution
+## Stacked volumes
 
-Comparing stacked devices with the disks below them (`storage_block_volumes`), and per-pod
-block I/O (`storage_block_pod`), land with the block merge. Their queries are added to this
-page then. Until then the block layer is per physical disk and node-wide, and per-pod
-numbers come from the filesystem queries above.
+With `storage_block_volumes`, bio-based LVM, dm-crypt, dm-thin and md volumes have series of
+their own (`obi_disk_stacked="true"`, `system_device="dm-4"` or `"md127"`), next to the disks
+below them, which keep counting the same I/O as requests.
+
+Bytes per second per volume:
+
+```promql
+sum by (k8s_node_name, system_device, disk_io_direction) (
+  rate(obi_stat_disk_io_bytes_total{obi_disk_stacked="true"}[5m])
+)
+```
+
+p99 latency as the volume's submitter sees it (queueing of the bio to the completion of its
+last fragment, the driver's own waits included):
+
+```promql
+histogram_quantile(0.99,
+  sum by (le, k8s_node_name, system_device, disk_io_direction) (
+    rate(obi_stat_disk_operation_duration_seconds_bucket{obi_disk_stacked="true"}[5m])
+  )
+)
+```
+
+Compare volumes with node_exporter in bytes, not operations: OBI counts bios as submitted,
+diskstats counts the fragments a driver splits them into. To add up the I/O of a node, sum
+either the disks (`obi_disk_stacked="false"`) or the volumes, never both. `dm-N` names change
+across reboots.
+
+## Per-pod block I/O
+
+With `storage_block_pod`, block reads and writes are counted per pod they are charged to
+(cgroup v2 with the `io` controller). Buffered writes are charged to the pod that owns the
+file's writeback, not to the kernel thread that issues them. I/O of no pod (the ext4
+journal, system services) is the series with `k8s_pod_name=""`.
+
+IOPS per pod:
+
+```promql
+sum by (k8s_node_name, k8s_namespace_name, k8s_pod_name, disk_io_direction) (
+  rate(obi_stat_disk_operations_total[5m])
+)
+```
+
+Bytes per second per pod and disk (`obi_stat_disk_io_bytes_total` carries the pod attributes
+when `storage_block_pod` is on):
+
+```promql
+sum by (k8s_node_name, k8s_namespace_name, k8s_pod_name, system_device, disk_io_direction) (
+  rate(obi_stat_disk_io_bytes_total[5m])
+)
+```
+
+Top 10 pods by write throughput across the cluster:
+
+```promql
+topk(10,
+  sum by (k8s_namespace_name, k8s_pod_name) (
+    rate(obi_stat_disk_io_bytes_total{disk_io_direction="write", k8s_pod_name!=""}[5m])
+  )
+)
+```
+
+Device time per pod, in seconds per second: the sum over a disk's pods is its busy time as
+diskstats fields 7 and 11 count it, which can exceed 1 on a device that serves requests in
+parallel:
+
+```promql
+sum by (k8s_node_name, system_device, k8s_namespace_name, k8s_pod_name) (
+  rate(obi_stat_disk_operation_time_seconds_total[5m])
+)
+```
+
+Mean time per read or write of a pod, from the request's block-layer accounting start to its
+completion (its queue wait included):
+
+```promql
+  sum by (k8s_node_name, k8s_namespace_name, k8s_pod_name, disk_io_direction) (rate(obi_stat_disk_operation_time_seconds_total[5m]))
+/ sum by (k8s_node_name, k8s_namespace_name, k8s_pod_name, disk_io_direction) (rate(obi_stat_disk_operations_total[5m]))
+```
+
+Share of a disk's writes issued for each pod:
+
+```promql
+  sum by (k8s_node_name, system_device, k8s_namespace_name, k8s_pod_name) (
+    rate(obi_stat_disk_io_bytes_total{disk_io_direction="write"}[5m])
+  )
+/ on (k8s_node_name, system_device) group_left
+  sum by (k8s_node_name, system_device) (rate(obi_stat_disk_io_bytes_total{disk_io_direction="write"}[5m]))
+```
+
+There are no per-pod latency histograms: for percentiles, use the per-disk histograms above
+or the filesystem layer's per-pod ones.

@@ -273,7 +273,7 @@ metric features. Names, attributes and semantics are in [devdocs/metrics.md](dev
 
 | Layer | What it measures | Kernel and attach | Limitations |
 |:------|:-----------------|:------------------|:------------|
-| Block | Per-device request latency, bytes, queue wait, errors, flushes and discards | `block_rq_*` raw tracepoints decoded through BTF; classic `tracepoint/block/*` fallback (needs tracefs) when BTF cannot locate a request's disk | Node-wide: no pod or PV attribute. Bio-based dm and md volumes are reported on the physical disk below |
+| Block | Per-device request latency, bytes, queue wait, errors, flushes, discards and requests in flight; per-pod reads and writes with `storage_block_pod` | `block_rq_*` as `tp_btf`, `raw_tp` fallback, both decoding the request through BTF; classic `tracepoint/block/*` fallback (needs tracefs) when BTF cannot locate a request's disk. Counted in kernel maps by default | No PV attribute, and no pod except the `storage_block_pod` counters, which need cgroup v2 with the `io` controller and the BTF programs. Bio-based dm and md volumes are reported on the physical disk below unless `storage_block_volumes` (Linux 5.12+) is on |
 | Filesystem | Per-operation latency, bytes and errors of read, write, fsync and fdatasync on nfs, ceph, cifs, fuse, ext4, xfs and btrfs; `sync`, `syncfs`, `sync_file_range` with `storage_fs_sync` | `fentry`/`fexit` per filesystem symbol, `kprobe`/`kretprobe` fallback. The in-flight start is kept in task storage (kernel 5.11+) and in a hash map otherwise | `splice_read` is not recorded on ceph, cifs and xfs. Needs `hostPID` to resolve PersistentVolumes |
 | NFS client | RPC latency, errors, retransmits and wire bytes per attempt | `tp_btf` on the sunrpc `rpc_stats_latency` tracepoint, `raw_tracepoint` fallback | Needs sunrpc module BTF (Linux 5.11+, RHEL 9); without it the NFS metrics stay off with one warning. While attached, sunrpc cannot be unloaded |
 
@@ -286,6 +286,8 @@ Kernel notes:
 - Kernel aggregation (filesystem and NFS) resolves a pod from the cgroup id on a cgroup v2 host. On
   cgroup v1 or hybrid hosts every key's cgroup is the root, so each key is decorated from its
   sample process instead, and NFS pod attribution uses the submitting thread's tgid.
+- `storage_block_pod` needs cgroup v2 with the `io` controller in the root's
+  `cgroup.subtree_control`; elsewhere OBI turns it off with a warning at start.
 - With a kubelet `--cgroup-root` other than `/` or `/kubelet`, cgroup-keyed series carry no pod labels.
 - Persistent volume attribution needs `hostPID: true`, and `get` on `persistentvolumes`
   (see the [RBAC block](devdocs/metrics.md#kubernetes-rbac-for-volume-attribution)).
