@@ -34,9 +34,8 @@ services:
       - ./system/sys/kernel/security:/sys/kernel/security
       - ../../../testoutput:/coverage
       - ../../../testoutput/run-disk-metrics:/var/run/obi
-      - /sys/kernel/tracing:/sys/kernel/tracing:rw
     image: hatest-obi
-    privileged: true # storage_block requires privileged AND tracefs mounted (below)
+    privileged: true # storage_block needs privileged; its block raw tracepoints need no tracefs mount
     pid: "host"
     environment:
       OTEL_EBPF_CONFIG_PATH: /configs/obi-config${OTEL_EBPF_CONFIG_SUFFIX}.yml
