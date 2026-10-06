@@ -106,8 +106,10 @@ func newPodFixture() (*fakeIndex, *fakeStore, *BlockPodResolver, *time.Time) {
 		byUID:       map[string]*ikube.CachedObjMeta{podUID: pod},
 	}
 	now := time.Unix(1_700_000_000, 0)
-	r := &BlockPodResolver{index: index, store: store, clock: func() time.Time { return now },
-		keep: statagg.DefaultCgroupTombstoneTTL, known: map[uint64]*podLabels{}}
+	r := &BlockPodResolver{
+		index: index, store: store, clock: func() time.Time { return now },
+		keep: statagg.DefaultCgroupTombstoneTTL, known: map[uint64]*podLabels{},
+	}
 	return index, store, r, &now
 }
 
@@ -395,7 +397,7 @@ func TestBlockCgroupFamily_PodSeriesAddUpToTheNode(t *testing.T) {
 	var opsSum, bytesSum float64
 	var timeSum float64
 	var podSeries, remainder int
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}

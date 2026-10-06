@@ -131,7 +131,6 @@ func TestPrometheusReporterKernelCounterTotals(t *testing.T) {
 
 	reporter.BpfMapInsertFailures("blk_agg", 3)
 	assert.InDelta(t, 15, value(reporter.bpfMapInsertFailures, "blk_agg"), 0, "a lower total restarted from zero")
-
 }
 
 type noopEmbeddingReporter struct {
