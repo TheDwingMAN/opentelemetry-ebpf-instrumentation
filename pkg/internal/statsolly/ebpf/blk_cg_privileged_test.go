@@ -82,8 +82,14 @@ func TestBlockPodChargesTheSubmittersCgroup(t *testing.T) {
 			assert.Positive(t, mine.timeNs)
 			assert.Less(t, mine.timeNs, uint64(elapsed), "operation time is within the writes' run")
 			assert.Equal(t, uint64(reads), got[cgKey{cgid: self, kind: uint8(StatsBlkIoOpBlkOpRead)}].count)
+			// udev probes a block device again when a writer closes it (its
+			// watch rule), with reads of its own: those are charged, rightly,
+			// to udev's cgroup. Nothing this test wrote may be charged there.
 			for key, c := range got {
-				assert.Equal(t, self, key.cgid, "no request is charged elsewhere: %+v %+v", key, c)
+				if key.cgid != self {
+					assert.Equal(t, uint8(StatsBlkIoOpBlkOpRead), key.kind,
+						"only another process's reads may be charged elsewhere: %+v %+v", key, c)
+				}
 			}
 			assertNoDrops(t, objects.StatsDrops)
 		})
