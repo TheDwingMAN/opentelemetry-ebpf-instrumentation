@@ -543,6 +543,7 @@ func TestFsSyncTypesAndFilesystems(t *testing.T) {
 		for _, latency := range stat.FsSync.Latency {
 			count += latency.Count
 		}
+		assert.Equal(t, count, stat.FsSync.Operations, "the counters count the syncs of the histogram")
 		switch {
 		case stat.FsSync.Type == ebpf.CodeFsSyncSync:
 			assert.Empty(t, stat.FsSync.Mountpoint, "sync(2) syncs every filesystem")
