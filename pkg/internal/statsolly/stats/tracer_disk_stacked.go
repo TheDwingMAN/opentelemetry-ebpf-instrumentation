@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	ciliumebpf "github.com/cilium/ebpf"
@@ -48,9 +49,10 @@ func (e ebpfDeviceSet) remove(dev uint32) error {
 	return e.set.Delete(dev)
 }
 
-// bioDevices keeps the set of stacked volumes whose bios the kernel measures in sync with the
-// bio-based stacked devices of the host: the device mapper (LVM, dm-crypt) and md RAID volumes.
-// Request-based device mapper volumes, like multipath ones, are left out: the kernel measures
+// bioDevices keeps the set of devices whose bios the kernel measures in sync with the bio-based
+// devices of the host: the device mapper (LVM, dm-crypt) and md RAID volumes, and the disks of
+// drivers that handle bios themselves, like the PowerFlex SDC (scini), DRBD, zram or pmem.
+// Request-based devices, like multipath device mapper volumes, are left out: the kernel measures
 // their requests.
 type bioDevices struct {
 	log     *slog.Logger
@@ -71,7 +73,7 @@ func (b *bioDevices) refresh() {
 	}
 	for _, entry := range entries {
 		dir := filepath.Join(b.sysRoot, "block", entry.Name())
-		if !isBioBasedStacked(dir) {
+		if !isBioBased(dir) {
 			continue
 		}
 		if dev, ok := readKernelDev(dir); ok {
@@ -100,13 +102,34 @@ func (b *bioDevices) refresh() {
 	}
 }
 
-// isBioBasedStacked tells whether the sysfs directory of a block device is a device mapper or md
-// RAID volume without a request queue (blk-mq devices have an "mq" directory)
-func isBioBasedStacked(dir string) bool {
+// bioStackingDrivers prefix the names of the bio-based devices that pass their I/O down to block
+// devices that sysfs doesn't list as their slaves: the head device of NVMe native multipath, over
+// its hidden path devices, and DRBD, over its backing device
+var bioStackingDrivers = []string{"nvme", "drbd"}
+
+// isBioBased tells whether the sysfs directory of a block device is a device without a request
+// queue, which never issues requests of its own. blk-mq devices have an "mq" directory, and the
+// request-based devices of older kernels list their I/O schedulers, while bio-based devices have
+// none: the kernel shows "none", or, on recent kernels, no scheduler file at all.
+func isBioBased(dir string) bool {
 	if exists(filepath.Join(dir, "mq")) {
 		return false
 	}
-	return exists(filepath.Join(dir, "dm")) || exists(filepath.Join(dir, "md"))
+	scheduler, err := os.ReadFile(filepath.Join(dir, "queue", "scheduler"))
+	return err != nil || strings.TrimSpace(string(scheduler)) == "none"
+}
+
+// stacksWithoutSlaves tells whether the sysfs directory of a block device is a bio-based device
+// that passes its I/O down to other block devices, although sysfs lists no slaves of it
+func stacksWithoutSlaves(dir string) bool {
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil || !isBioBased(dir) {
+		return false
+	}
+	name := filepath.Base(resolved)
+	return slices.ContainsFunc(bioStackingDrivers, func(prefix string) bool {
+		return strings.HasPrefix(name, prefix)
+	})
 }
 
 // isStacked tells whether the sysfs directory of a block device is a device built on other block

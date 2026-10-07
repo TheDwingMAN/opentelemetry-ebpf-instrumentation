@@ -82,9 +82,10 @@ groups:
         stability: development
         brief: Whether the block device (`system.device`) is built on other block devices.
         note: >
-          Device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass
-          their I/O down to the devices below them, which report it too. To count
-          the I/O once, add up the devices where it is `false`.
+          Device mapper (LVM, dm-crypt, multipath), md RAID and loop devices, the
+          head devices of NVMe native multipath and DRBD devices pass their I/O
+          down to the devices below them, which report it too. To count the I/O
+          once, add up the devices where it is `false`.
       - id: obi.disk.volume.device
         type: string
         stability: development

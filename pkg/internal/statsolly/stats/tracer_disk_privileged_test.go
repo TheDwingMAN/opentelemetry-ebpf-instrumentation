@@ -327,6 +327,68 @@ func TestDiskStackedVolumes(t *testing.T) {
 	assert.Equal(t, uint64(volumeWrites*directIOBlockSize), written)
 }
 
+// TestDiskBioBasedDisks writes to a zram disk, whose driver handles bios itself like the PowerFlex
+// SDC or DRBD do, and checks that its I/O is measured from its bios, as not stacked
+func TestDiskBioBasedDisks(t *testing.T) {
+	features := export.FeatureStatsDiskOperations | export.FeatureStatsDiskIO | export.FeatureStatsDiskStackedVolumes
+	bounds := []float64{0.001}
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
+		ebpf.LatencyHistograms{Disk: bounds}, ebpf.ProbeReads{})
+	require.NoError(t, err)
+	t.Cleanup(func() { fetcher.Close() })
+	require.NotNil(t, fetcher.DiskBioAccumMap(), "the bio probes must be attached on this kernel")
+
+	disk := zramDisk(t)
+
+	devices := &deviceNames{sysRoot: "/sys"}
+	containers := newCgroupContainers(ebpfCgroupNames{names: fetcher.DiskCgroupNamesMap()})
+	newBioDevices("/sys", ebpfDeviceSet{set: fetcher.DiskBioDevicesMap()}).refresh()
+	bios := newBioReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: fetcher.DiskBioAccumMap()},
+		bounds, devices, containers)
+	bios.readStats()
+
+	const diskWrites = 16
+	f, err := os.OpenFile(deviceNode(t, disk), os.O_RDWR|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	block := alignedBuffer(t, directIOBlockSize)
+	for i := range diskWrites {
+		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+	}
+
+	var writes, written uint64
+	for _, stat := range bios.readStats() {
+		if stat.DiskIO.Device != disk {
+			continue
+		}
+		assert.False(t, stat.DiskIO.Stacked, "zram is not built on other block devices")
+		if stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
+			writes += stat.DiskIO.Operations
+			written += stat.DiskIO.Bytes
+		}
+	}
+	assert.Equal(t, uint64(diskWrites), writes)
+	assert.Equal(t, uint64(diskWrites*directIOBlockSize), written)
+}
+
+// zramDisk adds a zram disk and returns its name
+func zramDisk(t *testing.T) string {
+	t.Helper()
+	_ = exec.Command("modprobe", "zram", "num_devices=0").Run()
+	id, err := os.ReadFile("/sys/class/zram-control/hot_add")
+	if err != nil {
+		t.Skipf("zram disks can't be added: %v", err)
+	}
+	name := "zram" + strings.TrimSpace(string(id))
+	t.Cleanup(func() {
+		_ = os.WriteFile(filepath.Join("/sys/block", name, "reset"), []byte("1"), 0o644)
+		_ = os.WriteFile("/sys/class/zram-control/hot_remove", []byte(strings.TrimSpace(string(id))), 0o644)
+	})
+	require.NoError(t, os.WriteFile(filepath.Join("/sys/block", name, "disksize"), []byte("16M"), 0o644))
+	return name
+}
+
 // attachDiskReader loads the disk probes of the given features and returns a reader of their
 // accumulation map that already forgot the I/O that happened before
 func attachDiskReader(t *testing.T, features export.Features) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {

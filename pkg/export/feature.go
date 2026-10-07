@@ -522,8 +522,9 @@ func (f Features) StatsDiskPendingOperations() bool {
 	return f.any(FeatureStatsDiskPendingOperations)
 }
 
-// StatsDiskStackedVolumes reports whether the I/O of bio-based stacked volumes, such as LVM and md
-// RAID volumes, is measured too
+// StatsDiskStackedVolumes reports whether the I/O of the bio-based devices is measured too: the
+// stacked volumes, such as LVM and md RAID volumes, and the disks of drivers that handle bios
+// themselves, such as the PowerFlex SDC, DRBD or zram
 func (f Features) StatsDiskStackedVolumes() bool {
 	return f.any(FeatureStatsDiskStackedVolumes)
 }

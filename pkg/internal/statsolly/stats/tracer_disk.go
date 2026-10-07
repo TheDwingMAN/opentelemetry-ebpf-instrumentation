@@ -531,7 +531,8 @@ func (d *deviceNames) expire() {
 	d.stack = map[[2]uint32]bool{}
 }
 
-// stacked tells whether a block device is built on other block devices (see isStacked)
+// stacked tells whether a block device is built on other block devices (see isStacked and
+// stacksWithoutSlaves)
 func (d *deviceNames) stacked(major, minor uint32) bool {
 	d.expire()
 	if stacked, ok := d.stack[[2]uint32{major, minor}]; ok {
@@ -542,7 +543,7 @@ func (d *deviceNames) stacked(major, minor uint32) bool {
 		// e.g. removed since its last I/O: not cached, the numbers may be given to another device
 		return false
 	}
-	stacked := isStacked(dir)
+	stacked := isStacked(dir) || stacksWithoutSlaves(dir)
 	d.stack[[2]uint32{major, minor}] = stacked
 	return stacked
 }
