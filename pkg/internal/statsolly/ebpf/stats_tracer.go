@@ -47,9 +47,10 @@ const fsSyncRetprobeMaxActive = 4096
 // (LOCAL_FREE_TARGET in kernel/bpf/bpf_lru_list.c)
 const lruLocalFreeTarget = 128
 
-// inFlightMaps hold an entry from the start of each block request, bio, file sync or NFS task until
-// it completes, in LRU maps
-var inFlightMaps = []string{"disk_rq_start", "disk_bio_start", "fs_sync_start", "nfs_task_cgroup"}
+// inFlightMaps are the LRU maps whose live entries must not be evicted: they hold an entry from the
+// start of each block request, bio, file sync or NFS task until it completes, and one for each
+// request queue whose requests the kernel times
+var inFlightMaps = []string{"disk_rq_start", "disk_bio_start", "fs_sync_start", "nfs_task_cgroup", "disk_timed_queues"}
 
 // Program names
 const (
@@ -439,8 +440,10 @@ func attachKretprobe(log *slog.Logger, symbol string, program *ebpf.Program, max
 
 // sizeInFlightMaps gives the in-flight maps room for twice the free entries that the CPUs can keep
 // for themselves. Before Linux 6.16, once those hold most of an LRU map, a CPU that needs an entry
-// evicts one in flight instead of taking a free one from another CPU, and that request is never
-// counted. It only grows the maps of hosts with more than 64 CPUs.
+// evicts a live one instead of taking a free one from another CPU: an evicted request is never
+// counted, and an evicted timed queue leaves the records of its next requests in disk_rq_start
+// (see disk_timed_queues). It grows the maps of 16384 entries on hosts with more than 64 CPUs, and
+// disk_timed_queues on hosts with more than 4.
 func sizeInFlightMaps(spec *ebpf.CollectionSpec, cpus int) {
 	minEntries := uint32(2 * lruLocalFreeTarget * cpus)
 	for _, name := range inFlightMaps {

@@ -454,15 +454,16 @@ func TestFsSyncAttributeReads(t *testing.T) {
 func TestSizeInFlightMaps(t *testing.T) {
 	newSpec := func() *ebpf.CollectionSpec {
 		return &ebpf.CollectionSpec{Maps: map[string]*ebpf.MapSpec{
-			"disk_rq_start":   {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
-			"disk_bio_start":  {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
-			"fs_sync_start":   {Type: ebpf.LRUHash, MaxEntries: 1 << 15},
-			"nfs_task_cgroup": {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
-			"disk_io_accum":   {Type: ebpf.Hash, MaxEntries: 1 << 12},
+			"disk_rq_start":     {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
+			"disk_bio_start":    {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
+			"fs_sync_start":     {Type: ebpf.LRUHash, MaxEntries: 1 << 15},
+			"nfs_task_cgroup":   {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
+			"disk_timed_queues": {Type: ebpf.LRUHash, MaxEntries: 1 << 10},
+			"disk_io_accum":     {Type: ebpf.Hash, MaxEntries: 1 << 12},
 		}}
 	}
 
-	// up to 64 CPUs, the maps keep their size
+	// up to 64 CPUs, the maps of 16384 entries keep their size
 	spec := newSpec()
 	sizeInFlightMaps(spec, 64)
 	for name, want := range map[string]uint32{
@@ -474,10 +475,17 @@ func TestSizeInFlightMaps(t *testing.T) {
 	// beyond, they get twice the free entries that the CPUs can keep for themselves
 	spec = newSpec()
 	sizeInFlightMaps(spec, 192)
-	for _, name := range []string{"disk_rq_start", "disk_bio_start", "fs_sync_start", "nfs_task_cgroup"} {
+	for _, name := range []string{"disk_rq_start", "disk_bio_start", "fs_sync_start", "nfs_task_cgroup", "disk_timed_queues"} {
 		assert.Equal(t, uint32(2*128*192), spec.Maps[name].MaxEntries, name)
 	}
 	assert.Equal(t, uint32(1<<12), spec.Maps["disk_io_accum"].MaxEntries, "not an in-flight map")
+
+	// the map of timed queues grows beyond 4 CPUs
+	for cpus, want := range map[int]uint32{1: 1 << 10, 4: 1 << 10, 16: 2 * 128 * 16, 64: 2 * 128 * 64} {
+		spec = newSpec()
+		sizeInFlightMaps(spec, cpus)
+		assert.Equal(t, want, spec.Maps["disk_timed_queues"].MaxEntries, "%d CPUs", cpus)
+	}
 
 	// a map already scaled beyond it is left alone
 	spec = newSpec()
