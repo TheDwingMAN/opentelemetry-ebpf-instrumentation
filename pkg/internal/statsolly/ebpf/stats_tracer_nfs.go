@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"slices"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/btf"
@@ -189,53 +191,134 @@ func (l nfsLoad) programsToDisable() []string {
 	return toDisable
 }
 
-// nfsAttached tells which NFS client metrics have their probes attached
-type nfsAttached struct {
-	procedures, bytes bool
+// nfsState tells which NFS client programs are loaded, which of them are attached, and which are
+// pending: their tracepoints don't exist yet, and they are attached when they do
+type nfsState struct {
+	loaded, attached, pending nfsLoad
 }
 
-// attachNFS attaches the loaded NFS client programs. They are optional: a tracepoint that can't be
-// attached, e.g. because its module was unloaded since the check, disables its metric only.
-func attachNFS(log *slog.Logger, objects *StatsObjects, load nfsLoad) (nfsAttached, []io.Closer) {
+// attachNFS attaches the pending NFS client programs. They are optional: a tracepoint that can't be
+// attached disables its metric only, unless it doesn't exist yet: the program waits for it.
+func attachNFS(log *slog.Logger, objects *StatsObjects, state *nfsState) []io.Closer {
 	var closables []io.Closer
-	attach := func(tracepoint string, program *ebpf.Program) bool {
+	// attach tells whether the tracepoint is attached, and whether it is only missing
+	attach := func(tracepoint string, program *ebpf.Program) (attached, missing bool) {
 		l, err := link.AttachRawTracepoint(link.RawTracepointOptions{Name: tracepoint, Program: program})
-		if err != nil {
+		switch {
+		case err == nil:
+			closables = append(closables, l)
+			return true, false
+		case errors.Is(err, os.ErrNotExist):
+			log.Debug("an NFS client tracepoint doesn't exist yet", "tracepoint", tracepoint)
+			return false, true
+		default:
 			log.Warn("can't attach an NFS client tracepoint", "tracepoint", tracepoint, "error", err)
-			return false
+			return false, false
 		}
-		closables = append(closables, l)
-		return true
 	}
 
-	var attached nfsAttached
-	if load.taskBegin && !attach(RawTracepointRPCTaskBegin, objects.ObiStatsRawTpRpcTaskBegin) {
-		log.Warn("NFS client stats are not charged to workloads")
+	if state.pending.taskBegin {
+		state.attached.taskBegin, state.pending.taskBegin = attach(RawTracepointRPCTaskBegin, objects.ObiStatsRawTpRpcTaskBegin)
+		if !state.attached.taskBegin && !state.pending.taskBegin {
+			log.Warn("NFS client stats are not charged to workloads")
+		}
 	}
-	if load.statsLatency {
-		attached.procedures = attach(RawTracepointRPCStatsLatency, objects.ObiStatsRawTpRpcStatsLatency)
+	if state.pending.statsLatency {
+		state.attached.statsLatency, state.pending.statsLatency = attach(RawTracepointRPCStatsLatency, objects.ObiStatsRawTpRpcStatsLatency)
 	}
-	if load.pgio {
-		reads := attach(RawTracepointNFSReadpageDone, objects.ObiStatsRawTpNfsReadpageDone)
-		writes := attach(RawTracepointNFSWritebackDone, objects.ObiStatsRawTpNfsWritebackDone)
-		attached.bytes = reads || writes
+	if state.pending.pgio {
+		reads, readsMissing := attach(RawTracepointNFSReadpageDone, objects.ObiStatsRawTpNfsReadpageDone)
+		writes, writesMissing := attach(RawTracepointNFSWritebackDone, objects.ObiStatsRawTpNfsWritebackDone)
+		state.attached.pgio = reads || writes
+		state.pending.pgio = !state.attached.pgio && (readsMissing || writesMissing)
 	}
-	return attached, closables
+	return closables
+}
+
+// moduleBTFLoaded tells whether the BTF of the module of a pending program exists, as it does while
+// the module is loaded: the prototype of the tracepoint can be checked then
+func (s nfsState) moduleBTFLoaded() bool {
+	modules, err := btf.NewCache().Modules()
+	if err != nil {
+		return false
+	}
+	return (s.pending.statsLatency && slices.Contains(modules, "sunrpc")) ||
+		(s.pending.pgio && slices.Contains(modules, "nfs"))
+}
+
+// stopUnsupported stops waiting for the pending programs that the kernel BTF, with the BTF of the
+// modules that are loaded now, says can't run
+func (s *nfsState) stopUnsupported(log *slog.Logger, probes nfsProbes) {
+	if probes.rpc != nil && s.pending.statsLatency {
+		log.Warn("NFS client probes disabled", "metrics", featureNFSProcedures, "error", probes.rpc)
+		s.pending.statsLatency = false
+	}
+	if probes.pgio != nil && s.pending.pgio {
+		log.Warn("NFS client probes disabled", "metrics", featureNFSIO, "error", probes.pgio)
+		s.pending.pgio = false
+	}
+	// rpc_task_begin alone would record the cgroups of RPCs that no metric reports
+	if !s.pending.statsLatency && !s.pending.pgio && !s.attached.statsLatency && !s.attached.pgio {
+		s.pending.taskBegin = false
+	}
+}
+
+// disabled returns the NFS client metrics whose loaded programs are not attached
+func (s nfsState) disabled() []DisabledFeature {
+	var disabled []DisabledFeature
+	if s.loaded.statsLatency && !s.attached.statsLatency {
+		disabled = append(disabled, notAttached(featureNFSProcedures, s.pending.statsLatency, "sunrpc",
+			"can't attach the rpc_stats_latency tracepoint"))
+	}
+	if s.loaded.pgio && !s.attached.pgio {
+		disabled = append(disabled, notAttached(featureNFSIO, s.pending.pgio, "nfs",
+			"can't attach the nfs_readpage_done and nfs_writeback_done tracepoints"))
+	}
+	return disabled
+}
+
+func notAttached(feature string, waiting bool, module, reason string) DisabledFeature {
+	if waiting {
+		reason = fmt.Sprintf("waiting for the tracepoints of the %s kernel module: the probes are attached when they exist", module)
+	}
+	return DisabledFeature{Feature: feature, Reason: reason}
+}
+
+// RefreshNFSProbes attaches the NFS client probes that wait for the tracepoints of the sunrpc and
+// nfs modules, if they exist now
+func (m *StatsFetcher) RefreshNFSProbes() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.nfs.pending == (nfsLoad{}) {
+		return
+	}
+
+	if m.nfs.moduleBTFLoaded() {
+		m.nfs.stopUnsupported(m.log, kernelNFSProbes())
+	}
+	attached := m.nfs.attached
+	m.closables = append(m.closables, attachNFS(m.log, m.objects, &m.nfs)...)
+	if !attached.statsLatency && m.nfs.attached.statsLatency {
+		m.log.Info("NFS client probes attached", "metrics", featureNFSProcedures)
+	}
+	if !attached.pgio && m.nfs.attached.pgio {
+		m.log.Info("NFS client probes attached", "metrics", featureNFSIO)
+	}
 }
 
 // NFSProcedureAccumMap returns the map where the kernel accumulates NFS client RPC latencies, or
-// nil if their probes are not attached.
+// nil if their programs are not loaded. Their probes may be attached later.
 func (m *StatsFetcher) NFSProcedureAccumMap() *ebpf.Map {
-	if !m.nfs.procedures {
+	if !m.nfs.loaded.statsLatency {
 		return nil
 	}
 	return m.objects.NfsProcedureAccum
 }
 
 // NFSIOAccumMap returns the map where the kernel accumulates the bytes that the NFS client read and
-// wrote, or nil if their probes are not attached.
+// wrote, or nil if their programs are not loaded. Their probes may be attached later.
 func (m *StatsFetcher) NFSIOAccumMap() *ebpf.Map {
-	if !m.nfs.bytes {
+	if !m.nfs.loaded.pgio {
 		return nil
 	}
 	return m.objects.NfsIoAccum

@@ -916,6 +916,40 @@ func TestNFSStatsAreOptional(t *testing.T) {
 	t.Cleanup(func() { fetcher.Close() })
 
 	assert.NotNil(t, fetcher.DiskIOAccumMap())
-	t.Logf("NFS procedures measured: %t, NFS bytes measured: %t",
-		fetcher.NFSProcedureAccumMap() != nil, fetcher.NFSIOAccumMap() != nil)
+	t.Logf("storage features not measured: %v", fetcher.DisabledStorageFeatures())
+}
+
+// TestNFSProbesAttachWhenTheirModulesAreLoaded checks that the NFS client probes that are loaded
+// before the sunrpc and nfs modules are attached once the modules are loaded. The modules are left
+// loaded, as other privileged tests may load programs meanwhile.
+func TestNFSProbesAttachWhenTheirModulesAreLoaded(t *testing.T) {
+	if _, err := os.Stat("/sys/module/sunrpc"); err == nil {
+		t.Skip("the sunrpc module is already loaded")
+	}
+	if err := exec.Command("modprobe", "--dry-run", "nfs").Run(); err != nil {
+		t.Skipf("the nfs module can't be loaded: %v", err)
+	}
+
+	features := export.FeatureStatsNFS
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
+		ebpf.LatencyHistograms{NFS: testBounds}, ebpf.ProbeReads{})
+	require.NoError(t, err)
+	t.Cleanup(func() { fetcher.Close() })
+
+	disabled := fetcher.DisabledStorageFeatures()
+	require.Len(t, disabled, 2, "both NFS client metrics wait for their modules: %v", disabled)
+	for _, d := range disabled {
+		if strings.Contains(d.Reason, "doesn't describe the") || strings.Contains(d.Reason, "can't tell the arguments of") {
+			t.Skipf("the kernel can't load the NFS client probes before their modules: %s", d.Reason)
+		}
+		require.Contains(t, d.Reason, "waiting for the tracepoints", d.Feature)
+	}
+	assert.NotNil(t, fetcher.NFSProcedureAccumMap())
+	assert.NotNil(t, fetcher.NFSIOAccumMap())
+	assert.NotNil(t, fetcher.DiskCgroupNamesMap())
+
+	out, err := exec.Command("modprobe", "nfs").CombinedOutput()
+	require.NoError(t, err, string(out))
+	fetcher.RefreshNFSProbes()
+	assert.Empty(t, fetcher.DisabledStorageFeatures())
 }

@@ -118,8 +118,12 @@ type StatsFetcher struct {
 	diskStatusIsBlkStatus bool
 	bioAttached           bool
 	fsSyncAttached        bool
-	nfs                   nfsAttached
+	nfs                   nfsState
 	disabled              []DisabledFeature
+
+	// mu guards closables, closed and nfs, except nfs.loaded, which never changes, against RefreshNFSProbes
+	mu     sync.Mutex
+	closed bool
 }
 
 // LatencyHistograms are the boundaries, in seconds, of the latency histograms that the kernel
@@ -138,7 +142,8 @@ func tlog() *slog.Logger {
 // NewStatsFetcher loads and attaches the stat probes of the enabled features. The storage probes
 // read the attributes that the reported attributes need, and the ones in reads. The TCP probes are
 // required, while the storage ones are optional: a storage feature whose probes can't be loaded or
-// attached is disabled, and listed by DisabledStorageFeatures, and the other stats keep working.
+// attached, or wait for a kernel module, is disabled, and listed by DisabledStorageFeatures, and
+// the other stats keep working.
 func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups attributes.AttrGroups,
 	selectorCfg *attributes.SelectorConfig, histograms LatencyHistograms, reads ProbeReads,
 ) (*StatsFetcher, error) {
@@ -263,7 +268,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 		diskStatusIsBlkStatus: storage.layout.completeReportsBlkStatus,
 		bioAttached:           storage.bio,
 		fsSyncAttached:        storage.fsSync,
-		nfs:                   storage.nfsAttached,
+		nfs:                   storage.nfsState,
 		disabled:              storage.disabled,
 	}, nil
 }
@@ -455,6 +460,9 @@ func closeAll(closables []io.Closer) {
 func (m *StatsFetcher) Close() error {
 	m.log.Debug("unregistering eBPF objects")
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closed = true
 	var errs []error
 	for _, c := range m.closables {
 		if c != nil {
@@ -511,18 +519,21 @@ func (m *StatsFetcher) FsSyncAccumMap() *ebpf.Map {
 }
 
 // DiskCgroupNamesMap returns the map where the kernel records the names of the cgroups that
-// block I/O, file syncs and NFS RPCs are charged to, or nil if none of their probes are attached.
+// block I/O, file syncs and NFS RPCs are charged to, or nil if none of their probes are attached,
+// or loaded for the NFS ones, which may be attached later.
 func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
-	if !m.diskAttached && !m.fsSyncAttached && !m.nfs.procedures && !m.nfs.bytes {
+	if !m.diskAttached && !m.fsSyncAttached && !m.nfs.loaded.statsLatency && !m.nfs.loaded.pgio {
 		return nil
 	}
 	return m.objects.DiskCgroupNames
 }
 
 // DisabledStorageFeatures returns the enabled storage features whose probes can't be loaded or
-// attached on this node
+// attached on this node, or wait for a kernel module
 func (m *StatsFetcher) DisabledStorageFeatures() []DisabledFeature {
-	return m.disabled
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Concat(m.disabled, m.nfs.disabled())
 }
 
 // DiskStatusIsBlkStatus tells whether the kernel reports block request completion statuses as

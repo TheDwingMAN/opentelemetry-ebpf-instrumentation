@@ -6,6 +6,7 @@
 package ebpf
 
 import (
+	"log/slog"
 	"testing"
 
 	"github.com/cilium/ebpf/btf"
@@ -96,4 +97,108 @@ func TestNFSLoadFor(t *testing.T) {
 		progObiStatsRawTpNFSReadpageDone, progObiStatsRawTpNFSWritebackDone,
 	}, nfsLoad{}.programsToDisable())
 	assert.Empty(t, nfsLoad{taskBegin: true, statsLatency: true, pgio: true}.programsToDisable())
+}
+
+func TestNFSStateDisabled(t *testing.T) {
+	all := nfsLoad{taskBegin: true, statsLatency: true, pgio: true}
+	procedures := nfsLoad{taskBegin: true, statsLatency: true}
+	waitingForSunrpc := DisabledFeature{
+		Feature: featureNFSProcedures,
+		Reason:  "waiting for the tracepoints of the sunrpc kernel module: the probes are attached when they exist",
+	}
+	waitingForNFS := DisabledFeature{
+		Feature: featureNFSIO,
+		Reason:  "waiting for the tracepoints of the nfs kernel module: the probes are attached when they exist",
+	}
+
+	tests := []struct {
+		name  string
+		state nfsState
+		want  []DisabledFeature
+	}{
+		{name: "nothing loaded", state: nfsState{}},
+		{
+			name:  "all waiting",
+			state: nfsState{loaded: all, pending: all},
+			want:  []DisabledFeature{waitingForSunrpc, waitingForNFS},
+		},
+		{
+			name:  "procedures attached, I/O waiting",
+			state: nfsState{loaded: all, attached: procedures, pending: nfsLoad{pgio: true}},
+			want:  []DisabledFeature{waitingForNFS},
+		},
+		{
+			name:  "I/O neither attached nor waiting",
+			state: nfsState{loaded: all, attached: procedures},
+			want: []DisabledFeature{{
+				Feature: featureNFSIO,
+				Reason:  "can't attach the nfs_readpage_done and nfs_writeback_done tracepoints",
+			}},
+		},
+		{name: "all attached", state: nfsState{loaded: all, attached: all}},
+		{
+			name:  "procedures only, waiting",
+			state: nfsState{loaded: procedures, pending: procedures},
+			want:  []DisabledFeature{waitingForSunrpc},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.state.disabled())
+		})
+	}
+}
+
+func TestNFSStateStopUnsupported(t *testing.T) {
+	all := nfsLoad{taskBegin: true, statsLatency: true, pgio: true}
+	procedures := nfsLoad{taskBegin: true, statsLatency: true}
+
+	tests := []struct {
+		name   string
+		state  nfsState
+		probes nfsProbes
+		want   nfsState
+	}{
+		{
+			name:   "no probe can run",
+			state:  nfsState{loaded: all, pending: all},
+			probes: nfsProbes{rpc: assert.AnError, pgio: assert.AnError},
+			want:   nfsState{loaded: all},
+		},
+		{
+			name:   "the I/O probes can't run",
+			state:  nfsState{loaded: all, pending: all},
+			probes: nfsProbes{pgio: assert.AnError},
+			want:   nfsState{loaded: all, pending: procedures},
+		},
+		{
+			name:   "an attached family is not touched",
+			state:  nfsState{loaded: all, attached: procedures, pending: nfsLoad{pgio: true}},
+			probes: nfsProbes{rpc: assert.AnError},
+			want:   nfsState{loaded: all, attached: procedures, pending: nfsLoad{pgio: true}},
+		},
+		{
+			name:   "rpc_task_begin keeps waiting for an attached family",
+			state:  nfsState{loaded: all, attached: nfsLoad{statsLatency: true}, pending: nfsLoad{taskBegin: true, pgio: true}},
+			probes: nfsProbes{pgio: assert.AnError},
+			want:   nfsState{loaded: all, attached: nfsLoad{statsLatency: true}, pending: nfsLoad{taskBegin: true}},
+		},
+		{
+			name:  "all probes can run",
+			state: nfsState{loaded: all, pending: all},
+			want:  nfsState{loaded: all, pending: all},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.state.stopUnsupported(slog.New(slog.DiscardHandler), tt.probes)
+			assert.Equal(t, tt.want, tt.state)
+		})
+	}
+}
+
+// The fetcher has no objects nor logger, so any attach would panic
+func TestRefreshNFSProbesStopsWhenClosed(t *testing.T) {
+	fetcher := &StatsFetcher{closed: true, nfs: nfsState{pending: nfsLoad{pgio: true}}}
+	assert.NotPanics(t, fetcher.RefreshNFSProbes)
 }

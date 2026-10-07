@@ -36,6 +36,8 @@ func (m *StatsFetcher) DisabledStorageFeatures() []DisabledFeature {
 	return nil
 }
 
+func (m *StatsFetcher) RefreshNFSProbes() {}
+
 func (m *StatsFetcher) StatsEventsMap() *ciliumebpf.Map {
 	return nil
 }

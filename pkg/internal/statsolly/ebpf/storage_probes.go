@@ -35,16 +35,17 @@ var fsSyncPrograms = []string{
 
 // storageProbes tells which storage probes are loaded and attached. The storage features are
 // optional: an enabled one whose probes can't be loaded or attached is disabled, with the reason,
-// and the other stats keep working.
+// and the other stats keep working. The NFS client probes whose tracepoints don't exist yet wait
+// for their kernel modules.
 type storageProbes struct {
 	layout blockTracepointLayout
 	disk   bool
 	bio    bool
 	fsSync bool
 	nfs    nfsLoad
-	// nfsAttached tells which NFS probes could be attached
-	nfsAttached nfsAttached
-	disabled    []DisabledFeature
+	// nfsState tells which NFS probes are attached, and which wait for their tracepoints
+	nfsState nfsState
+	disabled []DisabledFeature
 }
 
 // planStorageProbes returns the storage probes of the enabled features that the kernel can load
@@ -119,7 +120,7 @@ func (s *storageProbes) programsToDisable() []string {
 }
 
 // attach attaches the loaded storage probes, and disables the features whose probes can't be
-// attached
+// attached. The NFS client probes whose tracepoints don't exist yet wait for them.
 func (s *storageProbes) attach(log *slog.Logger, objects *StatsObjects) []io.Closer {
 	var closables []io.Closer
 	if s.fsSync {
@@ -169,16 +170,8 @@ func (s *storageProbes) attach(log *slog.Logger, objects *StatsObjects) []io.Clo
 		closables = append(closables, links...)
 		s.bio = err == nil
 	}
-	var nfsClosables []io.Closer
-	s.nfsAttached, nfsClosables = attachNFS(log, objects, s.nfs)
-	closables = append(closables, nfsClosables...)
-	if s.nfs.statsLatency && !s.nfsAttached.procedures {
-		s.disable(featureNFSProcedures, errors.New("can't attach the rpc_stats_latency tracepoint"))
-	}
-	if s.nfs.pgio && !s.nfsAttached.bytes {
-		s.disable(featureNFSIO, errors.New("can't attach the nfs_readpage_done and nfs_writeback_done tracepoints"))
-	}
-	return closables
+	s.nfsState = nfsState{loaded: s.nfs, pending: s.nfs}
+	return append(closables, attachNFS(log, objects, &s.nfsState)...)
 }
 
 // attachFsSync attaches the file sync probes. Those of vfs_fsync_range are needed, the others are

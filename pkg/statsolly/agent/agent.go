@@ -68,6 +68,10 @@ var errShutdownTimeout = errors.New("graceful shutdown has timed out while waiti
 // again, so that the warning is not lost among the startup logs
 const disabledStorageReminder = time.Hour
 
+// nfsProbesRefresh is how often the NFS client probes that wait for their kernel modules are
+// attached, if the modules are loaded
+const nfsProbesRefresh = 30 * time.Second
+
 // defaultDiskReadInterval is how often the disk accumulation map is read when ebpf.batch_timeout
 // doesn't set a period
 const defaultDiskReadInterval = time.Second
@@ -105,6 +109,7 @@ type ebpFetcher interface {
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
 	DisabledStorageFeatures() []ebpf.DisabledFeature
+	RefreshNFSProbes()
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -185,7 +190,7 @@ func warnDisabledStorage(disabled []ebpf.DisabledFeature) {
 }
 
 // remindDisabledStorage logs the disabled storage features again, periodically
-func remindDisabledStorage(ctx context.Context, disabled []ebpf.DisabledFeature) {
+func remindDisabledStorage(ctx context.Context, fetcher ebpFetcher) {
 	ticker := time.NewTicker(disabledStorageReminder)
 	defer ticker.Stop()
 	for {
@@ -193,7 +198,21 @@ func remindDisabledStorage(ctx context.Context, disabled []ebpf.DisabledFeature)
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			warnDisabledStorage(disabled)
+			warnDisabledStorage(fetcher.DisabledStorageFeatures())
+		}
+	}
+}
+
+// refreshNFSProbes attaches the NFS client probes that wait for their kernel modules, periodically
+func refreshNFSProbes(ctx context.Context, fetcher ebpFetcher) {
+	ticker := time.NewTicker(nfsProbesRefresh)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fetcher.RefreshNFSProbes()
 		}
 	}
 }
@@ -311,8 +330,9 @@ func (s *Stats) Run(ctx context.Context) error {
 		go logger.ReadDebugEventsMap(runCtx, s.fetcher.DebugEventsMap(),
 			slog.With("component", "statsolly.BPFDebug"))
 	}
-	if disabled := s.fetcher.DisabledStorageFeatures(); len(disabled) > 0 {
-		go remindDisabledStorage(runCtx, disabled)
+	if len(s.fetcher.DisabledStorageFeatures()) > 0 {
+		go remindDisabledStorage(runCtx, s.fetcher)
+		go refreshNFSProbes(runCtx, s.fetcher)
 	}
 
 	graph, err := s.buildPipeline(ctx)
