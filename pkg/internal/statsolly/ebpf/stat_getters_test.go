@@ -238,3 +238,47 @@ func TestStatGetters_DiskIOContainer(t *testing.T) {
 	assert.Equal(t, "0123abcd", containerID(inContainer).Value.AsString())
 	assert.False(t, containerID(onHost).Valid(), "omitted for I/O charged to no container")
 }
+
+func TestStatGetters_StorageOmitsUnknownKubernetesMetadata(t *testing.T) {
+	kubeNames := []attr.Name{
+		attr.K8sNamespaceName, attr.K8sOwnerName, attr.K8sClusterName,
+		attr.K8sPodName, attr.K8sContainerName, attr.K8sKind,
+	}
+	tests := []struct {
+		name string
+		stat *Stat
+	}{
+		{name: "disk io", stat: &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{}}},
+		{name: "disk pending", stat: &Stat{Type: StatTypeDiskPending, DiskPending: &DiskPending{}}},
+		{name: "fs sync", stat: &Stat{Type: StatTypeFsSync, FsSync: &FsSync{}}},
+		{name: "nfs procedure", stat: &Stat{Type: StatTypeNFSProcedure, NFSProcedure: &NFSProcedure{}}},
+		{name: "nfs io", stat: &Stat{Type: StatTypeNFSIO, NFSIO: &NFSIO{}}},
+		{name: "pod volume", stat: &Stat{Type: StatTypePodVolume, PodVolume: &PodVolume{}}},
+		{name: "disk volume", stat: &Stat{Type: StatTypeDiskVolume, DiskVolume: &DiskVolume{}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, name := range kubeNames {
+				get, ok := StatGetters(name)
+				require.True(t, ok)
+				getString, ok := StatStringGetters(name)
+				require.True(t, ok)
+
+				tt.stat.CommonAttrs.Metadata = nil
+				assert.False(t, get(tt.stat).Valid(), name)
+				assert.Empty(t, getString(tt.stat), "the Prometheus label stays empty")
+
+				tt.stat.CommonAttrs.Metadata = map[attr.Name]string{name: "x"}
+				assert.Equal(t, attribute.String(string(name), "x"), get(tt.stat))
+			}
+		})
+	}
+}
+
+func TestStatGetters_TCPKeepsEmptyClusterName(t *testing.T) {
+	// k8s.cluster.name is the only Kubernetes attribute that TCP and storage stats share
+	clusterName, ok := StatGetters(attr.K8sClusterName)
+	require.True(t, ok)
+	tcp := &Stat{Type: StatTypeTCPIo, TCPIo: &TCPIo{}}
+	assert.Equal(t, attribute.String(string(attr.K8sClusterName), ""), clusterName(tcp))
+}

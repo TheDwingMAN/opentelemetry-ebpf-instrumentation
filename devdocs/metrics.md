@@ -175,6 +175,8 @@ The disk metrics are charged to the workload that owns the I/O: the cgroup that 
 - Before Linux 5.18 (and on RHEL 8), the block layer can merge the I/O of different cgroups into the same request. OBI charges a merged request to the cgroup of its first bio.
 - `obi.stat.disk.io` counts the bytes of the requests that completed successfully, as issued to the device. The histogram and `obi.stat.disk.operations` count failed requests too, with an `error.type`.
 
+Over OTLP, the storage stats (disk, file sync, NFS client and pod volume) omit the workload attributes of the I/O that is reported without a workload, and `k8s.cluster.name` when the cluster name is unknown. OBI's Prometheus endpoint exposes them as empty labels, which Prometheus treats as missing.
+
 `obi.stat.disk.queue.duration` is the time requests wait between their allocation and their issue to the device, in the I/O scheduler or in the dispatch queues. Together with `obi.stat.disk.operation.duration`, it splits the time an I/O takes in the block layer like iostat's `await` does: the average number of requests waiting or in service (iostat's `aqu-sz`) is the rate of the sum of both histograms. Limitations:
 
 - The kernel only timestamps the allocation of requests on devices that keep I/O statistics (`/sys/block/<device>/queue/iostats`) or use an I/O scheduler. The wait of other requests is not measured.

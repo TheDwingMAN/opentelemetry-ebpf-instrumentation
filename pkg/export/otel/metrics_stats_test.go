@@ -4,7 +4,10 @@
 package otel
 
 import (
+	"maps"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,9 +15,17 @@ import (
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
+	"go.opentelemetry.io/obi/internal/test/collector"
+	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	otelmetric "go.opentelemetry.io/obi/pkg/export/otel/metric"
 	"go.opentelemetry.io/obi/pkg/export/otel/otelcfg"
+	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
+	"go.opentelemetry.io/obi/pkg/internal/pipe"
+	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
+	"go.opentelemetry.io/obi/pkg/pipe/global"
+	"go.opentelemetry.io/obi/pkg/pipe/msg"
 )
 
 var defaultStatRttInstrument = otelmetric.Instrument{
@@ -47,4 +58,78 @@ func TestStatHistogramView_ExplicitUsesBuckets(t *testing.T) {
 	aggregation, ok := stream.Aggregation.(sdkmetric.AggregationExplicitBucketHistogram)
 	require.True(t, ok)
 	assert.Equal(t, buckets, aggregation.Boundaries)
+}
+
+func TestStatMetricsExporter_StorageOmitsUnknownKubernetesMetadata(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	exporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{
+			OTELMetricsExporter:   &otelcfg.MetricsExporterInstancer{Cfg: cfg},
+			MetricAttributeGroups: attributes.GroupKubernetes,
+		},
+		&StatMetricsConfig{
+			Metrics:     cfg,
+			SelectorCfg: &attributes.SelectorConfig{SelectionCfg: attributes.Selection{}},
+			CommonCfg:   &perapp.GlobalMetricsConfig{Features: export.FeatureStatsDiskIO},
+		}, stats)(ctx)
+	require.NoError(t, err)
+
+	go exporter(ctx)
+
+	write := func(metadata map[attr.Name]string) *ebpf.Stat {
+		return &ebpf.Stat{
+			Type:        ebpf.StatTypeDiskIO,
+			DiskIO:      &ebpf.DiskIO{Device: "vda", Op: ebpf.CodeDiskOpWrite, Operations: 1, Bytes: 4096},
+			CommonAttrs: pipe.CommonAttrs{Metadata: metadata},
+		}
+	}
+	stats.Send([]*ebpf.Stat{
+		write(map[attr.Name]string{attr.K8sClusterName: "c", attr.K8sNamespaceName: "ns", attr.K8sOwnerName: "db"}),
+		// charged to no pod
+		write(map[attr.Name]string{attr.K8sClusterName: "c"}),
+	})
+
+	device := map[string]string{"system.device": "vda", "obi.disk.stacked": "false", "disk.io.direction": "write"}
+	want := []map[string]string{
+		{"k8s.cluster.name": "c", "k8s.namespace.name": "ns", "k8s.owner.name": "db"},
+		{"k8s.cluster.name": "c"},
+	}
+	for _, attrs := range want {
+		maps.Copy(attrs, device)
+	}
+
+	var got []map[string]string
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		got = appendNewSeries(got, otlp.Records(), attributes.StatDiskIO.OTEL)
+		assert.ElementsMatch(ct, want, got)
+	}, timeout, 100*time.Millisecond)
+}
+
+// appendNewSeries appends the attributes of the series of the named metric that the
+// records received so far add to series. Each export repeats the series it holds.
+func appendNewSeries(series []map[string]string, inCh <-chan collector.MetricRecord, name string) []map[string]string {
+	for {
+		select {
+		case record := <-inCh:
+			if record.Name == name && !slices.ContainsFunc(series, func(attrs map[string]string) bool {
+				return maps.Equal(attrs, record.Attributes)
+			}) {
+				series = append(series, record.Attributes)
+			}
+		default:
+			return series
+		}
+	}
 }

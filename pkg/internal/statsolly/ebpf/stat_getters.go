@@ -184,7 +184,15 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		}
 
 	default:
-		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
+		getter = func(s *Stat) attribute.KeyValue {
+			value := s.CommonAttrs.Metadata[name]
+			// Kubernetes metadata that is not known for a storage stat (no pod, or no cluster
+			// name) is omitted instead of exported empty
+			if value == "" && isStorageStat(s) {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(name), value)
+		}
 	}
 	return getter, getter != nil
 }
@@ -260,6 +268,16 @@ func diskDevice(s *Stat) string {
 		return s.DiskVolume.Device
 	}
 	return ""
+}
+
+// isStorageStat tells whether the stat is a block I/O, file sync, NFS or volume stat, not a TCP one
+func isStorageStat(s *Stat) bool {
+	switch s.Type {
+	case StatTypeDiskIO, StatTypeDiskPending, StatTypeFsSync, StatTypeNFSProcedure, StatTypeNFSIO,
+		StatTypePodVolume, StatTypeDiskVolume:
+		return true
+	}
+	return false
 }
 
 // k8sVolumeTypePVC is the k8s.volume.type of the volumes that mount a PersistentVolumeClaim
