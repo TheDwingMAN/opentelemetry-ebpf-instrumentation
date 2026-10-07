@@ -1,11 +1,11 @@
 # KVM lab results for PR #4 (OBI storage metrics)
 
-## State (updated 2026-10-08 00:39 +03:00)
+## State (updated 2026-10-08 01:00 +03:00)
 
 This branch is written by the KVM lab on the user's workstation. Two shas are involved:
 
 - `0b5d13939` (the code before `ec314571`): the kernel matrix, k3s and iostats blocks, and a supplement (the final payload with its NFS module unload line fixed, on the 8 kernels that failed `nfs-late-setup`), were run by an earlier lab session and are summarised in the second half of this file; their files are at the root of the branch (`matrix-final.tsv`, `matrix-final-nfsfix.tsv`, `k3s-final.tsv`, `iostats.tsv`, `out/`, `failures/`). All four are complete: none was cut off. No NVMe multipath run was made at this sha.
-- `a285b5b3485227f0ea636a9c791c1a2a3521a3e0` (the passthrough fix: `7c6ab26c8` "statsolly: keep passthrough commands out of the block request timing" plus `a285b5b34` "statsolly: make the passthrough commands test robust", on top of `ec314571`): seen on `feat/statso11y-disk-metrics-v2` at 23:20 +03:00. The payloads `final`, `iostats`, `nvme-mpath-nobio` and `nvme-mpath-bio` were rebuilt from it and are run in this order: matrix on v6.12.111 v6.18.54 v7.2.6 rhel9.6 rhel8.10 (step a); matrix on the other six kernels (step b); iostats (step c); 20 rounds of the NVMe multipath repeat (step d), published every 5 rounds. Their results are under `a285b5b34/` and in the first half of this file. **Progress: steps a, b (matrix, 11 kernels) and c (iostats, 4 kernels) done; step d (NVMe repeat): rounds 1-10 of 20 done, rounds 11-20 running.**
+- `a285b5b3485227f0ea636a9c791c1a2a3521a3e0` (the passthrough fix: `7c6ab26c8` "statsolly: keep passthrough commands out of the block request timing" plus `a285b5b34` "statsolly: make the passthrough commands test robust", on top of `ec314571`): seen on `feat/statso11y-disk-metrics-v2` at 23:20 +03:00. The payloads `final`, `iostats`, `nvme-mpath-nobio` and `nvme-mpath-bio` were rebuilt from it and are run in this order: matrix on v6.12.111 v6.18.54 v7.2.6 rhel9.6 rhel8.10 (step a); matrix on the other six kernels (step b); iostats (step c); 20 rounds of the NVMe multipath repeat (step d), published every 5 rounds. Their results are under `a285b5b34/` and in the first half of this file. **Progress: steps a, b (matrix, 11 kernels) and c (iostats, 4 kernels) done; step d (NVMe repeat): rounds 1-15 of 20 done, rounds 16-20 running.**
 
 What the runs at `a285b5b34` say so far (details in the sections below):
 
@@ -28,7 +28,7 @@ Things to know about the earlier blocks:
 
 ## Runs at `a285b5b3485227f0ea636a9c791c1a2a3521a3e0`
 
-OBI `feat/statso11y-disk-metrics-v2` at `a285b5b3485227f0ea636a9c791c1a2a3521a3e0` (HEAD: "statsolly: make the passthrough commands test robust"; the commit below it: "statsolly: keep passthrough commands out of the block request timing" (7c6ab26c8)). Lab kit `c865634`. `LAB_SMP=2 LAB_MEM=4096`, one VM at a time. 55 VM runs so far: all with `accel=kvm`. Files of this sha are under `a285b5b34/`.
+OBI `feat/statso11y-disk-metrics-v2` at `a285b5b3485227f0ea636a9c791c1a2a3521a3e0` (HEAD: "statsolly: make the passthrough commands test robust"; the commit below it: "statsolly: keep passthrough commands out of the block request timing" (7c6ab26c8)). Lab kit `c865634`. `LAB_SMP=2 LAB_MEM=4096`, one VM at a time. 75 VM runs so far: all with `accel=kvm`. Files of this sha are under `a285b5b34/`.
 
 ### Kernel matrix (final payload)
 
@@ -149,7 +149,7 @@ The payload output of every kernel is in `a285b5b34/out/iostats/<kernel>.out`.
 
 20 rounds; per round, in order: nvme-mpath-nobio and nvme-mpath-bio on v6.12.111, then on rhel9.6, each as `LAB_NVME_MPATH=256M ./run-vm.sh <kernel> payloads/<variant> 600`. Payloads built from `a285b5b34` (nobio) and `a285b5b34` (bio).
 
-**40 of 80 runs so far, rounds 1-10.**
+**60 of 80 runs so far, rounds 1-15.**
 
 Every run first does the same I/O without OBI (the control), then with OBI. A stall is a failed `nvme-diskstats-*` or `nvme-no-stuck-pending` check, a hung-task or "blocked for more than" message, a sysrq or stack dump, a dd or scrape that did not finish, or exit 124. "Stalls with OBI" are those seen after the control part ended; "control failures" are runs whose no-OBI part did not pass.
 
@@ -157,17 +157,17 @@ Every run first does the same I/O without OBI (the control), then with OBI. A st
 
 | kernel | variant | runs | PASS | FAIL | stalls with OBI | stalls in the control | control failures | accel | duration s (min/median/max) |
 |---|---|---|---|---|---|---|---|---|---|
-| v6.12.111 | nvme-mpath-nobio | 10 | 0 | 10 | 0 | 0 | 0 | kvm | 61/62/63 |
-| v6.12.111 | nvme-mpath-bio | 10 | 0 | 10 | 0 | 0 | 0 | kvm | 61/62/62 |
-| rhel9.6 | nvme-mpath-nobio | 10 | 0 | 10 | 0 | 0 | 0 | kvm | 62/62/62 |
-| rhel9.6 | nvme-mpath-bio | 10 | 0 | 10 | 0 | 0 | 0 | kvm | 61/62/63 |
+| v6.12.111 | nvme-mpath-nobio | 15 | 0 | 15 | 0 | 0 | 0 | kvm | 61/62/63 |
+| v6.12.111 | nvme-mpath-bio | 15 | 0 | 15 | 0 | 0 | 0 | kvm | 61/62/62 |
+| rhel9.6 | nvme-mpath-nobio | 15 | 0 | 15 | 0 | 0 | 0 | kvm | 62/62/62 |
+| rhel9.6 | nvme-mpath-bio | 15 | 0 | 15 | 0 | 0 | 0 | kvm | 61/62/63 |
 
 #### Failed checks
 
-- v6.12.111 nvme-mpath-nobio: nvme-head-bio-writes x10, nvme-head-diskstats-match x10, nvme-path-names-writes-match-head x10
-- v6.12.111 nvme-mpath-bio: nvme-path-names-writes-match-head x10
-- rhel9.6 nvme-mpath-nobio: nvme-head-bio-writes x10, nvme-head-diskstats-match x10, nvme-path-names-writes-match-head x10
-- rhel9.6 nvme-mpath-bio: nvme-path-names-writes-match-head x10
+- v6.12.111 nvme-mpath-nobio: nvme-head-bio-writes x15, nvme-head-diskstats-match x15, nvme-path-names-writes-match-head x15
+- v6.12.111 nvme-mpath-bio: nvme-path-names-writes-match-head x15
+- rhel9.6 nvme-mpath-nobio: nvme-head-bio-writes x15, nvme-head-diskstats-match x15, nvme-path-names-writes-match-head x15
+- rhel9.6 nvme-mpath-bio: nvme-path-names-writes-match-head x15
 
 #### Runs
 
@@ -213,8 +213,28 @@ Every run first does the same I/O without OBI (the control), then with OBI. A st
 | 10 | v6.12.111 | nvme-mpath-bio | 1 | 62 | FAIL | 9/1 | passed | no | nvme-path-names-writes-match-head | - |
 | 10 | rhel9.6 | nvme-mpath-nobio | 1 | 62 | FAIL | 6/3 | passed | no | nvme-head-bio-writes, nvme-head-diskstats-match, nvme-path-names-writes-match-head | - |
 | 10 | rhel9.6 | nvme-mpath-bio | 1 | 62 | FAIL | 8/1 | passed | no | nvme-path-names-writes-match-head | - |
+| 11 | v6.12.111 | nvme-mpath-nobio | 1 | 62 | FAIL | 7/3 | passed | no | nvme-head-bio-writes, nvme-head-diskstats-match, nvme-path-names-writes-match-head | - |
+| 11 | v6.12.111 | nvme-mpath-bio | 1 | 62 | FAIL | 9/1 | passed | no | nvme-path-names-writes-match-head | - |
+| 11 | rhel9.6 | nvme-mpath-nobio | 1 | 62 | FAIL | 6/3 | passed | no | nvme-head-bio-writes, nvme-head-diskstats-match, nvme-path-names-writes-match-head | - |
+| 11 | rhel9.6 | nvme-mpath-bio | 1 | 62 | FAIL | 8/1 | passed | no | nvme-path-names-writes-match-head | - |
+| 12 | v6.12.111 | nvme-mpath-nobio | 1 | 62 | FAIL | 7/3 | passed | no | nvme-head-bio-writes, nvme-head-diskstats-match, nvme-path-names-writes-match-head | - |
+| 12 | v6.12.111 | nvme-mpath-bio | 1 | 62 | FAIL | 9/1 | passed | no | nvme-path-names-writes-match-head | - |
+| 12 | rhel9.6 | nvme-mpath-nobio | 1 | 62 | FAIL | 6/3 | passed | no | nvme-head-bio-writes, nvme-head-diskstats-match, nvme-path-names-writes-match-head | - |
+| 12 | rhel9.6 | nvme-mpath-bio | 1 | 62 | FAIL | 8/1 | passed | no | nvme-path-names-writes-match-head | - |
+| 13 | v6.12.111 | nvme-mpath-nobio | 1 | 62 | FAIL | 7/3 | passed | no | nvme-head-bio-writes, nvme-head-diskstats-match, nvme-path-names-writes-match-head | - |
+| 13 | v6.12.111 | nvme-mpath-bio | 1 | 62 | FAIL | 9/1 | passed | no | nvme-path-names-writes-match-head | - |
+| 13 | rhel9.6 | nvme-mpath-nobio | 1 | 62 | FAIL | 6/3 | passed | no | nvme-head-bio-writes, nvme-head-diskstats-match, nvme-path-names-writes-match-head | - |
+| 13 | rhel9.6 | nvme-mpath-bio | 1 | 62 | FAIL | 8/1 | passed | no | nvme-path-names-writes-match-head | - |
+| 14 | v6.12.111 | nvme-mpath-nobio | 1 | 62 | FAIL | 7/3 | passed | no | nvme-head-bio-writes, nvme-head-diskstats-match, nvme-path-names-writes-match-head | - |
+| 14 | v6.12.111 | nvme-mpath-bio | 1 | 61 | FAIL | 9/1 | passed | no | nvme-path-names-writes-match-head | - |
+| 14 | rhel9.6 | nvme-mpath-nobio | 1 | 62 | FAIL | 6/3 | passed | no | nvme-head-bio-writes, nvme-head-diskstats-match, nvme-path-names-writes-match-head | - |
+| 14 | rhel9.6 | nvme-mpath-bio | 1 | 62 | FAIL | 8/1 | passed | no | nvme-path-names-writes-match-head | - |
+| 15 | v6.12.111 | nvme-mpath-nobio | 1 | 62 | FAIL | 7/3 | passed | no | nvme-head-bio-writes, nvme-head-diskstats-match, nvme-path-names-writes-match-head | - |
+| 15 | v6.12.111 | nvme-mpath-bio | 1 | 62 | FAIL | 9/1 | passed | no | nvme-path-names-writes-match-head | - |
+| 15 | rhel9.6 | nvme-mpath-nobio | 1 | 62 | FAIL | 6/3 | passed | no | nvme-head-bio-writes, nvme-head-diskstats-match, nvme-path-names-writes-match-head | - |
+| 15 | rhel9.6 | nvme-mpath-bio | 1 | 62 | FAIL | 8/1 | passed | no | nvme-path-names-writes-match-head | - |
 
-The RESULT lines of every run are in `a285b5b34/nvme-runs.tsv`; the logs and results directory of each failed or stalled run are in `a285b5b34/failures/nvme-<kernel>-<round>-<variant>/` (40 kept).
+The RESULT lines of every run are in `a285b5b34/nvme-runs.tsv`; the logs and results directory of each failed or stalled run are in `a285b5b34/failures/nvme-<kernel>-<round>-<variant>/` (60 kept).
 
 #### Supplement: the same NVMe payloads built from `0b5d13939` (not asked for; one run each)
 

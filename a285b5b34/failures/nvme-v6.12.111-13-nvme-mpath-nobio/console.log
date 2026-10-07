@@ -1,0 +1,59 @@
+[lab-init] kernel 6.12.111-0612111-generic; modprobe ok: 9pnet_virtio 9p null_blk dm_mod dm_delay dm_flakey loop overlay; failed: none
+===LAB_BOOTED=== 0.60
+===LAB_PAYLOAD_BEGIN===
+uname -r: 6.12.111-0612111-generic
+
+##### nvme multipath
+nvme_core multipath=Y
+cat: /sys/block/nvme1c0n1/dev: No such file or directory
+nvme1c0n1: dev= scheduler='[none] mq-deadline ' mq=yes slaves='' hidden=1
+cat: /sys/block/nvme1c1n1/dev: No such file or directory
+nvme1c1n1: dev= scheduler='[none] mq-deadline ' mq=yes slaves='' hidden=1
+nvme1n1: dev=259:2 scheduler='absent' mq=no slaves='' hidden=0
+head nvme1n1 with 2 paths
+obi features: stats_disk_operation_duration,stats_disk_io,stats_disk_operations,stats_disk_operation_time,stats_disk_queue_duration,stats_disk_flush,stats_disk_discard,stats_disk_pending_operations
+control write without obi: ok
+control read without obi: ok
+control dsync write without obi: ok
+control (same I/O pattern, no obi): diskstats read ok
+RESULT nvme-diskstats-without-obi PASS
+before the I/O with obi: diskstats read ok
+write with obi: ok
+RESULT nvme-io-with-obi PASS
+read with obi: ok
+dsync write with obi: ok
+after the I/O with obi: diskstats read ok
+RESULT nvme-diskstats-after-io-with-obi PASS
+scrape after.txt: ok (256 lines)
+scrape idle.txt: ok (256 lines)
+devices in the metrics:
+    118 system_device="nvme1c0n1"
+      2 system_device="nvme1n1"
+    118 system_device="vda"
+obi_stat_disk_operations_total{container_id="",disk_io_direction="read",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="nvme1c0n1"} 500
+obi_stat_disk_operations_total{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="nvme1c0n1"} 2064
+obi_stat_disk_pending_operations{disk_io_direction="read",obi_disk_stacked="false",system_device="nvme1c0n1"} 0
+obi_stat_disk_pending_operations{disk_io_direction="read",obi_disk_stacked="true",system_device="nvme1n1"} 0
+obi_stat_disk_pending_operations{disk_io_direction="write",obi_disk_stacked="false",system_device="nvme1c0n1"} 0
+obi_stat_disk_pending_operations{disk_io_direction="write",obi_disk_stacked="true",system_device="nvme1n1"} 0
+head nvme1n1: writes measured=0 diskstats=1064 (dd issued 1064)
+RESULT nvme-head-bio-writes FAIL (rc=1)
+RESULT nvme-head-diskstats-match FAIL (rc=1)
+head series with obi_disk_stacked=true: 2
+RESULT nvme-head-stacked-label PASS
+path nvme1c0n1: request writes=2064
+path nvme1c1n1: request writes=0
+request writes on the paths (by name)=2064, unstacked nvme write series total=2064
+RESULT nvme-path-request-writes PASS
+path request writes by name=2064, on raw major:minor devices=0 (0 series), head nvme1n1 writes: diskstats=1064 measured=0
+RESULT nvme-path-names-no-raw-numbers PASS
+RESULT nvme-path-names-writes-match-head FAIL (rc=1)
+head pending operations after 10 s idle: 0
+RESULT nvme-no-stuck-pending PASS
+time=2026-10-07T21:47:40.959Z level=WARN msg="timed out while waiting for Cloud metadata. Ignoring" component=meta.NodeMeta.otelNodeFetcher detector=ec2.resourceDetector
+===LAB_PAYLOAD_END===
+LAB_UPTIME=61.06
+LAB_EXIT=1
+[   61.079775] sysrq: Emergency Sync
+[   61.082023] sysrq: Power Off
+[   61.124007] reboot: Power down
