@@ -1,5 +1,23 @@
 # KVM lab results for PR #4 (OBI storage metrics)
 
+## State (updated 2026-10-07 22:55 +03:00)
+
+This branch is written by the KVM lab on the user's workstation. Two shas are involved:
+
+- `0b5d13939` (the code before `ec314571`): the kernel matrix, k3s and iostats blocks, and a supplement (the final payload with its NFS module unload line fixed, on the 8 kernels that failed `nfs-late-setup`), were run by an earlier lab session and are summarised in the second half of this file; their files are at the root of the branch (`matrix-final.tsv`, `matrix-final-nfsfix.tsv`, `k3s-final.tsv`, `iostats.tsv`, `out/`, `failures/`). All four are complete: none was cut off. No NVMe multipath run was made at this sha.
+- the passthrough fix (the commit on top of `ec314571173bc0ab9bc170da76e161da382e06a4`): **not pushed to `feat/statso11y-disk-metrics-v2` yet**; the lab polls the branch every 2 minutes (since 22:29 +03:00, for up to 3 hours). When it arrives, the payloads `final`, `iostats`, `nvme-mpath-nobio` and `nvme-mpath-bio` are rebuilt and run in this order: matrix on v6.12.111 v6.18.54 v7.2.6 rhel9.6 rhel8.10; matrix on the other six kernels; iostats; 20 rounds of the NVMe multipath repeat. Their results go under `<sha9>/` and into the first half of this file.
+
+Nothing was run at `ec314571` itself.
+
+Things to know about the earlier blocks:
+
+- The workstation was suspended from about 20:40 to 22:20 (+03:00), in the middle of the iostats block: the v6.12.111 iostats run that was in the guest at that time (exit 1, 3 FAIL, payload time 5983 s) is set aside as `failures/iostats-v6.12.111-host-suspended/` and was repeated afterwards (exit 0). The lab compares CLOCK_BOOTTIME with CLOCK_MONOTONIC around every VM and repeats any run the host slept through, so a suspend is not reported as a stall or a failure.
+- Single runs of 2026-10-07 outside the blocks: two `payloads/rhel-smoke` boots from `setup.sh` (v6.12.111 and rhel8.10, both exit 0) and one NFS module diagnostic on v6.6.157 (`out/extra/`).
+- The matrix's only FAIL at `0b5d13939` is `RESULT nfs-late-setup FAIL (rc=1)` on 8 of 11 kernels: `modprobe -r nfs` in `payloads/final/run.sh` leaves `sunrpc` loaded, so the precondition of the late-attach step fails (the payload, not OBI; the supplement passes with 0 FAIL on all 8). The lab kit is unchanged, so the same 8 FAIL lines are expected at the new sha.
+- NFS checks (`nfs-*`, `e2e-nfs-*`) are reported but do not block anything: NFS is deferred.
+
+## Earlier runs at `0b5d13939` (by the earlier lab session; files at the root of this branch)
+
 OBI `feat/statso11y-disk-metrics-v2` at `0b5d13939b645166812424562b55918e82c6f2b1`. Lab kit `c865634`. Every VM ran with `accel=kvm`, `LAB_SMP=2 LAB_MEM=4096`, one at a time.
 
 Notes on how the blocks were run:
@@ -19,7 +37,7 @@ Status of this results set: the kernel matrix, k3s and iostats blocks at `0b5d13
 
 Host suspend: the host was suspended from 20:40:56 to 22:20:06 local time. One run was in progress (iostats on v6.12.111); it is set aside and was repeated. No other run of this set overlapped the suspend.
 
-## Kernel matrix
+### Kernel matrix
 
 `./run-matrix.sh payloads/final 1200`, payload built from `0b5d13939`.
 
@@ -37,7 +55,7 @@ Host suspend: the host was suspended from 20:40:56 to 22:20:06 local time. One r
 | v6.18.54 | 1 | FAIL | 37 | 1 | 1 | kvm | 0.6s | 129.6s | 130.2s |
 | v7.2.6 | 1 | FAIL | 37 | 1 | 1 | kvm | 8.3s | 119.7s | 128.0s |
 
-### Failures
+#### Failures
 
 - **rhel9.6**: exit 1 (FAIL), 1 FAIL; logs in `failures/matrix-rhel9.6/`
   - `RESULT nfs-late-setup FAIL (rc=1)`
@@ -56,7 +74,7 @@ Host suspend: the host was suspended from 20:40:56 to 22:20:06 local time. One r
 - **v7.2.6**: exit 1 (FAIL), 1 FAIL; logs in `failures/matrix-v7.2.6/`
   - `RESULT nfs-late-setup FAIL (rc=1)`
 
-### SKIP lines
+#### SKIP lines
 
 - rhel9.6: `SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel`
 - v5.8.18: `SKIP e2e-write-zeroes the loop device has no write-zeroes on this kernel`
@@ -67,7 +85,7 @@ Host suspend: the host was suspended from 20:40:56 to 22:20:06 local time. One r
 
 The payload output of every kernel is in `out/matrix/<kernel>.out`.
 
-## Supplement: the final payload with the sunrpc unload fixed (a patched copy, not the lab kit's)
+### Supplement: the final payload with the sunrpc unload fixed (a patched copy, not the lab kit's)
 
 `./run-matrix.sh <copy of payloads/final with out/extra/final-nfsfix-run.sh.diff> 1200 <the 8 kernels that failed nfs-late-setup>`, payload built from `0b5d13939`.
 
@@ -82,11 +100,11 @@ The payload output of every kernel is in `out/matrix/<kernel>.out`.
 | v6.18.54 | 0 | PASS | 42 | 0 | 1 | kvm | 0.9s | 248.1s | 249.1s |
 | v7.2.6 | 0 | PASS | 42 | 0 | 1 | kvm | 0.9s | 234.8s | 235.8s |
 
-### Failures
+#### Failures
 
 None: every kernel exited 0 with no `RESULT ... FAIL` line.
 
-### SKIP lines
+#### SKIP lines
 
 - rhel9.6: `SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel`
 - v6.12.111: `SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel`
@@ -95,7 +113,7 @@ None: every kernel exited 0 with no `RESULT ... FAIL` line.
 
 The payload output of every kernel is in `out/nfsfix/<kernel>.out`.
 
-## k3s
+### k3s
 
 `./run-matrix.sh payloads/k3s-final 3000 v6.12.111 rhel9.6`, payload built from `0b5d13939`.
 
@@ -104,13 +122,13 @@ The payload output of every kernel is in `out/nfsfix/<kernel>.out`.
 | v6.12.111 | 0 | PASS | 42 | 0 | 0 | kvm | 0.6s | 1193.7s | 1194.4s |
 | rhel9.6 | 0 | PASS | 42 | 0 | 0 | kvm | 3.6s | 1189.8s | 1193.6s |
 
-### Failures
+#### Failures
 
 None: every kernel exited 0 with no `RESULT ... FAIL` line.
 
 The payload output of every kernel is in `out/k3s/<kernel>.out`.
 
-## iostats (stale request starts, the RQF_IO_STAT gate)
+### iostats (stale request starts, the RQF_IO_STAT gate)
 
 `LAB_EXTRA_DISKS="1G" ./run-matrix.sh payloads/iostats 1800 v6.18.54 v7.2.6 v6.12.111 rhel9.6`, payload built from `0b5d13939`.
 
@@ -123,11 +141,11 @@ The payload output of every kernel is in `out/k3s/<kernel>.out`.
 | rhel9.6 | 0 | PASS | 33 | 0 | 3 | kvm | 1.0s | 196.3s | 197.4s |
 | v6.12.111 | 0 | PASS | 33 | 0 | 3 | kvm | 1.0s | 201.4s | 202.4s |
 
-### Failures
+#### Failures
 
 None: every kernel exited 0 with no `RESULT ... FAIL` line.
 
-### Verdicts
+#### Verdicts
 
 | kernel | verdict lines | observed CLEAN | other |
 |---|---|---|---|
@@ -138,13 +156,13 @@ None: every kernel exited 0 with no `RESULT ... FAIL` line.
 
 Every verdict line observed CLEAN.
 
-### Runs set aside
+#### Runs set aside
 
 The host was suspended during these runs (the guest clock jumped), so they are not counted above and were repeated:
 
 - iostats-v6.12.111: exit 1; logs in `failures/iostats-v6.12.111-host-suspended/`
 
-### SKIP lines
+#### SKIP lines
 
 - v6.18.54: `SKIP stale-flush-iostats-none write cache is 'write through', not 'write back': no flushes`
 - v6.18.54: `SKIP stale-flush-iostats-mq-deadline write cache is 'write through', not 'write back': no flushes`
@@ -161,9 +179,8 @@ The host was suspended during these runs (the guest clock jumped), so they are n
 
 The payload output of every kernel is in `out/iostats/<kernel>.out`.
 
-## NVMe native multipath stall repeat (F-NVMe-2)
+### NVMe native multipath stall repeat (F-NVMe-2)
 
 20 rounds; per round, in order: nvme-mpath-nobio and nvme-mpath-bio on v6.12.111, then on rhel9.6, each as `LAB_NVME_MPATH=256M ./run-vm.sh <kernel> payloads/<variant> 600`. Payloads built from `0b5d13939`.
 
-Not run yet.
-
+Not run at this sha: the repeat is run at the new sha only.
