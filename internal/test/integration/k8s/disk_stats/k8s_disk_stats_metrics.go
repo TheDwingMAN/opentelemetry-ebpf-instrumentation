@@ -44,7 +44,7 @@ func FeatureDiskStats() features.Feature {
 		Assess("reports the file syncs of the workload", testFsSyncPerWorkload).
 		Assess("counts the file syncs of the workload", testFsSyncCountersPerWorkload).
 		Assess("reports how long the I/O of the workload waits before its issue", testDiskQueuePerWorkload).
-		Assess("reports the requests in flight of the disks of the workload", testDiskPendingOfWorkloadDevices).
+		Assess("reports the requests in flight of the disks of the workload", testDiskInflightOfWorkloadDevices).
 		Assess("links the pods to the disks of their PersistentVolumeClaims", testPodVolumeDevices).
 		Feature()
 }
@@ -211,7 +211,7 @@ func testDiskQueuePerWorkload(ctx context.Context, t *testing.T, _ *envconf.Conf
 	return ctx
 }
 
-func testDiskPendingOfWorkloadDevices(ctx context.Context, t *testing.T, _ *envconf.Config) context.Context {
+func testDiskInflightOfWorkloadDevices(ctx context.Context, t *testing.T, _ *envconf.Config) context.Context {
 	pq := promtest.Client{HostPort: prometheusHostPort}
 	for _, direction := range []string{"read", "write"} {
 		require.EventuallyWithT(t, func(ct *assert.CollectT) {
@@ -220,7 +220,7 @@ func testDiskPendingOfWorkloadDevices(ctx context.Context, t *testing.T, _ *envc
 			require.NoError(ct, err)
 			require.NotEmpty(ct, devices)
 			for _, device := range devices {
-				pending, err := pq.Query(`obi_stat_disk_pending_operations{system_device="` + device.Metric["system_device"] +
+				pending, err := pq.Query(`obi_stat_disk_operation_inflight{system_device="` + device.Metric["system_device"] +
 					`",disk_io_direction="` + direction + `"} >= 0`)
 				require.NoError(ct, err)
 				require.Len(ct, pending, 1, "one series per device and direction")

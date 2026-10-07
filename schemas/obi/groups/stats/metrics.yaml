@@ -805,15 +805,24 @@ groups:
       - ref: k8s.container.name
         requirement_level: opt_in
 
-  - id: metric.obi.obi.stat.disk.pending_operations
+  - id: metric.obi.obi.stat.disk.operation.inflight
     type: metric
-    metric_name: obi.stat.disk.pending_operations
+    metric_name: obi.stat.disk.operation.inflight
     instrument: updowncounter
     unit: "{operation}"
     stability: development
     brief: >
-      Number of block read and write requests that a device is serving, as the
-      kernel counts them for iostat, per block device and direction.
+      Block reads and writes that each device is serving when sampled: issued
+      to the device and not yet completed, as `/sys/block/<device>/inflight`
+      counts them, per block device and direction. Requests waiting in the I/O
+      scheduler are not counted.
+    note: >
+      Sampled every `ebpf.batch_timeout`. Discards count as writes. From Linux
+      6.10, /proc/diskstats field 9 (node_exporter's node_disk_io_now, the
+      hostmetrics receiver's system.disk.pending_operations) also counts the
+      requests waiting in the I/O scheduler, so it can be higher. For a
+      bio-based volume (LVM, md RAID), it counts the bios submitted to the
+      volume and not yet completed.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in

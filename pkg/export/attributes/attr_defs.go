@@ -1162,7 +1162,7 @@ func getDefinitions(
 			SubGroups:  []*AttrReportGroup{&statsDiskOpAttributes, &statsDiskKubeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
-		StatDiskPendingOperations.Section: {
+		StatDiskOperationInflight.Section: {
 			SubGroups:  []*AttrReportGroup{&statsDiskPendingAttributes},
 			Attributes: map[attr.Name]Default{},
 		},

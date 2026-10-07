@@ -48,8 +48,8 @@ func TestStat_GoDiskStatMetrics(t *testing.T) {
 	t.Run("Go Stat Metrics disk queue duration tests", func(t *testing.T) {
 		testStatMetricsDiskQueueDuration(t, containerID)
 	})
-	t.Run("Go Stat Metrics disk pending operations tests", func(t *testing.T) {
-		testStatMetricsDiskPendingOperations(t, containerID)
+	t.Run("Go Stat Metrics disk operations in flight tests", func(t *testing.T) {
+		testStatMetricsDiskOperationInflight(t, containerID)
 	})
 	runWeaverValidation(t)
 	require.NoError(t, compose.Close())

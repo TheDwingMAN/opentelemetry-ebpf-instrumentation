@@ -365,7 +365,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Requests in flight",
-      "description": "Reads and writes that each disk is serving, sampled.",
+      "description": "Reads and writes that each disk is serving (issued to the device, not yet completed), sampled. Requests waiting in the I/O scheduler are not included.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -382,7 +382,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (obi_ip, system_device, disk_io_direction) (obi_stat_disk_pending_operations{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"})",
+          "expr": "sum by (obi_ip, system_device, disk_io_direction) (obi_stat_disk_operation_inflight{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"})",
           "legendFormat": "{{obi_ip}} {{system_device}} {{disk_io_direction}}",
           "refId": "A",
           "format": "time_series"

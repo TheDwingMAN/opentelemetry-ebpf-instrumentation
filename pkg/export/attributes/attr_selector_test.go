@@ -281,16 +281,16 @@ func TestStatDiskServiceTimeSelection(t *testing.T) {
 	}
 }
 
-func TestStatDiskPendingOperationsSelection(t *testing.T) {
+func TestStatDiskOperationInflightSelection(t *testing.T) {
 	for _, key := range []Section{
-		"obi.stat.disk.pending_operations",
-		"obi_stat_disk_pending_operations",
+		"obi.stat.disk.operation.inflight",
+		"obi_stat_disk_operation_inflight",
 	} {
 		selection := Selection{key: InclusionLists{Include: []string{"obi.ip"}}}
 		selection.Normalize()
 		p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: selection})
 		require.NoError(t, err)
-		assert.Equal(t, []attr.Name{attr.OBIIP}, p.For(StatDiskPendingOperations), key)
+		assert.Equal(t, []attr.Name{attr.OBIIP}, p.For(StatDiskOperationInflight), key)
 	}
 }
 

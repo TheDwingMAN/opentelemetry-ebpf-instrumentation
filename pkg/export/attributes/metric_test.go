@@ -103,7 +103,7 @@ func TestPrometheusNames(t *testing.T) {
 		{StatDiskFlushDuration, "obi_stat_disk_flush_duration_seconds"},
 		{StatDiskDiscardDuration, "obi_stat_disk_discard_duration_seconds"},
 		{StatDiskDiscardIO, "obi_stat_disk_discard_io_bytes_total"},
-		{StatDiskPendingOperations, "obi_stat_disk_pending_operations"},
+		{StatDiskOperationInflight, "obi_stat_disk_operation_inflight"},
 		{StatNFSClientProcedureDuration, "obi_stat_nfs_client_procedure_duration_seconds"},
 		{StatNFSClientProcedureCount, "obi_stat_nfs_client_procedure_count_total"},
 		{StatNFSClientProcedureTime, "obi_stat_nfs_client_procedure_time_seconds_total"},

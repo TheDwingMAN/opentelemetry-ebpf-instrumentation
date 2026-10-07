@@ -1444,6 +1444,21 @@ Duration of block I/O requests, from their issue to the device until their compl
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
+## `obi.stat.disk.operation.inflight`
+
+Block reads and writes that each device is serving when sampled: issued to the device and not yet completed, as `/sys/block/<device>/inflight` counts them, per block device and direction. Requests waiting in the I/O scheduler are not counted.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| updowncounter | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
 ## `obi.stat.disk.operations`
 
 Completed block I/O requests, per block device, direction, outcome and workload the I/O is charged to.
@@ -1464,21 +1479,6 @@ Completed block I/O requests, per block device, direction, outcome and workload 
 | `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
-| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |
-| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
-| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
-
-## `obi.stat.disk.pending_operations`
-
-Number of block read and write requests that a device is serving, as the kernel counts them for iostat, per block device and direction.
-
-| Instrument | Unit | Stability |
-| --- | --- | --- |
-| updowncounter | {operation} | development |
-
-| Attribute | Type | Requirement level | Stability | Description | Examples |
-| --- | --- | --- | --- | --- | --- |
-| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |

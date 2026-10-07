@@ -436,8 +436,8 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsDiskDiscard() {
 		want = append(want, "disk_discard")
 	}
-	if features.StatsDiskPendingOperations() {
-		want = append(want, "disk_pending_operations")
+	if features.StatsDiskOperationInflight() {
+		want = append(want, "disk_operation_inflight")
 	}
 	if features.StatsDiskStackedVolumes() {
 		want = append(want, "disk_stacked_volumes")

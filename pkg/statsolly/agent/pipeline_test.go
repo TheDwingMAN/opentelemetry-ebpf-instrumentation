@@ -296,7 +296,7 @@ func TestDiskCounters(t *testing.T) {
 
 func TestDiskOperationsBeyondReadsAndWrites(t *testing.T) {
 	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskOperations|export.FeatureStatsDiskQueueDuration|
-		export.FeatureStatsDiskFlush|export.FeatureStatsDiskDiscard|export.FeatureStatsDiskPendingOperations)
+		export.FeatureStatsDiskFlush|export.FeatureStatsDiskDiscard|export.FeatureStatsDiskOperationInflight)
 
 	write := fakeDiskRecord("vda", ebpf.CodeDiskOpWrite, "", ebpf.LatencySample{Seconds: 0.004, Count: 2})
 	write.DiskIO.Operations = 2
@@ -333,15 +333,15 @@ func TestDiskOperationsBeyondReadsAndWrites(t *testing.T) {
 			{Name: "obi_stat_disk_discard_io_bytes_total", Value: 1 << 20, Labels: map[string]string{"obi_disk_stacked": "false", "system_device": "vda"}},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_discard_io_bytes_total"))
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_disk_pending_operations", Value: 5, Labels: map[string]string{"obi_disk_stacked": "false", "system_device": "vda", "disk_io_direction": "read"}},
-		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_pending_operations"))
+			{Name: "obi_stat_disk_operation_inflight", Value: 5, Labels: map[string]string{"obi_disk_stacked": "false", "system_device": "vda", "disk_io_direction": "read"}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_inflight"))
 	}, timeout, 100*time.Millisecond)
 }
 
-func TestDiskPendingOperationsOfSeveralStatsInOneSeries(t *testing.T) {
-	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskPendingOperations, func(s *Stats) {
+func TestDiskOperationInflightOfSeveralStatsInOneSeries(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskOperationInflight, func(s *Stats) {
 		s.cfg.Attributes.Select = attributes.Selection{
-			attributes.StatDiskPendingOperations.Section: attributes.InclusionLists{Exclude: []string{"disk.io.direction"}},
+			attributes.StatDiskOperationInflight.Section: attributes.InclusionLists{Exclude: []string{"disk.io.direction"}},
 		}
 	})
 
@@ -352,8 +352,8 @@ func TestDiskPendingOperationsOfSeveralStatsInOneSeries(t *testing.T) {
 
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_disk_pending_operations", Value: 8, Labels: map[string]string{"obi_disk_stacked": "false", "system_device": "vda"}},
-		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_pending_operations"), "the reads and writes add up")
+			{Name: "obi_stat_disk_operation_inflight", Value: 8, Labels: map[string]string{"obi_disk_stacked": "false", "system_device": "vda"}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_inflight"), "the reads and writes add up")
 	}, timeout, 100*time.Millisecond)
 }
 
@@ -542,7 +542,7 @@ func TestDiskVolumeStats(t *testing.T) {
 func TestStorageStatsOfUnselectedApplicationsUnderDynamicSelection(t *testing.T) {
 	volumes := fakeDiskVolumesTracer(t)
 	diskEvents, promURL := startDiskPipeline(t,
-		export.FeatureStatsDiskOperations|export.FeatureStatsDiskPendingOperations|export.FeatureStatsDiskVolumeDevices,
+		export.FeatureStatsDiskOperations|export.FeatureStatsDiskOperationInflight|export.FeatureStatsDiskVolumeDevices,
 		func(s *Stats) { s.ctxInfo.DynamicSelector = discover.NewDynamicSelector() })
 
 	ofContainer := fakeDiskRecord("vda", ebpf.CodeDiskOpWrite, "")

@@ -746,10 +746,9 @@ var (
 		Unit:    "By",
 		Type:    InstrumentCounter,
 	})
-	StatDiskPendingOperations = metric(Name{
-		// normalized like the attributes.select keys, which have their underscores replaced by dots
-		Section: "obi.stat.disk.pending.operations",
-		OTEL:    "obi.stat.disk.pending_operations",
+	StatDiskOperationInflight = metric(Name{
+		Section: "obi.stat.disk.operation.inflight",
+		OTEL:    "obi.stat.disk.operation.inflight",
 		Unit:    "{operation}",
 		Type:    InstrumentUpDownCounter,
 	})

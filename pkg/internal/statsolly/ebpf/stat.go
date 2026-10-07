@@ -45,7 +45,7 @@ var statTypeMetrics = map[StatType][]attributes.Name{
 	StatTypeFsSync: {
 		attributes.StatFsSyncDuration, attributes.StatFsSyncOperations, attributes.StatFsSyncOperationTime,
 	},
-	StatTypeDiskPending: {attributes.StatDiskPendingOperations},
+	StatTypeDiskPending: {attributes.StatDiskOperationInflight},
 	StatTypeNFSProcedure: {
 		attributes.StatNFSClientProcedureDuration, attributes.StatNFSClientProcedureCount,
 		attributes.StatNFSClientProcedureTime,

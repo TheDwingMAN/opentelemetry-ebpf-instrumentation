@@ -64,7 +64,7 @@ const (
 	FeatureStatsDiskQueueDuration
 	FeatureStatsDiskFlush
 	FeatureStatsDiskDiscard
-	FeatureStatsDiskPendingOperations
+	FeatureStatsDiskOperationInflight
 	FeatureStatsDiskStackedVolumes
 	FeatureStatsNFSClientProcedureDuration
 	FeatureStatsNFSClientIO
@@ -88,7 +88,7 @@ const FeatureStats = FeatureStatsTCPRtt | FeatureStatsTCPFailedConnections | Fea
 // not part of the `stats` aggregate: the block probes fire on every block request, so they have to
 // be enabled explicitly.
 const FeatureStatsDisk = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskServiceTime |
-	FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard | FeatureStatsDiskPendingOperations |
+	FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard | FeatureStatsDiskOperationInflight |
 	FeatureStatsDiskStackedVolumes | FeatureStatsDiskVolumeDevices
 
 // FeatureStatsFsSync groups the file sync stat metrics. They are not part of the `stats` aggregate.
@@ -133,7 +133,7 @@ var FeatureMapper = map[string]Features{
 	"stats_disk_queue_duration":           FeatureStatsDiskQueueDuration,
 	"stats_disk_flush":                    FeatureStatsDiskFlush,
 	"stats_disk_discard":                  FeatureStatsDiskDiscard,
-	"stats_disk_pending_operations":       FeatureStatsDiskPendingOperations,
+	"stats_disk_operation_inflight":       FeatureStatsDiskOperationInflight,
 	"stats_disk_stacked_volumes":          FeatureStatsDiskStackedVolumes,
 	"stats_nfs":                           FeatureStatsNFS,
 	"stats_nfs_client_procedure_duration": FeatureStatsNFSClientProcedureDuration,
@@ -467,7 +467,7 @@ func (f Features) StatsTCPIo() bool {
 }
 
 // StatsDisk reports whether any block I/O stat metric that the block probes measure is enabled. The
-// pending operations and the disks of the stacked volumes are read from the kernel counters and
+// operations in flight and the disks of the stacked volumes are read from the kernel counters and
 // sysfs, and the stacked volumes are measured only along with one of these metrics.
 func (f Features) StatsDisk() bool {
 	return f.any(featureStatsDiskRequests)
@@ -518,8 +518,8 @@ func (f Features) StatsDiskDiscard() bool {
 	return f.any(FeatureStatsDiskDiscard)
 }
 
-func (f Features) StatsDiskPendingOperations() bool {
-	return f.any(FeatureStatsDiskPendingOperations)
+func (f Features) StatsDiskOperationInflight() bool {
+	return f.any(FeatureStatsDiskOperationInflight)
 }
 
 // StatsDiskStackedVolumes reports whether the I/O of the bio-based devices is measured too: the

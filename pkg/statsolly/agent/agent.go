@@ -262,10 +262,10 @@ func statsAgent(
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
 	var diskTracer *stats.DiskMapTracer
-	// the pending operations are read from the kernel counters, with or without the probes
+	// the operations in flight are read from the kernel counters, with or without the probes
 	if statsFetcher.DiskIOAccumMap() != nil || statsFetcher.FsSyncAccumMap() != nil ||
 		statsFetcher.NFSProcedureAccumMap() != nil || statsFetcher.NFSIOAccumMap() != nil ||
-		cfg.Metrics.Features.StatsDiskPendingOperations() {
+		cfg.Metrics.Features.StatsDiskOperationInflight() {
 		interval := cfg.EBPF.BatchTimeout
 		if interval <= 0 {
 			interval = defaultDiskReadInterval
@@ -273,7 +273,7 @@ func statsAgent(
 		histograms, _ := latencyHistograms(cfg)
 		diskTracer = stats.NewDiskMapTracer(&stats.DiskMapTracerConfig{
 			DiskIOAccum:           statsFetcher.DiskIOAccumMap(),
-			DiskPending:           cfg.Metrics.Features.StatsDiskPendingOperations(),
+			DiskPending:           cfg.Metrics.Features.StatsDiskOperationInflight(),
 			DiskBioAccum:          statsFetcher.DiskBioAccumMap(),
 			DiskBioDevices:        statsFetcher.DiskBioDevicesMap(),
 			FsSyncAccum:           statsFetcher.FsSyncAccumMap(),

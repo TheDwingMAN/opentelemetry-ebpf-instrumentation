@@ -1132,7 +1132,7 @@ prometheus_export:
 	require.NoError(t, err)
 	features := roundTripped.Metrics.Features
 	require.True(t, features.StatsDiskOperationDuration())
-	require.True(t, features.StatsDiskPendingOperations())
+	require.True(t, features.StatsDiskOperationInflight())
 	require.True(t, features.StatsFsSyncDuration())
 	require.True(t, features.StatsNFS())
 	require.True(t, features.StatsDiskPodVolumes())

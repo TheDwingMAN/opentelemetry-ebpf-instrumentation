@@ -53,7 +53,7 @@ type statMetricsReporter struct {
 	diskFlushDuration        *kernelHistogramVec
 	diskDiscardDuration      *kernelHistogramVec
 	diskDiscardIO            *Expirer[prometheus.Counter]
-	diskPendingOperations    *Expirer[prometheus.Gauge]
+	diskOperationInflight    *Expirer[prometheus.Gauge]
 	nfsProcedureDuration     *kernelHistogramVec
 	nfsProcedureCount        *Expirer[prometheus.Counter]
 	nfsProcedureTime         *Expirer[prometheus.Counter]
@@ -79,7 +79,7 @@ type statMetricsReporter struct {
 	diskFlushDurationAttrs        []attributes.Field[*ebpf.Stat, string]
 	diskDiscardDurationAttrs      []attributes.Field[*ebpf.Stat, string]
 	diskDiscardIOAttrs            []attributes.Field[*ebpf.Stat, string]
-	diskPendingOperationsAttrs    []attributes.Field[*ebpf.Stat, string]
+	diskOperationInflightAttrs    []attributes.Field[*ebpf.Stat, string]
 	nfsProcedureDurationAttrs     []attributes.Field[*ebpf.Stat, string]
 	nfsProcedureCountAttrs        []attributes.Field[*ebpf.Stat, string]
 	nfsProcedureTimeAttrs         []attributes.Field[*ebpf.Stat, string]
@@ -288,7 +288,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeDiskOperations(stat)
 			r.observeNFS(stat)
 		}
-		r.observeDiskPendingOperations(stats)
+		r.observeDiskOperationInflight(stats)
 		r.observePodVolumes(stats)
 		r.observeDiskVolumes(stats)
 	}
@@ -435,13 +435,13 @@ func (r *statMetricsReporter) registerDiskOperationMetrics(cfg *StatsPrometheusC
 		register = append(register, r.diskDiscardIO)
 	}
 
-	if features.StatsDiskPendingOperations() {
-		r.diskPendingOperationsAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskPendingOperations))
-		r.diskPendingOperations = NewExpirer[prometheus.Gauge](prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: attributes.StatDiskPendingOperations.Prom,
-			Help: "number of block I/O requests that a device is serving",
-		}, labelNames(r.diskPendingOperationsAttrs)).MetricVec, timeNow, cfg.Config.TTL)
-		register = append(register, r.diskPendingOperations)
+	if features.StatsDiskOperationInflight() {
+		r.diskOperationInflightAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskOperationInflight))
+		r.diskOperationInflight = NewExpirer[prometheus.Gauge](prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: attributes.StatDiskOperationInflight.Prom,
+			Help: "number of block reads and writes issued to the device and not yet completed (sysfs inflight)",
+		}, labelNames(r.diskOperationInflightAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, r.diskOperationInflight)
 	}
 	return register
 }
@@ -598,11 +598,11 @@ func (r *statMetricsReporter) observeDiskVolumes(stats []*ebpf.Stat) {
 	})
 }
 
-func (r *statMetricsReporter) observeDiskPendingOperations(stats []*ebpf.Stat) {
-	if r.diskPendingOperations == nil {
+func (r *statMetricsReporter) observeDiskOperationInflight(stats []*ebpf.Stat) {
+	if r.diskOperationInflight == nil {
 		return
 	}
-	setGaugeSums(r.diskPendingOperations, r.diskPendingOperationsAttrs, stats, func(stat *ebpf.Stat) (float64, bool) {
+	setGaugeSums(r.diskOperationInflight, r.diskOperationInflightAttrs, stats, func(stat *ebpf.Stat) (float64, bool) {
 		if stat.DiskPending == nil {
 			return 0, false
 		}

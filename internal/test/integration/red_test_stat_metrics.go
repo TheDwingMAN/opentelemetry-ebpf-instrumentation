@@ -306,9 +306,9 @@ func testStatMetricsDiskQueueDuration(t *testing.T, containerID string) {
 	}
 }
 
-// testStatMetricsDiskPendingOperations checks that the devices that the disk-io container reads
+// testStatMetricsDiskOperationInflight checks that the devices that the disk-io container reads
 // and writes report their requests in flight
-func testStatMetricsDiskPendingOperations(t *testing.T, containerID string) {
+func testStatMetricsDiskOperationInflight(t *testing.T, containerID string) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
 	for _, direction := range []string{"read", "write"} {
 		require.EventuallyWithT(t, func(ct *assert.CollectT) {
@@ -317,7 +317,7 @@ func testStatMetricsDiskPendingOperations(t *testing.T, containerID string) {
 			require.NoError(ct, err)
 			enoughPromResults(ct, devices)
 			for _, device := range devices {
-				pending, err := pq.Query(`obi_stat_disk_pending_operations{system_device="` + device.Metric["system_device"] +
+				pending, err := pq.Query(`obi_stat_disk_operation_inflight{system_device="` + device.Metric["system_device"] +
 					`",disk_io_direction="` + direction + `"} >= 0`)
 				require.NoError(ct, err)
 				require.Len(ct, pending, 1, "one series per device and direction")

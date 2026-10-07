@@ -108,7 +108,7 @@ type statMetricsExporter struct {
 	diskFlushDuration        *kernelHistogram
 	diskDiscardDuration      *kernelHistogram
 	diskDiscardIO            *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
-	diskPendingOperations    *currentUpDownCounter[*ebpf.Stat]
+	diskOperationInflight    *currentUpDownCounter[*ebpf.Stat]
 	nfsProcedureDuration     *kernelHistogram
 	nfsProcedureCount        *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	nfsProcedureTime         *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
@@ -367,7 +367,7 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				nfsIO.Add(ctx, int64(v.NFSIO.Bytes), metric2.WithAttributeSet(attrs))
 			}
 		}
-		recordCurrentSums(me.diskPendingOperations, i, func(stat *ebpf.Stat) (int64, bool) {
+		recordCurrentSums(me.diskOperationInflight, i, func(stat *ebpf.Stat) (int64, bool) {
 			if stat.DiskPending == nil {
 				return 0, false
 			}
@@ -499,15 +499,15 @@ func (me *statMetricsExporter) createDiskOperationMetrics(
 		me.diskDiscardIO = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, discardIO, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
-	if features.StatsDiskPendingOperations() {
-		pending, err := meter.Int64UpDownCounter(attributes.StatDiskPendingOperations.OTEL,
-			metric2.WithUnit(attributes.StatDiskPendingOperations.Unit))
+	if features.StatsDiskOperationInflight() {
+		pending, err := meter.Int64UpDownCounter(attributes.StatDiskOperationInflight.OTEL,
+			metric2.WithUnit(attributes.StatDiskOperationInflight.Unit))
 		if err != nil {
-			log.Error("creating stats disk pending operations counter", "error", err)
+			log.Error("creating stats disk operation inflight counter", "error", err)
 			return err
 		}
-		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskPendingOperations))
-		me.diskPendingOperations = newCurrentUpDownCounter(ctx, pending, attrs, timeNow, cfg.Metrics.TTL)
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskOperationInflight))
+		me.diskOperationInflight = newCurrentUpDownCounter(ctx, pending, attrs, timeNow, cfg.Metrics.TTL)
 	}
 	return nil
 }

@@ -390,7 +390,7 @@ const (
 	statsFeatureDiskQueueDuration          = "disk_queue_duration"
 	statsFeatureDiskFlush                  = "disk_flush"
 	statsFeatureDiskDiscard                = "disk_discard"
-	statsFeatureDiskPendingOperations      = "disk_pending_operations"
+	statsFeatureDiskOperationInflight      = "disk_operation_inflight"
 	statsFeatureDiskStackedVolumes         = "disk_stacked_volumes"
 	statsFeatureNFSClientProcedureDuration = "nfs_client_procedure_duration"
 	statsFeatureNFSClientProcedureCount    = "nfs_client_procedure_count"
@@ -447,8 +447,8 @@ func statsFeatures(features featureexport.Features) []string {
 	if features.StatsDiskDiscard() {
 		out = append(out, statsFeatureDiskDiscard)
 	}
-	if features.StatsDiskPendingOperations() {
-		out = append(out, statsFeatureDiskPendingOperations)
+	if features.StatsDiskOperationInflight() {
+		out = append(out, statsFeatureDiskOperationInflight)
 	}
 	if features.StatsDiskStackedVolumes() {
 		out = append(out, statsFeatureDiskStackedVolumes)
