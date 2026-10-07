@@ -76,29 +76,67 @@ static void test_status_code(void) {
 }
 
 static void test_op_from_req_op(void) {
-    assert_true(disk_op_from_req_op(0) == disk_op_read, "REQ_OP_READ is a read");
-    assert_true(disk_op_from_req_op(1) == disk_op_write, "REQ_OP_WRITE is a write");
-    assert_true(disk_op_from_req_op(2) == disk_op_flush, "REQ_OP_FLUSH is a flush");
-    assert_true(disk_op_from_req_op(3) == disk_op_discard, "REQ_OP_DISCARD is a discard");
-    assert_true(disk_op_from_req_op(5) == disk_op_discard, "REQ_OP_SECURE_ERASE is a discard");
-    assert_true(disk_op_from_req_op(9) == disk_op_unknown, "REQ_OP_WRITE_ZEROES is not measured");
-    assert_true(disk_op_from_req_op(34) == disk_op_unknown,
+    assert_true(disk_op_from_req_op(0, 0) == disk_op_read, "REQ_OP_READ is a read");
+    assert_true(disk_op_from_req_op(1, 0) == disk_op_write, "REQ_OP_WRITE is a write");
+    assert_true(disk_op_from_req_op(2, 0) == disk_op_flush, "REQ_OP_FLUSH is a flush");
+    assert_true(disk_op_from_req_op(3, 0) == disk_op_discard, "REQ_OP_DISCARD is a discard");
+    assert_true(disk_op_from_req_op(5, 0) == disk_op_discard, "REQ_OP_SECURE_ERASE is a discard");
+    assert_true(disk_op_from_req_op(9, 0) == disk_op_write, "REQ_OP_WRITE_ZEROES is a write");
+    assert_true(disk_op_from_req_op(34, 0) == disk_op_unknown,
                 "driver private operations are not measured");
+    assert_true(disk_op_from_req_op(35, 0) == disk_op_unknown,
+                "odd driver private operations are not measured");
+}
+
+// The REQ_OP_ZONE_APPEND values of the kernel BTFs, with the zoned operations that share or
+// neighbour them
+static void test_zone_append(void) {
+    // Linux 5.8 and RHEL 8 (enum req_opf): ZONE_APPEND 13, WRITE_SAME 7
+    assert_true(disk_op_from_req_op(13, 13) == disk_op_write, "a 5.8 zone append is a write");
+    assert_true(disk_op_from_req_op(7, 13) == disk_op_unknown, "a 5.8 WRITE_SAME is not measured");
+
+    // Linux 5.10 and 5.15 stable (enum req_opf): ZONE_APPEND 21, CLOSE 13, RESET 17
+    assert_true(disk_op_from_req_op(21, 21) == disk_op_write, "a 5.10 zone append is a write");
+    assert_true(disk_op_from_req_op(7, 21) == disk_op_unknown, "a 5.10 WRITE_SAME is not measured");
+    assert_true(disk_op_from_req_op(13, 21) == disk_op_unknown, "a zone close is not measured");
+    assert_true(disk_op_from_req_op(17, 21) == disk_op_unknown,
+                "a 5.10 zone reset is not measured");
+
+    // Linux 6.1+ and RHEL 9 (enum req_op): ZONE_APPEND 7, CLOSE 13 (RESET 13 on RHEL 9.6)
+    assert_true(disk_op_from_req_op(7, 7) == disk_op_write, "a 6.1 zone append is a write");
+    assert_true(disk_op_from_req_op(13, 7) == disk_op_unknown, "a zone reset is not an append");
+    assert_true(disk_op_from_req_op(15, 7) == disk_op_unknown, "a zone finish is not measured");
+    assert_true(disk_op_from_req_op(17, 7) == disk_op_unknown, "a 6.1 zone reset is not measured");
+
+    // a kernel without REQ_OP_ZONE_APPEND
+    assert_true(disk_op_from_req_op(7, 0) == disk_op_unknown,
+                "op 7 is no zone append without the op");
+    assert_true(disk_op_from_req_op(13, 0) == disk_op_unknown,
+                "op 13 is no zone append without the op");
+    assert_true(disk_op_from_req_op(21, 0) == disk_op_unknown,
+                "op 21 is no zone append without the op");
+    assert_true(disk_op_from_req_op(0, 0) == disk_op_read,
+                "the missing op never turns reads into writes");
 }
 
 static void test_bio_op(void) {
     const u32 op_mask = 0xff;
     const u32 preflush = 1U << 18;
-    assert_true(disk_bio_op(1, op_mask, preflush, 4096) == disk_op_write, "a write bio is a write");
-    assert_true(disk_bio_op(1 | preflush, op_mask, preflush, 0) == disk_op_flush,
+    assert_true(disk_bio_op(1, op_mask, preflush, 0, 4096) == disk_op_write,
+                "a write bio is a write");
+    assert_true(disk_bio_op(1 | preflush, op_mask, preflush, 0, 0) == disk_op_flush,
                 "an empty write with the preflush flag is a flush");
-    assert_true(disk_bio_op(1 | preflush, op_mask, preflush, 4096) == disk_op_write,
+    assert_true(disk_bio_op(1 | preflush, op_mask, preflush, 0, 4096) == disk_op_write,
                 "a write with data and the preflush flag is a write");
-    assert_true(disk_bio_op(1, op_mask, preflush, 0) == disk_op_write,
+    assert_true(disk_bio_op(1, op_mask, preflush, 0, 0) == disk_op_write,
                 "an empty write without the preflush flag is a write");
-    assert_true(disk_bio_op(0 | preflush, op_mask, preflush, 0) == disk_op_read,
+    assert_true(disk_bio_op(0 | preflush, op_mask, preflush, 0, 0) == disk_op_read,
                 "the preflush flag only turns writes into flushes");
-    assert_true(disk_bio_op(3, op_mask, preflush, 1 << 20) == disk_op_discard, "a discard bio");
+    assert_true(disk_bio_op(3, op_mask, preflush, 0, 1 << 20) == disk_op_discard, "a discard bio");
+    assert_true(disk_bio_op(9, op_mask, preflush, 0, 1 << 20) == disk_op_write,
+                "a write-zeroes bio is a write");
+    assert_true(disk_bio_op(7, op_mask, preflush, 7, 4096) == disk_op_write,
+                "a zone append bio is a write");
 }
 
 static void test_queue_ns(void) {
@@ -153,6 +191,7 @@ int main(void) {
     test_final_completion();
     test_status_code();
     test_op_from_req_op();
+    test_zone_append();
     test_bio_op();
     test_queue_ns();
     test_rq_bytes();

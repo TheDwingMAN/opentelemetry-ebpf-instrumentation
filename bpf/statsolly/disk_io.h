@@ -27,23 +27,28 @@ static __always_inline u32 disk_latency_bucket(const volatile u64 *bounds,
 }
 
 // REQ_OP_* values of the operations that are measured. They are stable across kernel versions,
-// unlike the zoned operations that were renumbered in Linux 6.8, and enum req_opf was renamed, so
-// they are not relocated.
+// unlike REQ_OP_ZONE_APPEND (13, 21 or 7), which userspace finds in the kernel BTF. enum req_opf
+// was renamed enum req_op, so none of them is relocated.
 enum {
     k_req_op_read = 0,
     k_req_op_write = 1,
     k_req_op_flush = 2,
     k_req_op_discard = 3,
     k_req_op_secure_erase = 5,
+    k_req_op_write_zeroes = 9,
 };
 
 // disk_op_from_req_op classifies the REQ_OP_* operation of a request. A secure erase discards
-// the blocks too, so it counts as a discard.
-static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op) {
+// the blocks too, so it counts as a discard. Writing zeroes and appending to a zone count as
+// writes, as /proc/diskstats counts them. zone_append_op is REQ_OP_ZONE_APPEND, or 0 when the
+// kernel has none: reads are classified first, so 0 matches nothing.
+static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op,
+                                                        const u32 zone_append_op) {
     switch (req_op) {
     case k_req_op_read:
         return disk_op_read;
     case k_req_op_write:
+    case k_req_op_write_zeroes:
         return disk_op_write;
     case k_req_op_flush:
         return disk_op_flush;
@@ -51,15 +56,18 @@ static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op) {
     case k_req_op_secure_erase:
         return disk_op_discard;
     default:
-        return disk_op_unknown;
+        return req_op == zone_append_op ? disk_op_write : disk_op_unknown;
     }
 }
 
 // disk_bio_op classifies a bio from its operation and flags. File systems flush the cache of
 // a device with an empty write that has the preflush flag.
-static __always_inline enum disk_op
-disk_bio_op(const u32 opf, const u32 op_mask, const u32 preflush_flag, const u32 size) {
-    const enum disk_op op = disk_op_from_req_op(opf & op_mask);
+static __always_inline enum disk_op disk_bio_op(const u32 opf,
+                                                const u32 op_mask,
+                                                const u32 preflush_flag,
+                                                const u32 zone_append_op,
+                                                const u32 size) {
+    const enum disk_op op = disk_op_from_req_op(opf & op_mask, zone_append_op);
     if (op == disk_op_write && size == 0 && (opf & preflush_flag)) {
         return disk_op_flush;
     }

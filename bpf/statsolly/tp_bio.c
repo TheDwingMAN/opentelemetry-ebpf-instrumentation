@@ -34,8 +34,11 @@ static __always_inline struct gendisk *bio_disk(struct bio *bio) {
 
 static __always_inline enum disk_op bio_op(struct bio *bio) {
     const u32 preflush_flag = 1U << bpf_core_enum_value(enum req_flag_bits, __REQ_PREFLUSH);
-    return disk_bio_op(
-        BPF_CORE_READ(bio, bi_opf), k_op_mask, preflush_flag, BPF_CORE_READ(bio, bi_iter.bi_size));
+    return disk_bio_op(BPF_CORE_READ(bio, bi_opf),
+                       k_op_mask,
+                       preflush_flag,
+                       disk_req_op_zone_append,
+                       BPF_CORE_READ(bio, bi_iter.bi_size));
 }
 
 static __always_inline void record_bio_queue(struct bio *bio) {

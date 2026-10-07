@@ -232,6 +232,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 			"disk_latency_bounds_len":    uint32(len(histograms.Disk)),
 			"disk_status_is_blk_status":  storage.layout.completeReportsBlkStatus,
 			"disk_rqf_flush_seq":         storage.layout.flushSeqFlag,
+			"disk_req_op_zone_append":    storage.layout.zoneAppendOp,
 			"disk_read_cgroup":           diskReads.cgroup,
 			"disk_read_partition":        diskReads.partition,
 			"fs_sync_latency_bounds_ns":  fsSyncLatencyBoundsNs,
@@ -556,6 +557,8 @@ type blockTracepointLayout struct {
 	bioUnknown bool
 	// flushSeqFlag is the RQF_FLUSH_SEQ flag of the block requests
 	flushSeqFlag uint32
+	// zoneAppendOp is REQ_OP_ZONE_APPEND, whose value depends on the kernel, or 0 if the kernel has none
+	zoneAppendOp uint32
 }
 
 // kernelBlockTracepointLayout reads the block tracepoint prototypes from the kernel BTF. The kernel
@@ -575,6 +578,8 @@ func kernelBlockTracepointLayout(log *slog.Logger) (blockTracepointLayout, error
 		log.Warn("can't find the RQF_FLUSH_SEQ request flag in the kernel BTF: the writes with a cache " +
 			"flush before or after them may be counted twice")
 	}
+	zoneAppendOp, _ := enumerator(spec)("REQ_OP_ZONE_APPEND")
+	layout.zoneAppendOp = uint32(zoneAppendOp)
 	return layout, nil
 }
 

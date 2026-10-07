@@ -21,6 +21,10 @@ volatile const u32 disk_latency_bounds_len;
 // REQ_OP_BITS-wide operation field.
 enum { k_op_mask = (1U << __REQ_FAILFAST_DEV) - 1 };
 
+// REQ_OP_ZONE_APPEND, which userspace finds in the kernel BTF: its value depends on the kernel
+// version. 0 when the kernel has none.
+volatile const u32 disk_req_op_zone_append;
+
 SCRATCH_MEM_TYPED(disk_io_accum_init, disk_io_accum_t)
 
 // The accumulation entry of a key in one of the disk accumulation maps, created zeroed if missing

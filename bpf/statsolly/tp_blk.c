@@ -37,7 +37,7 @@ struct request___old {
 } __attribute__((preserve_access_index));
 
 static __always_inline enum disk_op request_op(struct request *rq) {
-    return disk_op_from_req_op(BPF_CORE_READ(rq, cmd_flags) & k_op_mask);
+    return disk_op_from_req_op(BPF_CORE_READ(rq, cmd_flags) & k_op_mask, disk_req_op_zone_append);
 }
 
 static __always_inline struct gendisk *request_disk(struct request *rq) {

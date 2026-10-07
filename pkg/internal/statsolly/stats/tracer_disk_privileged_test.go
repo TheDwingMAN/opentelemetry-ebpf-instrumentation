@@ -232,6 +232,47 @@ func TestDiskFileSyncsAreCountedLikeTheKernel(t *testing.T) {
 	assert.Less(t, writeTime, float64(writes), "each write took less than a second on average")
 }
 
+// TestDiskWriteZeroesAreCountedLikeTheKernel zeroes a range of a loop device, which the loop
+// driver serves by punching a hole in its backing file: the request that writes the zeroes must be
+// counted as one write of the zeroed range, as in /proc/diskstats.
+func TestDiskWriteZeroesAreCountedLikeTheKernel(t *testing.T) {
+	loopDev := attachLoopDevice(t)
+	device := filepath.Base(loopDev)
+	reader := attachDiskReader(t, export.FeatureStatsDisk)
+
+	disk, err := os.OpenFile(loopDev, os.O_RDWR, 0)
+	require.NoError(t, err)
+	defer disk.Close()
+	const zeroed = 1 << 20
+	before := readKernelDiskStats(t, device)
+	// unlike BLKZEROOUT, punching a hole in a block device never falls back to writing zero pages
+	err = unix.Fallocate(int(disk.Fd()), unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, 0, zeroed)
+	if errors.Is(err, unix.EOPNOTSUPP) {
+		t.Skip("the loop device doesn't support write-zeroes on this kernel")
+	}
+	require.NoError(t, err)
+	after := readKernelDiskStats(t, device)
+
+	var writes, written, discards uint64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != device {
+			continue
+		}
+		switch stat.DiskIO.Op {
+		case ebpf.CodeDiskOpWrite:
+			writes += stat.DiskIO.Operations
+			written += stat.DiskIO.Bytes
+		case ebpf.CodeDiskOpDiscard:
+			discards += stat.DiskIO.Operations
+		}
+	}
+	require.Equal(t, uint64(1), after.writes-before.writes, "the kernel completes one write-zeroes request")
+	assert.Equal(t, uint64(1), writes)
+	assert.Equal(t, (after.sectorsWritten-before.sectorsWritten)*kernelSectorSize, written)
+	assert.Equal(t, uint64(zeroed), written, "the written bytes are the zeroed range")
+	assert.Zero(t, discards, "writing zeroes is not a discard")
+}
+
 const kernelSectorSize = 512
 
 type kernelDiskStats struct {
@@ -327,8 +368,9 @@ func TestDiskStackedVolumes(t *testing.T) {
 	assert.Equal(t, uint64(volumeWrites*directIOBlockSize), written)
 }
 
-// TestDiskBioBasedDisks writes to a zram disk, whose driver handles bios itself like the PowerFlex
-// SDC or DRBD do, and checks that its I/O is measured from its bios, as not stacked
+// TestDiskBioBasedDisks writes to and zeroes a range of a zram disk, whose driver handles bios
+// itself like the PowerFlex SDC or DRBD do, and checks that its I/O is measured from its bios, as
+// not stacked
 func TestDiskBioBasedDisks(t *testing.T) {
 	features := export.FeatureStatsDiskOperations | export.FeatureStatsDiskIO | export.FeatureStatsDiskStackedVolumes
 	bounds := []float64{0.001}
@@ -356,6 +398,16 @@ func TestDiskBioBasedDisks(t *testing.T) {
 		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
 		require.NoError(t, err)
 	}
+	wantWrites, wantWritten := uint64(diskWrites), uint64(diskWrites*directIOBlockSize)
+
+	// zram doesn't count its write-zeroes in /proc/diskstats, but they are bios like the others
+	const zeroed = 1 << 20
+	err = unix.Fallocate(int(f.Fd()), unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, 0, zeroed)
+	if !errors.Is(err, unix.EOPNOTSUPP) {
+		require.NoError(t, err)
+		wantWrites++
+		wantWritten += zeroed
+	}
 
 	var writes, written uint64
 	for _, stat := range bios.readStats() {
@@ -368,8 +420,8 @@ func TestDiskBioBasedDisks(t *testing.T) {
 			written += stat.DiskIO.Bytes
 		}
 	}
-	assert.Equal(t, uint64(diskWrites), writes)
-	assert.Equal(t, uint64(diskWrites*directIOBlockSize), written)
+	assert.Equal(t, wantWrites, writes)
+	assert.Equal(t, wantWritten, written)
 }
 
 // zramDisk adds a zram disk and returns its name
