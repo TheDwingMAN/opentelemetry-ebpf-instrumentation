@@ -256,9 +256,8 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
 
-	closables, err := attachTCPProbes(tlog, &objects, features, connRoleUsed)
+	closables, err := attachTCPProbes(&objects, features, connRoleUsed)
 	if err != nil {
-		closeAll(closables)
 		return nil, err
 	}
 	closables = append(closables, storage.attach(tlog, &objects)...)
@@ -277,18 +276,8 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 }
 
 // attachTCPProbes attaches the probes of the enabled TCP stats, which are required
-func attachTCPProbes(log *slog.Logger, objects *StatsObjects, features *export.Features, connRoleUsed bool) ([]io.Closer, error) {
+func attachTCPProbes(objects *StatsObjects, features *export.Features, connRoleUsed bool) ([]io.Closer, error) {
 	var closables []io.Closer
-
-	// kretprobes, attached before the kprobes: a call that starts once its kprobe is attached must
-	// not return before its kretprobe is, or its start is never completed
-	if features.StatsTCPIo() {
-		l, err := attachKretprobe(log, KprobeTCPSendMsg, objects.ObiStatsKretprobeTcpSendmsg, 0)
-		if err != nil {
-			return closables, fmt.Errorf("failed kretprobe attachment %s: %w", KprobeTCPSendMsg, err)
-		}
-		closables = append(closables, l)
-	}
 
 	// kprobes
 	for _, k := range []probe{
@@ -319,7 +308,27 @@ func attachTCPProbes(log *slog.Logger, objects *StatsObjects, features *export.F
 
 		l, err := kprobe.Attach(k.name, k.program, false)
 		if err != nil {
-			return closables, fmt.Errorf("failed kprobe attachment %s: %w", k.name, err)
+			closeAll(closables)
+			return nil, fmt.Errorf("failed kprobe attachment %s: %w", k.name, err)
+		}
+		closables = append(closables, l)
+	}
+
+	// kretprobes
+	for _, k := range []probe{
+		{
+			name:    KprobeTCPSendMsg,
+			program: objects.ObiStatsKretprobeTcpSendmsg,
+			enabled: features.StatsTCPIo(),
+		},
+	} {
+		if !k.enabled {
+			continue
+		}
+		l, err := kprobe.Attach(k.name, k.program, true)
+		if err != nil {
+			closeAll(closables)
+			return nil, fmt.Errorf("failed kretprobe attachment %s: %w", k.name, err)
 		}
 		closables = append(closables, l)
 	}
@@ -355,22 +364,34 @@ func attachTCPProbes(log *slog.Logger, objects *StatsObjects, features *export.F
 		group, tp, _ := strings.Cut(t.name, "/")
 		l, err := link.Tracepoint(group, tp, t.program, nil)
 		if err != nil {
-			return closables, fmt.Errorf("failed tracepoint attachment %s: %w", t.name, err)
+			closeAll(closables)
+			return nil, fmt.Errorf("failed tracepoint attachment %s: %w", t.name, err)
 		}
 		closables = append(closables, l)
 	}
 
 	// raw tracepoints
-	if features.StatsTCPRetransmits() {
+	for _, t := range []probe{
+		{
+			name:    RawTracepointTCPRetransmitSkb,
+			program: objects.ObiStatsRawTpTcpRetransmitSkb,
+			enabled: features.StatsTCPRetransmits(),
+		},
+	} {
+		if !t.enabled {
+			continue
+		}
 		l, err := link.AttachRawTracepoint(link.RawTracepointOptions{
-			Name:    RawTracepointTCPRetransmitSkb,
-			Program: objects.ObiStatsRawTpTcpRetransmitSkb,
+			Name:    t.name,
+			Program: t.program,
 		})
 		if err != nil {
-			return closables, fmt.Errorf("failed raw tracepoint attachment %s: %w", RawTracepointTCPRetransmitSkb, err)
+			closeAll(closables)
+			return nil, fmt.Errorf("failed raw tracepoint attachment %s: %w", t.name, err)
 		}
 		closables = append(closables, l)
 	}
+
 	return closables, nil
 }
 
