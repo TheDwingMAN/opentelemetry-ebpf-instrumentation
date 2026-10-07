@@ -1,0 +1,54 @@
+# HELP obi_stat_disk_operation_duration_seconds measures the duration of block I/O requests, from their issue to the device until their completion, in seconds
+# TYPE obi_stat_disk_operation_duration_seconds histogram
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="5e-05"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="0.0001"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="0.00025"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="0.0005"} 2
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="0.001"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="0.0025"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="0.005"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="0.01"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="0.025"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="0.05"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="0.1"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="0.25"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="0.5"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="1"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="2.5"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="5"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="10"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="30"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="60"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda",le="+Inf"} 5
+obi_stat_disk_operation_duration_seconds_sum{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda"} 0.00271319
+obi_stat_disk_operation_duration_seconds_count{disk_io_direction="read",error_type="",obi_disk_stacked="false",system_device="vda"} 5
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="5e-05"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="0.0001"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="0.00025"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="0.0005"} 4
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="0.001"} 14
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="0.0025"} 104
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="0.005"} 192
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="0.01"} 289
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="0.025"} 289
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="0.05"} 289
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="0.1"} 289
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="0.25"} 289
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="0.5"} 289
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="1"} 289
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="2.5"} 289
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="5"} 289
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="10"} 289
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="30"} 289
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="60"} 289
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda",le="+Inf"} 289
+obi_stat_disk_operation_duration_seconds_sum{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda"} 1.1444523580000001
+obi_stat_disk_operation_duration_seconds_count{disk_io_direction="write",error_type="",obi_disk_stacked="false",system_device="vda"} 289
+# HELP obi_stat_disk_operations_total number of completed block I/O requests
+# TYPE obi_stat_disk_operations_total counter
+obi_stat_disk_operations_total{container_id="",disk_io_direction="read",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda"} 5
+obi_stat_disk_operations_total{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda"} 289
+# HELP promhttp_metric_handler_errors_total Total number of internal errors encountered by the promhttp metric handler.
+# TYPE promhttp_metric_handler_errors_total counter
+promhttp_metric_handler_errors_total{cause="encoding"} 0
+promhttp_metric_handler_errors_total{cause="gathering"} 0

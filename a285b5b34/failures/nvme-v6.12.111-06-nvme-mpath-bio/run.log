@@ -1,0 +1,49 @@
+uname -r: 6.12.111-0612111-generic
+
+##### nvme multipath
+nvme_core multipath=Y
+cat: /sys/block/nvme0c0n1/dev: No such file or directory
+nvme0c0n1: dev= scheduler='[none] mq-deadline ' mq=yes slaves='' hidden=1
+cat: /sys/block/nvme0c1n1/dev: No such file or directory
+nvme0c1n1: dev= scheduler='[none] mq-deadline ' mq=yes slaves='' hidden=1
+nvme0n1: dev=259:1 scheduler='absent' mq=no slaves='' hidden=0
+head nvme0n1 with 2 paths
+obi features: stats_disk_operation_duration,stats_disk_operations,stats_disk_stacked_volumes
+control write without obi: ok
+control read without obi: ok
+control dsync write without obi: ok
+control (same I/O pattern, no obi): diskstats read ok
+RESULT nvme-diskstats-without-obi PASS
+before the I/O with obi: diskstats read ok
+write with obi: ok
+RESULT nvme-io-with-obi PASS
+read with obi: ok
+dsync write with obi: ok
+after the I/O with obi: diskstats read ok
+RESULT nvme-diskstats-after-io-with-obi PASS
+scrape after.txt: ok (146 lines)
+scrape idle.txt: ok (146 lines)
+devices in the metrics:
+     46 system_device="nvme0c0n1"
+     46 system_device="nvme0n1"
+     46 system_device="vda"
+obi_stat_disk_operations_total{container_id="",disk_io_direction="read",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="nvme0c0n1"} 500
+obi_stat_disk_operations_total{container_id="",disk_io_direction="read",error_type="",obi_disk_partition="",obi_disk_stacked="true",obi_ip="10.0.2.15",system_device="nvme0n1"} 500
+obi_stat_disk_operations_total{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="nvme0c0n1"} 2064
+obi_stat_disk_operations_total{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="true",obi_ip="10.0.2.15",system_device="nvme0n1"} 1064
+head nvme0n1: writes measured=1064 diskstats=1064 (dd issued 1064)
+RESULT nvme-head-bio-writes PASS
+RESULT nvme-head-diskstats-match PASS
+head series with obi_disk_stacked=true: 46
+RESULT nvme-head-stacked-label PASS
+path nvme0c0n1: request writes=2064
+path nvme0c1n1: request writes=0
+request writes on the paths (by name)=2064, unstacked nvme write series total=2064
+RESULT nvme-path-request-writes PASS
+path request writes by name=2064, on raw major:minor devices=0 (0 series), head nvme0n1 writes: diskstats=1064 measured=1064
+RESULT nvme-path-names-no-raw-numbers PASS
+RESULT nvme-path-names-writes-match-head FAIL (rc=1)
+head pending operations after 10 s idle: 0
+RESULT nvme-no-stuck-pending PASS
+time=2026-10-07T21:19:43.376Z level=WARN msg="timed out while waiting for Cloud metadata. Ignoring" component=meta.NodeMeta.otelNodeFetcher detector=ec2.resourceDetector
+[run-vm] exit=1 kernel=v6.12.111 (6.12.111-0612111-generic) accel=kvm boot=0.9s payload=61.3s total=62.4s log=~/obi-work/lab-kit/lab/logs/v6.12.111-20261008-001939.log results=~/obi-work/lab-kit/lab/runs/v6.12.111-20261008-001939/results
