@@ -460,6 +460,210 @@ func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 	return kernelDiskStats{}
 }
 
+// TestDiskPassthroughCommands sends SCSI commands through SG_IO to a disk while it reads and
+// writes, as multipath path checkers and smartd do, and checks that the commands are not counted
+// and that every read and write is timed from its own issue
+func TestDiskPassthroughCommands(t *testing.T) {
+	const (
+		staleAge = 2 * time.Second
+		workers  = 4
+		blocks   = 64
+	)
+	device := scsiDebugDisk(t)
+	// the kernel times the requests of the queues that collect I/O statistics, as writeback
+	// throttling makes them do
+	if readQueueAttribute(t, device, "wbt_lat_usec") == "0" {
+		writeQueueAttribute(t, device, "wbt_lat_usec", "75000")
+	}
+	node := deviceNode(t, device)
+	reader := attachDiskReader(t, export.FeatureStatsDisk)
+
+	stopCommands := sendTestUnitReady(node, workers)
+	require.NoError(t, writeAndReadConcurrently(t, node, workers, blocks))
+	require.NoError(t, stopCommands())
+	// a command that takes a request whose start is still recorded from a read or a write would be
+	// timed from that start: let the starts age so that such a command stands out
+	time.Sleep(staleAge)
+	stopCommands = sendTestUnitReady(node, workers)
+	time.Sleep(staleAge / 4)
+	require.NoError(t, stopCommands())
+
+	operations := map[ebpf.DiskOpCode]uint64{}
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != device || !stat.DiskIO.Op.IsTransfer() {
+			continue
+		}
+		operations[stat.DiskIO.Op] += stat.DiskIO.Operations
+		for _, latency := range stat.DiskIO.Latency {
+			assert.Less(t, latency.Seconds, staleAge.Seconds(), "no %v is timed from an earlier request", stat.DiskIO.Op)
+		}
+	}
+	// not compared with /proc/diskstats: before Linux 5.18 (including RHEL 8), it counts the commands
+	// as reads
+	assert.Equal(t, map[ebpf.DiskOpCode]uint64{
+		ebpf.CodeDiskOpRead:  workers * blocks,
+		ebpf.CodeDiskOpWrite: workers * blocks,
+	}, operations)
+}
+
+// scsiDebugDisk loads scsi_debug with one disk and returns the name of the disk, once udev, if it
+// runs, has probed it. It skips the test if scsi_debug can't be loaded or creates no disk.
+func scsiDebugDisk(t *testing.T) string {
+	t.Helper()
+	if _, err := os.Stat("/sys/module/scsi_debug"); err == nil {
+		t.Skip("scsi_debug is already loaded, with parameters that this test doesn't control")
+	}
+	// the sd driver creates the disk. Where it's a module, only udev would load it.
+	_ = exec.Command("modprobe", "sd_mod").Run()
+	if out, err := exec.Command("modprobe", "scsi_debug", "dev_size_mb=64").CombinedOutput(); err != nil {
+		t.Skipf("scsi_debug can't be loaded: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("modprobe", "-r", "scsi_debug").Run() })
+	disk := ""
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if disks, _ := filepath.Glob("/sys/bus/pseudo/drivers/scsi_debug/adapter*/host*/target*/*/block/*"); len(disks) == 1 {
+			disk = filepath.Base(disks[0])
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if disk == "" {
+		t.Skip("scsi_debug created no disk: the sd driver isn't loaded")
+	}
+	// udev reads a new disk to probe it, and again whenever it changes unless the disk is locked
+	// (https://systemd.io/BLOCK_DEVICE_LOCKING/): wait for the probe and keep the disk locked so
+	// that only the test does I/O
+	_ = exec.Command("udevadm", "settle", "--timeout=10").Run()
+	if node, err := os.Open(filepath.Join("/dev", disk)); err == nil {
+		t.Cleanup(func() { node.Close() })
+		require.NoError(t, unix.Flock(int(node.Fd()), unix.LOCK_EX))
+	}
+	return disk
+}
+
+// writeAndReadConcurrently writes then reads the given number of different blocks of a device from
+// each of the given number of goroutines, and returns their errors
+func writeAndReadConcurrently(t *testing.T, device string, workers, blocks int) error {
+	t.Helper()
+	done := make(chan error, workers)
+	for i := range workers {
+		block := alignedBuffer(t, directIOBlockSize)
+		offset := int64(i * blocks * directIOBlockSize)
+		go func() {
+			f, err := os.OpenFile(device, os.O_RDWR|unix.O_DIRECT, 0)
+			if err != nil {
+				done <- err
+				return
+			}
+			defer f.Close()
+			for j := range blocks {
+				if _, err := f.WriteAt(block, offset+int64(j*directIOBlockSize)); err != nil {
+					done <- err
+					return
+				}
+			}
+			for j := range blocks {
+				if _, err := f.ReadAt(block, offset+int64(j*directIOBlockSize)); err != nil {
+					done <- err
+					return
+				}
+			}
+			done <- nil
+		}()
+	}
+	var errs []error
+	for range workers {
+		errs = append(errs, <-done)
+	}
+	return errors.Join(errs...)
+}
+
+// sendTestUnitReady sends SCSI TEST UNIT READY commands to a device from the given number of
+// goroutines until the returned function is called, which returns their errors
+func sendTestUnitReady(device string, senders int) (stop func() error) {
+	stopped := make(chan struct{})
+	done := make(chan error, senders)
+	for range senders {
+		go func() {
+			f, err := os.OpenFile(device, os.O_RDONLY, 0)
+			if err != nil {
+				done <- err
+				return
+			}
+			defer f.Close()
+			for {
+				select {
+				case <-stopped:
+					done <- nil
+					return
+				default:
+				}
+				if err := testUnitReady(f); err != nil {
+					done <- err
+					return
+				}
+			}
+		}()
+	}
+	return func() error {
+		close(stopped)
+		var errs []error
+		for range senders {
+			errs = append(errs, <-done)
+		}
+		return errors.Join(errs...)
+	}
+}
+
+// from include/scsi/sg.h
+const (
+	sgIO          = 0x2285
+	sgInterfaceID = 'S'
+	sgDxferNone   = -1
+	sgTimeoutMs   = 10000
+)
+
+// sgIOHeader is struct sg_io_hdr of include/scsi/sg.h, for a command without data or sense buffer
+type sgIOHeader struct {
+	interfaceID    int32
+	dxferDirection int32
+	cmdLen         uint8
+	_              uint8          // mx_sb_len
+	_              uint16         // iovec_count
+	_              uint32         // dxfer_len
+	_              unsafe.Pointer // dxferp
+	cmdp           unsafe.Pointer
+	_              unsafe.Pointer // sbp
+	timeout        uint32
+	_              uint32         // flags
+	_              int32          // pack_id
+	_              unsafe.Pointer // usr_ptr
+	_              [4]uint8       // status, masked_status, msg_status, sb_len_wr
+	_              [2]uint16      // host_status, driver_status
+	_              int32          // resid
+	_              uint32         // duration
+	_              uint32         // info
+}
+
+// testUnitReady sends a SCSI TEST UNIT READY command to a device through SG_IO, which the kernel
+// passes through the block layer to the device without reading or writing it
+func testUnitReady(f *os.File) error {
+	var command [6]byte // TEST UNIT READY: operation code 0, no parameters
+	header := sgIOHeader{
+		interfaceID:    sgInterfaceID,
+		dxferDirection: sgDxferNone,
+		cmdLen:         uint8(len(command)),
+		cmdp:           unsafe.Pointer(&command[0]),
+		timeout:        sgTimeoutMs,
+	}
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), sgIO, uintptr(unsafe.Pointer(&header)))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
 // syncFile writes data to a file, if any, and syncs it
 func syncFile(t *testing.T, path string, data []byte) {
 	t.Helper()

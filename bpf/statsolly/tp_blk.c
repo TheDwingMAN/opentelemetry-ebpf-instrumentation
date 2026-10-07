@@ -248,9 +248,16 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         return 0;
     }
 
+    // From Linux 6.8 the kernel doesn't time passthrough commands (REQ_OP_DRV_*), so they must
+    // not reach the maps: their completion would stop the timing of the queue.
+    const enum disk_op op = request_op(rq);
+    if (op == disk_op_unknown) {
+        return 0;
+    }
+
     // the kernel completes a write with a cache flush before or after it again at the end of its
     // flush sequence, and only counts it then
-    if (in_flush_sequence(rq) && request_op(rq) != disk_op_flush) {
+    if (in_flush_sequence(rq) && op != disk_op_flush) {
         return 0;
     }
 
@@ -260,9 +267,6 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
             return 0;
         }
     } else if (!kernel_timed_start(rq, nr_bytes, &start) && !recorded_start(rq, &start)) {
-        return 0;
-    }
-    if (start.op == disk_op_unknown) {
         return 0;
     }
     const u64 now_ns = bpf_ktime_get_ns();
