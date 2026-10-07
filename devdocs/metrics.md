@@ -237,6 +237,46 @@ sum by (system_device) (rate(obi_stat_disk_io_bytes_total{disk_io_direction="wri
 - `server.address` is the IP address of the server, as the RPC transport displays it, not the host name of the mount.
 - `error.type` is the errno of failed RPCs, or the number of NFSv4 errors that the client doesn't translate into errnos.
 
+#### Storage stats profiles
+
+The storage stats are opt-in, and their cost in series depends on the features and attributes you choose. Three starting points, with the series of a typical node (4 devices with I/O, 40 workloads doing I/O, 10 of them syncing files, 1 NFS server) and of a busy one (40 devices, 250 workloads, all of them syncing, 50 on NFS across 4 servers), with the default 16 histogram buckets:
+
+| Profile | What it reports | Typical node | Busy node |
+|---|---|---|---|
+| Minimal | Block I/O bytes, requests and time per device and workload, flush latency per device, file syncs and their time per workload. No probe on NFS, no request latency distribution. | ~500 | ~6,600 |
+| Standard | Everything, with the latency histograms per device, call or procedure and the counters per workload: the defaults. | ~1,100 | ~16,000 |
+| Detailed | The standard profile, with the latency histograms per workload too. | ~6,900 | ~130,000 |
+
+Minimal:
+
+```yaml
+metrics:
+  features: [stats_disk_io, stats_disk_operations, stats_disk_operation_time, stats_disk_flush,
+             stats_fs_sync_operations, stats_fs_sync_operation_time]
+```
+
+Standard (add `stats_disk_pod_volumes` in Kubernetes to link the pods to their disks):
+
+```yaml
+metrics:
+  features: [stats_disk, stats_fs_sync, stats_nfs]
+```
+
+Detailed:
+
+```yaml
+metrics:
+  features: [stats_disk, stats_fs_sync, stats_nfs]
+attributes:
+  select:
+    # every storage latency histogram, per workload but not per pod
+    obi.stat.*.duration:
+      include: ["*"]
+      exclude: [obi.ip, obi.disk.partition, container.id, k8s.pod.name, k8s.container.name, k8s.kind]
+```
+
+The mean latency per workload doesn't need the detailed profile: it is the ratio of a time counter to its count counter, e.g. `rate(obi_stat_disk_operation_time_seconds_total[5m]) / rate(obi_stat_disk_operations_total[5m])`. Selecting `k8s.pod.name`, `k8s.container.name` or `container.id` on a latency histogram makes a series per bucket for each pod, and OBI warns about it at startup. With config v2, list the same families in `capture.network.stats.features` (without the `stats_` prefix) and the selection in `extensions.obi.enrich.attributes.select`.
+
 #### Storage stats under dynamic application selection
 
 When OBI is embedded with a dynamic selector (`instrumenter.WithDynamicSelector`), the block I/O, file sync and NFS metrics keep only what the kernel charges to the containers of the selected processes, and to the containers of the pods of the selected Kubernetes workloads. `obi.stat.k8s.pod.volume.device` keeps only the volumes of those pods. Limitations:

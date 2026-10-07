@@ -43,3 +43,28 @@ func TestPerPodHistograms(t *testing.T) {
 		"obi.stat.nfs.client.procedure.duration": {Include: []string{"k8s.pod.name"}},
 	}), "disabled histograms don't count")
 }
+
+// TestDetailedProfileIsPerWorkload checks the selection of the detailed profile of the storage stats
+// in devdocs/metrics.md: every storage latency histogram per workload, none per pod
+func TestDetailedProfileIsPerWorkload(t *testing.T) {
+	selection := attributes.Selection{"obi.stat.*.duration": {
+		Include: []string{"*"},
+		Exclude: []string{"obi.ip", "obi.disk.partition", "container.id", "k8s.pod.name", "k8s.container.name", "k8s.kind"},
+	}}
+	selection.Normalize()
+	attrSel, err := attributes.NewAttrSelector(attributes.GroupKubernetes|attributes.GroupContainer,
+		&attributes.SelectorConfig{SelectionCfg: selection})
+	require.NoError(t, err)
+
+	features := export.FeatureStatsDisk | export.FeatureStatsFsSync | export.FeatureStatsNFS
+	assert.Empty(t, perPodHistograms(&features, attrSel))
+	for _, histogram := range []attributes.Name{
+		attributes.StatDiskOperationDuration, attributes.StatDiskQueueDuration, attributes.StatDiskFlushDuration,
+		attributes.StatDiskDiscardDuration, attributes.StatFsSyncDuration, attributes.StatNFSClientProcedureDuration,
+	} {
+		assert.Subset(t, attrSel.For(histogram), []attr.Name{attr.K8sNamespaceName, attr.K8sOwnerName}, histogram.OTEL)
+	}
+	assert.Equal(t, []attr.Name{
+		attr.ErrorType, attr.K8sClusterName, attr.K8sNamespaceName, attr.K8sOwnerName, attr.FsSyncType,
+	}, attrSel.For(attributes.StatFsSyncOperations), "the counters keep their defaults")
+}
