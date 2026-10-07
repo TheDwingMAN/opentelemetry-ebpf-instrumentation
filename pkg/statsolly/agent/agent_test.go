@@ -17,7 +17,7 @@ import (
 )
 
 func TestLatencyHistogramsOfTheEnabledExportersAndFeatures(t *testing.T) {
-	custom := []float64{0.0003, 0.0007, 0.003, 0.007, 0.03, 0.07, 0.3, 0.7}
+	custom := []float64{0.0003, 0.003, 0.03, 0.3, 0.7}
 	cfg := &obi.Config{
 		// the Prometheus exporter is disabled: its default buckets don't count
 		Prometheus: prom.PrometheusConfig{Buckets: export.DefaultBuckets},
@@ -36,10 +36,12 @@ func TestLatencyHistogramsOfTheEnabledExportersAndFeatures(t *testing.T) {
 	assert.Empty(t, approximated)
 
 	cfg.Prometheus.Port = 9400
+	cfg.Metrics.Features |= export.FeatureStatsNFSClientProcedureDuration
 	histograms, approximated = latencyHistograms(cfg)
 	assert.Len(t, histograms.Disk, len(custom)+len(export.DefaultBuckets.StatDiskOperationDurationHistogram),
 		"the union of the boundaries of both exporters, as many as the kernel keeps")
 	assert.IsIncreasing(t, histograms.Disk)
+	assert.Equal(t, export.DefaultBuckets.StatNFSClientProcedureDurationHistogram, histograms.NFS)
 	assert.Empty(t, approximated)
 }
 

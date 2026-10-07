@@ -280,7 +280,10 @@
             0.5,
             1,
             2.5,
-            5
+            5,
+            10,
+            30,
+            60
           ]
         },
         "stat_disk_flush_duration_histogram": {
@@ -304,7 +307,10 @@
             0.5,
             1,
             2.5,
-            5
+            5,
+            10,
+            30,
+            60
           ]
         },
         "stat_disk_operation_duration_histogram": {
@@ -328,7 +334,10 @@
             0.5,
             1,
             2.5,
-            5
+            5,
+            10,
+            30,
+            60
           ]
         },
         "stat_disk_queue_duration_histogram": {
@@ -352,7 +361,10 @@
             0.5,
             1,
             2.5,
-            5
+            5,
+            10,
+            30,
+            60
           ]
         },
         "stat_fs_sync_duration_histogram": {
@@ -376,7 +388,10 @@
             0.5,
             1,
             2.5,
-            5
+            5,
+            10,
+            30,
+            60
           ]
         },
         "stat_nfs_client_procedure_duration_histogram": {
@@ -400,7 +415,9 @@
             1,
             2.5,
             5,
-            10
+            10,
+            30,
+            60
           ]
         },
         "stat_tcp_rtt_histogram": {
