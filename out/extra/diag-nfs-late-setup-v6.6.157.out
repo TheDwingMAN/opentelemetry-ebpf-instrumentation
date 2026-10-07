@@ -1,0 +1,54 @@
+uname -r: 6.6.157-0606157-generic
+--- before the tests
+fscache: refcnt=1 holders='9p ' initstate=live
+netfs: refcnt=2 holders='9p fscache ' initstate=live
+privileged rc=0
+--- PASS: TestNFSStatsAreOptional (0.16s)
+--- PASS: TestNFSProbesAttachWhenTheirModulesAreLoaded (0.17s)
+--- PASS: TestNFSProcedureReader (0.00s)
+--- PASS: TestNFSIOReader (0.00s)
+--- PASS: TestNFSErrorType (0.00s)
+--- after the tests
+nfs: refcnt=0 holders='' initstate=live
+lockd: refcnt=1 holders='nfs ' initstate=live
+grace: refcnt=1 holders='lockd ' initstate=live
+sunrpc: refcnt=2 holders='lockd nfs ' initstate=live
+fscache: refcnt=2 holders='9p nfs ' initstate=live
+netfs: refcnt=3 holders='9p fscache nfs ' initstate=live
+--- modprobe -r nfs (what the payload runs), verbose
+rmmod nfs
+rmmod lockd
+rc=0
+--- after modprobe -r nfs
+grace: refcnt=0 holders='' initstate=live
+sunrpc: refcnt=0 holders='' initstate=live
+fscache: refcnt=1 holders='9p ' initstate=live
+netfs: refcnt=2 holders='9p fscache ' initstate=live
+after 1s more: modprobe -r nfs rc=0 sunrpc loaded=yes
+after 5s more: modprobe -r nfs rc=0 sunrpc loaded=yes
+after 15s more: modprobe -r nfs rc=0 sunrpc loaded=yes
+--- after the retries
+grace: refcnt=0 holders='' initstate=live
+sunrpc: refcnt=0 holders='' initstate=live
+fscache: refcnt=1 holders='9p ' initstate=live
+netfs: refcnt=2 holders='9p fscache ' initstate=live
+--- modprobe -r of each module, verbose
+rmmod grace
+grace rc=0
+rmmod sunrpc
+sunrpc rc=0
+--- at the end
+fscache: refcnt=1 holders='9p ' initstate=live
+netfs: refcnt=2 holders='9p fscache ' initstate=live
+RESULT diag-sunrpc-unloaded-at-end PASS
+[   12.827701] RPC: Registered named UNIX socket transport module.
+[   12.827704] RPC: Registered udp transport module.
+[   12.827704] RPC: Registered tcp transport module.
+[   12.827705] RPC: Registered tcp-with-tls transport module.
+[   12.827705] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[   34.195785] RPC: Unregistered named UNIX socket transport module.
+[   34.195790] RPC: Unregistered udp transport module.
+[   34.195791] RPC: Unregistered tcp transport module.
+[   34.195792] RPC: Unregistered tcp-with-tls transport module.
+[   34.195792] RPC: Unregistered tcp NFSv4.1 backchannel transport module.
+[run-vm] exit=0 kernel=v6.6.157 (6.6.157-0606157-generic) accel=kvm boot=0.5s payload=33.9s total=34.5s log=~/obi-work/lab-kit/lab/logs/v6.6.157-20261007-203307.log results=~/obi-work/lab-kit/lab/runs/v6.6.157-20261007-203307/results

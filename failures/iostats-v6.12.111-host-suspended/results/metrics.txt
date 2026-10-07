@@ -1,0 +1,66 @@
+# HELP obi_stat_disk_io_bytes_total bytes transferred by the block I/O requests that completed successfully
+# TYPE obi_stat_disk_io_bytes_total counter
+obi_stat_disk_io_bytes_total{disk_io_direction="write",obi_disk_stacked="false",system_device="vda"} 3.2636928e+07
+# HELP obi_stat_disk_operation_duration_seconds measures the duration of block I/O requests, from their issue to the device until their completion, in seconds
+# TYPE obi_stat_disk_operation_duration_seconds histogram
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="5e-05"} 0
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.0001"} 0
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.00025"} 0
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.0005"} 0
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.001"} 0
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.0025"} 15
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.005"} 35
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.01"} 42
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.025"} 42
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.05"} 58
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.1"} 58
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.25"} 58
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.5"} 58
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="1"} 58
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="2.5"} 58
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="5"} 58
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="10"} 58
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="30"} 58
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="60"} 58
+obi_stat_disk_operation_duration_seconds_bucket{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="+Inf"} 58
+obi_stat_disk_operation_duration_seconds_sum{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda"} 0.6918464529999999
+obi_stat_disk_operation_duration_seconds_count{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda"} 58
+# HELP obi_stat_disk_operation_time_seconds_total sum of the durations of the completed block I/O requests, in seconds
+# TYPE obi_stat_disk_operation_time_seconds_total counter
+obi_stat_disk_operation_time_seconds_total{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda"} 0.691846453
+# HELP obi_stat_disk_operations_total number of completed block I/O requests
+# TYPE obi_stat_disk_operations_total counter
+obi_stat_disk_operations_total{container_id="",disk_io_direction="write",error_type="",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda"} 58
+# HELP obi_stat_disk_pending_operations number of block I/O requests that a device is serving
+# TYPE obi_stat_disk_pending_operations gauge
+obi_stat_disk_pending_operations{disk_io_direction="read",obi_disk_stacked="true",system_device="loop0"} 0
+obi_stat_disk_pending_operations{disk_io_direction="write",obi_disk_stacked="false",system_device="vda"} 0
+obi_stat_disk_pending_operations{disk_io_direction="write",obi_disk_stacked="true",system_device="loop0"} 0
+# HELP obi_stat_disk_queue_duration_seconds measures the time block I/O requests wait between their allocation and their issue to the device, in seconds
+# TYPE obi_stat_disk_queue_duration_seconds histogram
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="5e-05"} 24
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.0001"} 24
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.00025"} 24
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.0005"} 40
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.001"} 40
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.0025"} 40
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.005"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.01"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.025"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.05"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.1"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.25"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="0.5"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="1"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="2.5"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="5"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="10"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="30"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="60"} 58
+obi_stat_disk_queue_duration_seconds_bucket{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda",le="+Inf"} 58
+obi_stat_disk_queue_duration_seconds_sum{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda"} 0.065366147
+obi_stat_disk_queue_duration_seconds_count{container_id="",disk_io_direction="write",obi_disk_partition="",obi_disk_stacked="false",obi_ip="10.0.2.15",system_device="vda"} 58
+# HELP promhttp_metric_handler_errors_total Total number of internal errors encountered by the promhttp metric handler.
+# TYPE promhttp_metric_handler_errors_total counter
+promhttp_metric_handler_errors_total{cause="encoding"} 0
+promhttp_metric_handler_errors_total{cause="gathering"} 0

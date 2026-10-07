@@ -1,0 +1,2 @@
+obi_stat_disk_pending_operations{disk_io_direction="read",obi_disk_stacked="true",system_device="loop0"} 0
+obi_stat_disk_pending_operations{disk_io_direction="write",obi_disk_stacked="true",system_device="loop0"} 0

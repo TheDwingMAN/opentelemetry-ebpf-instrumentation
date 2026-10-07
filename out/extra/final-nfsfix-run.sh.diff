@@ -1,0 +1,4 @@
+65c65
+< modprobe -r nfs 2>/dev/null   # the privileged test loaded it and left it unused
+---
+> modprobe -r nfs 2>/dev/null; modprobe -r sunrpc 2>/dev/null   # patched copy: modprobe -r nfs leaves sunrpc loaded with refcnt 0

@@ -8,6 +8,12 @@ Notes on how the blocks were run:
 - Payloads were built with `build-payload.sh final`, `k3s-final`, `iostats`, `nvme-mpath-nobio`, `nvme-mpath-bio`; every `COMMIT` file says `0b5d13939`. In `k3s-final` the manifests' image tag is still named `obi:disk-v2-23410d280`; build-payload rebuilt that tag from `0b5d13939`.
 - Logs are scrubbed: host name, user, home paths (`~`), non-guest IP and MAC addresses, and the guest kernel's lines about the CPU and firmware (the guests run with `-cpu host`) are replaced.
 
+About the matrix's only failure, `nfs-late-setup` (8 kernels: every kernel where OBI can load the NFS probes):
+
+- It is the precondition of the payload's "nfs late attach" step, not an OBI check: `modprobe -r nfs` in the guest removes `nfs` and `lockd` only and leaves `sunrpc` (and `grace`) loaded with refcnt 0 and no holders, so `[ ! -e /sys/module/sunrpc/initstate ]` fails. A diagnostic run on v6.6.157 shows it (`out/extra/diag-nfs-late-setup-v6.6.157.out`, script next to it): after `modprobe -r nfs` three retries over 21 s change nothing, and `modprobe -r sunrpc` then unloads it at once. Nothing pins the module.
+- The consequence: on those 8 kernels the checks behind it (`nfs-waiting-warn`, `nfs-late-attach`, `e2e-nfs-late-io`, `nfs-modules-pinned`) did not run in the matrix. The privileged test `TestNFSProbesAttachWhenTheirModulesAreLoaded` passed on all 8.
+- rhel8.9, rhel8.10 and v5.8.18 pass `nfs-late-setup` because the privileged test skips there without loading the modules; they take the `nfs-stays-off` branch.
+
 ## Kernel matrix
 
 `./run-matrix.sh payloads/final 1200`, payload built from `0b5d13939`.
@@ -77,7 +83,50 @@ The payload output of every kernel is in `out/k3s/<kernel>.out`.
 
 `payloads/iostats/MODE`: `fixed`.
 
-Not run yet.
+| kernel | exit | verdict | PASS | FAIL | SKIP | accel | boot | payload | total |
+|---|---|---|---|---|---|---|---|---|---|
+| v6.18.54 | 0 | PASS | 33 | 0 | 3 | kvm | 0.5s | 195.3s | 195.9s |
+| v7.2.6 | 0 | PASS | 33 | 0 | 3 | kvm | 0.6s | 197.0s | 197.5s |
+| rhel9.6 | 0 | PASS | 33 | 0 | 3 | kvm | 1.0s | 196.3s | 197.4s |
+| v6.12.111 | 0 | PASS | 33 | 0 | 3 | kvm | 1.0s | 201.4s | 202.4s |
+
+### Failures
+
+None: every kernel exited 0 with no `RESULT ... FAIL` line.
+
+### Verdicts
+
+| kernel | verdict lines | observed CLEAN | other |
+|---|---|---|---|
+| v6.18.54 | 11 | 11 | 0 |
+| v7.2.6 | 11 | 11 | 0 |
+| rhel9.6 | 11 | 11 | 0 |
+| v6.12.111 | 11 | 11 | 0 |
+
+Every verdict line observed CLEAN.
+
+### Runs set aside
+
+The host was suspended during these runs (the guest clock jumped), so they are not counted above and were repeated:
+
+- iostats-v6.12.111: exit 1; logs in `failures/iostats-v6.12.111-host-suspended/`
+
+### SKIP lines
+
+- v6.18.54: `SKIP stale-flush-iostats-none write cache is 'write through', not 'write back': no flushes`
+- v6.18.54: `SKIP stale-flush-iostats-mq-deadline write cache is 'write through', not 'write back': no flushes`
+- v6.18.54: `SKIP stale-flush-nullb1-shared write cache is 'write through', not 'write back': no flushes`
+- v7.2.6: `SKIP stale-flush-iostats-none write cache is 'write through', not 'write back': no flushes`
+- v7.2.6: `SKIP stale-flush-iostats-mq-deadline write cache is 'write through', not 'write back': no flushes`
+- v7.2.6: `SKIP stale-flush-nullb1-shared write cache is 'write through', not 'write back': no flushes`
+- rhel9.6: `SKIP stale-flush-iostats-none write cache is 'write through', not 'write back': no flushes`
+- rhel9.6: `SKIP stale-flush-iostats-mq-deadline write cache is 'write through', not 'write back': no flushes`
+- rhel9.6: `SKIP stale-flush-nullb1-shared write cache is 'write through', not 'write back': no flushes`
+- v6.12.111: `SKIP stale-flush-iostats-none write cache is 'write through', not 'write back': no flushes`
+- v6.12.111: `SKIP stale-flush-iostats-mq-deadline write cache is 'write through', not 'write back': no flushes`
+- v6.12.111: `SKIP stale-flush-nullb1-shared write cache is 'write through', not 'write back': no flushes`
+
+The payload output of every kernel is in `out/iostats/<kernel>.out`.
 
 ## NVMe native multipath stall repeat (F-NVMe-2)
 
