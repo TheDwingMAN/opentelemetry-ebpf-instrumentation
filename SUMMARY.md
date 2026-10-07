@@ -1,11 +1,11 @@
 # KVM lab results for PR #4 (OBI storage metrics)
 
-## State (updated 2026-10-07 23:38 +03:00)
+## State (updated 2026-10-07 23:52 +03:00)
 
 This branch is written by the KVM lab on the user's workstation. Two shas are involved:
 
 - `0b5d13939` (the code before `ec314571`): the kernel matrix, k3s and iostats blocks, and a supplement (the final payload with its NFS module unload line fixed, on the 8 kernels that failed `nfs-late-setup`), were run by an earlier lab session and are summarised in the second half of this file; their files are at the root of the branch (`matrix-final.tsv`, `matrix-final-nfsfix.tsv`, `k3s-final.tsv`, `iostats.tsv`, `out/`, `failures/`). All four are complete: none was cut off. No NVMe multipath run was made at this sha.
-- `a285b5b3485227f0ea636a9c791c1a2a3521a3e0` (the passthrough fix: `7c6ab26c8` "statsolly: keep passthrough commands out of the block request timing" plus `a285b5b34` "statsolly: make the passthrough commands test robust", on top of `ec314571`): seen on `feat/statso11y-disk-metrics-v2` at 23:20 +03:00. The payloads `final`, `iostats`, `nvme-mpath-nobio` and `nvme-mpath-bio` were rebuilt from it and are run in this order: matrix on v6.12.111 v6.18.54 v7.2.6 rhel9.6 rhel8.10 (step a); matrix on the other six kernels (step b); iostats (step c); 20 rounds of the NVMe multipath repeat (step d), published every 5 rounds. Their results are under `a285b5b34/` and in the first half of this file. **Progress: steps a and b done (matrix, 11 kernels); step c (iostats) running; NVMe not started.**
+- `a285b5b3485227f0ea636a9c791c1a2a3521a3e0` (the passthrough fix: `7c6ab26c8` "statsolly: keep passthrough commands out of the block request timing" plus `a285b5b34` "statsolly: make the passthrough commands test robust", on top of `ec314571`): seen on `feat/statso11y-disk-metrics-v2` at 23:20 +03:00. The payloads `final`, `iostats`, `nvme-mpath-nobio` and `nvme-mpath-bio` were rebuilt from it and are run in this order: matrix on v6.12.111 v6.18.54 v7.2.6 rhel9.6 rhel8.10 (step a); matrix on the other six kernels (step b); iostats (step c); 20 rounds of the NVMe multipath repeat (step d), published every 5 rounds. Their results are under `a285b5b34/` and in the first half of this file. **Progress: steps a, b (matrix, 11 kernels) and c (iostats, 4 kernels) done; step d (NVMe repeat) running, rounds 1-5 first.**
 
 Nothing was run at `ec314571` itself.
 
@@ -18,7 +18,7 @@ Things to know about the earlier blocks:
 
 ## Runs at `a285b5b3485227f0ea636a9c791c1a2a3521a3e0`
 
-OBI `feat/statso11y-disk-metrics-v2` at `a285b5b3485227f0ea636a9c791c1a2a3521a3e0` (HEAD: "statsolly: make the passthrough commands test robust"; the commit below it: "statsolly: keep passthrough commands out of the block request timing" (7c6ab26c8)). Lab kit `c865634`. `LAB_SMP=2 LAB_MEM=4096`, one VM at a time. 11 VM runs so far: all with `accel=kvm`. Files of this sha are under `a285b5b34/`.
+OBI `feat/statso11y-disk-metrics-v2` at `a285b5b3485227f0ea636a9c791c1a2a3521a3e0` (HEAD: "statsolly: make the passthrough commands test robust"; the commit below it: "statsolly: keep passthrough commands out of the block request timing" (7c6ab26c8)). Lab kit `c865634`. `LAB_SMP=2 LAB_MEM=4096`, one VM at a time. 15 VM runs so far: all with `accel=kvm`. Files of this sha are under `a285b5b34/`.
 
 ### Kernel matrix (final payload)
 
@@ -92,9 +92,48 @@ The payload output of every kernel is in `a285b5b34/out/matrix/<kernel>.out`.
 
 `LAB_EXTRA_DISKS="1G" ./run-matrix.sh payloads/iostats 1800 v6.18.54 v7.2.6 v6.12.111 rhel9.6`, payload built from `a285b5b34`.
 
-MODE: `payloads/iostats/MODE` after the build: `fixed`; printed by the payload in the runs: `-`.
+MODE: `payloads/iostats/MODE` after the build: `fixed`; printed by the payload in the runs: `fixed`.
 
-No valid run yet.
+| kernel | exit | verdict | PASS | FAIL | FAIL not NFS | SKIP | accel | boot | payload | total |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v6.18.54 | 0 | PASS | 33 | 0 | 0 | 3 | kvm | 0.8s | 197.3s | 198.2s |
+| v7.2.6 | 0 | PASS | 33 | 0 | 0 | 3 | kvm | 0.9s | 193.3s | 194.3s |
+| v6.12.111 | 0 | PASS | 33 | 0 | 0 | 3 | kvm | 0.9s | 196.9s | 197.9s |
+| rhel9.6 | 0 | PASS | 33 | 0 | 0 | 3 | kvm | 1.1s | 194.9s | 196.1s |
+
+`verdict` is the VM's exit code (PASS = 0, TIMEOUT = 124, INFRA = 125: the guest never reported an exit code). NFS checks are reported but were deferred by the user: they do not block anything.
+
+#### Failures
+
+None: every kernel exited 0 with no `RESULT ... FAIL` line.
+
+#### Verdicts
+
+| kernel | verdict lines | observed CLEAN | other |
+|---|---|---|---|
+| v6.18.54 | 11 | 11 | 0 |
+| v7.2.6 | 11 | 11 | 0 |
+| v6.12.111 | 11 | 11 | 0 |
+| rhel9.6 | 11 | 11 | 0 |
+
+Every verdict line observed CLEAN.
+
+#### SKIP lines
+
+- v6.18.54: `SKIP stale-flush-iostats-none write cache is 'write through', not 'write back': no flushes`
+- v6.18.54: `SKIP stale-flush-iostats-mq-deadline write cache is 'write through', not 'write back': no flushes`
+- v6.18.54: `SKIP stale-flush-nullb1-shared write cache is 'write through', not 'write back': no flushes`
+- v7.2.6: `SKIP stale-flush-iostats-none write cache is 'write through', not 'write back': no flushes`
+- v7.2.6: `SKIP stale-flush-iostats-mq-deadline write cache is 'write through', not 'write back': no flushes`
+- v7.2.6: `SKIP stale-flush-nullb1-shared write cache is 'write through', not 'write back': no flushes`
+- v6.12.111: `SKIP stale-flush-iostats-none write cache is 'write through', not 'write back': no flushes`
+- v6.12.111: `SKIP stale-flush-iostats-mq-deadline write cache is 'write through', not 'write back': no flushes`
+- v6.12.111: `SKIP stale-flush-nullb1-shared write cache is 'write through', not 'write back': no flushes`
+- rhel9.6: `SKIP stale-flush-iostats-none write cache is 'write through', not 'write back': no flushes`
+- rhel9.6: `SKIP stale-flush-iostats-mq-deadline write cache is 'write through', not 'write back': no flushes`
+- rhel9.6: `SKIP stale-flush-nullb1-shared write cache is 'write through', not 'write back': no flushes`
+
+The payload output of every kernel is in `a285b5b34/out/iostats/<kernel>.out`.
 
 ### NVMe native multipath stall repeat (F-NVMe-2)
 

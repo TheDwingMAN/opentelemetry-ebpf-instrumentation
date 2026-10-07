@@ -1,0 +1,199 @@
+uname -r: 7.2.6-070206-generic
+INFO btf __RQF_IO_STAT (grep -c -a /sys/kernel/btf/vmlinux): 1
+INFO kallsyms queue_iostats_passthrough_show (1 expected only on 6.18 and 7.2): 1
+INFO device loop0 scheduler='[none] mq-deadline ' write_cache='write through' nr_requests=128 iostats=1 wbt_lat_usec=2000
+INFO device loop1 scheduler='[none] mq-deadline ' write_cache='write through' nr_requests=128 iostats=1 wbt_lat_usec=2000
+INFO device loop2 scheduler='[none] mq-deadline ' write_cache='write through' nr_requests=128 iostats=1 wbt_lat_usec=2000
+INFO device loop3 scheduler='[none] mq-deadline ' write_cache='write through' nr_requests=128 iostats=1 wbt_lat_usec=2000
+INFO device loop4 scheduler='[none] mq-deadline ' write_cache='write through' nr_requests=128 iostats=1 wbt_lat_usec=2000
+INFO device loop5 scheduler='[none] mq-deadline ' write_cache='write through' nr_requests=128 iostats=1 wbt_lat_usec=2000
+INFO device loop6 scheduler='[none] mq-deadline ' write_cache='write through' nr_requests=128 iostats=1 wbt_lat_usec=2000
+INFO device loop7 scheduler='[none] mq-deadline ' write_cache='write through' nr_requests=128 iostats=1 wbt_lat_usec=2000
+INFO device nullb0 scheduler='[none] mq-deadline ' write_cache='write through' nr_requests=64 iostats=1 wbt_lat_usec=2000
+INFO device vda scheduler='[none] mq-deadline ' write_cache='write back' nr_requests=256 iostats=1 wbt_lat_usec=75000
+INFO device vdb scheduler='[none] mq-deadline ' write_cache='write back' nr_requests=256 iostats=1 wbt_lat_usec=75000
+INFO mode=fixed expect=CLEAN (current binary: STALE from kernel 6.13, CLEAN before; fixed binary: CLEAN everywhere)
+INFO commit: a285b5b34
+INFO virtio extra disk lab-extra-1 is vdb
+INFO loop device: loop0
+INFO null_blk device: iostats
+INFO obi started after 6 s; binary: sha256 539eae0c7ef5f8daf1479ca87002e3f29d198c66cd448cd98cade6f28d46f36a disk_rqf_flush_seq 4 disk_rqf_io_stat 4 
+RESULT binary-matches-mode PASS
+
+##### loop: loop0, scheduler none, tag none
+INFO loop0 none: scheduler='[none] mq-deadline ' write_cache='write back' nr_requests=128 iostats=1 wbt_lat_usec=2000
+INFO settled loop0 in 4 s: reads +2048 of 2048 wanted
+INFO settled loop0 in 6 s: reads +256 of 256 wanted
+INFO settled loop0 in 7 s: reads +256 of 256 wanted
+INFO loop0-none B (iostats=0, 8.0 s after A): ops_r=256 ops_w=32 kernel_reads=0 kernel_writes=0
+INFO loop0-none B queue duration: reads count=0 over5s=0 mean=0.000000 top=none; writes count=0 over5s=0 mean=0.000000 top=none
+INFO loop0-none B writes: operation_duration over5s=0 operation_time=0.000844 s flush_duration count=31
+INFO loop0-none C (iostats=1): ops_r=256 ops_w=63 kernel_reads=256 kernel_writes=63; queue duration reads count=256 over5s=0 le0.1s=256 top=le=5e-05(256), writes count=32 over5s=0
+INFO positive-loop0-none: ops_r=256 (want >= 256) ops_w=32 (want >= 32), kernel deltas reads=0 writes=0 (want 0)
+RESULT positive-loop0-none PASS
+INFO control-loop0-none: q_cnt_r=256 (want >= 256) q_inf_r=0 q_inf_w=0 (want 0) q_fast_r=256 (want >= 0.98 q_cnt_r) ops_w=63 kernel_writes=63 (want equal)
+RESULT control-loop0-none PASS
+INFO witness-loop0-none: word/hint/bits_per_word before A: 3 97 32, after A: 3 126 32, after B: 3 125 32 (hctx0)
+RESULT witness-loop0-none PASS
+INFO stale-queue-loop0-none: observed=CLEAN expect=CLEAN q_inf_r=0 (STALE needs >= 128) q_mean_r=0.000000 (STALE needs >= 7)
+RESULT stale-queue-loop0-none PASS
+INFO verdict queue loop0-none: ABSENT (observed CLEAN, expected CLEAN)
+INFO stale-flush-loop0-none: observed=CLEAN expect=CLEAN od_inf_w=0 (STALE needs >= 16) ot_w=0.000844 (STALE needs >= 224) ops_w=32
+RESULT stale-flush-loop0-none PASS
+INFO verdict flush loop0-none: ABSENT (observed CLEAN, expected CLEAN)
+INFO loop0 none took 30 s; elapsed 36 s
+
+##### loop: loop0, scheduler mq-deadline, tag mq-deadline
+INFO loop0 mq-deadline: scheduler='none [mq-deadline] ' write_cache='write back' nr_requests=256 iostats=1 wbt_lat_usec=2000
+INFO settled loop0 in 4 s: reads +2048 of 2048 wanted
+INFO settled loop0 in 5 s: reads +256 of 256 wanted
+INFO settled loop0 in 4 s: reads +256 of 256 wanted
+INFO loop0-mq-deadline B (iostats=0, 8.0 s after A): ops_r=256 ops_w=32 kernel_reads=0 kernel_writes=0
+INFO loop0-mq-deadline B queue duration: reads count=0 over5s=0 mean=0.000000 top=none; writes count=0 over5s=0 mean=0.000000 top=none
+INFO loop0-mq-deadline B writes: operation_duration over5s=0 operation_time=0.000470 s flush_duration count=31
+INFO loop0-mq-deadline C (iostats=1): ops_r=256 ops_w=63 kernel_reads=256 kernel_writes=63; queue duration reads count=256 over5s=0 le0.1s=256 top=le=5e-05(256), writes count=32 over5s=0
+INFO positive-loop0-mq-deadline: ops_r=256 (want >= 256) ops_w=32 (want >= 32), kernel deltas reads=0 writes=0 (want 0)
+RESULT positive-loop0-mq-deadline PASS
+INFO control-loop0-mq-deadline: q_cnt_r=256 (want >= 256) q_inf_r=0 q_inf_w=0 (want 0) q_fast_r=256 (want >= 0.98 q_cnt_r) ops_w=63 kernel_writes=63 (want equal)
+RESULT control-loop0-mq-deadline PASS
+INFO witness-loop0-mq-deadline: word/hint/bits_per_word before A: 3 243 64, after A: 3 253 64, after B: 3 252 64 (hctx0)
+RESULT witness-loop0-mq-deadline PASS
+INFO stale-queue-loop0-mq-deadline: observed=CLEAN expect=CLEAN q_inf_r=0 (STALE needs >= 128) q_mean_r=0.000000 (STALE needs >= 7)
+RESULT stale-queue-loop0-mq-deadline PASS
+INFO verdict queue loop0-mq-deadline: ABSENT (observed CLEAN, expected CLEAN)
+INFO stale-flush-loop0-mq-deadline: observed=CLEAN expect=CLEAN od_inf_w=0 (STALE needs >= 16) ot_w=0.000470 (STALE needs >= 224) ops_w=32
+RESULT stale-flush-loop0-mq-deadline PASS
+INFO verdict flush loop0-mq-deadline: ABSENT (observed CLEAN, expected CLEAN)
+INFO loop0 mq-deadline took 25 s; elapsed 61 s
+
+##### virtio: vdb, scheduler none, tag none
+INFO vdb none: scheduler='[none] mq-deadline ' write_cache='write back' nr_requests=256 iostats=1 wbt_lat_usec=75000
+INFO settled vdb in 6 s: reads +2048 of 2048 wanted
+INFO settled vdb in 4 s: reads +256 of 256 wanted
+INFO settled vdb in 7 s: reads +256 of 256 wanted
+INFO vdb-none B (iostats=0, 8.0 s after A): ops_r=256 ops_w=32 kernel_reads=0 kernel_writes=0
+INFO vdb-none B queue duration: reads count=0 over5s=0 mean=0.000000 top=none; writes count=0 over5s=0 mean=0.000000 top=none
+INFO vdb-none B writes: operation_duration over5s=0 operation_time=0.003423 s flush_duration count=31
+INFO vdb-none C (iostats=1): ops_r=256 ops_w=63 kernel_reads=256 kernel_writes=63; queue duration reads count=256 over5s=0 le0.1s=256 top=le=5e-05(256), writes count=32 over5s=0
+INFO positive-vdb-none: ops_r=256 (want >= 256) ops_w=32 (want >= 32), kernel deltas reads=0 writes=0 (want 0)
+RESULT positive-vdb-none PASS
+INFO control-vdb-none: q_cnt_r=256 (want >= 256) q_inf_r=0 q_inf_w=0 (want 0) q_fast_r=256 (want >= 0.98 q_cnt_r) ops_w=63 kernel_writes=63 (want equal)
+RESULT control-vdb-none PASS
+INFO witness-vdb-none: word/hint/bits_per_word before A: 3 199 64, after A: 3 254 64, after B: 3 253 64 (hctx1)
+RESULT witness-vdb-none PASS
+INFO stale-queue-vdb-none: observed=CLEAN expect=CLEAN q_inf_r=0 (STALE needs >= 128) q_mean_r=0.000000 (STALE needs >= 7)
+RESULT stale-queue-vdb-none PASS
+INFO verdict queue vdb-none: ABSENT (observed CLEAN, expected CLEAN)
+INFO stale-flush-vdb-none: observed=CLEAN expect=CLEAN od_inf_w=0 (STALE needs >= 16) ot_w=0.003423 (STALE needs >= 224) ops_w=32
+RESULT stale-flush-vdb-none PASS
+INFO verdict flush vdb-none: ABSENT (observed CLEAN, expected CLEAN)
+INFO vdb none took 28 s; elapsed 89 s
+
+##### virtio: vdb, scheduler mq-deadline, tag mq-deadline
+INFO vdb mq-deadline: scheduler='none [mq-deadline] ' write_cache='write back' nr_requests=256 iostats=1 wbt_lat_usec=75000
+INFO settled vdb in 6 s: reads +2048 of 2048 wanted
+INFO settled vdb in 7 s: reads +256 of 256 wanted
+INFO settled vdb in 6 s: reads +256 of 256 wanted
+INFO vdb-mq-deadline B (iostats=0, 8.0 s after A): ops_r=256 ops_w=32 kernel_reads=0 kernel_writes=0
+INFO vdb-mq-deadline B queue duration: reads count=0 over5s=0 mean=0.000000 top=none; writes count=0 over5s=0 mean=0.000000 top=none
+INFO vdb-mq-deadline B writes: operation_duration over5s=0 operation_time=0.003706 s flush_duration count=31
+INFO vdb-mq-deadline C (iostats=1): ops_r=256 ops_w=63 kernel_reads=256 kernel_writes=63; queue duration reads count=256 over5s=0 le0.1s=256 top=le=0.0001(1), writes count=32 over5s=0
+INFO positive-vdb-mq-deadline: ops_r=256 (want >= 256) ops_w=32 (want >= 32), kernel deltas reads=0 writes=0 (want 0)
+RESULT positive-vdb-mq-deadline PASS
+INFO control-vdb-mq-deadline: q_cnt_r=256 (want >= 256) q_inf_r=0 q_inf_w=0 (want 0) q_fast_r=256 (want >= 0.98 q_cnt_r) ops_w=63 kernel_writes=63 (want equal)
+RESULT control-vdb-mq-deadline PASS
+INFO witness-vdb-mq-deadline: word/hint/bits_per_word before A: 2 149 64, after A: 2 189 64, after B: 2 188 64 (hctx1)
+RESULT witness-vdb-mq-deadline PASS
+INFO stale-queue-vdb-mq-deadline: observed=CLEAN expect=CLEAN q_inf_r=0 (STALE needs >= 128) q_mean_r=0.000000 (STALE needs >= 7)
+RESULT stale-queue-vdb-mq-deadline PASS
+INFO verdict queue vdb-mq-deadline: ABSENT (observed CLEAN, expected CLEAN)
+INFO stale-flush-vdb-mq-deadline: observed=CLEAN expect=CLEAN od_inf_w=0 (STALE needs >= 16) ot_w=0.003706 (STALE needs >= 224) ops_w=32
+RESULT stale-flush-vdb-mq-deadline PASS
+INFO verdict flush vdb-mq-deadline: ABSENT (observed CLEAN, expected CLEAN)
+INFO vdb mq-deadline took 29 s; elapsed 118 s
+
+##### nullb: iostats, scheduler none, tag none
+INFO iostats none: scheduler='[none] mq-deadline ' write_cache='write through' nr_requests=64 iostats=1 wbt_lat_usec=2000
+INFO settled iostats in 7 s: reads +2048 of 2048 wanted
+INFO settled iostats in 7 s: reads +256 of 256 wanted
+INFO settled iostats in 4 s: reads +256 of 256 wanted
+INFO iostats-none B (iostats=0, 8.0 s after A): ops_r=256 ops_w=0 kernel_reads=0 kernel_writes=0
+INFO iostats-none B queue duration: reads count=0 over5s=0 mean=0.000000 top=none; writes count=0 over5s=0 mean=0.000000 top=none
+INFO iostats-none B writes: operation_duration over5s=0 operation_time=0.000000 s flush_duration count=0
+INFO iostats-none C (iostats=1): ops_r=256 ops_w=0 kernel_reads=256 kernel_writes=0; queue duration reads count=256 over5s=0 le0.1s=256 top=le=5e-05(256), writes count=0 over5s=0
+INFO positive-iostats-none: ops_r=256 (want >= 256), kernel deltas reads=0 writes=0 (want 0)
+RESULT positive-iostats-none PASS
+INFO control-iostats-none: q_cnt_r=256 (want >= 256) q_inf_r=0 q_inf_w=0 (want 0) q_fast_r=256 (want >= 0.98 q_cnt_r) 
+RESULT control-iostats-none PASS
+INFO witness-iostats-none: word/hint/bits_per_word before A: 1 18 16, after A: 1 18 16, after B: 1 18 16 (hctx0)
+RESULT witness-iostats-none PASS
+INFO stale-queue-iostats-none: observed=CLEAN expect=CLEAN q_inf_r=0 (STALE needs >= 128) q_mean_r=0.000000 (STALE needs >= 7)
+RESULT stale-queue-iostats-none PASS
+INFO verdict queue iostats-none: ABSENT (observed CLEAN, expected CLEAN)
+SKIP stale-flush-iostats-none write cache is 'write through', not 'write back': no flushes
+INFO iostats none took 27 s; elapsed 145 s
+
+##### nullb: iostats, scheduler mq-deadline, tag mq-deadline
+INFO iostats mq-deadline: scheduler='none [mq-deadline] ' write_cache='write through' nr_requests=128 iostats=1 wbt_lat_usec=2000
+INFO settled iostats in 6 s: reads +2048 of 2048 wanted
+INFO settled iostats in 6 s: reads +256 of 256 wanted
+INFO settled iostats in 5 s: reads +256 of 256 wanted
+INFO iostats-mq-deadline B (iostats=0, 8.0 s after A): ops_r=256 ops_w=0 kernel_reads=0 kernel_writes=0
+INFO iostats-mq-deadline B queue duration: reads count=0 over5s=0 mean=0.000000 top=none; writes count=0 over5s=0 mean=0.000000 top=none
+INFO iostats-mq-deadline B writes: operation_duration over5s=0 operation_time=0.000000 s flush_duration count=0
+INFO iostats-mq-deadline C (iostats=1): ops_r=256 ops_w=0 kernel_reads=256 kernel_writes=0; queue duration reads count=256 over5s=0 le0.1s=256 top=le=0.00025(1), writes count=0 over5s=0
+INFO positive-iostats-mq-deadline: ops_r=256 (want >= 256), kernel deltas reads=0 writes=0 (want 0)
+RESULT positive-iostats-mq-deadline PASS
+INFO control-iostats-mq-deadline: q_cnt_r=256 (want >= 256) q_inf_r=0 q_inf_w=0 (want 0) q_fast_r=256 (want >= 0.98 q_cnt_r) 
+RESULT control-iostats-mq-deadline PASS
+INFO witness-iostats-mq-deadline: word/hint/bits_per_word before A: 3 102 32, after A: 3 127 32, after B: 3 127 32 (hctx0)
+RESULT witness-iostats-mq-deadline PASS
+INFO stale-queue-iostats-mq-deadline: observed=CLEAN expect=CLEAN q_inf_r=0 (STALE needs >= 128) q_mean_r=0.000000 (STALE needs >= 7)
+RESULT stale-queue-iostats-mq-deadline PASS
+INFO verdict queue iostats-mq-deadline: ABSENT (observed CLEAN, expected CLEAN)
+SKIP stale-flush-iostats-mq-deadline write cache is 'write through', not 'write back': no flushes
+INFO iostats mq-deadline took 27 s; elapsed 172 s
+
+##### shared tags: nullb0 accounted, then nullb1 not
+
+##### shared: nullb1, scheduler none, tag shared
+INFO nullb1 shared: scheduler='[none] mq-deadline ' write_cache='write through' nr_requests=64 iostats=1 wbt_lat_usec=2000
+INFO settled nullb1 in 4 s: reads +0 of 0 wanted
+INFO settled nullb1 in 6 s: reads +256 of 256 wanted
+INFO settled nullb1 in 6 s: reads +256 of 256 wanted
+INFO nullb1-shared B (iostats=0, 8.0 s after A): ops_r=256 ops_w=0 kernel_reads=0 kernel_writes=0
+INFO nullb1-shared B queue duration: reads count=0 over5s=0 mean=0.000000 top=none; writes count=0 over5s=0 mean=0.000000 top=none
+INFO nullb1-shared B writes: operation_duration over5s=0 operation_time=0.000000 s flush_duration count=0
+INFO nullb1-shared C (iostats=1): ops_r=256 ops_w=0 kernel_reads=256 kernel_writes=0; queue duration reads count=256 over5s=0 le0.1s=256 top=le=5e-05(256), writes count=0 over5s=0
+INFO positive-nullb1-shared: ops_r=256 (want >= 256), kernel deltas reads=0 writes=0 (want 0)
+RESULT positive-nullb1-shared PASS
+INFO control-nullb1-shared: q_cnt_r=256 (want >= 256) q_inf_r=0 q_inf_w=0 (want 0) q_fast_r=256 (want >= 0.98 q_cnt_r) 
+RESULT control-nullb1-shared PASS
+INFO witness-nullb1-shared: word/hint/bits_per_word before A: 0 9 16, after A: 0 15 16, after B: 0 15 16 (hctx0)
+RESULT witness-nullb1-shared PASS
+INFO stale-queue-nullb1-shared: observed=CLEAN expect=CLEAN q_inf_r=0 (STALE needs >= 128) q_mean_r=0.000000 (STALE needs >= 7)
+RESULT stale-queue-nullb1-shared PASS
+INFO verdict queue nullb1-shared: ABSENT (observed CLEAN, expected CLEAN)
+SKIP stale-flush-nullb1-shared write cache is 'write through', not 'write back': no flushes
+INFO nullb1 shared took 21 s; elapsed 193 s
+
+##### summary
+INFO summary queue loop0-none ABSENT observed=CLEAN expected=CLEAN
+INFO summary flush loop0-none ABSENT observed=CLEAN expected=CLEAN
+INFO summary queue loop0-mq-deadline ABSENT observed=CLEAN expected=CLEAN
+INFO summary flush loop0-mq-deadline ABSENT observed=CLEAN expected=CLEAN
+INFO summary queue vdb-none ABSENT observed=CLEAN expected=CLEAN
+INFO summary flush vdb-none ABSENT observed=CLEAN expected=CLEAN
+INFO summary queue vdb-mq-deadline ABSENT observed=CLEAN expected=CLEAN
+INFO summary flush vdb-mq-deadline ABSENT observed=CLEAN expected=CLEAN
+INFO summary queue iostats-none ABSENT observed=CLEAN expected=CLEAN
+INFO summary queue iostats-mq-deadline ABSENT observed=CLEAN expected=CLEAN
+INFO summary queue nullb1-shared ABSENT observed=CLEAN expected=CLEAN
+INFO RQF_FLUSH_SEQ lines in obi.log: 0
+time=2026-10-07T20:42:15.521Z level=WARN msg="a storage latency histogram is reported per pod or container: each pod adds a series per bucket. The operations and time counters give the mean latency per pod at one series each" component=agent.StatsO11y histogram=obi.stat.disk.operation.duration attributes=[container.id]
+time=2026-10-07T20:42:15.522Z level=WARN msg="a storage latency histogram is reported per pod or container: each pod adds a series per bucket. The operations and time counters give the mean latency per pod at one series each" component=agent.StatsO11y histogram=obi.stat.disk.queue.duration attributes=[container.id]
+INFO done in 193 s
+./run.sh: line 85: /sys/block/iostats/queue/iostats: No such file or directory
+./run.sh: line 85: /sys/block/iostats/queue/iostats: No such file or directory
+./run.sh: line 85: /sys/block/iostats/queue/iostats: No such file or directory
+./run.sh: line 85: /sys/block/iostats/queue/iostats: No such file or directory
