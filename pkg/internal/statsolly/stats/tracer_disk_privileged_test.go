@@ -472,7 +472,11 @@ func TestDiskPassthroughCommands(t *testing.T) {
 	device := scsiDebugDisk(t)
 	// the kernel times the requests of the queues that collect I/O statistics, as writeback
 	// throttling makes them do
-	if readQueueAttribute(t, device, "wbt_lat_usec") == "0" {
+	wbtLatency, err := os.ReadFile(filepath.Join("/sys/block", device, "queue", "wbt_lat_usec"))
+	if err != nil {
+		t.Skipf("no writeback throttling to make the kernel time the requests: %v", err)
+	}
+	if strings.TrimSpace(string(wbtLatency)) == "0" {
 		writeQueueAttribute(t, device, "wbt_lat_usec", "75000")
 	}
 	node := deviceNode(t, device)
@@ -549,7 +553,8 @@ func writeAndReadConcurrently(t *testing.T, device string, workers, blocks int) 
 	done := make(chan error, workers)
 	for i := range workers {
 		block := alignedBuffer(t, directIOBlockSize)
-		offset := int64(i * blocks * directIOBlockSize)
+		// a block apart, so that the scheduler can't merge the requests of two goroutines
+		offset := int64(i * (blocks + 1) * directIOBlockSize)
 		go func() {
 			f, err := os.OpenFile(device, os.O_RDWR|unix.O_DIRECT, 0)
 			if err != nil {

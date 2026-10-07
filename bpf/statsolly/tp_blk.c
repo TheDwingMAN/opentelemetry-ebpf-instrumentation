@@ -248,8 +248,9 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         return 0;
     }
 
-    // From Linux 6.8 the kernel doesn't time passthrough commands (REQ_OP_DRV_*), so they must
-    // not reach the maps: their completion would stop the timing of the queue.
+    // the operations that OBI doesn't measure (passthrough, zone management) must not reach the
+    // maps: from Linux 6.8 the kernel doesn't time passthrough commands, and their completion
+    // would stop the timing of the queue
     const enum disk_op op = request_op(rq);
     if (op == disk_op_unknown) {
         return 0;
