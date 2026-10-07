@@ -1,0 +1,73 @@
+uname -r: 6.12.111-0612111-generic
+local PV on dm-0 over loop0; partitioned disk loop2
+zram0: scheduler 'absent'
+node ready after 11s
+node name: lab
+obi running after 15s
+RESULT obi-running PASS
+workloads running after 15s
+NAMESPACE   NAME                              READY   STATUS    RESTARTS   AGE   IP          NODE   NOMINATED NODE   READINESS GATES
+batch       report-writer-57cbd5997b-npwdh    1/1     Running   0          20s   10.42.0.3   lab    <none>           <none>
+batch       report-writer-57cbd5997b-w9gqv    1/1     Running   0          20s   10.42.0.2   lab    <none>           <none>
+default     disk-io-5d77fdfdc4-vbcqv          1/1     Running   0          20s   10.42.0.4   lab    <none>           <none>
+default     disk-io-kubens-666cd679d4-wwrkj   1/1     Running   0          20s   10.42.0.6   lab    <none>           <none>
+default     disk-io-pvc-7d65b445d5-99grv      1/1     Running   0          20s   10.42.0.5   lab    <none>           <none>
+obi         obi-8vklh                         1/1     Running   0          20s   10.0.2.15   lab    <none>           <none>
+the kubens pod after 0s
+RESULT kubens-hides-the-mounts PASS
+RESULT nfs-waiting-warn PASS
+NFS probes attached after 15s
+RESULT nfs-late-attach PASS
+##### activity for 960s from 2026-10-07T16:54:09Z
+##### activity done at 2026-10-07T17:10:09Z
+RESULT obi-stats-agent PASS
+RESULT pod-names PASS
+RESULT partition PASS
+RESULT pod-volumes PASS
+RESULT pod-volumes-in-kubens-namespace PASS
+RESULT no-mounts-warning-when-visible PASS
+RESULT discards PASS
+obi_stat_disk_volume_device{obi_disk_volume_device="dm-0",obi_disk_volume_name="labvg-pv",system_device="vda"} 1
+obi_stat_disk_volume_device{obi_disk_volume_device="loop0",obi_disk_volume_name="",system_device="vda"} 1
+obi_stat_disk_volume_device{obi_disk_volume_device="loop1",obi_disk_volume_name="",system_device="vda"} 1
+RESULT volume-device-lvm-to-vda PASS
+RESULT operation-time-select-new-key PASS
+RESULT otlp-operation-time-new-name PASS
+RESULT otlp-no-empty-attribute-key PASS
+RESULT otlp-no-empty-k8s-attribute PASS
+RESULT otlp-pod-keeps-k8s-attributes PASS
+RESULT prometheus-keeps-empty-workload-label PASS
+RESULT otlp-pod-less-series-exported PASS
+RESULT flushes PASS
+RESULT fs-sync-types PASS
+RESULT nfs PASS
+RESULT stall-bounds-disk_operation PASS
+RESULT stall-bounds-disk_queue PASS
+RESULT stall-bounds-disk_flush PASS
+RESULT stall-bounds-fs_sync PASS
+RESULT stall-bounds-nfs PASS
+RESULT otlp-stall-bounds PASS
+RESULT no-approximated-buckets PASS
+RESULT fs-type-ext4 PASS
+RESULT fs-type-tmpfs PASS
+RESULT fs-type-nfs4 PASS
+RESULT fs-type-always-set PASS
+RESULT otlp-fs-type-string PASS
+RESULT fs-sync-operations-per-workload PASS
+RESULT fs-sync-operation-time-per-workload PASS
+RESULT nfs-counters PASS
+RESULT otlp-new-counters PASS
+RESULT no-per-pod-histogram-warning PASS
+RESULT bio-based-disk PASS
+"host.id","value":{"stringValue":"lab"
+RESULT host-id-is-node-name PASS
+      2 OBI will use process-internal maps; external features depending on pinned maps (e.g., profile correlation) will be disabled
+      6 Unsupported Go program detected, using generic instrumentation
+      1 context propagation is disabled: the BPF compensation is ineffective (attach failed or blocked?). This kernel misreports ioctl(FIONREAD) for sockets in a sockhash (kernel commit 929e30f93125), or could not be verified to report it correctly, so keeping propagation enabled would risk making applications sizing reads via FIONREAD stall or truncate transfers
+      2 creating or accessing OTEL namespace in bpffs failed (is bpffs mounted and accessible?)
+      1 invalid Prometheus' exemplar_filter value. Defaulting to always_off
+      1 kernel misreports ioctl(FIONREAD) for sockets in a sockhash (kernel commit 929e30f93125, present in 6.6.128+, 6.12.75+, 6.18.14+ and 6.19+); enabling BPF compensation for tracked sockets
+      2 storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working
+RESULT mounts-hidden-warns-once PASS
+468K	/results/prom-data
+1.6M	/results/otlp.json

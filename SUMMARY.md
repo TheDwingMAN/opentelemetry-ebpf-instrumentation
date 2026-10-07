@@ -60,7 +60,16 @@ The payload output of every kernel is in `out/matrix/<kernel>.out`.
 
 `./run-matrix.sh payloads/k3s-final 3000 v6.12.111 rhel9.6`, payload built from `0b5d13939`.
 
-Not run yet.
+| kernel | exit | verdict | PASS | FAIL | SKIP | accel | boot | payload | total |
+|---|---|---|---|---|---|---|---|---|---|
+| v6.12.111 | 0 | PASS | 42 | 0 | 0 | kvm | 0.6s | 1193.7s | 1194.4s |
+| rhel9.6 | 0 | PASS | 42 | 0 | 0 | kvm | 3.6s | 1189.8s | 1193.6s |
+
+### Failures
+
+None: every kernel exited 0 with no `RESULT ... FAIL` line.
+
+The payload output of every kernel is in `out/k3s/<kernel>.out`.
 
 ## iostats (stale request starts, the RQF_IO_STAT gate)
 
