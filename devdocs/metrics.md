@@ -235,7 +235,7 @@ sum by (system_device) (rate(obi_stat_disk_io_bytes_total{disk_io_direction="wri
 - The arguments of the tracepoints are checked in the BTF of the modules (Linux 5.11+). Older kernels are trusted from Linux 5.8, so the NFS metrics are disabled on RHEL 8 kernels without module BTF.
 - An RPC is charged to the workload of the thread that started it, through the cgroup of its `io` controller. The kernel writes cached data back from its own threads, unless the application syncs it, so those write RPCs are charged to no workload, like block I/O writeback on cgroup v1.
 - `server.address` is the IP address of the server, as the RPC transport displays it, not the host name of the mount.
-- `error.type` is the errno of failed RPCs, or the number of NFSv4 errors that the client doesn't translate into errnos.
+- `error.type` is the errno of failed RPCs, e.g. `EIO`. The kernel-internal errnos of the client and the NFSv4 errors that it doesn't translate into errnos have the names that the kernel and the RFCs give them, e.g. `EJUKEBOX` and `NFS4ERR_DELAY` when the server asks the client to retry later. A status without a name is reported by its number.
 
 #### Storage stats profiles
 

@@ -120,8 +120,30 @@ func TestNFSIOReader(t *testing.T) {
 }
 
 func TestNFSErrorType(t *testing.T) {
-	assert.Empty(t, nfsErrorType(0))
-	assert.Equal(t, "EIO", nfsErrorType(uint16(unix.EIO)))
-	// NFS4ERR_DELAY, which the client retries instead of translating
-	assert.Equal(t, "10008", nfsErrorType(10008))
+	tests := []struct {
+		name   string
+		status uint16
+		want   string
+	}{
+		{name: "success", status: 0, want: ""},
+		{name: "uapi errno", status: uint16(unix.EIO), want: "EIO"},
+		{name: "first kernel-internal errno", status: 512, want: "ERESTARTSYS"},
+		{name: "NFSv3 not supported", status: 524, want: "ENOTSUPP"},
+		{name: "NFSv3 retry later", status: 528, want: "EJUKEBOX"},
+		{name: "last kernel-internal errno", status: 531, want: "ENOGRACE"},
+		{name: "first NFSv4 status", status: 10001, want: "NFS4ERR_BADHANDLE"},
+		{name: "NFSv4 retry later", status: 10008, want: "NFS4ERR_DELAY"},
+		{name: "NFSv4 grace period", status: 10013, want: "NFS4ERR_GRACE"},
+		{name: "last NFSv4 status", status: 10096, want: "NFS4ERR_XATTR2BIG"},
+		{name: "unassigned kernel-internal errno", status: 520, want: "520"},
+		{name: "unassigned NFSv4 status", status: 10073, want: "10073"},
+		{name: "past the NFSv4 statuses", status: 10097, want: "10097"},
+		{name: "internal pNFS status", status: 12001, want: "12001"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, nfsErrorType(tt.status))
+		})
+	}
 }
