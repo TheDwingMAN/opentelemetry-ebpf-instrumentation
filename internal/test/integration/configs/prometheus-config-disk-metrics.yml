@@ -1,0 +1,28 @@
+global:
+  evaluation_interval: 250ms
+  scrape_interval: 250ms
+scrape_configs:
+  # Disk metrics are asserted over BOTH export paths, because the two produce
+  # the metric independently and can disagree (naming, units, type, attribute
+  # rendering). The `exported` label is what lets a test pin an assertion to
+  # one specific path.
+  #
+  # OTLP path: OBI -> otelcol (OTLP/HTTP) -> otelcol's Prometheus exporter.
+  # Metric names here are derived by the collector from the OTLP name + unit,
+  # not by OBI.
+  - job_name: otel
+    honor_labels: true
+    static_configs:
+      - labels:
+          exported: "otel"
+        targets:
+          - 'otelcol:9464'
+  # Native Prometheus path: OBI's own /metrics endpoint. Metric names here come
+  # straight from the `Prom` field of the attributes.Name definitions.
+  - job_name: obi-collector
+    honor_labels: true
+    static_configs:
+      - labels:
+          exported: "prometheus"
+        targets:
+          - 'obi:8999'

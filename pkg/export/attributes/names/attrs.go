@@ -94,6 +94,10 @@ const (
 	K8SClientCluster   = Name("client_k8s_cluster_name")
 	K8SServerCluster   = Name("server_k8s_cluster_name")
 
+	K8sPersistentVolumeName      = Name("k8s.persistentvolume.name")
+	K8sPersistentVolumeClaimName = Name("k8s.persistentvolumeclaim.name")
+	K8sStorageClassName          = Name("k8s.storageclass.name")
+
 	ContainerName = Name(semconv.ContainerNameKey)
 	ContainerID   = Name(semconv.ContainerIDKey)
 
@@ -259,6 +263,9 @@ const (
 	BpfProbeName = Name("bpf.probe.name")
 	BpfProbeType = Name("bpf.probe.type")
 
+	// BpfDropReason says why an eBPF program could not record an operation.
+	BpfDropReason = Name("bpf.drop.reason")
+
 	TelemetryType = Name("telemetry.type")
 	Subscriber    = Name("subscriber")
 )
@@ -390,4 +397,16 @@ const (
 	TCPFailedConnectionReason = Name("reason")
 	NetworkTCPHandshakeRole   = Name("network.tcp.handshake.role")
 	NetworkIoDirection        = Name(semconv.NetworkIODirectionKey)
+	DiskDevice                = Name("system.device")
+	DiskIODirection           = Name("disk.io.direction")
+	DiskStacked               = Name("obi.disk.stacked")
+	DiskPhysicalDevice        = Name("obi.disk.physical_device")
+	DiskPartition             = Name("obi.disk.partition")
+	FsType                    = Name("system.filesystem.type")
+	FsOperation               = Name("fs.operation")
+	// NFSOperationName is the NFSv4 operation of an NFS client RPC, whose
+	// ONC RPC procedure is always COMPOUND.
+	NFSOperationName      = Name(semconv.NfsOperationNameKey)
+	FsMountpoint          = Name("system.filesystem.mountpoint")
+	FsContainerMountpoint = Name("obi.fs.container.mountpoint")
 )

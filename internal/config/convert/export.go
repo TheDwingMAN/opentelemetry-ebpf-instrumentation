@@ -382,6 +382,46 @@ const (
 	statsFeatureTCPIo                    = "tcp_io"
 )
 
+// storageStatsFamily is a storage family of capture.network.stats.features,
+// named after its metrics.features flag.
+type storageStatsFamily struct {
+	name    string
+	feature featureexport.Features
+}
+
+// storageStatsFamilies are the storage leaf families, in export order: one
+// per single-bit storage flag of export.FeatureMapper, each a metric family
+// or, for storage_block_volumes, an addition to the block ones
+// (TestStorageStatsFamiliesCoverTheFeatureMapper).
+var storageStatsFamilies = []storageStatsFamily{
+	{"storage_block_duration", featureexport.FeatureStorageBlockDuration},
+	{"storage_block_io", featureexport.FeatureStorageBlockIo},
+	{"storage_block_queue", featureexport.FeatureStorageBlockQueue},
+	{"storage_block_errors", featureexport.FeatureStorageBlockErrors},
+	{"storage_block_flush", featureexport.FeatureStorageBlockFlush},
+	{"storage_block_discard", featureexport.FeatureStorageBlockDiscard},
+	{"storage_block_pending", featureexport.FeatureStorageBlockPending},
+	{"storage_block_volumes", featureexport.FeatureStorageBlockVolumes},
+	{"storage_block_pod", featureexport.FeatureStorageBlockPod},
+	{"storage_block_queue_depth", featureexport.FeatureStorageBlockQueueDepth},
+	{"storage_fs_duration", featureexport.FeatureStorageFSDuration},
+	{"storage_fs_io", featureexport.FeatureStorageFSIo},
+	{"storage_fs_errors", featureexport.FeatureStorageFSErrors},
+	{"storage_fs_sync", featureexport.FeatureStorageFSSync},
+	{"storage_nfs_duration", featureexport.FeatureStorageNFSDuration},
+	{"storage_nfs_errors", featureexport.FeatureStorageNFSErrors},
+	{"storage_nfs_retransmits", featureexport.FeatureStorageNFSRetransmits},
+	{"storage_nfs_io", featureexport.FeatureStorageNFSIo},
+}
+
+// storageStatsUmbrellas are accepted on import, as in metrics.features, and
+// never exported: the export lists the leaves they stand for.
+var storageStatsUmbrellas = []storageStatsFamily{
+	{"storage_block", featureexport.FeatureStorageBlock},
+	{"storage_fs", featureexport.FeatureStorageFS},
+	{"storage_nfs", featureexport.FeatureStorageNFS},
+}
+
 func statsFeatures(features featureexport.Features) []string {
 	out := []string{}
 	if features.StatsTCPRtt() {
@@ -398,6 +438,11 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsTCPIo() {
 		out = append(out, statsFeatureTCPIo)
+	}
+	for _, f := range storageStatsFamilies {
+		if features&f.feature != 0 {
+			out = append(out, f.name)
+		}
 	}
 	return out
 }

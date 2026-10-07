@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +41,14 @@ var (
 	specCache   sync.Map // map[uintptr]*ebpf.CollectionSpec keyed by loadFn pointer
 	specCacheMu sync.Mutex
 	btfCache    = btf.NewCache()
+	// storageLoadMu serializes the loads of the storage collections. Their
+	// programs relocate against module BTF (nfs, cifs, ceph, sunrpc), and
+	// cilium/ebpf v0.22.0's split BTF decoders inflate the types of their
+	// shared vmlinux base under their own lock only, so two concurrent
+	// relocations through btfCache can write the base's type maps at once
+	// (fatal error: concurrent map writes), as soon as more than one of
+	// those modules is loaded.
+	storageLoadMu sync.Mutex
 )
 
 func cachedSpec(t *testing.T, loadFn func() (*ebpf.CollectionSpec, error)) *ebpf.CollectionSpec {
@@ -76,6 +85,27 @@ func loadAndVerify(t *testing.T, name string, loadFn func() (*ebpf.CollectionSpe
 		}
 		uprobe.PrepareSpecs(spec)
 
+		// Storage programs: the block tracepoint family this kernel uses,
+		// and both families of every filesystem's programs, which carry a
+		// placeholder attach target: the fentry/fexit ones pointed at the
+		// filesystem's own functions or at vmlinux stand-ins, and the
+		// kprobe/kretprobe fallback.
+		storage := false
+		if spec.Programs["obi_stats_tp_block_rq_issue"] != nil || spec.Programs["obi_stats_fentry_nfs_read"] != nil ||
+			spec.Programs["obi_stats_tp_btf_block_bio_queue"] != nil {
+			require.NoError(t, statsolly.PrepareStorageSpec(spec), "failed to prepare storage programs")
+			storage = true
+		}
+
+		// The NFS program: the tp_btf variant needs the sunrpc BTF, which a
+		// kernel without the module loaded does not have.
+		if spec.Programs["obi_stats_tp_btf_rpc_stats_latency"] != nil {
+			if !statsolly.PrepareNFSSpec(spec) {
+				t.Log("no sunrpc BTF on this kernel: verifying the raw_tp NFS program only")
+			}
+			storage = true
+		}
+
 		if len(consts) > 0 && consts[0] != nil {
 			err := ebpfconvenience.RewriteConstants(spec, consts[0])
 			require.NoError(t, err, "failed to rewrite constants")
@@ -98,6 +128,9 @@ func loadAndVerify(t *testing.T, name string, loadFn func() (*ebpf.CollectionSpe
 			}
 		}
 
+		if storage {
+			storageLoadMu.Lock()
+		}
 		coll, err := ebpf.NewCollectionWithOptions(spec, ebpf.CollectionOptions{
 			Programs: ebpf.ProgramOptions{
 				// Increase log buffer so verifier rejections are not truncated.
@@ -105,6 +138,9 @@ func loadAndVerify(t *testing.T, name string, loadFn func() (*ebpf.CollectionSpe
 			},
 			Cache: btfCache,
 		})
+		if storage {
+			storageLoadMu.Unlock()
+		}
 		if err != nil {
 			var ve *ebpf.VerifierError
 			if errors.As(err, &ve) {
@@ -322,5 +358,139 @@ func TestBPFVerifierWithConstants(t *testing.T) {
 	forEachCombination(t, "statsolly/Stats", statsolly.LoadStats, []constOption{
 		{"g_bpf_debug", []any{true, false}},
 		{"stats_wakeup_data_bytes", []any{uint32(0), uint32(1 << 20)}},
+		{"blk_want_queue_depth", []any{uint8(0), uint8(1)}},
+		{"blk_emit_kinds", []any{uint8(0), uint8(0x0f)}},
+		// Step 16: with it on, the issue programs read rq->rq_flags and
+		// rq->start_time_ns and CO-RE-resolve enum rqf_flags.
+		{"blk_want_queue", []any{uint8(0), uint8(1)}},
+		// Step 13: with it on, the issue programs CO-RE-read bio->bi_bdev
+		// and rq->part (guarded by bpf_core_field_exists), so this exercises
+		// those relocations against this kernel's BTF.
+		{"blk_want_part", []any{uint8(0), uint8(1)}},
 	})
+	// Kernel aggregation: the completion counts into the per-CPU maps in
+	// either histogram layout instead of the ring buffer. The queue depth,
+	// which forces the ring buffer, stays off.
+	forEachCombination(t, "statsolly/StatsAgg", statsolly.LoadStats, []constOption{
+		{"g_bpf_debug", []any{true, false}},
+		{"blk_emit_kinds", []any{uint8(0x0f)}},
+		{"blk_want_queue", []any{uint8(0), uint8(1)}},
+		{"blk_want_part", []any{uint8(0), uint8(1)}},
+		{"blk_emit_mode", []any{uint8(1)}},
+		{"blk_hist_exp", []any{uint8(0), uint8(1)}},
+	})
+	// Step 20: the bio programs of stacked volumes, an object of their own.
+	// tp_btf and raw_tp are loaded together, in the variant this kernel's
+	// block_bio_queue prototype takes, in both emit modes and both histogram
+	// layouts; blk_want_part adds the read of the bio's block_device dev_t.
+	forEachCombination(t, "statsolly/BlkBio", statsolly.LoadBlkBio, []constOption{
+		{"g_bpf_debug", []any{true, false}},
+		{"blk_want_queue_depth", []any{uint8(0), uint8(1)}},
+		{"blk_emit_kinds", []any{uint8(0), uint8(0x0f)}},
+		{"blk_want_part", []any{uint8(0), uint8(1)}},
+	})
+	forEachCombination(t, "statsolly/BlkBioAgg", statsolly.LoadBlkBio, []constOption{
+		{"g_bpf_debug", []any{true, false}},
+		{"blk_emit_kinds", []any{uint8(0x0f)}},
+		{"blk_want_part", []any{uint8(0), uint8(1)}},
+		{"blk_emit_mode", []any{uint8(1)}},
+		{"blk_hist_exp", []any{uint8(0), uint8(1)}},
+	})
+	// Step 21: storage_block_pod reads the blkcg chain at the issue of a
+	// read or write (rq->bio) and at the queueing of a bio, and counts the
+	// completion in blk_cg_agg, in both emit modes. The request issue also
+	// reads the accounting start for operation_time, with queue.duration on
+	// or off.
+	forEachCombination(t, "statsolly/StatsPod", statsolly.LoadStats, []constOption{
+		{"blk_want_cgroup", []any{uint8(1)}},
+		{"blk_emit_kinds", []any{uint8(0), uint8(0x0f)}},
+		{"blk_want_queue", []any{uint8(0), uint8(1)}},
+		{"blk_want_part", []any{uint8(0), uint8(1)}},
+		{"blk_emit_mode", []any{uint8(0), uint8(1)}},
+	})
+	forEachCombination(t, "statsolly/BlkBioPod", statsolly.LoadBlkBio, []constOption{
+		{"blk_want_cgroup", []any{uint8(1)}},
+		{"blk_emit_kinds", []any{uint8(0), uint8(0x0f)}},
+		{"blk_want_part", []any{uint8(0), uint8(1)}},
+		{"blk_emit_mode", []any{uint8(0), uint8(1)}},
+	})
+	forEachCombination(t, "statsolly/FsIo", statsolly.LoadFsIo, []constOption{
+		{"g_bpf_debug", []any{true, false}},
+		{"stats_wakeup_data_bytes", []any{uint32(0), uint32(1 << 20)}},
+	})
+	forEachCombination(t, "statsolly/NfsRpc", statsolly.LoadNfsRpc, []constOption{
+		{"nfs_want_status", []any{uint8(0), uint8(1)}},
+		{"nfs_hist_exp", []any{uint8(0), uint8(1)}},
+		{"nfs_key_owner", []any{uint8(0), uint8(1)}},
+		{"nfs_cgroup_v1", []any{uint8(0), uint8(1)}},
+	})
+	// Kernel aggregation (explicit and exponential layouts) against the ring
+	// buffer, each with the fentry/fexit starts in task storage or in the
+	// fs_start hash map.
+	forEachCombination(t, "statsolly/FsIoAgg", statsolly.LoadFsIo, []constOption{
+		{"fs_emit_mode", []any{uint8(0), uint8(1)}},
+		{"fs_hist_exp", []any{uint8(0), uint8(1)}},
+		{"fs_task_btf", []any{uint8(0), uint8(1)}},
+	})
+}
+
+// TestBPFVerifierBlockWithoutBlkCgroup loads the block request and bio
+// objects with storage_block_pod on against this kernel's BTF minus
+// bio.bi_blkg, as on a kernel built without CONFIG_BLK_CGROUP: the blkcg
+// chain is read only behind bpf_core_field_exists(bio->bi_blkg), so its
+// relocations, which cannot be resolved there, must be dead code rather than
+// an invalid instruction that rejects every block program (v2 commit
+// b1dfc046f).
+func TestBPFVerifierBlockWithoutBlkCgroup(t *testing.T) {
+	if err := rlimit.RemoveMemlock(); err != nil {
+		t.Skipf("cannot remove memlock limit (insufficient privileges?): %v", err)
+	}
+	kernel, err := btfCache.Kernel()
+	require.NoError(t, err)
+	types := kernel.Copy()
+	var bio *btf.Struct
+	require.NoError(t, types.TypeByName("bio", &bio))
+	before := len(bio.Members)
+	bio.Members = slices.DeleteFunc(slices.Clone(bio.Members), func(m btf.Member) bool { return m.Name == "bi_blkg" })
+	require.Len(t, bio.Members, before-1, "this kernel's struct bio has bi_blkg to remove")
+
+	for _, obj := range []struct {
+		name string
+		load func() (*ebpf.CollectionSpec, error)
+	}{
+		{"Stats", statsolly.LoadStats},
+		{"BlkBio", statsolly.LoadBlkBio},
+	} {
+		for _, mode := range []uint8{0, 1} {
+			t.Run(fmt.Sprintf("%s/blk_emit_mode=%d", obj.name, mode), func(t *testing.T) {
+				spec := cachedSpec(t, obj.load)
+				require.NoError(t, statsolly.PrepareStorageSpec(spec))
+				require.NoError(t, ebpfconvenience.RewriteConstants(spec, map[string]any{
+					"blk_want_cgroup": uint8(1),
+					"blk_emit_kinds":  uint8(0x0f),
+					"blk_emit_mode":   mode,
+				}))
+				for _, m := range spec.Maps {
+					m.Pinning = ebpf.PinNone
+					switch {
+					case m.MaxEntries != 0:
+					case m.Type == ebpf.RingBuf:
+						m.MaxEntries = uint32(os.Getpagesize())
+					case m.Type != ebpf.TaskStorage:
+						m.MaxEntries = 1
+					}
+				}
+				coll, err := ebpf.NewCollectionWithOptions(spec, ebpf.CollectionOptions{
+					Programs: ebpf.ProgramOptions{KernelTypes: types, LogSizeStart: 10 * 1024 * 1024},
+					Cache:    btfCache,
+				})
+				var ve *ebpf.VerifierError
+				if errors.As(err, &ve) {
+					t.Fatalf("BPF verifier rejected program(s) without bio.bi_blkg:\n%+v", ve)
+				}
+				require.NoError(t, err)
+				coll.Close()
+			})
+		}
+	}
 }

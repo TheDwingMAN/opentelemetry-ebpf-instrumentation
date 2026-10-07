@@ -213,6 +213,8 @@ OBI currently documents the following statistical instrumentation support:
 | TCP Successful Connections | Node-wide statistical metric collection | Counts completed TCP handshakes between two endpoints | Reports separate client and server observations identified by `network.tcp.handshake.role` |
 | TCP Retransmits | Node-wide statistical metric collection | Counts data-segment and client-SYN retransmits | Server-side SYN-ACK retransmits are a separate event and not counted |
 | TCP IO | Node-wide statistical metric collection | Count bytes transferred at the socket layer. When enabled, the eBPF probes fire on every `tcp_sendmsg` and `tcp_cleanup_rbuf` call, so consider enabling it standalone with `stats_tcp_io` if overhead is a concern. | On kernels older than ~6.5, traffic sent via `sendfile()` is not captured because it went through `tcp_sendpage` rather than `tcp_sendmsg`; on kernels 6.5+ the splice path was unified and `sendfile()` traffic is captured. The internal accumulation map size can be increased via the `ebpf.*` configuration knobs on nodes with many concurrent connections. |
+| Disk queue time (`obi.stat.disk.queue.duration`) | Node-wide statistical metric collection | Time from the block request's accounting start to dispatch to the driver | Needs `enum rqf_flags` in the kernel BTF (the enum appeared in the 5.1x series; the exact version was not checked) and the request-keyed block programs. On kernels without it (such as Linux 5.10 and the RHEL 8 family) and with the classic block tracepoints the metric has no series and OBI logs a warning at start. Not recorded for devices with `queue/iostats=0`; see [devdocs/metrics.md](devdocs/metrics.md) |
+| Stacked volumes (`storage_block_volumes`) | Node-wide statistical metric collection | LVM logical volumes, md arrays and other bio-based device-mapper devices as devices of their own (`obi.disk.stacked=true`) in the `obi.stat.disk.*` metrics, measured per bio from submission to completion | Opt-in: its programs run for every bio submitted on the node. Needs Linux 5.12+ with BTF; on other kernels the volumes are skipped with a warning and the other block metrics are kept. Only leaf bio-based dm/md devices are tracked: request-based dm (dm-multipath) and NVMe multipath heads are measured on the devices below them. Operation counts are bios as submitted to the volume, not the per-fragment counts of `/proc/diskstats`, so compare bytes with node_exporter; see [devdocs/metrics.md](devdocs/metrics.md) |
 
 ## Runtime Metrics
 
@@ -266,6 +268,33 @@ OBI currently documents the following GPU execution instrumentation support:
 | `libcuda` | `>= 7.0` | `cuLaunchKernel`, `cuLaunchKernelEx`, `cuGraphLaunch` | None documented |
 
 Since the CUDA runtime implements the driver API, launches in a process that maps both libraries would be observed twice; OBI deduplicates them in the eBPF programs by suppressing the driver API call that a runtime API call on the same thread is still executing.
+
+## Storage Metrics
+
+Block, filesystem and NFS client metrics (`obi.stat.disk.*`, `obi.stat.fs.*`,
+`obi.stat.nfs.client.*`) are opt-in through the `storage_block*`, `storage_fs*` and `storage_nfs*`
+metric features. Names, attributes and semantics are in [devdocs/metrics.md](devdocs/metrics.md#storage-metrics).
+
+| Layer | What it measures | Kernel and attach | Limitations |
+|:------|:-----------------|:------------------|:------------|
+| Block | Per-device request latency, bytes, queue wait, errors, flushes, discards and requests in flight; per-pod reads and writes with `storage_block_pod` | `block_rq_*` as `tp_btf`, `raw_tp` fallback, both decoding the request through BTF; classic `tracepoint/block/*` fallback (needs tracefs) when BTF cannot locate a request's disk. Counted in kernel maps by default | No PV attribute, and no pod except the `storage_block_pod` counters, which need cgroup v2 with the `io` controller and the BTF programs. Bio-based dm and md volumes are reported on the physical disk below unless `storage_block_volumes` (Linux 5.12+) is on |
+| Filesystem | Per-operation latency, bytes and errors of read, write, fsync and fdatasync on nfs, ceph, cifs, fuse, ext4, xfs and btrfs; `sync`, `syncfs`, `sync_file_range` with `storage_fs_sync` | `fentry`/`fexit` per filesystem symbol, `kprobe`/`kretprobe` fallback. The in-flight start is kept in task storage (kernel 5.11+) and in a hash map otherwise | `splice_read` is not recorded on ceph, cifs and xfs. Needs `hostPID` to resolve PersistentVolumes |
+| NFS client | RPC latency, errors, retransmits and wire bytes per attempt | `tp_btf` on the sunrpc `rpc_stats_latency` tracepoint, `raw_tracepoint` fallback | Needs sunrpc module BTF (Linux 5.11+, RHEL 9); without it the NFS metrics stay off with one warning. While attached, sunrpc cannot be unloaded |
+
+Kernel notes:
+
+- The tested floor is RHEL 9 (Linux `5.14.0-687.el9` and `5.14.0-749.el9`, which includes task storage
+  for tracing programs and sunrpc module BTF). The general kernel minimum above still applies, but
+  the storage layers have not been validated below it: RHEL 8 (4.18) lacks task storage and sunrpc
+  module BTF, so it takes the hash-map start and has no NFS metrics.
+- Kernel aggregation (filesystem and NFS) resolves a pod from the cgroup id on a cgroup v2 host. On
+  cgroup v1 or hybrid hosts every key's cgroup is the root, so each key is decorated from its
+  sample process instead, and NFS pod attribution uses the submitting thread's tgid.
+- `storage_block_pod` needs cgroup v2 with the `io` controller in the root's
+  `cgroup.subtree_control`; elsewhere OBI turns it off with a warning at start.
+- With a kubelet `--cgroup-root` other than `/` or `/kubelet`, cgroup-keyed series carry no pod labels.
+- Persistent volume attribution needs `hostPID: true`, and `get` on `persistentvolumes`
+  (see the [RBAC block](devdocs/metrics.md#kubernetes-rbac-for-volume-attribution)).
 
 ## Explicitly Out Of Scope
 

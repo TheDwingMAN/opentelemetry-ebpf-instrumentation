@@ -11,11 +11,23 @@ import (
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
 )
 
 type StatsFetcher struct{}
 
-func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig) (*StatsFetcher, error) {
+// NFSConfig is how the NFS client RPC programs count.
+type NFSConfig struct {
+	Exponential  bool
+	KernelBounds []uint64
+	Owner        bool
+	CgroupV1     bool
+}
+
+func NewStatsFetcher(
+	_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig, _ FsAggregation, _ NFSConfig,
+	_ *BlockAggregation, _ imetrics.Reporter,
+) (*StatsFetcher, error) {
 	return nil, nil
 }
 
@@ -29,5 +41,25 @@ func (m *StatsFetcher) StatsEventsMap() *ciliumebpf.Map {
 }
 
 func (m *StatsFetcher) DebugEventsMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) NFSRPCMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) FsAccumMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) BlockAggregation() *BlockAggMaps {
+	return nil
+}
+
+func (m *StatsFetcher) KernelDropsMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) BlockPrograms() map[string]*ciliumebpf.Program {
 	return nil
 }

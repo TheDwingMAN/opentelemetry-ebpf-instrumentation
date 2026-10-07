@@ -50,10 +50,10 @@ func ipAddr(ip string) pipe.IPAddr {
 	return addr
 }
 
-func newTestDecorator(t *testing.T, store *kube.Store) *decorator {
-	t.Helper()
+func newTestDecorator(tb testing.TB, store *kube.Store) *decorator {
+	tb.Helper()
 	lru, err := simplelru.NewLRU[string, struct{}](alreadyLoggedIPsCacheLen, nil)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	return &decorator{
 		log:              log(),
 		alreadyLoggedIPs: lru,
@@ -222,4 +222,52 @@ func TestTransform_SrcAndDstPods(t *testing.T) {
 	// Destination peer attributes
 	assert.Equal(t, "backend", a.Metadata[attr.ServicePeerName])
 	assert.Equal(t, "api", a.Metadata[attr.ServicePeerNamespace])
+}
+
+// drop_external judges items by their network endpoints. Items without any,
+// such as storage stats, survive it when the caller exempts them.
+func TestDropExternalKeepsExemptItems(t *testing.T) {
+	notifier := &fakeNotifier{}
+	store := kube.NewStore(notifier, kube.ResourceLabels{}, nil, imetrics.NoopReporter{})
+	dec := newTestDecorator(t, store)
+
+	type item struct {
+		attrs   pipe.CommonAttrs
+		storage bool
+	}
+	items := []*item{
+		{attrs: pipe.CommonAttrs{SrcAddr: ipAddr("8.8.8.8"), DstAddr: ipAddr("1.1.1.1")}},
+		{storage: true},
+	}
+	attrsOf := func(i *item) *pipe.CommonAttrs { return &i.attrs }
+
+	assert.Empty(t, dropExternal(items, attrsOf, dec, nil), "nothing matches a pod without the exemption")
+
+	storage := &item{storage: true}
+	items[1] = storage
+	kept := dropExternal(items, attrsOf, dec, func(i *item) bool { return i.storage })
+	require.Len(t, kept, 1)
+	assert.Same(t, storage, kept[0])
+	assert.Empty(t, storage.attrs.Metadata[attr.K8sSrcName], "an exempt item has no endpoint to be decorated by")
+}
+
+// Without drop_external, the exempt items get the cluster name only: looking
+// up their empty endpoints in the store is work for nothing on every event.
+func TestDecorateAllSkipsExemptItems(t *testing.T) {
+	notifier := &fakeNotifier{}
+	store := kube.NewStore(notifier, kube.ResourceLabels{}, nil, imetrics.NoopReporter{})
+	dec := newTestDecorator(t, store)
+	dec.clusterName = "prod"
+
+	type item struct {
+		attrs   pipe.CommonAttrs
+		storage bool
+	}
+	network := &item{attrs: pipe.CommonAttrs{SrcAddr: ipAddr("8.8.8.8"), DstAddr: ipAddr("1.1.1.1")}}
+	storage := &item{storage: true}
+	decorateAll([]*item{network, storage}, func(i *item) *pipe.CommonAttrs { return &i.attrs },
+		dec, func(i *item) bool { return i.storage })
+
+	assert.Equal(t, "prod", network.attrs.Metadata[attr.K8sClusterName])
+	assert.Equal(t, map[attr.Name]string{attr.K8sClusterName: "prod"}, storage.attrs.Metadata)
 }

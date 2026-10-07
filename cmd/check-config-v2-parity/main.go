@@ -17,6 +17,7 @@ import (
 	"github.com/gobwas/glob"
 	"go.yaml.in/yaml/v3"
 
+	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/obi"
 )
 
@@ -405,6 +406,33 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	}
 	if features.StatsTCPIo() {
 		want = append(want, "tcp_io")
+	}
+	for _, f := range []struct {
+		name    string
+		feature export.Features
+	}{
+		{"storage_block_duration", export.FeatureStorageBlockDuration},
+		{"storage_block_io", export.FeatureStorageBlockIo},
+		{"storage_block_queue", export.FeatureStorageBlockQueue},
+		{"storage_block_errors", export.FeatureStorageBlockErrors},
+		{"storage_block_flush", export.FeatureStorageBlockFlush},
+		{"storage_block_discard", export.FeatureStorageBlockDiscard},
+		{"storage_block_pending", export.FeatureStorageBlockPending},
+		{"storage_block_volumes", export.FeatureStorageBlockVolumes},
+		{"storage_block_pod", export.FeatureStorageBlockPod},
+		{"storage_block_queue_depth", export.FeatureStorageBlockQueueDepth},
+		{"storage_fs_duration", export.FeatureStorageFSDuration},
+		{"storage_fs_io", export.FeatureStorageFSIo},
+		{"storage_fs_errors", export.FeatureStorageFSErrors},
+		{"storage_fs_sync", export.FeatureStorageFSSync},
+		{"storage_nfs_duration", export.FeatureStorageNFSDuration},
+		{"storage_nfs_errors", export.FeatureStorageNFSErrors},
+		{"storage_nfs_retransmits", export.FeatureStorageNFSRetransmits},
+		{"storage_nfs_io", export.FeatureStorageNFSIo},
+	} {
+		if features&f.feature != 0 {
+			want = append(want, f.name)
+		}
 	}
 
 	got := toStringSlice(featuresValue)

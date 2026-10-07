@@ -15,22 +15,25 @@ package attributes // import "go.opentelemetry.io/obi/pkg/export/attributes"
 // Unlike the metrics in metric.go these are not user-selectable, so they carry no Section:
 // nothing refers to them from an attributes.select group.
 type InternalMetrics struct {
-	TracerFlushes            Name
-	OTELMetricExports        Name
-	OTELMetricExportErrors   Name
-	OTELTraceExports         Name
-	OTELTraceExportErrors    Name
-	InstrumentedProcesses    Name
-	InstrumentationErrors    Name
-	AvoidedServices          Name
-	BuildInfo                Name
-	BpfProbeLatency          Name
-	BpfMapEntries            Name
-	BpfMapMaxEntries         Name
-	KubeCacheForwardLag      Name
-	BpfNetworkIgnoredPackets Name
-	BpfNetworkPackets        Name
-	QueueCapacityRatio       Name
+	TracerFlushes             Name
+	OTELMetricExports         Name
+	OTELMetricExportErrors    Name
+	OTELTraceExports          Name
+	OTELTraceExportErrors     Name
+	InstrumentedProcesses     Name
+	InstrumentationErrors     Name
+	AvoidedServices           Name
+	BuildInfo                 Name
+	BpfProbeLatency           Name
+	BpfMapEntries             Name
+	BpfMapMaxEntries          Name
+	KubeCacheForwardLag       Name
+	BpfNetworkIgnoredPackets  Name
+	BpfNetworkPackets         Name
+	BpfStorageDrops           Name
+	BpfStorageRecursionMisses Name
+	BpfMapInsertFailures      Name
+	QueueCapacityRatio        Name
 }
 
 func NewInternalMetrics(prefix string) InternalMetrics {
@@ -98,6 +101,21 @@ func NewInternalMetrics(prefix string) InternalMetrics {
 		BpfNetworkPackets: metric(Name{
 			OTEL: prefix + ".bpf.network.packets",
 			Unit: "{packet}",
+			Type: InstrumentCounter,
+		}),
+		BpfStorageDrops: metric(Name{
+			OTEL: prefix + ".bpf.storage.dropped.operations",
+			Unit: "{operation}",
+			Type: InstrumentCounter,
+		}),
+		BpfStorageRecursionMisses: metric(Name{
+			OTEL: prefix + ".bpf.storage.program.recursion.misses",
+			Unit: "{execution}",
+			Type: InstrumentCounter,
+		}),
+		BpfMapInsertFailures: metric(Name{
+			OTEL: prefix + ".bpf.map.insert.failures",
+			Unit: "{insert}",
 			Type: InstrumentCounter,
 		}),
 		QueueCapacityRatio: metric(Name{

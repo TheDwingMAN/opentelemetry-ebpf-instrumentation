@@ -61,60 +61,78 @@ func GeoIPProvider[T any](cfg *GeoIP, attrs func(T) *pipe.CommonAttrs, input, ou
 		if !cfg.Enabled() {
 			return swarm.Bypass(input, output)
 		}
-		lookupFn, err := getLookupFn(cfg)
+		decorate, err := NewItemDecorator(cfg, attrs)
 		if err != nil {
 			return nil, err
 		}
 
 		log := geoiplog()
 		in := input.Subscribe(msg.SubscriberName("pipe.GeoIP"))
-		cache := expirable.NewLRU[pipe.IPAddr, ipInfo](cfg.CacheLen, nil, cfg.CacheTTL)
-		cachedLookup := func(addr *pipe.IPAddr) (ipInfo, error) {
-			info, ok := cache.Get(*addr)
-			if ok {
-				return info, nil
-			}
-			info, err := lookupFn(addr.IP())
-			if err != nil {
-				return info, err
-			}
-			cache.Add(*addr, info)
-			return info, nil
-		}
-
-		// only warn the first time to prevent log flooding
-		var failureLogFn func(string, ...any)
-		failureLogFn = func(msg string, args ...any) {
-			log.Warn(msg, args...)
-			failureLogFn = log.Debug
-		}
-
 		return func(_ context.Context) {
 			defer output.Close()
 			log.Debug("starting GeoIP node")
 			for items := range in {
 				for _, item := range items {
-					a := attrs(item)
-					srcInfo, err := cachedLookup(&a.SrcAddr)
-					if err != nil {
-						failureLogFn("failed to perform geoip lookup for source", "err", err)
-					}
-					dstInfo, err := cachedLookup(&a.DstAddr)
-					if err != nil {
-						failureLogFn("failed to perform geoip lookup for destination", "err", err)
-					}
-					if a.Metadata == nil {
-						a.Metadata = map[attr.Name]string{}
-					}
-					a.Metadata[attr.SrcCountry] = srcInfo.Country
-					a.Metadata[attr.DstCountry] = dstInfo.Country
-					a.Metadata[attr.SrcASN] = srcInfo.ASN
-					a.Metadata[attr.DstASN] = dstInfo.ASN
+					decorate(item)
 				}
 				output.Send(items)
 			}
 		}, nil
 	}
+}
+
+// NewItemDecorator returns what the GeoIP node does to an item: set the
+// country and ASN of its source and destination addresses. It is nil when
+// GeoIP is disabled.
+func NewItemDecorator[T any](cfg *GeoIP, attrs func(T) *pipe.CommonAttrs) (func(T), error) {
+	if !cfg.Enabled() {
+		return nil, nil
+	}
+	lookupFn, err := getLookupFn(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	log := geoiplog()
+	cache := expirable.NewLRU[pipe.IPAddr, ipInfo](cfg.CacheLen, nil, cfg.CacheTTL)
+	cachedLookup := func(addr *pipe.IPAddr) (ipInfo, error) {
+		info, ok := cache.Get(*addr)
+		if ok {
+			return info, nil
+		}
+		info, err := lookupFn(addr.IP())
+		if err != nil {
+			return info, err
+		}
+		cache.Add(*addr, info)
+		return info, nil
+	}
+
+	// only warn the first time to prevent log flooding
+	var failureLogFn func(string, ...any)
+	failureLogFn = func(msg string, args ...any) {
+		log.Warn(msg, args...)
+		failureLogFn = log.Debug
+	}
+
+	return func(item T) {
+		a := attrs(item)
+		srcInfo, err := cachedLookup(&a.SrcAddr)
+		if err != nil {
+			failureLogFn("failed to perform geoip lookup for source", "err", err)
+		}
+		dstInfo, err := cachedLookup(&a.DstAddr)
+		if err != nil {
+			failureLogFn("failed to perform geoip lookup for destination", "err", err)
+		}
+		if a.Metadata == nil {
+			a.Metadata = map[attr.Name]string{}
+		}
+		a.Metadata[attr.SrcCountry] = srcInfo.Country
+		a.Metadata[attr.DstCountry] = dstInfo.Country
+		a.Metadata[attr.SrcASN] = srcInfo.ASN
+		a.Metadata[attr.DstASN] = dstInfo.ASN
+	}, nil
 }
 
 type IPLookupFn func(addr net.IP) (ipInfo, error)

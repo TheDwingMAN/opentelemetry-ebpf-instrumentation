@@ -315,4 +315,7 @@ func attributeGroups(config *obi.Config, ctxInfo *global.ContextInfo) {
 	if config.NetworkFlows.GeoIP.Enabled() {
 		ctxInfo.MetricAttributeGroups.Add(attributes.GroupNetGeoIP)
 	}
+	if config.Metrics.Features.StorageBlockPod() {
+		ctxInfo.MetricAttributeGroups.Add(attributes.GroupStatsBlockPod)
+	}
 }

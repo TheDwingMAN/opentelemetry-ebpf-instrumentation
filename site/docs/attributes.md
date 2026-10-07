@@ -66,6 +66,7 @@ Attributes carried by OBI's own internal (obi.*) OTLP metrics. Keys are namespac
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
+| `bpf.drop.reason` | string | development | Why an eBPF program could not record an operation. fs_accum_full: the filesystem aggregation map was full, so an operation of a new series was not counted; fs_start_failed: the start of a filesystem operation could not be stored, so the operation was not recorded; kretprobe_miss: a kprobe-mode return probe found no start for its operation, so the operation was not recorded; fs_unknown: a filesystem drop reason this build has no name for. | fs_accum_full; fs_start_failed; kretprobe_miss; fs_unknown |
 | `bpf.map.id` | string | development | Identifier of the eBPF map the stats belong to. | 17 |
 | `bpf.map.name` | string | development | Name of the eBPF map. | events; ongoing_http |
 | `bpf.map.type` | string | development | eBPF map type. | hash; lru_hash; perf_event_array |
@@ -85,7 +86,7 @@ Kubernetes metadata OBI's k8s decorator (pkg/transform/k8s.go) attaches to the r
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
-| `k8s.kind` | string | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.kind` | string | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
 | `k8s.owner.name` | string | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 
 ## `registry.obi.network`
@@ -165,11 +166,16 @@ Attributes used by OBI's span-metrics emission. The metric names match the outpu
 
 ## `registry.obi.stats`
 
-Attributes carried on OBI's per-connection TCP statistics. Emitted when the `stats_tcp_rtt`, `stats_tcp_failed_connections` or `stats_tcp_successful_connections` features are enabled (all rolled into the umbrella `stats` feature). Like network-flow metrics, the per-data-point attribute set is configurable via `attributes.select`.
+Attributes carried on OBI's per-connection TCP statistics and filesystem I/O stats. Emitted when the `stats_tcp_rtt`, `stats_tcp_failed_connections`, `stats_tcp_successful_connections` or `storage_fs*` features are enabled (the TCP ones are rolled into the umbrella `stats` feature; `storage_fs*` is opt-in and not part of it). Like network-flow metrics, the per-data-point attribute set is configurable via `attributes.select`.
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
+| `fs.operation` | enum | development | Filesystem operation performed. | read; write; fsync; fdatasync; sync; syncfs; sync_file_range |
 | `network.tcp.handshake.role` | enum | development | Role of the local endpoint in the TCP three-way handshake (`client` initiated the SYN, `server` was awaiting it). | client; server; unknown |
+| `obi.disk.partition` | string | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
+| `obi.disk.physical_device` | string | development | Physical disk(s) behind a filesystem's block device: sorted, comma-joined, at most 8. Omitted when the filesystem is not block-backed, or the walk cannot resolve one. | vdb; nvme0n1,nvme1n1 |
+| `obi.disk.stacked` | boolean | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `obi.fs.container.mountpoint` | string | development | Path at which the container of the process mounts the filesystem the operation went through, read from the process's mount table. | /data |
 | `reason` | enum | development | Classification of why a TCP connection failed. | refused; reset; timed-out; host-unreachable; net-unreachable; other; unknown |
 
 ## `registry.obi.traces_resource`

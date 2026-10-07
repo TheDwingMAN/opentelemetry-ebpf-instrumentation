@@ -666,7 +666,235 @@ var (
 		OTEL:    "obi.stat.tcp.successful.connections",
 		Type:    InstrumentCounter,
 	})
+	// `operation.duration` follows the semantic conventions naming guidance:
+	// `duration` is reserved for a histogram of the elapsed time of a discrete
+	// operation (as in `db.client.operation.duration`), which is exactly what
+	// this measures. `latency` is not a convention term.
+	//
+	// It also keeps `obi.stat.disk.io` free to be a metric in its own right:
+	// a name must not serve as both a leaf and a namespace.
+	StatDiskOperationDuration = metric(Name{
+		Section: "obi.stat.disk.operation.duration",
+		OTEL:    "obi.stat.disk.operation.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	// StatDiskIO carries the same semantics as upstream semconv's
+	// `system.disk.io` (disk bytes transferred, keyed by `system.device` and
+	// `disk.io.direction`) but is deliberately published under the OBI
+	// namespace rather than as the standard metric.
+	//
+	// Emitting `system.disk.io` would collide with the OTel Collector's
+	// `hostmetrics` receiver, which publishes that exact metric with the same
+	// attributes. On any host running both, aggregate queries such as
+	// `sum(rate(system_disk_io_bytes_total[5m]))` would silently return roughly
+	// double the real throughput, since both agents report the same physical
+	// devices. A distinct name keeps the two sources independently attributable
+	// and lets operators run OBI alongside hostmetrics.
+	//
+	// The unit is deliberately absent from the name: semantic conventions state
+	// that metrics carrying their unit in OTEL metadata SHOULD NOT repeat it in
+	// the metric name.
+	StatDiskIO = metric(Name{
+		Section: "obi.stat.disk.io",
+		OTEL:    "obi.stat.disk.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
+	// Time a read or write request spent queued: from rq->start_time_ns (set
+	// after the tag or scheduler-tag allocation, shared by all requests of a
+	// plug batch) to block_rq_issue, the dispatch to the driver. Nothing is
+	// recorded for a device with queue/iostats=0, for the data write of a
+	// flush sequence, nor on a kernel without enum rqf_flags in its BTF or
+	// using the classic block tracepoints.
+	StatDiskQueueDuration = metric(Name{
+		Section: "obi.stat.disk.queue.duration",
+		OTEL:    "obi.stat.disk.queue.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	// Count of requests still in flight on the device immediately after this
+	// one completed. Observed per completion rather than time-averaged, so it
+	// approximates instantaneous saturation rather than a true utilization
+	// integral. Deprecated, behind its own storage_block_queue_depth feature.
+	StatDiskQueueDepth = metric(Name{
+		Section: "obi.stat.disk.queue.depth",
+		OTEL:    "obi.stat.disk.queue.depth",
+		Unit:    "{operation}",
+		Type:    InstrumentHistogram,
+	})
+	// Count of block read and write completions with a non-zero error, broken
+	// down by errno via the upstream error.type attribute. Failed flushes and
+	// discards carry error.type on their own duration histograms instead.
+	StatDiskOperationErrors = metric(Name{
+		Section: "obi.stat.disk.operation.errors",
+		OTEL:    "obi.stat.disk.operation.errors",
+		Unit:    "{error}",
+		Type:    InstrumentCounter,
+	})
+	// Service time of a cache flush request (REQ_OP_FLUSH), from issue to
+	// completion: what fsync and fdatasync wait for at the device. Flushes
+	// move no data, so they have no direction and are not counted as writes;
+	// a failed flush carries its errno in error.type. Its count matches the
+	// flushes in /proc/diskstats.
+	StatDiskFlushDuration = metric(Name{
+		Section: "obi.stat.disk.flush.duration",
+		OTEL:    "obi.stat.disk.flush.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	// Service time of a discard (or secure erase) request, from issue to
+	// completion. Discards release blocks rather than move data, so they are
+	// not counted as reads or writes; a failed discard carries its errno in
+	// error.type.
+	StatDiskDiscardDuration = metric(Name{
+		Section: "obi.stat.disk.discard.duration",
+		OTEL:    "obi.stat.disk.discard.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	// Bytes released by discards (and secure erases) that completed
+	// successfully: a failed discard released nothing, although
+	// /proc/diskstats counts its sectors.
+	StatDiskDiscardIO = metric(Name{
+		Section: "obi.stat.disk.discard.io",
+		OTEL:    "obi.stat.disk.discard.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
+	// Count of block I/O requests still in flight on the device, from a
+	// userspace snapshot of the in-flight map rather than a per-request
+	// counter (unlike the deprecated queue.depth, this costs nothing on the
+	// issue/complete path). Named after the hostmetrics receiver's
+	// system.disk.pending_operations; not in semconv.
+	StatDiskPendingOperations = metric(Name{
+		Section: "obi.stat.disk.pending_operations",
+		OTEL:    "obi.stat.disk.pending_operations",
+		Unit:    "{operation}",
+		Type:    InstrumentUpDownCounter,
+	})
+	// Count of completed block reads and writes per device and direction,
+	// charged to the cgroup (pod, container) that owns the I/O: the
+	// submitter for reads and direct I/O, the owner of the file's writeback
+	// domain for buffered writes. Counted in the kernel per cgroup
+	// (storage_block_pod); I/O charged to no pod is a series without pod
+	// attributes, so the series of a device and direction add up to its
+	// node-level count.
+	StatDiskOperations = metric(Name{
+		Section: "obi.stat.disk.operations",
+		OTEL:    "obi.stat.disk.operations",
+		Unit:    "{operation}",
+		Type:    InstrumentCounter,
+	})
+	// Time spent on the block reads and writes of obi.stat.disk.operations,
+	// summed: from the request's block-layer accounting start (when valid,
+	// as for queue.duration) to its completion, else from its issue. The
+	// semantics of semconv system.disk.operation_time and of diskstats
+	// fields 7 and 11.
+	StatDiskOperationTime = metric(Name{
+		Section: "obi.stat.disk.operation_time",
+		OTEL:    "obi.stat.disk.operation_time",
+		Unit:    "s",
+		Type:    InstrumentCounter,
+	})
+	// Latency of a single filesystem read or write as the application
+	// experiences it. NOTE: buffered writes return once data is in the page
+	// cache, so this is app-perceived latency, not server round-trip time.
+	StatFsOperationDuration = metric(Name{
+		Section: "obi.stat.fs.operation.duration",
+		OTEL:    "obi.stat.fs.operation.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	// Published under obi.* rather than system.filesystem.* to avoid
+	// double-counting against the Collector's hostmetrics receiver.
+	StatFsIO = metric(Name{
+		Section: "obi.stat.fs.io",
+		OTEL:    "obi.stat.fs.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
+	// Count of filesystem read/write operations that failed, broken down by
+	// errno via the upstream error.type attribute.
+	StatFsOperationErrors = metric(Name{
+		Section: "obi.stat.fs.operation.errors",
+		OTEL:    "obi.stat.fs.operation.errors",
+		Unit:    "{error}",
+		Type:    InstrumentCounter,
+	})
+	// Execute time of each NFS client RPC attempt, as /proc/self/mountstats
+	// sums it: from the task's start to its end, backlog and retransmissions
+	// included. A server-requested retry (NFSv3 JUKEBOX, NFSv4 DELAY or
+	// GRACE) is a new attempt, which includes the client's backoff. Not
+	// rpc.client.call.duration, which OBI emits for application-level ONC
+	// RPC.
+	StatNFSClientRPCDuration = metric(Name{
+		Section: "obi.stat.nfs.client.rpc.duration",
+		OTEL:    "obi.stat.nfs.client.rpc.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	// NFS client RPC attempts that ended with an error status, as
+	// mountstats counts them: normal misses such as ENOENT on LOOKUP and
+	// server back-pressure (EJUKEBOX, NFS4ERR_DELAY) included.
+	StatNFSClientRPCErrors = metric(Name{
+		Section: "obi.stat.nfs.client.rpc.errors",
+		OTEL:    "obi.stat.nfs.client.rpc.errors",
+		Unit:    "{error}",
+		Type:    InstrumentCounter,
+	})
+	// Retransmissions of NFS client RPC requests: every transmission of an
+	// attempt after the first. Server-requested retries are new attempts,
+	// not retransmissions. The OBI counterpart of the hostmetrics
+	// nfs.client.rpc.retransmit.count.
+	StatNFSClientRPCRetransmits = metric(Name{
+		Section: "obi.stat.nfs.client.rpc.retransmits",
+		OTEL:    "obi.stat.nfs.client.rpc.retransmits",
+		Unit:    "{retransmit}",
+		Type:    InstrumentCounter,
+	})
+	// Wire bytes of NFS client RPC calls and replies: headers and every
+	// procedure included (RPC/XDR headers, not just READ/WRITE payload), so
+	// it is larger than the fs NFS bytes of StatFsIO. By direction
+	// (network.io.direction: transmit = sent to the server, receive = from
+	// it), not by procedure or version: those stay opt-in, unlike on the
+	// duration and errors metrics, to keep this metric's default series to
+	// one pair per server.
+	StatNFSClientIO = metric(Name{
+		Section: "obi.stat.nfs.client.io",
+		OTEL:    "obi.stat.nfs.client.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
 )
+
+// StatMetrics lists every StatsO11y metric, so tests can check that each one is
+// wired into the exporters (for instance, that every histogram has a View).
+var StatMetrics = []Name{
+	StatTCPRtt,
+	StatTCPFailedConnections,
+	StatTCPRetransmits,
+	StatTCPIo,
+	StatTCPSuccessfulConnections,
+	StatDiskOperationDuration,
+	StatDiskIO,
+	StatDiskQueueDuration,
+	StatDiskQueueDepth,
+	StatDiskOperationErrors,
+	StatDiskFlushDuration,
+	StatDiskDiscardDuration,
+	StatDiskDiscardIO,
+	StatDiskPendingOperations,
+	StatDiskOperations,
+	StatDiskOperationTime,
+	StatFsOperationDuration,
+	StatFsIO,
+	StatFsOperationErrors,
+	StatNFSClientRPCDuration,
+	StatNFSClientRPCErrors,
+	StatNFSClientRPCRetransmits,
+	StatNFSClientIO,
+}
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.
 // The user can specify the Prometheus or OTEL notation, and can include or not

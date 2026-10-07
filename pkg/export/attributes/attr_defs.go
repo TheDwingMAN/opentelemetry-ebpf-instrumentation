@@ -38,6 +38,9 @@ const (
 	GroupNetGeoIP
 	GroupStats
 	GroupStatsKube
+	// GroupStatsBlockPod is set when storage_block_pod counts block I/O per
+	// cgroup: obi.stat.disk.io then carries the pod attributes.
+	GroupStatsBlockPod
 )
 
 func (e *AttrGroups) Has(groups AttrGroups) bool {
@@ -55,6 +58,7 @@ func getDefinitions(
 	extraGroupAttributes GroupAttributes,
 ) map[Section]AttrReportGroup {
 	kubeEnabled := groups.Has(GroupKubernetes)
+	blockPodEnabled := groups.Has(GroupStatsBlockPod)
 	containerEnabled := groups.Has(GroupContainer)
 	promEnabled := groups.Has(GroupPrometheus)
 	ifaceDirEnabled := groups.Has(GroupNetIfaceDirection)
@@ -126,6 +130,70 @@ func getDefinitions(
 		},
 		extraGroupAttributes[GroupStats],
 	)
+
+	// k8s.node.name is a constant for the whole agent run (the node it runs
+	// on, set once by pipeline.go's setNodeName) and is reported on every
+	// storage stat metric, disk and filesystem alike.
+	statsNodeNameAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sNodeName: true,
+		},
+	}
+
+	// disk I/O stat metrics attributes
+	statsDiskAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&statsNodeNameAttributes},
+		Attributes: map[attr.Name]Default{
+			attr.DiskDevice:      true,
+			attr.DiskIODirection: true,
+			attr.DiskStacked:     true,
+		},
+	}
+
+	// disk queue depth is a per-device gauge; it has no read/write direction
+	// of its own (in-flight requests of both directions are counted together).
+	// Flushes and discards have no direction either.
+	statsDiskDeviceAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&statsNodeNameAttributes},
+		Attributes: map[attr.Name]Default{
+			attr.DiskDevice:  true,
+			attr.DiskStacked: true,
+		},
+	}
+
+	// pending_operations is a point-in-time snapshot across every kind of
+	// request: direction only applies to the read/write entries (flush and
+	// discard have none), so, unlike the other disk metrics, it defaults
+	// off and is opt-in. The node and stacked labels are on, as on every
+	// disk metric.
+	statsDiskPendingAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&statsNodeNameAttributes},
+		Attributes: map[attr.Name]Default{
+			attr.DiskDevice:      true,
+			attr.DiskIODirection: false,
+			attr.DiskStacked:     true,
+		},
+	}
+
+	// pod attribution of block reads and writes (storage_block_pod), only
+	// relevant when kubernetes metadata is enabled. Container and kind are
+	// opt-in to bound the series count (D11); the owner follows the network
+	// decorator's rule (the pod's top owner, else the pod).
+	statsDiskPodAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sNamespaceName: true,
+			attr.K8sPodName:       true,
+			attr.K8sOwnerName:     true,
+			attr.K8sContainerName: false,
+			attr.K8sKind:          false,
+		},
+	}
+	// obi.stat.disk.io carries them only when storage_block_pod counts it per
+	// cgroup.
+	statsDiskIOPodAttributes := statsDiskPodAttributes
+	statsDiskIOPodAttributes.Disabled = !kubeEnabled || !blockPodEnabled
 
 	// attributes to be reported exclusively for network metrics when
 	// kubernetes metadata is enabled
@@ -242,6 +310,107 @@ func getDefinitions(
 		},
 		extraGroupAttributes[GroupAppKube],
 	)
+
+	// persistent volume/claim attributes for filesystem I/O stat metrics,
+	// only relevant when kubernetes metadata is enabled
+	statsFsKubeAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sPersistentVolumeName:      true,
+			attr.K8sPersistentVolumeClaimName: true,
+			attr.K8sStorageClassName:          true,
+			// Opt-in: they read the host's mount table and a process's.
+			attr.FsMountpoint:          false,
+			attr.FsContainerMountpoint: false,
+		},
+	}
+
+	// pod/namespace/container/owner attribution for filesystem I/O stat
+	// metrics, only relevant when kubernetes metadata is enabled. A local
+	// group rather than appKubeAttributes: the pid decorator only ever sets
+	// these fields for filesystem events, not the full application metadata
+	// set (deployment, replica set, node, ...). k8s.owner.name and k8s.kind
+	// follow the same rule as the network decorator's owner attribution
+	// (topOwnerNameKind); k8s.kind is opt-in to bound cardinality.
+	statsFsPodAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sPodName:       true,
+			attr.K8sNamespaceName: true,
+			attr.K8sContainerName: true,
+			attr.K8sOwnerName:     true,
+			attr.K8sKind:          false,
+		},
+	}
+
+	// filesystem I/O stat metrics attributes. system.device and
+	// obi.disk.physical_device are "" for a network filesystem (the getter
+	// resolves nothing to walk); server.address is "" for a block-backed one
+	// (3.0's omit-empty rule drops all three then), so all three default on
+	// without one filesystem type crowding out the other's label (step 10).
+	statsFsAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&statsFsPodAttributes, &statsFsKubeAttributes, &statsNodeNameAttributes},
+		Attributes: map[attr.Name]Default{
+			attr.FsType:             true,
+			attr.FsOperation:        true,
+			attr.DiskDevice:         true,
+			attr.DiskPhysicalDevice: true,
+			attr.ServerAddr:         true,
+		},
+	}
+
+	// the node of the agent, on NFS client RPC metrics, only relevant when
+	// kubernetes metadata is enabled.
+	statsNFSKubeAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sNodeName: true,
+		},
+	}
+
+	// Pod attribution of an NFS RPC (step 19), opt-in: the submitter's pod,
+	// namespace, container and owner workload, only relevant when
+	// kubernetes metadata is enabled. Selecting any of these is also what
+	// turns the kernel key's owner on (nfs_key_owner): background NFS calls
+	// (writeback, COMMIT, DELEGRETURN) carry no pod either way.
+	statsNFSPodAttributes := AttrReportGroup{
+		Disabled: !kubeEnabled,
+		Attributes: map[attr.Name]Default{
+			attr.K8sNamespaceName: false,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
+			attr.K8sOwnerName:     false,
+		},
+	}
+
+	// NFS client RPC metrics attributes. An NFSv2 or NFSv3 RPC is named by
+	// its ONC RPC procedure, an NFSv4 one by its operation: its procedure is
+	// always COMPOUND. Each name is left out of the other versions' series.
+	statsNFSAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&statsNFSKubeAttributes, &statsNFSPodAttributes},
+		Attributes: map[attr.Name]Default{
+			attr.OncRPCVersion:       true,
+			attr.OncRPCProcedureName: true,
+			attr.NFSOperationName:    true,
+			attr.ServerAddr:          true,
+		},
+	}
+
+	// NFS client IO attributes. Its one kernel key counts an attempt's sent
+	// and received bytes together, so network.io.direction is on by
+	// default to tell the two apart; the procedure and version breakdown
+	// statsNFSAttributes defaults on is opt-in here instead, to keep this
+	// metric's default series to one pair per server (section 5).
+	statsNFSIOAttributes := AttrReportGroup{
+		SubGroups: []*AttrReportGroup{&statsNFSKubeAttributes, &statsNFSPodAttributes},
+		Attributes: map[attr.Name]Default{
+			attr.NetworkIoDirection:  true,
+			attr.ServerAddr:          true,
+			attr.OncRPCVersion:       false,
+			attr.OncRPCProcedureName: false,
+			attr.NFSOperationName:    false,
+		},
+	}
 
 	// The semantic conventions define service.name and service.namespace as
 	// resource attributes, and OBI reports them there. They are also available
@@ -906,6 +1075,101 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{
 				attr.NetworkTCPHandshakeRole: false,
 			},
+		},
+		StatDiskOperationDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.DiskPartition: false,
+			},
+		},
+		StatDiskIO.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskIOPodAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.DiskPartition: false,
+			},
+		},
+		StatDiskQueueDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.DiskPartition: false,
+			},
+		},
+		StatDiskQueueDepth.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskOperationErrors.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType:     true,
+				attr.DiskPartition: false,
+			},
+		},
+		StatDiskFlushDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskDiscardDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType:     true,
+				attr.DiskPartition: false,
+			},
+		},
+		StatDiskDiscardIO.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.DiskPartition: false,
+			},
+		},
+		StatDiskPendingOperations.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskPendingAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.DiskPartition: false,
+			},
+		},
+		// No obi.disk.partition: the pod counters are per device.
+		StatDiskOperations.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskPodAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskOperationTime.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskPodAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatFsOperationDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&statsFsAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatFsIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsFsAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatFsOperationErrors.Section: {
+			SubGroups: []*AttrReportGroup{&statsFsAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatNFSClientRPCDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&statsNFSAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatNFSClientRPCErrors.Section: {
+			SubGroups: []*AttrReportGroup{&statsNFSAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatNFSClientRPCRetransmits.Section: {
+			SubGroups:  []*AttrReportGroup{&statsNFSAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatNFSClientIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsNFSIOAttributes},
+			Attributes: map[attr.Name]Default{},
 		},
 
 		// span and service graph metrics don't yet implement attribute selection,

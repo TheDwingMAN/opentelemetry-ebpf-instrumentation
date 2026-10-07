@@ -1,0 +1,1144 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package k8s
+
+import (
+	"context"
+	"log/slog"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/hashicorp/golang-lru/v2/expirable"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"go.opentelemetry.io/obi/pkg/appolly/app"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
+	"go.opentelemetry.io/obi/pkg/internal/helpers/container"
+	"go.opentelemetry.io/obi/pkg/internal/pipe"
+	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
+	"go.opentelemetry.io/obi/pkg/internal/testutil"
+	"go.opentelemetry.io/obi/pkg/kube"
+	"go.opentelemetry.io/obi/pkg/kube/kubecache/informer"
+	"go.opentelemetry.io/obi/pkg/kube/kubecache/meta"
+	"go.opentelemetry.io/obi/pkg/pipe/msg"
+)
+
+const pidTestTimeout = 5 * time.Second
+
+type pidTestItem struct {
+	pipe.CommonAttrs
+	pidNs   uint32
+	hostPID uint32
+	sDev    uint32
+	hasPID  bool
+	mount   *ebpf.MountAttrs
+}
+
+func pidTestAttrs(item *pidTestItem) *pipe.CommonAttrs { return &item.CommonAttrs }
+
+func pidTestPidOf(item *pidTestItem) (uint32, uint32, ebpf.MountKey, bool) {
+	return item.pidNs, item.hostPID, ebpf.MountKey{Dev: item.sDev}, item.hasPID
+}
+
+func pidTestSetMount(item *pidTestItem, m *ebpf.MountAttrs) { item.mount = m }
+
+// volume returns an item's volume attributes, or none when it has no volume.
+func (item *pidTestItem) volume() ebpf.MountAttrs {
+	if item.mount == nil {
+		return ebpf.MountAttrs{}
+	}
+	return *item.mount
+}
+
+func noopPVCLookup(context.Context, string) (string, string, string, bool) { return "", "", "", false }
+
+func newPIDTestStore(tb testing.TB) *kube.Store {
+	tb.Helper()
+	n := meta.NewBaseNotifier(slog.Default())
+	return kube.NewStore(&n, kube.ResourceLabels{}, nil, imetrics.NoopReporter{})
+}
+
+func TestPIDMetadataDecorator_PassesThroughItemsWithoutPID(t *testing.T) {
+	store := newPIDTestStore(t)
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	item := &pidTestItem{hasPID: false}
+	input.Send([]*pidTestItem{item})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Same(t, item, got[0])
+	assert.Nil(t, got[0].Metadata)
+}
+
+func TestPIDMetadataDecorator_DecoratesFromPIDPath(t *testing.T) {
+	originalInfoForPID := kube.InfoForPID
+	defer func() { kube.InfoForPID = originalInfoForPID }()
+
+	store := newPIDTestStore(t)
+
+	const pidNs = uint32(5000)
+	const hostPID = app.PID(1234)
+
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		if pid == hostPID {
+			return container.Info{ContainerID: "cid-1", PIDNamespace: pidNs}, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	store.AddProcess(hostPID)
+
+	podMeta := &informer.ObjectMeta{
+		Name: "my-pod", Namespace: "my-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{
+			Uid:        "pod-uid-1",
+			Containers: []*informer.ContainerInfo{{Id: "cid-1", Name: "my-container"}},
+		},
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	input.Send([]*pidTestItem{{pidNs: pidNs, hostPID: uint32(hostPID), hasPID: true}})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Equal(t, "my-pod", got[0].Metadata[attr.K8sPodName])
+	assert.Equal(t, "my-ns", got[0].Metadata[attr.K8sNamespaceName])
+	assert.Equal(t, "my-container", got[0].Metadata[attr.K8sContainerName])
+}
+
+// A pod owned by a ReplicaSet, itself owned by a Deployment, is attributed to
+// its top owner: the Deployment, not the ReplicaSet. A bare pod with no
+// owners is attributed to itself (k8s.owner.name = its own name, k8s.kind =
+// "Pod"), the same rule as the network decorator's topOwnerNameKind.
+func TestPIDMetadataDecorator_OwnerFollowsTopOwnerChain(t *testing.T) {
+	originalInfoForPID := kube.InfoForPID
+	defer func() { kube.InfoForPID = originalInfoForPID }()
+
+	store := newPIDTestStore(t)
+
+	const pidNs = uint32(5100)
+	const hostPID = app.PID(1235)
+
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		if pid == hostPID {
+			return container.Info{ContainerID: "cid-owned", PIDNamespace: pidNs}, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	store.AddProcess(hostPID)
+
+	podMeta := &informer.ObjectMeta{
+		Name: "owned-pod", Namespace: "my-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{
+			Uid:        "pod-uid-owned",
+			Containers: []*informer.ContainerInfo{{Id: "cid-owned", Name: "my-container"}},
+			Owners: []*informer.Owner{
+				{Kind: "ReplicaSet", Name: "my-deploy-abc123"},
+				{Kind: "Deployment", Name: "my-deploy"},
+			},
+		},
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
+
+	bareMeta := &informer.ObjectMeta{
+		Name: "bare-pod", Namespace: "my-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{
+			Uid:        "pod-uid-bare",
+			Containers: []*informer.ContainerInfo{{Id: "cid-bare", Name: "bare-container"}},
+		},
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: bareMeta}))
+
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		switch pid {
+		case hostPID:
+			return container.Info{ContainerID: "cid-owned", PIDNamespace: pidNs}, nil
+		case hostPID + 1:
+			return container.Info{ContainerID: "cid-bare", PIDNamespace: pidNs + 1}, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	store.AddProcess(hostPID + 1)
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	input.Send([]*pidTestItem{
+		{pidNs: pidNs, hostPID: uint32(hostPID), hasPID: true},
+		{pidNs: pidNs + 1, hostPID: uint32(hostPID + 1), hasPID: true},
+	})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 2)
+	assert.Equal(t, "my-deploy", got[0].Metadata[attr.K8sOwnerName], "attributed to the top owner, not the ReplicaSet")
+	assert.Equal(t, "Deployment", got[0].Metadata[attr.K8sKind])
+	assert.Equal(t, "bare-pod", got[1].Metadata[attr.K8sOwnerName], "a bare pod owns itself")
+	assert.Equal(t, "Pod", got[1].Metadata[attr.K8sKind])
+}
+
+func TestPIDMetadataDecorator_FallsBackToMountPodWhenPIDUnresolved(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	store := newPIDTestStore(t)
+
+	podMeta := &informer.ObjectMeta{
+		Name: "vol-pod", Namespace: "vol-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{Uid: "pod-uid-2"},
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
+
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-2", PVName: "pvc-abc", VolumeType: "nfs"}, true
+	}
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	pvc := func(_ context.Context, pvName string) (string, string, string, bool) {
+		assert.Equal(t, "pvc-abc", pvName)
+		return "vol-ns", "my-claim", "", true
+	}
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, pvc, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	// pidNs/hostPID that don't resolve to any tracked process via the PID path.
+	input.Send([]*pidTestItem{{pidNs: 1, hostPID: 1, sDev: 42, hasPID: true}})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Equal(t, "vol-pod", got[0].Metadata[attr.K8sPodName])
+	assert.Equal(t, "vol-ns", got[0].Metadata[attr.K8sNamespaceName])
+	assert.Empty(t, got[0].Metadata[attr.K8sContainerName])
+	assert.Equal(t, "pvc-abc", got[0].volume().PVName)
+	assert.Equal(t, "my-claim", got[0].volume().PVCName)
+	// Storage class attribute must be absent when PVC lookup returns empty string
+	assert.Empty(t, got[0].volume().StorageClass)
+}
+
+// TestPIDMetadataDecorator_SkipsMountResolutionForDevZero covers step 14's
+// sync(2) events (bpf/statsolly/fs_io.c fs_probe_entry_sync): s_dev 0 is
+// never a real superblock, so decorate must not call resolveMount for it at
+// all, rather than churning the resolver's cache with a key that can never
+// resolve. Pod attribution still runs from the PID path alone when the mount
+// is skipped this way.
+func TestPIDMetadataDecorator_SkipsMountResolutionForDevZero(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+	resolveMount = func(mount ebpf.MountKey) (ebpf.MountInfo, bool) {
+		t.Fatalf("resolveMount must not be called for a dev_t 0 mount key, got %+v", mount)
+		return ebpf.MountInfo{}, false
+	}
+
+	originalInfoForPID := kube.InfoForPID
+	defer func() { kube.InfoForPID = originalInfoForPID }()
+
+	store := newPIDTestStore(t)
+
+	const pidNs = uint32(6000)
+	const hostPID = app.PID(4321)
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		if pid == hostPID {
+			return container.Info{ContainerID: "cid-sync", PIDNamespace: pidNs}, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	store.AddProcess(hostPID)
+
+	podMeta := &informer.ObjectMeta{
+		Name: "sync-pod", Namespace: "sync-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{
+			Uid:        "pod-uid-sync",
+			Containers: []*informer.ContainerInfo{{Id: "cid-sync", Name: "sync-container"}},
+		},
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	// sDev left at its zero value: the mount key fs_probe_entry_sync reports
+	// for sync(2), which has no file to take a device from.
+	input.Send([]*pidTestItem{{pidNs: pidNs, hostPID: uint32(hostPID), sDev: 0, hasPID: true}})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Equal(t, "sync-pod", got[0].Metadata[attr.K8sPodName], "pod attribution still runs from the PID path")
+	assert.Equal(t, "sync-ns", got[0].Metadata[attr.K8sNamespaceName])
+	assert.Nil(t, got[0].mount, "no volume: the mount was never resolved")
+}
+
+func TestPIDMetadataDecorator_AttributesStorageClass(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	store := newPIDTestStore(t)
+
+	podMeta := &informer.ObjectMeta{
+		Name: "vol-pod", Namespace: "vol-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{Uid: "pod-uid-3"},
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
+
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-3", PVName: "pvc-def", VolumeType: "nfs"}, true
+	}
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	pvc := func(_ context.Context, pvName string) (string, string, string, bool) {
+		assert.Equal(t, "pvc-def", pvName)
+		return "vol-ns", "my-claim", "fast-ssd", true
+	}
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, pvc, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	input.Send([]*pidTestItem{{pidNs: 1, hostPID: 1, sDev: 43, hasPID: true}})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Equal(t, "vol-pod", got[0].Metadata[attr.K8sPodName])
+	assert.Equal(t, "vol-ns", got[0].Metadata[attr.K8sNamespaceName])
+	assert.Equal(t, "pvc-def", got[0].volume().PVName)
+	assert.Equal(t, "my-claim", got[0].volume().PVCName)
+	// Storage class attribute must be present and equal to the non-empty value returned by PVC lookup
+	assert.Equal(t, "fast-ssd", got[0].volume().StorageClass)
+}
+
+func TestPIDMetadataDecorator_NoMountFoundSkipsVolumeAttrs(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) { return ebpf.MountInfo{}, false }
+
+	store := newPIDTestStore(t)
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	input.Send([]*pidTestItem{{pidNs: 1, hostPID: 1, sDev: 42, hasPID: true}})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0].volume().PVName)
+	assert.Empty(t, got[0].volume().PVCName)
+}
+
+func TestPIDMetadataDecoratorProvider_BypassesWhenStoreNil(t *testing.T) {
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		nil, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	item := &pidTestItem{hasPID: true, pidNs: 1, hostPID: 1}
+	input.Send([]*pidTestItem{item})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Same(t, item, got[0])
+}
+
+// On a ReadWriteMany volume the mount's pod is one of several. When the PID
+// path cannot name the process, the volume and claim are still certain and
+// must be reported; the pod must not be guessed from the mount.
+func TestPIDMetadataDecorator_SharedVolumeKeepsVolumeButNotPod(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	store := newPIDTestStore(t)
+	podMeta := &informer.ObjectMeta{
+		Name: "first-mounter", Namespace: "vol-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{Uid: "pod-uid-2"},
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
+
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-2", PVName: "pvc-shared", VolumeType: "nfs", Shared: true}, true
+	}
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	pvc := func(_ context.Context, _ string) (string, string, string, bool) {
+		return "vol-ns", "shared-claim", "obi-nfs", true
+	}
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, pvc, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	input.Send([]*pidTestItem{{pidNs: 1, hostPID: 1, sDev: 42, hasPID: true}})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0].Metadata[attr.K8sPodName], "a shared volume must not name the first mounter")
+	assert.Empty(t, got[0].Metadata[attr.K8sOwnerName], "the owner is never guessed from a shared mount either")
+	assert.Empty(t, got[0].Metadata[attr.K8sKind])
+	assert.Equal(t, "pvc-shared", got[0].volume().PVName)
+	assert.Equal(t, "shared-claim", got[0].volume().PVCName)
+	assert.Equal(t, "obi-nfs", got[0].volume().StorageClass)
+	assert.Equal(t, "vol-ns", got[0].Metadata[attr.K8sNamespaceName], "the claim's namespace is still certain")
+}
+
+// With storage metrics alone nothing registers processes in the Store, so a
+// process on a shared volume, where the mount cannot name the pod, is still
+// attributed through its cgroup.
+func TestPIDMetadataDecorator_UntrackedPIDResolvedFromCgroup(t *testing.T) {
+	originalInfoForPID := kube.InfoForPID
+	defer func() { kube.InfoForPID = originalInfoForPID }()
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	store := newPIDTestStore(t)
+	const hostPID = app.PID(4321)
+
+	reads := 0
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		reads++
+		if pid == hostPID {
+			return container.Info{ContainerID: "cid-writer", PIDNamespace: 7000}, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	for _, podMeta := range []*informer.ObjectMeta{
+		{
+			Name: "first-mounter", Namespace: "vol-ns", Kind: "Pod",
+			Pod: &informer.PodInfo{Uid: "pod-uid-1"},
+		},
+		{
+			Name: "writer", Namespace: "vol-ns", Kind: "Pod",
+			Pod: &informer.PodInfo{
+				Uid:        "pod-uid-2",
+				Containers: []*informer.ContainerInfo{{Id: "cid-writer", Name: "io"}},
+				Owners:     []*informer.Owner{{Kind: "Deployment", Name: "writer-deploy"}},
+			},
+		},
+	} {
+		require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: podMeta}))
+	}
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-1", PVName: "pvc-shared", VolumeType: "nfs", Shared: true}, true
+	}
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	// Two items from the same process: the cgroup is read once.
+	input.Send([]*pidTestItem{
+		{pidNs: 7000, hostPID: uint32(hostPID), sDev: 42, hasPID: true},
+		{pidNs: 7000, hostPID: uint32(hostPID), sDev: 42, hasPID: true},
+	})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 2)
+	for _, item := range got {
+		assert.Equal(t, "writer", item.Metadata[attr.K8sPodName])
+		assert.Equal(t, "vol-ns", item.Metadata[attr.K8sNamespaceName])
+		assert.Equal(t, "io", item.Metadata[attr.K8sContainerName])
+		assert.Equal(t, "writer-deploy", item.Metadata[attr.K8sOwnerName], "the pod is known via its cgroup, so the owner is attributed even on a shared mount")
+		assert.Equal(t, "Deployment", item.Metadata[attr.K8sKind])
+		assert.Equal(t, "pvc-shared", item.volume().PVName)
+	}
+	assert.Equal(t, 1, reads, "the container ID is cached per PID")
+}
+
+// A writer that exits before its events are decorated, like a dd spawned by a
+// shell loop, is still attributed to its container through its PID namespace,
+// which the container's other processes keep alive.
+func TestPIDMetadataDecorator_ExitedPIDResolvedThroughItsNamespace(t *testing.T) {
+	originalInfoForPID := kube.InfoForPID
+	defer func() { kube.InfoForPID = originalInfoForPID }()
+	originalPidsInNamespace := pidsInNamespace
+	defer func() { pidsInNamespace = originalPidsInNamespace }()
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	store := newPIDTestStore(t)
+	const (
+		exitedPID = app.PID(5001)
+		shellPID  = app.PID(4000)
+		podNs     = uint32(7100)
+	)
+
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		if pid == shellPID {
+			return container.Info{ContainerID: "cid-writer", PIDNamespace: podNs}, nil
+		}
+		return container.Info{}, assert.AnError // exitedPID is gone
+	}
+	scans := 0
+	pidsInNamespace = func(ns uint32) []app.PID {
+		scans++
+		if ns == podNs {
+			return []app.PID{shellPID}
+		}
+		return nil
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: &informer.ObjectMeta{
+		Name: "writer", Namespace: "vol-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{
+			Uid:        "pod-uid-2",
+			Containers: []*informer.ContainerInfo{{Id: "cid-writer", Name: "io"}},
+		},
+	}}))
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-2", PVName: "pvc-a", VolumeType: "nfs", Shared: true}, true
+	}
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	// Two short-lived writers in the same container: the namespace is scanned once.
+	input.Send([]*pidTestItem{
+		{pidNs: podNs, hostPID: uint32(exitedPID), sDev: 42, hasPID: true},
+		{pidNs: podNs, hostPID: uint32(exitedPID + 1), sDev: 42, hasPID: true},
+	})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 2)
+	for _, item := range got {
+		assert.Equal(t, "writer", item.Metadata[attr.K8sPodName])
+		assert.Equal(t, "io", item.Metadata[attr.K8sContainerName])
+	}
+	assert.Equal(t, 1, scans, "the namespace's container is cached")
+}
+
+// A pod doing I/O in its first seconds is attributed even before the Store
+// has heard of its container: the pod UID in the cgroup path names the pod.
+func TestPIDMetadataDecorator_NewContainerResolvedByPodUID(t *testing.T) {
+	originalInfoForPID := kube.InfoForPID
+	defer func() { kube.InfoForPID = originalInfoForPID }()
+	originalPodUIDForPID := podUIDForPID
+	defer func() { podUIDForPID = originalPodUIDForPID }()
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	store := newPIDTestStore(t)
+	const hostPID = app.PID(6001)
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		if pid == hostPID {
+			return container.Info{ContainerID: "cid-not-yet-reported", PIDNamespace: 8100}, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	podUIDForPID = func(pid app.PID) string {
+		if pid == hostPID {
+			return "0e0c38ef-d14c-4ca4-8810-5b6360663f4b"
+		}
+		return ""
+	}
+	// Scheduled, but its status does not list the container yet.
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: &informer.ObjectMeta{
+		Name: "early-writer", Namespace: "jobs", Kind: "Pod",
+		Pod: &informer.PodInfo{Uid: "0e0c38ef-d14c-4ca4-8810-5b6360663f4b"},
+	}}))
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "someone-else", PVName: "pvc-shared", VolumeType: "nfs", Shared: true}, true
+	}
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	input.Send([]*pidTestItem{{pidNs: 8100, hostPID: uint32(hostPID), sDev: 42, hasPID: true}})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Equal(t, "early-writer", got[0].Metadata[attr.K8sPodName])
+	assert.Equal(t, "jobs", got[0].Metadata[attr.K8sNamespaceName])
+	assert.Empty(t, got[0].Metadata[attr.K8sContainerName], "the container name is not known yet")
+}
+
+func TestPodUIDPatternMatchesBothCgroupDrivers(t *testing.T) {
+	for _, line := range []string{
+		"0::/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod44c76ce5_f953_4bd3_bc89_12621681af49.slice/crio-40c03570b6f4c30bc8d69923d37ee698f5cfcced92c7b7df1c47f6f7887378a9.scope",
+		"0::/kubepods/burstable/pod44c76ce5-f953-4bd3-bc89-12621681af49/40c03570b6f4c30bc8d69923d37ee698f5cfcced92c7b7df1c47f6f7887378a9",
+	} {
+		m := podUIDPattern.FindStringSubmatch(line)
+		require.NotNil(t, m, line)
+		assert.Equal(t, "44c76ce5-f953-4bd3-bc89-12621681af49", strings.ReplaceAll(m[1], "_", "-"))
+	}
+}
+
+// Several PVs on one superblock (an NFS export shared by a subdirectory
+// provisioner) leave the PV unnamed; no claim is guessed for it.
+func TestPIDMetadataDecorator_AmbiguousVolumeSkipsVolumeAttrs(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+	resolveMount = func(_ ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "55293f39-c745-4578-accb-f3e5cfc7b303", VolumeType: "csi"}, true
+	}
+	lookups := 0
+	pvcLookup := func(context.Context, string) (string, string, string, bool) {
+		lookups++
+		return "ns", "claim", "class", true
+	}
+
+	store := newPIDTestStore(t)
+
+	input := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	defer input.Close()
+	output := msg.NewQueue[[]*pidTestItem](msg.ChannelBufferLen(10))
+	outCh := output.Subscribe()
+
+	run, err := PIDMetadataDecoratorProvider[*pidTestItem](
+		store, pidTestAttrs, pidTestPidOf, pidTestSetMount, pvcLookup, input, output,
+	)(t.Context())
+	require.NoError(t, err)
+	go run(t.Context())
+
+	input.Send([]*pidTestItem{{pidNs: 1, hostPID: 1, sDev: 77, hasPID: true}})
+
+	got := testutil.ReadChannel(t, outCh, pidTestTimeout)
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0].volume().PVName)
+	assert.Empty(t, got[0].volume().PVCName)
+	assert.Zero(t, lookups, "no claim lookup for an unnamed volume")
+}
+
+// The volume attributes depend on the mount alone, so they are built once per
+// mount resolution and shared by the stats of that mount: the claim is not
+// looked up per event, and a stat's getters never go back to a resolver.
+func TestPIDMetadataDecorator_VolumeResolvedOncePerMount(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+	// Addr is set (a plausible nfs server.address) and Source left empty, so
+	// the fs join device labels stay deterministically empty (dev 42's major
+	// is 0, and an empty source never resolves through statHostPathDevT)
+	// while still exercising the info.Addr -> attrs.ServerAddress wiring.
+	info := ebpf.MountInfo{PodUID: "pod-uid-1", PVName: "pvc-abc", VolumeType: "nfs", Addr: "10.0.0.5:2049"}
+	resolveMount = func(ebpf.MountKey) (ebpf.MountInfo, bool) { return info, true }
+
+	lookups := 0
+	d := &pidDecorator{
+		store: newPIDTestStore(t),
+		pvc: func(context.Context, string) (string, string, string, bool) {
+			lookups++
+			return "vol-ns", "my-claim", "fast", true
+		},
+		containers: expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		namespaces: expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		volumes:    map[ebpf.MountKey]volumeEntry{},
+	}
+	key := ebpf.MountKey{Dev: 42, RootIno: 7}
+
+	first := d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
+	second := d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
+	require.NotNil(t, first)
+	assert.Same(t, first, second, "one value per mount, shared by its stats")
+	assert.Equal(t, ebpf.MountAttrs{
+		PVName: "pvc-abc", PVCName: "my-claim", StorageClass: "fast", PVCNamespace: "vol-ns",
+		ServerAddress: "10.0.0.5:2049",
+	}, *first)
+	assert.Equal(t, 1, lookups)
+
+	// The mount resolves to something else (the table changed): rebuilt.
+	info.Shared = true
+	third := d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
+	assert.NotSame(t, first, third)
+	assert.Equal(t, 2, lookups)
+}
+
+// A bound volume's attrs, including the fs join labels, are cached for
+// boundVolumeRetry (not forever): once it elapses, volumeOf asks the PVC
+// lookup again, so a Retain PV rebound to a new claim is picked up.
+func TestPIDMetadataDecorator_BoundVolumeRetriedAfterBoundVolumeRetry(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+	resolveMount = func(ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-1", PVName: "pvc-abc", VolumeType: "nfs"}, true
+	}
+
+	lookups := 0
+	d := &pidDecorator{
+		store: newPIDTestStore(t),
+		pvc: func(context.Context, string) (string, string, string, bool) {
+			lookups++
+			return "vol-ns", "my-claim", "fast", true
+		},
+		containers: expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		namespaces: expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		volumes:    map[ebpf.MountKey]volumeEntry{},
+	}
+	key := ebpf.MountKey{Dev: 42}
+
+	for range 5 {
+		v := d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
+		require.NotNil(t, v)
+		assert.Equal(t, "my-claim", v.PVCName)
+	}
+	assert.Equal(t, 1, lookups, "cached for boundVolumeRetry, not looked up per event")
+
+	// A bound entry's retryAt must actually be boundVolumeRetry away, not the
+	// zero value: a zero retryAt would (as it once did) cache the entry
+	// forever regardless of how much time passes, since decorate's own retry
+	// check treats a zero retryAt as "never expires".
+	retryAt := d.volumes[key].retryAt
+	require.False(t, retryAt.IsZero(), "a bound volume's retryAt must not be the zero value")
+	assert.WithinDuration(t, time.Now().Add(boundVolumeRetry), retryAt, time.Second)
+
+	entry := d.volumes[key]
+	entry.retryAt = time.Now().Add(-time.Second)
+	d.volumes[key] = entry
+	d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
+	assert.Equal(t, 2, lookups, "re-resolved once boundVolumeRetry elapses, not cached forever")
+}
+
+// A volume whose claim is not found is not asked about on every event either.
+func TestPIDMetadataDecorator_UnboundVolumeRetriedLater(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+	resolveMount = func(ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-1", PVName: "pvc-abc", VolumeType: "nfs"}, true
+	}
+
+	lookups := 0
+	d := &pidDecorator{
+		store:      newPIDTestStore(t),
+		pvc:        func(context.Context, string) (string, string, string, bool) { lookups++; return "", "", "", false },
+		containers: expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		namespaces: expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		volumes:    map[ebpf.MountKey]volumeEntry{},
+	}
+	key := ebpf.MountKey{Dev: 42}
+
+	for range 5 {
+		a := &pipe.CommonAttrs{}
+		v := d.decorate(t.Context(), a, 0, 0, key)
+		require.NotNil(t, v)
+		assert.Equal(t, "pvc-abc", v.PVName)
+		assert.Empty(t, v.PVCName)
+		assert.Nil(t, a.Metadata, "no pod and no claim namespace: nothing to record")
+	}
+	assert.Equal(t, 1, lookups)
+
+	entry := d.volumes[key]
+	entry.retryAt = time.Now().Add(-time.Second)
+	d.volumes[key] = entry
+	d.decorate(t.Context(), &pipe.CommonAttrs{}, 0, 0, key)
+	assert.Equal(t, 2, lookups)
+}
+
+// An item that comes with its pod, as a kernel-aggregated filesystem key
+// whose cgroup named it, keeps that pod and container: neither the PID path
+// nor the mount's owner replaces them. Its volume is still resolved.
+func TestPIDMetadataDecorator_KeepsAPodAlreadySet(t *testing.T) {
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	store := newPIDTestStore(t)
+	mountPod := &informer.ObjectMeta{
+		Name: "mount-owner", Namespace: "other-ns", Kind: "Pod",
+		Pod: &informer.PodInfo{Uid: "pod-uid-3"},
+	}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: mountPod}))
+	resolveMount = func(ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "pod-uid-3", PVName: "pvc-xyz", VolumeType: "csi"}, true
+	}
+	pvc := func(context.Context, string) (string, string, string, bool) { return "db-ns", "data", "fast", true }
+	decorate := NewPIDItemDecorator(store, pidTestAttrs, pidTestPidOf, pidTestSetMount, pvc)
+
+	item := &pidTestItem{pidNs: 1, hostPID: 1, sDev: 42, hasPID: true}
+	item.Metadata = map[attr.Name]string{
+		attr.K8sPodName: "db-0", attr.K8sNamespaceName: "db-ns", attr.K8sContainerName: "postgres",
+	}
+	decorate(t.Context(), item)
+
+	assert.Equal(t, map[attr.Name]string{
+		attr.K8sPodName: "db-0", attr.K8sNamespaceName: "db-ns", attr.K8sContainerName: "postgres",
+	}, item.Metadata)
+	assert.Equal(t, ebpf.MountAttrs{PVName: "pvc-xyz", PVCName: "data", StorageClass: "fast", PVCNamespace: "db-ns"}, item.volume())
+}
+
+func mountpointTestStore(t *testing.T) *kube.Store {
+	t.Helper()
+	store := newPIDTestStore(t)
+	for _, p := range []struct{ name, uid string }{{"web-0", "uid-a"}, {"web-1", "uid-b"}} {
+		pod := &informer.ObjectMeta{Name: p.name, Namespace: "ns", Kind: "Pod", Pod: &informer.PodInfo{Uid: p.uid}}
+		require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: pod}))
+	}
+	return store
+}
+
+func withMountInfoResult(t *testing.T, info ebpf.MountInfo) {
+	t.Helper()
+	original := resolveMount
+	t.Cleanup(func() { resolveMount = original })
+	resolveMount = func(ebpf.MountKey) (ebpf.MountInfo, bool) { return info, true }
+}
+
+// With neither mount path selected nothing about paths is resolved, and the
+// volume's attributes are the one value every stat of the mount shares.
+func TestPIDMetadataDecorator_MountpointsOffResolveNothing(t *testing.T) {
+	withMountInfoResult(t, ebpf.MountInfo{PodUID: "uid-a", PVName: "pvc-1", HostPath: "/host/a"})
+	decorate := NewPIDItemDecoratorWith(mountpointTestStore(t), pidTestAttrs, pidTestPidOf, pidTestSetMount,
+		noopPVCLookup, PIDMountpoints[*pidTestItem]{})
+
+	first := &pidTestItem{pidNs: 1, hostPID: 1, sDev: 42, hasPID: true}
+	second := &pidTestItem{pidNs: 2, hostPID: 2, sDev: 42, hasPID: true}
+	decorate(t.Context(), first)
+	decorate(t.Context(), second)
+
+	assert.Empty(t, first.volume().HostPath)
+	assert.Empty(t, first.volume().ContainerPath)
+	assert.Same(t, first.mount, second.mount)
+}
+
+func TestPIDMetadataDecorator_HostPathOfAnUnsharedVolume(t *testing.T) {
+	withMountInfoResult(t, ebpf.MountInfo{PodUID: "uid-a", PVName: "pvc-1", HostPath: "/host/a"})
+	decorate := NewPIDItemDecoratorWith(mountpointTestStore(t), pidTestAttrs, pidTestPidOf, pidTestSetMount,
+		noopPVCLookup, PIDMountpoints[*pidTestItem]{Host: true})
+
+	first := &pidTestItem{pidNs: 1, hostPID: 1, sDev: 42, hasPID: true}
+	second := &pidTestItem{pidNs: 2, hostPID: 2, sDev: 42, hasPID: true}
+	decorate(t.Context(), first)
+	decorate(t.Context(), second)
+
+	assert.Equal(t, "/host/a", first.volume().HostPath)
+	assert.Same(t, first.mount, second.mount, "one value for the mount")
+}
+
+// Two pods of a ReadWriteMany volume each get their own kubelet path: the
+// pod found from the process, and the pod an aggregated key already named.
+func TestPIDMetadataDecorator_SharedVolumeHostPathIsTheEventsPod(t *testing.T) {
+	info := ebpf.MountInfo{PodUID: "uid-a", PVName: "pvc-rwx", Shared: true}.
+		WithPodHostPaths(map[string]string{"uid-a": "/host/a", "uid-b": "/host/b"})
+	withMountInfoResult(t, info)
+	uidOf := map[string]string{"web-0": "uid-a", "web-1": "uid-b"}
+	decorate := NewPIDItemDecoratorWith(mountpointTestStore(t), pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup,
+		PIDMountpoints[*pidTestItem]{Host: true, PodUID: func(item *pidTestItem) string {
+			return uidOf[item.Metadata[attr.K8sPodName]]
+		}})
+
+	withPod := func(name string) *pidTestItem {
+		return &pidTestItem{
+			pidNs: 1, hostPID: 1, sDev: 42, hasPID: true,
+			CommonAttrs: pipe.CommonAttrs{Metadata: map[attr.Name]string{attr.K8sPodName: name}},
+		}
+	}
+	a, b, a2, nobody := withPod("web-0"), withPod("web-1"), withPod("web-0"), withPod("gone")
+	for _, item := range []*pidTestItem{a, b, a2, nobody} {
+		decorate(t.Context(), item)
+	}
+
+	assert.Equal(t, "/host/a", a.volume().HostPath)
+	assert.Equal(t, "/host/b", b.volume().HostPath)
+	assert.Same(t, a.mount, a2.mount, "one value per pod and mount")
+	assert.Empty(t, nobody.volume().HostPath, "a pod with no mount of the volume gets no path")
+	assert.Equal(t, "pvc-rwx", nobody.volume().PVName)
+}
+
+// An event whose process is in no pod still resolves its volume without a
+// pod; a shared volume then has no path to name.
+func TestPIDMetadataDecorator_SharedVolumeWithoutAPodHasNoHostPath(t *testing.T) {
+	info := ebpf.MountInfo{PodUID: "uid-a", PVName: "pvc-rwx", Shared: true}.
+		WithPodHostPaths(map[string]string{"uid-a": "/host/a"})
+	withMountInfoResult(t, info)
+	decorate := NewPIDItemDecoratorWith(mountpointTestStore(t), pidTestAttrs, pidTestPidOf, pidTestSetMount,
+		noopPVCLookup, PIDMountpoints[*pidTestItem]{Host: true})
+
+	item := &pidTestItem{pidNs: 1, hostPID: 1, sDev: 42, hasPID: true}
+	decorate(t.Context(), item)
+
+	assert.Empty(t, item.volume().HostPath, "never the first pod's path")
+}
+
+func TestPIDMetadataDecorator_ContainerPathPerContainer(t *testing.T) {
+	withMountInfoResult(t, ebpf.MountInfo{PodUID: "uid-a", PVName: "pvc-1"})
+	calls := 0
+	decorate := NewPIDItemDecoratorWith(mountpointTestStore(t), pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup,
+		PIDMountpoints[*pidTestItem]{ContainerPath: func(_, _ uint32, scope string, mount ebpf.MountKey) string {
+			calls++
+			assert.Equal(t, ebpf.MountKey{Dev: 42}, mount)
+			return map[string]string{"app": "/data", "sidecar": "/mnt/vol", "": ""}[scope]
+		}})
+
+	withContainer := func(name string) *pidTestItem {
+		return &pidTestItem{
+			pidNs: 1, hostPID: 1, sDev: 42, hasPID: true,
+			CommonAttrs: pipe.CommonAttrs{Metadata: map[attr.Name]string{
+				attr.K8sPodName: "web-0", attr.K8sContainerName: name,
+			}},
+		}
+	}
+	app1, app2, sidecar, unknown := withContainer("app"), withContainer("app"), withContainer("sidecar"), withContainer("")
+	for _, item := range []*pidTestItem{app1, app2, sidecar, unknown} {
+		decorate(t.Context(), item)
+	}
+
+	assert.Equal(t, "/data", app1.volume().ContainerPath)
+	assert.Equal(t, "/mnt/vol", sidecar.volume().ContainerPath)
+	assert.Empty(t, unknown.volume().ContainerPath)
+	assert.Equal(t, "pvc-1", sidecar.volume().PVName)
+	assert.Same(t, app1.mount, app2.mount)
+	assert.Equal(t, 4, calls)
+}
+
+// dev_t 0 is sync(2): no mount, so no path of either kind and no lookup.
+func TestPIDMetadataDecorator_NoMountpointsForDeviceZero(t *testing.T) {
+	original := resolveMount
+	defer func() { resolveMount = original }()
+	resolveMount = func(ebpf.MountKey) (ebpf.MountInfo, bool) {
+		t.Fatal("dev 0 must not reach the mount resolver")
+		return ebpf.MountInfo{}, false
+	}
+	decorate := NewPIDItemDecoratorWith(mountpointTestStore(t), pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup,
+		PIDMountpoints[*pidTestItem]{Host: true, ContainerPath: func(uint32, uint32, string, ebpf.MountKey) string {
+			t.Fatal("dev 0 must not reach the container resolver")
+			return ""
+		}})
+
+	item := &pidTestItem{pidNs: 1, hostPID: 1, sDev: 0, hasPID: true}
+	decorate(t.Context(), item)
+
+	assert.Nil(t, item.mount)
+}
+
+// The variants of a volume, and of all volumes together, are bounded.
+func TestPIDMetadataDecorator_VariantsAreBounded(t *testing.T) {
+	d := &pidDecorator{volumes: map[ebpf.MountKey]volumeEntry{}}
+	info := ebpf.MountInfo{PVName: "pvc-1"}
+	pvc := func(context.Context, string) (string, string, string, bool) { return "ns", "c", "sc", true }
+	d.pvc = pvc
+
+	for vol := range 2 * maxCachedVariants / maxVolumeVariants {
+		for i := range 3 * maxVolumeVariants {
+			d.volumeOf(t.Context(), ebpf.MountKey{Dev: uint32(vol + 1)}, info,
+				pathVariant{containerPath: "/p" + strconv.Itoa(i)})
+			total := 0
+			for _, e := range d.volumes {
+				assert.LessOrEqual(t, len(e.variants), maxVolumeVariants)
+				total += len(e.variants)
+			}
+			require.LessOrEqual(t, total, maxCachedVariants)
+		}
+	}
+}
+
+// Kernel-aggregated stats come with their pod; per-event stats find it from
+// the process. On a shared volume both get the same mount paths.
+func TestPIDMetadataDecorator_AggregatedAndPerEventAgreeOnMountpoints(t *testing.T) {
+	originalInfoForPID := kube.InfoForPID
+	t.Cleanup(func() { kube.InfoForPID = originalInfoForPID })
+	const pidNs, hostPID = uint32(5000), app.PID(1234)
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		if pid == hostPID {
+			return container.Info{ContainerID: "cid-b", PIDNamespace: pidNs}, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	store := newPIDTestStore(t)
+	store.AddProcess(hostPID)
+	for _, p := range []struct{ name, uid, cid string }{{"web-0", "uid-a", "cid-a"}, {"web-1", "uid-b", "cid-b"}} {
+		pod := &informer.ObjectMeta{
+			Name: p.name, Namespace: "ns", Kind: "Pod",
+			Pod: &informer.PodInfo{Uid: p.uid, Containers: []*informer.ContainerInfo{{Id: p.cid, Name: "app"}}},
+		}
+		require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: pod}))
+	}
+	info := ebpf.MountInfo{PodUID: "uid-a", PVName: "pvc-rwx", Shared: true}.
+		WithPodHostPaths(map[string]string{"uid-a": "/host/a", "uid-b": "/host/b"})
+	withMountInfoResult(t, info)
+	uidOf := map[string]string{"web-0": "uid-a", "web-1": "uid-b"}
+	decorate := NewPIDItemDecoratorWith(store, pidTestAttrs, pidTestPidOf, pidTestSetMount, noopPVCLookup,
+		PIDMountpoints[*pidTestItem]{
+			Host: true,
+			PodUID: func(item *pidTestItem) string {
+				return uidOf[item.Metadata[attr.K8sPodName]]
+			},
+			ContainerPath: func(_, _ uint32, scope string, _ ebpf.MountKey) string {
+				return map[string]string{"app": "/data"}[scope]
+			},
+		})
+
+	perEvent := &pidTestItem{pidNs: pidNs, hostPID: uint32(hostPID), sDev: 42, hasPID: true}
+	aggregated := &pidTestItem{
+		pidNs: pidNs, sDev: 42, hasPID: true,
+		CommonAttrs: pipe.CommonAttrs{Metadata: map[attr.Name]string{
+			attr.K8sPodName: "web-1", attr.K8sNamespaceName: "ns", attr.K8sContainerName: "app",
+			attr.K8sOwnerName: "web-1", attr.K8sKind: "Pod",
+		}},
+	}
+	decorate(t.Context(), perEvent)
+	decorate(t.Context(), aggregated)
+
+	assert.Equal(t, "/host/b", perEvent.volume().HostPath)
+	assert.Equal(t, "/data", perEvent.volume().ContainerPath)
+	assert.Equal(t, perEvent.Metadata, aggregated.Metadata)
+	assert.Equal(t, perEvent.volume(), aggregated.volume())
+}
+
+// The kernel hands out PID namespace numbers lowest free first, so a pod
+// created right after another was deleted (a StatefulSet pod, a Job, a pod
+// recreated under its own name) gets the old pod's namespace number. A
+// writer of the new pod that exited before decoration must be attributed to
+// the new pod, not resolved from the cached identity of the deleted one.
+func TestPIDMetadataDecorator_ReusedNamespaceNumberResolvesTheNewPod(t *testing.T) {
+	originalInfoForPID := kube.InfoForPID
+	defer func() { kube.InfoForPID = originalInfoForPID }()
+	originalPidsInNamespace := pidsInNamespace
+	defer func() { pidsInNamespace = originalPidsInNamespace }()
+	originalPodUIDForPID := podUIDForPID
+	defer func() { podUIDForPID = originalPodUIDForPID }()
+	originalResolveMount := resolveMount
+	defer func() { resolveMount = originalResolveMount }()
+
+	const (
+		podNs   = uint32(7100)
+		oldSh   = app.PID(4000)
+		newSh   = app.PID(4100)
+		exitedA = app.PID(5001)
+		exitedB = app.PID(5101)
+	)
+	live := map[app.PID]container.Info{oldSh: {ContainerID: "cid-old", PIDNamespace: podNs}}
+	kube.InfoForPID = func(pid app.PID) (container.Info, error) {
+		if info, ok := live[pid]; ok {
+			return info, nil
+		}
+		return container.Info{}, assert.AnError
+	}
+	podUIDForPID = func(pid app.PID) string {
+		return map[app.PID]string{oldSh: "uid-old", newSh: "uid-new"}[pid]
+	}
+	pidsInNamespace = func(ns uint32) []app.PID {
+		if ns != podNs {
+			return nil
+		}
+		var pids []app.PID
+		for pid := range live {
+			pids = append(pids, pid)
+		}
+		return pids
+	}
+	resolveMount = func(ebpf.MountKey) (ebpf.MountInfo, bool) {
+		return ebpf.MountInfo{PodUID: "uid-old", PVName: "pvc-shared", VolumeType: "nfs", Shared: true}, true
+	}
+
+	store := newPIDTestStore(t)
+	pod := func(uid, cid string) *informer.ObjectMeta {
+		return &informer.ObjectMeta{
+			Name: "writer", Namespace: "ns", Kind: "Pod",
+			Pod: &informer.PodInfo{Uid: uid, Containers: []*informer.ContainerInfo{{Id: cid, Name: "io"}}},
+		}
+	}
+	d := &pidDecorator{
+		store:      store,
+		pvc:        noopPVCLookup,
+		containers: expirable.NewLRU[app.PID, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		namespaces: expirable.NewLRU[uint32, cgroupIdentity](untrackedPIDCacheSize, nil, untrackedPIDCacheTTL),
+		volumes:    map[ebpf.MountKey]volumeEntry{},
+	}
+	key := ebpf.MountKey{Dev: 42, RootIno: 7}
+
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: pod("uid-old", "cid-old")}))
+	first := &pipe.CommonAttrs{}
+	d.decorate(t.Context(), first, podNs, uint32(exitedA), key)
+	require.Equal(t, "writer", first.Metadata[attr.K8sPodName], "the old pod, through its namespace")
+
+	// The old pod is deleted and a new one, under the same name, gets the
+	// same namespace number.
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_DELETED, Resource: pod("uid-old", "cid-old")}))
+	delete(live, oldSh)
+	live[newSh] = container.Info{ContainerID: "cid-new", PIDNamespace: podNs}
+	require.NoError(t, store.On(&informer.Event{Type: informer.EventType_CREATED, Resource: pod("uid-new", "cid-new")}))
+
+	second := &pipe.CommonAttrs{}
+	d.decorate(t.Context(), second, podNs, uint32(exitedB), key)
+	assert.Equal(t, "writer", second.Metadata[attr.K8sPodName], "the new pod, not the cached identity of the deleted one")
+	assert.Equal(t, "io", second.Metadata[attr.K8sContainerName])
+}

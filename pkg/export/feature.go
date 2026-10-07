@@ -56,8 +56,86 @@ const (
 	FeatureGraph
 	FeatureApplicationRuntime
 	FeatureEBPF
-	FeatureAll = Features(^uint(0)) // all bits to 1
+	FeatureStorageBlockDuration
+	FeatureStorageBlockIo
+	FeatureStorageBlockQueue
+	FeatureStorageBlockErrors
+	FeatureStorageFSDuration
+	FeatureStorageFSIo
+	FeatureStorageFSErrors
+	// FeatureStorageBlockQueueDepth emits the per-completion in-flight histogram
+	// obi.stat.disk.queue.depth. It is in no umbrella: it is the only block metric
+	// that needs a counter shared by every CPU on the block path.
+	//
+	// Deprecated: the metric will be removed.
+	FeatureStorageBlockQueueDepth
+	FeatureStorageBlockFlush
+	FeatureStorageBlockDiscard
+	// FeatureStorageNFSDuration, FeatureStorageNFSErrors,
+	// FeatureStorageNFSRetransmits and FeatureStorageNFSIo emit the NFS
+	// client RPC metrics, counted in the kernel from the sunrpc
+	// rpc_stats_latency tracepoint.
+	FeatureStorageNFSDuration
+	FeatureStorageNFSErrors
+	FeatureStorageNFSRetransmits
+	FeatureStorageNFSIo
+	// FeatureStorageFSSync enables the storage_fs_sync probes: fentry/fexit
+	// (kprobe fallback) on the syncfs and sync_file_range syscall wrappers,
+	// kprobe/kretprobe on the sync wrapper (step 14). Unlike
+	// FeatureStorageFSDuration/Io/Errors, which only split series
+	// cardinality on an already-running probe pair, this is its own probe
+	// set: disabling it stops the kernel-side work, not just the export.
+	FeatureStorageFSSync
+	// FeatureStorageBlockPending emits obi.stat.disk.pending_operations, a
+	// userspace snapshot of the in-flight map taken at each collection: no
+	// hot-path cost, unlike FeatureStorageBlockQueueDepth.
+	FeatureStorageBlockPending
+	// FeatureStorageBlockVolumes adds the bio-based stacked volumes (LVM
+	// logical volumes, md arrays, dm-crypt and other device-mapper devices)
+	// to the block metrics, under their own device. It is in no umbrella:
+	// its two programs run for every bio submitted on the node, on top of
+	// the request programs. It enables no metric by itself: it needs one of
+	// the storage_block metrics.
+	FeatureStorageBlockVolumes
+	// FeatureStorageBlockPod counts block reads and writes per cgroup they are
+	// charged to, in the kernel: obi.stat.disk.operations and
+	// obi.stat.disk.operation_time, and the Kubernetes pod attributes of
+	// obi.stat.disk.io. It is in no umbrella: it adds a cgroup read at every
+	// issue and a map update at every completion of a read or write, and
+	// per-pod series. It needs cgroup v2 with the io controller; elsewhere
+	// configuration validation turns it off with a warning.
+	FeatureStorageBlockPod
+	// FeatureAll is what "all" and "*" select: every feature except the deprecated
+	// FeatureStorageBlockQueueDepth, which is in no umbrella and is only enabled
+	// when listed by name.
+	FeatureAll = Features(^uint(0)) &^ FeatureStorageBlockQueueDepth
 )
+
+// FeatureStorageBlock enables all block-layer storage metrics.
+// Note: the block tracepoints (block_rq_issue and
+// block_rq_complete) attach together whenever any storage_block* bit is set,
+// and every request pays for them. Disabling duration/io/queue/errors only
+// reduces series cardinality: their read and write events are delivered as
+// long as one of them is on. Flushes and discards are the exception: without
+// storage_block_flush or storage_block_discard their completions end in the
+// kernel, without a ring buffer event.
+const FeatureStorageBlock = FeatureStorageBlockDuration | FeatureStorageBlockIo | FeatureStorageBlockQueue | FeatureStorageBlockErrors |
+	FeatureStorageBlockFlush | FeatureStorageBlockDiscard | FeatureStorageBlockPending
+
+// FeatureStorageFS enables all filesystem metrics. Duration/Io/Errors derive
+// from the same probe pair, so disabling one of those does not reduce
+// kernel-side overhead — splitting them controls series cardinality only.
+// Sync is its own probe set (step 14): the umbrella enables it too, but it
+// can also be disabled on its own without losing read/write/fsync.
+const FeatureStorageFS = FeatureStorageFSDuration | FeatureStorageFSIo | FeatureStorageFSErrors | FeatureStorageFSSync
+
+// FeatureStorageNFS enables all NFS client RPC metrics. They share one
+// program on the sunrpc rpc_stats_latency tracepoint, which runs once per NFS
+// RPC attempt: disabling one of them reduces series cardinality, and only
+// storage_nfs_errors adds kernel keys (one per error status); storage_nfs_io
+// reads two more words of the same key. It is its own umbrella: storage_fs
+// does not imply it.
+const FeatureStorageNFS = FeatureStorageNFSDuration | FeatureStorageNFSErrors | FeatureStorageNFSRetransmits | FeatureStorageNFSIo
 
 // FeatureStats enables all stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -74,6 +152,27 @@ var FeatureMapper = map[string]Features{
 	"stats_tcp_retransmits":            FeatureStatsTCPRetransmits,
 	"stats_tcp_io":                     FeatureStatsTCPIo,
 	"stats_tcp_successful_connections": FeatureStatsTCPSuccessfulConnections,
+	"storage_block":                    FeatureStorageBlock,
+	"storage_block_duration":           FeatureStorageBlockDuration,
+	"storage_block_io":                 FeatureStorageBlockIo,
+	"storage_block_queue":              FeatureStorageBlockQueue,
+	"storage_block_errors":             FeatureStorageBlockErrors,
+	"storage_block_flush":              FeatureStorageBlockFlush,
+	"storage_block_discard":            FeatureStorageBlockDiscard,
+	"storage_block_queue_depth":        FeatureStorageBlockQueueDepth,
+	"storage_block_pending":            FeatureStorageBlockPending,
+	"storage_block_volumes":            FeatureStorageBlockVolumes,
+	"storage_block_pod":                FeatureStorageBlockPod,
+	"storage_fs":                       FeatureStorageFS,
+	"storage_fs_duration":              FeatureStorageFSDuration,
+	"storage_fs_io":                    FeatureStorageFSIo,
+	"storage_fs_errors":                FeatureStorageFSErrors,
+	"storage_nfs":                      FeatureStorageNFS,
+	"storage_nfs_duration":             FeatureStorageNFSDuration,
+	"storage_nfs_errors":               FeatureStorageNFSErrors,
+	"storage_nfs_retransmits":          FeatureStorageNFSRetransmits,
+	"storage_nfs_io":                   FeatureStorageNFSIo,
+	"storage_fs_sync":                  FeatureStorageFSSync,
 	"network":                          FeatureNetwork,
 	"network_inter_zone":               FeatureNetworkInterZone,
 	"network_flow_packets":             FeatureNetworkFlowPackets,
@@ -95,8 +194,9 @@ var FeatureMapper = map[string]Features{
 // The names keep working; they are reported at startup and flagged as deprecated in the
 // generated JSON schema and configuration reference.
 var deprecatedFeatures = map[string]string{
-	"application_span":       "application_span_otel",
-	"application_span_sizes": "",
+	"application_span":          "application_span_otel",
+	"application_span_sizes":    "",
+	"storage_block_queue_depth": "",
 }
 
 // DeprecatedFeature is a deprecated feature name together with the feature that
@@ -375,7 +475,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats)
+	return f.any(FeatureStats | FeatureStorageBlock | FeatureStorageBlockQueueDepth | FeatureStorageBlockPod | FeatureStorageFS | FeatureStorageNFS)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -396,6 +496,114 @@ func (f Features) StatsTCPRetransmits() bool {
 
 func (f Features) StatsTCPIo() bool {
 	return f.any(FeatureStatsTCPIo)
+}
+
+// StorageBlock reports whether any block-layer storage metric is enabled. It
+// gates the shared setup (eBPF probes, ring buffer) that every block metric
+// needs, including the deprecated queue depth and the pod counters outside
+// the umbrella.
+func (f Features) StorageBlock() bool {
+	return f.any(FeatureStorageBlock | FeatureStorageBlockQueueDepth | FeatureStorageBlockPod)
+}
+
+func (f Features) StorageBlockDuration() bool {
+	return f.any(FeatureStorageBlockDuration)
+}
+
+func (f Features) StorageBlockIo() bool {
+	return f.any(FeatureStorageBlockIo)
+}
+
+func (f Features) StorageBlockQueue() bool {
+	return f.any(FeatureStorageBlockQueue)
+}
+
+func (f Features) StorageBlockErrors() bool {
+	return f.any(FeatureStorageBlockErrors)
+}
+
+func (f Features) StorageBlockQueueDepth() bool {
+	return f.any(FeatureStorageBlockQueueDepth)
+}
+
+// StorageBlockReadWrite reports whether any metric of block reads and writes is
+// enabled, the ones that carry a disk.io.direction.
+func (f Features) StorageBlockReadWrite() bool {
+	return f.any(FeatureStorageBlockDuration | FeatureStorageBlockIo | FeatureStorageBlockQueue |
+		FeatureStorageBlockErrors | FeatureStorageBlockQueueDepth)
+}
+
+func (f Features) StorageBlockFlush() bool {
+	return f.any(FeatureStorageBlockFlush)
+}
+
+func (f Features) StorageBlockDiscard() bool {
+	return f.any(FeatureStorageBlockDiscard)
+}
+
+// StorageBlockPending reports whether obi.stat.disk.pending_operations is
+// enabled: a userspace snapshot of the in-flight map, with no cost on the
+// issue/complete path.
+func (f Features) StorageBlockPending() bool {
+	return f.any(FeatureStorageBlockPending)
+}
+
+// StorageBlockVolumes reports whether bio-based stacked volumes are measured
+// too. It adds devices to the enabled block metrics and is no metric of its
+// own, so StorageBlock and StatMetrics do not count it.
+func (f Features) StorageBlockVolumes() bool {
+	return f.any(FeatureStorageBlockVolumes)
+}
+
+// StorageBlockPod reports whether block reads and writes are counted per
+// cgroup: obi.stat.disk.operations, obi.stat.disk.operation_time and the pod
+// attributes of obi.stat.disk.io.
+func (f Features) StorageBlockPod() bool {
+	return f.any(FeatureStorageBlockPod)
+}
+
+// StorageFS reports whether any filesystem metric is enabled. It gates
+// the shared setup (eBPF probes, ring buffer) that both metrics need.
+func (f Features) StorageFS() bool {
+	return f.any(FeatureStorageFS)
+}
+
+func (f Features) StorageFSDuration() bool {
+	return f.any(FeatureStorageFSDuration)
+}
+
+func (f Features) StorageFSIo() bool {
+	return f.any(FeatureStorageFSIo)
+}
+
+func (f Features) StorageFSErrors() bool {
+	return f.any(FeatureStorageFSErrors)
+}
+
+// StorageNFS reports whether any NFS client RPC metric is enabled. It gates
+// the NFS program and its kernel aggregation map.
+func (f Features) StorageNFS() bool {
+	return f.any(FeatureStorageNFS)
+}
+
+func (f Features) StorageNFSDuration() bool {
+	return f.any(FeatureStorageNFSDuration)
+}
+
+func (f Features) StorageNFSErrors() bool {
+	return f.any(FeatureStorageNFSErrors)
+}
+
+func (f Features) StorageNFSRetransmits() bool {
+	return f.any(FeatureStorageNFSRetransmits)
+}
+
+func (f Features) StorageNFSIo() bool {
+	return f.any(FeatureStorageNFSIo)
+}
+
+func (f Features) StorageFSSync() bool {
+	return f.any(FeatureStorageFSSync)
 }
 
 func (f Features) NetworkInterZone() bool {

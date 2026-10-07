@@ -37,6 +37,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/health"
 	"go.opentelemetry.io/obi/pkg/internal/avoidedsvc"
 	"go.opentelemetry.io/obi/pkg/internal/pipe/cidr"
+	"go.opentelemetry.io/obi/pkg/internal/statsolly/statagg"
 	"go.opentelemetry.io/obi/pkg/kube"
 	"go.opentelemetry.io/obi/pkg/kube/klogbridge"
 	"go.opentelemetry.io/obi/pkg/kube/kubeflags"
@@ -225,6 +226,10 @@ var DefaultConfig = Config{
 		},
 		BPFFSPath:      "/sys/fs/bpf/",
 		InstrumentCuda: config.CudaModeAuto,
+		StorageAggregation: config.StorageAggregation{
+			BlockMapsBudgetBytes:    8 << 20,
+			BlockPodMapsBudgetBytes: 8 << 20,
+		},
 	},
 	CloudMetadata: transform.CloudMetadataConfig{
 		RefreshInterval: 30 * time.Second,
@@ -764,7 +769,10 @@ func (e ConfigError) Error() string {
 
 // Validate validates a standalone OBI configuration.
 func (c *Config) Validate() error {
-	return c.validate(validationContext{checkCiliumCompatibility: tcmanager.EnsureCiliumCompatibility})
+	return c.validate(validationContext{
+		checkCiliumCompatibility: tcmanager.EnsureCiliumCompatibility,
+		checkBlockPod:            hostBlockPodUnsupported,
+	})
 }
 
 // ValidateStatic validates a standalone OBI configuration without inspecting
@@ -780,8 +788,13 @@ func (c *Config) ValidateForReceiver() error {
 		hostTracesSink:           true,
 		hostMetricsSink:          true,
 		checkCiliumCompatibility: tcmanager.EnsureCiliumCompatibility,
+		checkBlockPod:            hostBlockPodUnsupported,
 	})
 }
+
+// hostBlockPodUnsupported checks this host's cgroup hierarchy for
+// storage_block_pod.
+func hostBlockPodUnsupported() string { return blockPodUnsupported(blockPodCgroupRoots) }
 
 // ValidateStaticForReceiver validates a Collector receiver configuration
 // without inspecting host state.
@@ -793,6 +806,9 @@ type validationContext struct {
 	hostTracesSink           bool
 	hostMetricsSink          bool
 	checkCiliumCompatibility func(config.TCBackend) error
+	// checkBlockPod returns why storage_block_pod can't attribute block I/O
+	// on this host, or "". Nil skips the check (static validation).
+	checkBlockPod func() string
 }
 
 //nolint:cyclop
@@ -849,10 +865,10 @@ func (c *Config) validate(context validationContext) error {
 	applicationEnabled := c.enabledForValidation(FeatureAppO11y, context)
 	statsEnabled := c.enabledForValidation(FeatureStatsO11y, context)
 	if !networkEnabled && !applicationEnabled && !statsEnabled {
-		return ConfigError("at least one of 'network', 'application' or 'stats' features must be enabled. " +
-			"Enable an OpenTelemetry or Prometheus metrics export, then enable any of the network*, application* or stats*" +
-			"features using the 'OTEL_EBPF_METRICS_FEATURES=network,application,stats' environment variable " +
-			"or 'meter_provider: { features: [network,application,stats] }' in the YAML configuration file. ")
+		return ConfigError("at least one of 'network', 'application', 'stats', 'storage_block', 'storage_fs' or 'storage_nfs' features must be enabled. " +
+			"Enable an OpenTelemetry or Prometheus metrics export, then enable any of the network*, application*, stats*, " +
+			"storage_block*, storage_fs* or storage_nfs* features using the 'OTEL_EBPF_METRICS_FEATURES=network,application,stats,storage_block,storage_fs' environment variable " +
+			"or 'meter_provider: { features: [network,application,stats,storage_block,storage_fs] }' in the YAML configuration file. ")
 	}
 
 	if networkEnabled && c.NetworkFlows.Source == EbpfSourceTC && context.checkCiliumCompatibility != nil {
@@ -880,6 +896,17 @@ func (c *Config) validate(context validationContext) error {
 			" purposes, you can also set OTEL_EBPF_STATS_PRINT_STATS=true")
 	}
 
+	// The stats OTel exporter runs only with an endpoint (a host metrics
+	// sink does not export stats): the same test StatsAgent sizes the
+	// kernel layout with.
+	if statsEnabled && c.Metrics.Features.StorageNFS() {
+		if _, err := c.NFSHistogramLayout(c.OTELMetrics.EndpointEnabled()); err != nil {
+			return ConfigError("storage_nfs: " + err.Error() + ": the union of the OTel and Prometheus" +
+				" stat_nfs_client_rpc_duration_histogram buckets must have at most 32 bounds")
+		}
+	}
+	c.warnStorageBlockVolumesAlone()
+
 	if !c.TracePrinter.Valid() {
 		return ConfigError(fmt.Sprintf("invalid value for trace_printer: '%s'", c.TracePrinter))
 	}
@@ -902,6 +929,11 @@ func (c *Config) validate(context validationContext) error {
 		// drive the exporters through JoinMetricsConfig, so report against the same set.
 		c.warnDeprecatedMetricsFeatures()
 	}
+
+	// After the span metrics formats are resolved: clearing a bit makes an
+	// "all" list no longer FeatureAll, which InvalidSpanMetricsConfig tells
+	// apart from an explicit choice of both formats.
+	c.disableBlockPodIfUnsupported(context.checkBlockPod)
 
 	if c.InternalMetrics.Exporter == imetrics.InternalMetricsExporterOTEL && c.InternalMetrics.Prometheus.Port != 0 {
 		return ConfigError("you can't enable both OTEL and Prometheus internal metrics")
@@ -1006,6 +1038,18 @@ func (c *Config) warnDeprecatedMetricsFeatures() {
 	}
 }
 
+// warnStorageBlockVolumesAlone reports storage_block_volumes enabled without
+// any block metric: the flag adds the stacked volumes (LVM, md, device-mapper)
+// to the storage_block metrics as devices of their own and is no metric
+// itself, so alone it measures nothing.
+func (c *Config) warnStorageBlockVolumesAlone() {
+	if f := c.Metrics.Features; f.StorageBlockVolumes() && !f.StorageBlock() {
+		slog.Warn("storage_block_volumes adds stacked volumes to the storage_block metrics and none of them is"+
+			" enabled; it has no effect. Enable storage_block, or the storage_block_* metrics wanted, next to it",
+			"feature", "storage_block_volumes")
+	}
+}
+
 func (c *Config) enabledForValidation(feature Feature, context validationContext) bool {
 	if c.Enabled(feature) {
 		return true
@@ -1022,6 +1066,27 @@ func (c *Config) enabledForValidation(feature Feature, context validationContext
 	default:
 		return false
 	}
+}
+
+// NFSHistogramLayout returns the kernel histogram layout the NFS client RPC
+// metrics count in: exponential when the OTel exporter aggregates histograms
+// exponentially, else explicit over the union of the enabled exporters'
+// buckets, which holds at most 32 bounds. otelEnabled tells whether the OTel
+// metrics exporter runs.
+func (c *Config) NFSHistogramLayout(otelEnabled bool) (*statagg.Layout, error) {
+	choice := statagg.HistogramChoice{
+		OTelExponential: otelEnabled && c.OTELMetrics.HistogramAggregation == otelcfg.HistogramAggregationExponential,
+	}
+	var sets [][]float64
+	if c.Metrics.Features.StorageNFSDuration() {
+		if otelEnabled {
+			sets = append(sets, c.OTELMetrics.Buckets.StatNFSClientRPCDurationHistogram)
+		}
+		if c.Prometheus.EndpointEnabled() {
+			sets = append(sets, c.Prometheus.Buckets.StatNFSClientRPCDurationHistogram)
+		}
+	}
+	return choice.NewLayout(sets...)
 }
 
 func (c *Config) promNetO11yEnabled() bool {

@@ -39,6 +39,10 @@ type Client struct {
 }
 
 func (c *Client) Query(promQL string) ([]Result, error) {
+	// QueryEscape, not PathEscape: this is a query parameter, and PathEscape
+	// leaves "+" untouched, which a server then decodes as a space. That
+	// silently turns a PromQL regex like "pod-.+" into "pod-. " and makes
+	// the query match nothing, with no error to notice.
 	qurl := "http://" + c.HostPort + "/api/v1/query?query=" + url.QueryEscape(promQL)
 	log.Debug("querying prometheus", "query", promQL, "url", qurl)
 	resp, err := http.Get(qurl)

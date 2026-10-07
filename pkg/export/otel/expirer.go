@@ -42,6 +42,10 @@ type Expirer[Record any, Metric removableMetric[ValType], ValType any] struct {
 	clock          expire.Clock
 	lastExpiration time.Time
 	ttl            time.Duration
+
+	// omitEmptyStrings leaves out string attributes whose value is "", as
+	// if their getter had omitted them.
+	omitEmptyStrings bool
 }
 
 // NewExpirer creates an expirer that wraps data points of a given type. Its labeled instances are dropped
@@ -91,11 +95,29 @@ func (ex *Expirer[Record, Metric, ValType]) ForRecord(r Record, extraAttrs ...at
 }
 
 func (ex *Expirer[Record, Metric, ValType]) recordAttributes(m Record, extraAttrs ...attribute.KeyValue) (attribute.Set, []string) {
-	keyVals := make([]attribute.KeyValue, 0, len(ex.attrs)+len(extraAttrs))
-	vals := make([]string, 0, len(ex.attrs)+len(extraAttrs))
+	return recordAttributes(m, ex.attrs, ex.omitEmptyStrings, extraAttrs...)
+}
 
-	for _, attr := range ex.attrs {
+// recordAttributes returns the attribute set of a record's data point and the
+// values that identify its series. omitEmptyStrings leaves out string
+// attributes whose value is "".
+func recordAttributes[Record any](
+	m Record,
+	attrs []attributes.Field[Record, attribute.KeyValue],
+	omitEmptyStrings bool,
+	extraAttrs ...attribute.KeyValue,
+) (attribute.Set, []string) {
+	keyVals := make([]attribute.KeyValue, 0, len(attrs)+len(extraAttrs))
+	vals := make([]string, 0, len(attrs)+len(extraAttrs))
+
+	for _, attr := range attrs {
 		kv := sanitizeKeyValue(attr.Get(m))
+		if omitEmptyStrings && (!kv.Valid() || isEmptyString(kv)) {
+			// The omitted attribute keeps its place in the series key, so
+			// records that omit different attributes never share a series.
+			vals = append(vals, "")
+			continue
+		}
 		if !kv.Valid() {
 			continue
 		}
@@ -109,6 +131,10 @@ func (ex *Expirer[Record, Metric, ValType]) recordAttributes(m Record, extraAttr
 	}
 
 	return attribute.NewSet(keyVals...), vals
+}
+
+func isEmptyString(kv attribute.KeyValue) bool {
+	return kv.Value.Type() == attribute.STRING && kv.Value.AsString() == ""
 }
 
 func sanitizeKeyValue(kv attribute.KeyValue) attribute.KeyValue {

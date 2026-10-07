@@ -103,6 +103,19 @@ type Reporter interface {
 	// BPFPacketStats sets the counters of how many packets have been internally accounted vs how many packets
 	// have been ignored due to internal BPF map collisions
 	BPFPacketStats(count, ignored uint64)
+	// BpfStorageDrops adds dropped to the operations the storage eBPF programs
+	// could not record for reason (a full map, a start that could not be
+	// stored), which their metrics are then missing.
+	BpfStorageDrops(reason string, dropped uint64)
+	// BpfStorageRecursionMisses adds misses to the executions the kernel
+	// skipped of the named storage eBPF program because another eBPF program
+	// was already running on the CPU (bpf_prog_info.recursion_misses): each
+	// one is an event the program never saw.
+	BpfStorageRecursionMisses(program string, misses uint64)
+	// BpfMapInsertFailures sets the total number of inserts into a BPF map
+	// that failed because the map was full, of which the programs counted
+	// what they could not record.
+	BpfMapInsertFailures(mapName string, total uint64)
 	// QueueBufferUtilization shows the ratio [0-1] between the unread messages of an internal Go channel
 	// and its total capacity
 	QueueBufferUtilization(subscriber string, ratio float64)
@@ -142,4 +155,7 @@ func (n NoopReporter) BpfMapMaxEntries(_, _, _ string, _ int)                   
 func (n NoopReporter) BpfInternalMetricsScrapeInterval() time.Duration                         { return 0 }
 func (n NoopReporter) InformerLag(_ float64)                                                   {}
 func (n NoopReporter) BPFPacketStats(_, _ uint64)                                              {}
+func (n NoopReporter) BpfStorageDrops(_ string, _ uint64)                                      {}
+func (n NoopReporter) BpfStorageRecursionMisses(_ string, _ uint64)                            {}
+func (n NoopReporter) BpfMapInsertFailures(_ string, _ uint64)                                 {}
 func (n NoopReporter) QueueBufferUtilization(_ string, _ float64)                              {}

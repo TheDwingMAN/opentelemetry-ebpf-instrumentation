@@ -124,6 +124,18 @@ groups:
         stability: development
         brief: Name of the eBPF map.
         examples: ["events", "ongoing_http"]
+      - id: bpf.drop.reason
+        type: string
+        stability: development
+        brief: >
+          Why an eBPF program could not record an operation. fs_accum_full:
+          the filesystem aggregation map was full, so an operation of a new
+          series was not counted; fs_start_failed: the start of a filesystem
+          operation could not be stored, so the operation was not recorded;
+          kretprobe_miss: a kprobe-mode return probe found no start for its
+          operation, so the operation was not recorded; fs_unknown: a
+          filesystem drop reason this build has no name for.
+        examples: ["fs_accum_full", "fs_start_failed", "kretprobe_miss", "fs_unknown"]
       - id: subscriber
         type: string
         stability: development

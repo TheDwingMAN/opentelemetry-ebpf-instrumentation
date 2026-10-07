@@ -4,6 +4,7 @@
 package attributes
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -177,4 +178,20 @@ func TestCPythonRuntimeDefinitions(t *testing.T) {
 		assert.Contains(t, definition.All(), attr.ServiceNamespace)
 		assert.Contains(t, definition.All(), attr.CPythonGCGeneration)
 	}
+}
+
+// StatMetrics is what the exporter tests walk to check each stat metric is
+// wired in, so it must list every stat metric that has attribute definitions.
+func TestStatMetricsListsEveryStatDefinition(t *testing.T) {
+	listed := map[Section]bool{}
+	for _, m := range StatMetrics {
+		listed[m.Section] = true
+	}
+	defined := map[Section]bool{}
+	for section := range getDefinitions(0, nil) {
+		if strings.HasPrefix(string(section), "obi.stat.") {
+			defined[section] = true
+		}
+	}
+	assert.Equal(t, defined, listed)
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	ciliumebpf "github.com/cilium/ebpf"
@@ -17,9 +18,11 @@ import (
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/logger"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/tracefs"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
+	"go.opentelemetry.io/obi/pkg/internal/statsolly/statagg"
 	stats "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 	"go.opentelemetry.io/obi/pkg/netip"
 	"go.opentelemetry.io/obi/pkg/obi"
@@ -77,6 +80,33 @@ type Stats struct {
 	// focuses on TCP/UDP stack internals (kprobes/tracepoints)
 	fetcher ebpFetcher
 
+	// what the pipeline built that the decoration of aggregated stats shares
+	aggDeps aggregationDeps
+	// the kernel histogram layout of the NFS client RPC metrics
+	nfsLayout *statagg.Layout
+	// nfsOwner is whether a pod attribute is selected on an NFS metric
+	// (step 19); nfsCgroupV1 is whether the owner it keys is a tgid
+	// (task->tk_owner) resolved by the pid path, rather than a cgroup v2 id
+	// resolved by cgroups.
+	nfsOwner, nfsCgroupV1 bool
+	// fsAccum is the kernel map the filesystem programs aggregate into, and
+	// fsLayout its histogram layout; nil when they send ring buffer events.
+	fsAccum  statagg.Source
+	fsLayout *statagg.Layout
+	// families are the kernel aggregation families the exporters read, and
+	// cgroups the index their decoration shares (nil until a family needs
+	// it, and on a cgroup v1 host); Run starts both.
+	families []*statagg.Family
+	cgroups  *statagg.CgroupIndex
+	// pods is the Kubernetes store as the families' decoration sees it,
+	// remembering the pods it deleted for a while (podMemory).
+	pods *statagg.PodMemory
+	// the running families, which stop waits for before closing their maps
+	familiesRunning sync.WaitGroup
+	// blockLayout is the kernel histogram layout of the block aggregation
+	// maps, nil when block completions are sent as events.
+	blockLayout *statagg.Layout
+
 	status Status
 }
 
@@ -84,6 +114,10 @@ type ebpFetcher interface {
 	io.Closer
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
+	NFSRPCMap() *ciliumebpf.Map
+	FsAccumMap() *ciliumebpf.Map
+	BlockAggregation() *ebpf.BlockAggMaps
+	KernelDropsMap() *ciliumebpf.Map
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -107,16 +141,50 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		SelectionCfg:            cfg.Attributes.Select,
 		ExtraGroupAttributesCfg: cfg.Attributes.ExtraGroupAttributes,
 	}
-	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg)
+	nfsLayout, err := cfg.NFSHistogramLayout(cfg.OTELMetrics.EndpointEnabled())
+	if err != nil {
+		return nil, fmt.Errorf("NFS client RPC histogram: %w", err)
+	}
+	nfsOwner, err := nfsOwnerFor(ctxInfo.MetricAttributeGroups, selectorCfg)
+	if err != nil {
+		return nil, err
+	}
+	nfsCgroupV1Host := nfsOwner && nfsCgroupV1()
+	nfsCfg := ebpf.NFSConfig{
+		Exponential:  nfsLayout.Kind == statagg.LayoutExponential,
+		KernelBounds: nfsLayout.KernelBounds(),
+		Owner:        nfsOwner,
+		CgroupV1:     nfsCgroupV1Host,
+	}
+	fsAgg, fsLayout := fsAggregation(cfg, alog)
+	blockAgg, blockLayout := blockAggregation(cfg, alog)
+	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, fsAgg, nfsCfg, blockAgg, ctxInfo.Metrics)
 	if err != nil {
 		return nil, err
 	}
 
-	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
+	s := statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
+	s.nfsLayout = nfsLayout
+	s.nfsOwner = nfsOwner
+	s.nfsCgroupV1 = nfsCgroupV1Host
+	s.blockLayout = blockLayout
+	// No map when no filesystem collection could be created: the
+	// filesystem metrics then have nothing to export either way.
+	if m := statsFetcher.FsAccumMap(); m != nil {
+		if s.fsAccum, err = newMapSource(m); err != nil {
+			_ = statsFetcher.Close()
+			return nil, fmt.Errorf("reading the filesystem aggregation map: %w", err)
+		}
+		s.fsLayout = fsLayout
+	}
+	return s, nil
 }
 
-func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg)
+func newFetcher(
+	cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig, fsAgg ebpf.FsAggregation,
+	nfsCfg ebpf.NFSConfig, blockAgg *ebpf.BlockAggregation, metrics imetrics.Reporter,
+) (ebpFetcher, error) {
+	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, fsAgg, nfsCfg, blockAgg, metrics)
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests
@@ -125,7 +193,7 @@ func statsAgent(
 	cfg *obi.Config,
 	statsFetcher ebpFetcher,
 	agentIP net.IP,
-) (*Stats, error) {
+) *Stats {
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
 	return &Stats{
@@ -134,7 +202,7 @@ func statsAgent(
 		rbTracer: rbTracer,
 		agentIP:  agentIP,
 		fetcher:  statsFetcher,
-	}, nil
+	}
 }
 
 // Run a Stats agent
@@ -160,11 +228,15 @@ func (s *Stats) Run(ctx context.Context) error {
 	s.graph = graph
 
 	s.graph.Start(ctx, swarm.WithCancelTimeout(tracefs.EffectiveShutdownTimeout(s.cfg.ShutdownTimeout)))
+	// After the pipeline is built: the exporters are attached to the
+	// families, so none misses a delta.
+	s.runAggregation(runCtx)
 	s.status = StatusStarted
 
 	alog.Info("Stats agent successfully started")
 
 	<-ctx.Done()
+	cancel()
 
 	if err := s.stop(); err != nil {
 		return fmt.Errorf("failed to stop Stats agent: %w", err)
@@ -173,6 +245,9 @@ func (s *Stats) Run(ctx context.Context) error {
 	return nil
 }
 
+// stop waits for the families, whose context must be done, to read their
+// maps a last time before it closes the eBPF objects: a family reading a
+// closed map would lose what the kernel counted since its last read.
 func (s *Stats) stop() error {
 	alog := alog()
 
@@ -180,6 +255,7 @@ func (s *Stats) stop() error {
 	go func() {
 		s.status = StatusStopping
 		alog.Info("stopping Stats agent")
+		s.familiesRunning.Wait()
 		if err := s.fetcher.Close(); err != nil {
 			alog.Warn("eBPF resources not correctly closed", "error", err)
 		}

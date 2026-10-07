@@ -62,6 +62,10 @@ type MetadataProvider struct {
 	store    *Store
 	informer meta.Notifier
 
+	// nodeMt guards localNodeName and clusterName, which callers on several
+	// goroutines read and fill in. It is not mt: Get holds mt while it may
+	// look the node name up.
+	nodeMt        sync.Mutex
 	localNodeName string
 	clusterName   string
 
@@ -158,29 +162,46 @@ func (mp *MetadataProvider) getInformer(ctx context.Context) (meta.Notifier, err
 }
 
 func (mp *MetadataProvider) CurrentNodeName(ctx context.Context) (string, error) {
-	if mp.localNodeName != "" {
-		return mp.localNodeName, nil
+	mp.nodeMt.Lock()
+	nodeName := mp.localNodeName
+	mp.nodeMt.Unlock()
+	if nodeName != "" {
+		return nodeName, nil
 	}
 
-	if nn, err := mp.fetchNodeName(ctx); err != nil {
+	// The lookup runs without the lock, so a caller with a short deadline is
+	// not held up by another caller's lookup.
+	nn, err := mp.fetchNodeName(ctx)
+	if err != nil {
 		return "", err
-	} else {
+	}
+	mp.nodeMt.Lock()
+	defer mp.nodeMt.Unlock()
+	if mp.localNodeName == "" {
 		mp.localNodeName = nn
 	}
 	return mp.localNodeName, nil
 }
 
 func (mp *MetadataProvider) ClusterName(ctx context.Context) (string, error) {
-	if mp.clusterName != "" {
-		return mp.clusterName, nil
+	mp.nodeMt.Lock()
+	clusterName := mp.clusterName
+	mp.nodeMt.Unlock()
+	if clusterName != "" {
+		return clusterName, nil
 	}
 	// make sure that node name has been fetched and cached previously
-	if _, err := mp.CurrentNodeName(ctx); err != nil {
+	nodeName, err := mp.CurrentNodeName(ctx)
+	if err != nil {
 		return "", fmt.Errorf("can't get node name before getting Cluster name: %w", err)
 	}
-	if cn, err := mp.fetchClusterNameFromNodeLabels(ctx); err != nil {
+	cn, err := mp.fetchClusterNameFromNodeLabels(ctx, nodeName)
+	if err != nil {
 		return "", err
-	} else {
+	}
+	mp.nodeMt.Lock()
+	defer mp.nodeMt.Unlock()
+	if mp.clusterName == "" {
 		mp.clusterName = cn
 	}
 	return mp.clusterName, nil
@@ -211,19 +232,19 @@ func (mp *MetadataProvider) fetchNodeName(ctx context.Context) (string, error) {
 	return pods.Items[0].Spec.NodeName, nil
 }
 
-func (mp *MetadataProvider) fetchClusterNameFromNodeLabels(ctx context.Context) (string, error) {
+func (mp *MetadataProvider) fetchClusterNameFromNodeLabels(ctx context.Context, nodeName string) (string, error) {
 	kubeClient, err := mp.KubeClient()
 	if err != nil {
 		return "", fmt.Errorf("can't get kubernetes client: %w", err)
 	}
 	nodes, err := kubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{
-		FieldSelector: "metadata.name=" + mp.localNodeName,
+		FieldSelector: "metadata.name=" + nodeName,
 	})
 	if err != nil {
-		return "", fmt.Errorf("fetchClusterNameFromNodeLabels getting node %s: %w", mp.localNodeName, err)
+		return "", fmt.Errorf("fetchClusterNameFromNodeLabels getting node %s: %w", nodeName, err)
 	}
 	if len(nodes.Items) == 0 {
-		return "", fmt.Errorf("fetchClusterNameFromNodeLabels can't find node %s", mp.localNodeName)
+		return "", fmt.Errorf("fetchClusterNameFromNodeLabels can't find node %s", nodeName)
 	}
 	node := nodes.Items[0]
 	for _, label := range clusterNameNodeLabels {

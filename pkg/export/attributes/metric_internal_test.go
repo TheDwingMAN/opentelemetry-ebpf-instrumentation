@@ -35,6 +35,9 @@ func TestInternalPrometheusNames(t *testing.T) {
 		{internal.KubeCacheForwardLag, "obi_kube_cache_forward_lag_seconds"},
 		{internal.BpfNetworkIgnoredPackets, "obi_bpf_network_ignored_packets_total"},
 		{internal.BpfNetworkPackets, "obi_bpf_network_packets_total"},
+		{internal.BpfStorageDrops, "obi_bpf_storage_dropped_operations_total"},
+		{internal.BpfStorageRecursionMisses, "obi_bpf_storage_program_recursion_misses_total"},
+		{internal.BpfMapInsertFailures, "obi_bpf_map_insert_failures_total"},
 		{internal.QueueCapacityRatio, "obi_queue_capacity_ratio"},
 	}
 
@@ -61,22 +64,25 @@ func TestInternalMetricsAllDeclared(t *testing.T) {
 	internal := NewInternalMetrics("obi")
 
 	for name, m := range map[string]Name{
-		"TracerFlushes":            internal.TracerFlushes,
-		"OTELMetricExports":        internal.OTELMetricExports,
-		"OTELMetricExportErrors":   internal.OTELMetricExportErrors,
-		"OTELTraceExports":         internal.OTELTraceExports,
-		"OTELTraceExportErrors":    internal.OTELTraceExportErrors,
-		"InstrumentedProcesses":    internal.InstrumentedProcesses,
-		"InstrumentationErrors":    internal.InstrumentationErrors,
-		"AvoidedServices":          internal.AvoidedServices,
-		"BuildInfo":                internal.BuildInfo,
-		"BpfProbeLatency":          internal.BpfProbeLatency,
-		"BpfMapEntries":            internal.BpfMapEntries,
-		"BpfMapMaxEntries":         internal.BpfMapMaxEntries,
-		"KubeCacheForwardLag":      internal.KubeCacheForwardLag,
-		"BpfNetworkIgnoredPackets": internal.BpfNetworkIgnoredPackets,
-		"BpfNetworkPackets":        internal.BpfNetworkPackets,
-		"QueueCapacityRatio":       internal.QueueCapacityRatio,
+		"TracerFlushes":             internal.TracerFlushes,
+		"OTELMetricExports":         internal.OTELMetricExports,
+		"OTELMetricExportErrors":    internal.OTELMetricExportErrors,
+		"OTELTraceExports":          internal.OTELTraceExports,
+		"OTELTraceExportErrors":     internal.OTELTraceExportErrors,
+		"InstrumentedProcesses":     internal.InstrumentedProcesses,
+		"InstrumentationErrors":     internal.InstrumentationErrors,
+		"AvoidedServices":           internal.AvoidedServices,
+		"BuildInfo":                 internal.BuildInfo,
+		"BpfProbeLatency":           internal.BpfProbeLatency,
+		"BpfMapEntries":             internal.BpfMapEntries,
+		"BpfMapMaxEntries":          internal.BpfMapMaxEntries,
+		"KubeCacheForwardLag":       internal.KubeCacheForwardLag,
+		"BpfNetworkIgnoredPackets":  internal.BpfNetworkIgnoredPackets,
+		"BpfNetworkPackets":         internal.BpfNetworkPackets,
+		"BpfStorageDrops":           internal.BpfStorageDrops,
+		"BpfStorageRecursionMisses": internal.BpfStorageRecursionMisses,
+		"BpfMapInsertFailures":      internal.BpfMapInsertFailures,
+		"QueueCapacityRatio":        internal.QueueCapacityRatio,
 	} {
 		t.Run(name, func(t *testing.T) {
 			require.NotEmpty(t, m.OTEL, "OTEL name must be set")

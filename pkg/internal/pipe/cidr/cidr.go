@@ -173,21 +173,35 @@ func DecoratorProvider[T any](g Definitions, attrs func(T) *pipe.CommonAttrs,
 		if !g.Enabled() {
 			return swarm.Bypass(input, output)
 		}
-		grouper, err := newIPGrouper(g)
+		decorate, err := NewItemDecorator(g, attrs)
 		if err != nil {
-			return nil, fmt.Errorf("instantiating IP grouper: %w", err)
+			return nil, err
 		}
 		in := input.Subscribe(msg.SubscriberName("cidr.Decorator"))
 		return func(ctx context.Context) {
 			defer output.Close()
 			swarms.ForEachInput(ctx, in, glog().Debug, func(items []T) {
 				for _, item := range items {
-					grouper.decorate(attrs(item))
+					decorate(item)
 				}
 				output.Send(items)
 			})
 		}, nil
 	}
+}
+
+// NewItemDecorator returns what the CIDR decorator does to an item: label its
+// source and destination addresses with the narrowest configured CIDR that
+// contains them. It is nil when no CIDR is configured.
+func NewItemDecorator[T any](g Definitions, attrs func(T) *pipe.CommonAttrs) (func(T), error) {
+	if !g.Enabled() {
+		return nil, nil
+	}
+	grouper, err := newIPGrouper(g)
+	if err != nil {
+		return nil, fmt.Errorf("instantiating IP grouper: %w", err)
+	}
+	return func(item T) { grouper.decorate(attrs(item)) }, nil
 }
 
 type customRangerEntry struct {

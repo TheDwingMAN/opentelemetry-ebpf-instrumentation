@@ -983,6 +983,18 @@ Number of entries in the eBPF map.
 | `bpf.map.name` | string | `required` | development | Name of the eBPF map. | events; ongoing_http |
 | `bpf.map.type` | string | `required` | development | eBPF map type. | hash; lru_hash; perf_event_array |
 
+## `obi.bpf.map.insert.failures`
+
+Inserts into an eBPF map that failed because the map was full: what its programs could not count, so the metrics the map feeds undercount by as much.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {insert} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `bpf.map.name` | string | `required` | development | Name of the eBPF map. | events; ongoing_http |
+
 ## `obi.bpf.map.max_entries`
 
 Maximum number of entries the eBPF map can hold.
@@ -1030,6 +1042,30 @@ Latency distribution of the eBPF probe in seconds.
 | `bpf.probe.id` | string | `required` | development | Identifier of the eBPF program (probe) the stats belong to. | 42 |
 | `bpf.probe.name` | string | `required` | development | Name of the eBPF probe. | kprobe_tcp_sendmsg |
 | `bpf.probe.type` | string | `required` | development | eBPF program type of the probe. | kprobe; tracepoint |
+
+## `obi.bpf.storage.dropped.operations`
+
+Operations the storage eBPF programs could not record, which the storage metrics are missing. The kernel maps never evict: an operation that finds its map full is counted here instead.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `bpf.drop.reason` | string | `required` | development | Why an eBPF program could not record an operation. fs_accum_full: the filesystem aggregation map was full, so an operation of a new series was not counted; fs_start_failed: the start of a filesystem operation could not be stored, so the operation was not recorded; kretprobe_miss: a kprobe-mode return probe found no start for its operation, so the operation was not recorded; fs_unknown: a filesystem drop reason this build has no name for. | fs_accum_full; fs_start_failed; kretprobe_miss; fs_unknown |
+
+## `obi.bpf.storage.program.recursion.misses`
+
+Executions the kernel skipped of a storage eBPF program because another eBPF program was already running on the CPU (bpf_prog_info.recursion_misses, Linux 5.12+). Each one is an event the program never saw, so the storage metrics miss it.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {execution} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `bpf.probe.name` | string | `required` | development | Name of the eBPF probe. | kprobe_tcp_sendmsg |
 
 ## `obi.ebpf.tracer.flushes`
 
@@ -1307,6 +1343,358 @@ Ratio [0-1] between the unread messages of an internal Go channel and its total 
 | --- | --- | --- | --- | --- | --- |
 | `subscriber` | string | `required` | development | Name of the pipeline stage consuming the internal queue, as given to msg.SubscriberName when the stage subscribed. Subscribers that do not provide a name fall back to the name of the queue they subscribed to. | discover.CriteriaMatcher; traceAttacher |
 
+## `obi.stat.disk.discard.duration`
+
+Block-layer service time of discard and secure erase requests, measured from `block_rq_issue` to `block_rq_complete`, broken down by device. `/proc/diskstats` counts a secure erase as a write instead.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `conditionally_required`: if the discard failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.discard.io`
+
+Count of bytes released by discard and secure erase requests that completed successfully, broken down by device.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.flush.duration`
+
+Block-layer service time of cache flush requests, measured from `block_rq_issue` to `block_rq_complete`, broken down by device. The count matches the flushes in `/proc/diskstats`. On a stacked volume measured with `storage_block_volumes`, a flush is the empty preflush write submitted to the volume; `/proc/diskstats` never counts it as a flush there (device-mapper counts it as a write of 0 bytes, md not at all).
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `conditionally_required`: if the flush failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.io`
+
+Count of bytes transferred at the block layer, accumulated per completed disk read or write request and broken down by device and direction. With `storage_block_pod`, also by the pod the I/O is charged to (see `obi.stat.disk.operations`); I/O charged to no pod is a series without pod attributes.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
+| `k8s.namespace.name` | string | `recommended`: with storage_block_pod, if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `recommended`: with storage_block_pod, if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `recommended`: with storage_block_pod, if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.operation.duration`
+
+Block-layer service latency per disk read or write request, measured from `block_rq_issue` to `block_rq_complete`, broken down by device and direction. Flush and discard requests are not included: they have metrics of their own. The write count matches the writes in `/proc/diskstats`, except that diskstats also counts as a write an empty preflush write (0 bytes, such as a dm-thin metadata commit or a flush passed through a loop device), counted here only as the flush issued for it, and a secure erase, counted here as a discard. With the `storage_block_volumes` feature, a bio-based stacked volume (an LVM logical volume, an md array, a dm-crypt device) is a device of its own in every `obi.stat.disk.*` metric, measured per bio from `block_bio_queue` to `block_bio_complete`: the end-to-end time of the bio as it was submitted to the volume, counted once however its driver splits it. `/proc/diskstats` of device-mapper and md devices counts the fragments instead, so compare bytes, which match, rather than operation counts.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.operation.errors`
+
+Count of block read and write requests that completed with a non-zero error, broken down by device, direction and errno. Failed flushes and discards carry `error.type` on their own duration histograms.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {error} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `error.type` | string | `recommended` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.operation_time`
+
+Time spent on the block reads and writes of obi.stat.disk.operations, summed: from the request's block-layer accounting start to its completion, or from its issue to the driver when the device does not account it (queue/iostats=0) or for a write in a flush sequence; a stacked volume's bio from its submission. Broken down by device, direction and the pod the I/O is charged to.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.operations`
+
+Count of completed block read and write requests, broken down by device, direction and the pod the I/O is charged to. Reads and direct I/O are charged to the submitting container; buffered writes, whether flushed by the kernel or by fsync, to the cgroup that owns the file's writeback domain: normally the container that created the file, then the dominant writer after some writeback rounds, then the pod or QoS slice once the container is removed. I/O charged to no pod (kernel threads such as the ext4 journal, system services) is a series without pod attributes, so the series of a device and direction add up to all of its reads or writes.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.pending_operations`
+
+Count of block I/O requests still in flight on the device right now, from a snapshot of the kernel's in-flight map taken once per collection, broken down by device. A device with no request in flight reports 0 until it has gone idle past the metric's reporting interval. With `storage_block_volumes`, the bios in flight on a stacked volume are its pending operations.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| updowncounter | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `opt_in` | development | The disk IO operation direction. | read |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.queue.depth`
+
+> **obsoleted** — The `storage_block_queue_depth` metrics feature that emits this histogram is deprecated with no replacement.
+
+Number of block I/O requests still in flight on the device immediately after this request completed, observed per read or write completion and broken down by device.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.queue.duration`
+
+Time a disk read or write request spent queued, from the request's accounting start (`start_time_ns`, set after the tag or scheduler-tag allocation and shared by all requests of a plug batch) to dispatch to the driver. Nothing is recorded for a device with `queue/iostats=0`, for the data write of a flush sequence (PREFLUSH or FUA on a device without FUA), nor on a kernel whose BTF has no `enum rqf_flags` or that uses the classic block tracepoints (OBI logs a warning at start), so the count can be lower than `obi.stat.disk.operation.duration`'s. A stacked volume measured with `storage_block_volumes` has no queue wait of its own: what its bios wait for is part of their operation duration.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `obi.disk.partition` | string | `opt_in` | development | Sysfs name of the partition a block I/O request targeted, when the request named a partition rather than the whole disk. Omitted for whole-disk I/O, for flush requests (which have no partition) and for a request whose partition could not be resolved. | nvme0n1p1; sda1; dm-4 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the disk is a stacked device (device-mapper, software RAID, loop, or an NVMe multipath head) rather than one that issues requests directly to hardware. | true; false |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.fs.io`
+
+Count of bytes transferred through filesystem read and write operations, broken down by filesystem type and operation.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync; sync; syncfs; sync_file_range |
+| `k8s.container.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
+| `k8s.namespace.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.persistentvolume.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the volume is a known PersistentVolume | development | The name of the PersistentVolume. | pv-data-01 |
+| `k8s.persistentvolumeclaim.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of the PersistentVolumeClaim. | pvc-data-01 |
+| `k8s.pod.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `k8s.storageclass.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of K8s [StorageClass](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#storageclass-v1-storage-k8s-io) object. | gold.storageclass.storage.k8s.io |
+| `obi.disk.physical_device` | string | `recommended` | development | Physical disk(s) behind a filesystem's block device: sorted, comma-joined, at most 8. Omitted when the filesystem is not block-backed, or the walk cannot resolve one. | vdb; nvme0n1,nvme1n1 |
+| `obi.fs.container.mountpoint` | string | `opt_in` | development | Path at which the container of the process mounts the filesystem the operation went through, read from the process's mount table. | /data |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+| `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
+| `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
+
+## `obi.stat.fs.operation.duration`
+
+Latency of a single filesystem read, write, fsync, fdatasync, sync, syncfs or sync_file_range as the application experiences it, broken down by filesystem type and operation. Buffered writes (no O_SYNC, O_DIRECT or fsync) end once the data is in the page cache, so their latency is the copy into memory; the server's or device's latency shows in fsync, fdatasync and the sync syscalls (`storage_fs_sync`, waiting `sync_file_range` calls only, D7).
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync; sync; syncfs; sync_file_range |
+| `k8s.container.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
+| `k8s.namespace.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.persistentvolume.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the volume is a known PersistentVolume | development | The name of the PersistentVolume. | pv-data-01 |
+| `k8s.persistentvolumeclaim.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of the PersistentVolumeClaim. | pvc-data-01 |
+| `k8s.pod.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `k8s.storageclass.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of K8s [StorageClass](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#storageclass-v1-storage-k8s-io) object. | gold.storageclass.storage.k8s.io |
+| `obi.disk.physical_device` | string | `recommended` | development | Physical disk(s) behind a filesystem's block device: sorted, comma-joined, at most 8. Omitted when the filesystem is not block-backed, or the walk cannot resolve one. | vdb; nvme0n1,nvme1n1 |
+| `obi.fs.container.mountpoint` | string | `opt_in` | development | Path at which the container of the process mounts the filesystem the operation went through, read from the process's mount table. | /data |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+| `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
+| `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
+
+## `obi.stat.fs.operation.errors`
+
+Count of filesystem read or write operations that failed, broken down by filesystem type, operation and errno.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {error} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `recommended` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `fs.operation` | enum | `recommended` | development | Filesystem operation performed. | read; write; fsync; fdatasync; sync; syncfs; sync_file_range |
+| `k8s.container.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
+| `k8s.namespace.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.persistentvolume.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the volume is a known PersistentVolume | development | The name of the PersistentVolume. | pv-data-01 |
+| `k8s.persistentvolumeclaim.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of the PersistentVolumeClaim. | pvc-data-01 |
+| `k8s.pod.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod is known | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `k8s.storageclass.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the PersistentVolume is Bound | development | The name of K8s [StorageClass](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#storageclass-v1-storage-k8s-io) object. | gold.storageclass.storage.k8s.io |
+| `obi.disk.physical_device` | string | `recommended` | development | Physical disk(s) behind a filesystem's block device: sorted, comma-joined, at most 8. Omitted when the filesystem is not block-backed, or the walk cannot resolve one. | vdb; nvme0n1,nvme1n1 |
+| `obi.fs.container.mountpoint` | string | `opt_in` | development | Path at which the container of the process mounts the filesystem the operation went through, read from the process's mount table. | /data |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+| `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
+| `system.filesystem.type` | enum | `recommended` | development | The filesystem type | ext4 |
+
+## `obi.stat.nfs.client.io`
+
+Count of wire bytes of NFS client RPC calls and replies, by direction: transmit is sent to the server, receive is from it.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: when Kubernetes metadata is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `network.io.direction` | enum | `recommended` | development | The network IO operation direction. | transmit |
+| `nfs.operation.name` | string | `opt_in` | development | NFSv4+ operation name. | OPEN; READ; GETATTR |
+| `onc_rpc.procedure.name` | string | `opt_in` | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `opt_in` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended`: the server's IP address, as the mount option addr= shows it | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
+## `obi.stat.nfs.client.rpc.duration`
+
+Execute time of each NFS client RPC attempt, from the task's start to its end, backlog and retransmissions included. A retry the server asks for (NFSv3 JUKEBOX, NFSv4 DELAY or GRACE) is a new attempt, counted as an error followed by a slower attempt that includes the client's backoff (5 s after a JUKEBOX); it is not a retransmission.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: when Kubernetes metadata is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `nfs.operation.name` | string | `conditionally_required`: for NFSv4 RPCs | development | NFSv4+ operation name. | OPEN; READ; GETATTR |
+| `onc_rpc.procedure.name` | string | `conditionally_required`: for NFSv2 and NFSv3 RPCs | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended`: the server's IP address, as the mount option addr= shows it | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
+## `obi.stat.nfs.client.rpc.errors`
+
+Count of NFS client RPC attempts that ended with an error status, as mountstats counts errors: normal misses (ENOENT on LOOKUP or OPEN, which every O_CREAT on NFSv3 produces) and server back-pressure (EJUKEBOX, NFS4ERR_DELAY) included.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {error} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `required` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: when Kubernetes metadata is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `nfs.operation.name` | string | `conditionally_required`: for NFSv4 RPCs | development | NFSv4+ operation name. | OPEN; READ; GETATTR |
+| `onc_rpc.procedure.name` | string | `conditionally_required`: for NFSv2 and NFSv3 RPCs | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended`: the server's IP address, as the mount option addr= shows it | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
+## `obi.stat.nfs.client.rpc.retransmits`
+
+Count of retransmissions of NFS client RPC requests: every transmission of an attempt after its first. The OBI counterpart of the hostmetrics receiver's nfs.client.rpc.retransmit.count.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {retransmit} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.node.name` | string | `recommended`: when Kubernetes metadata is enabled | release_candidate | The name of the Node. | node-1 |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `nfs.operation.name` | string | `conditionally_required`: for NFSv4 RPCs | development | NFSv4+ operation name. | OPEN; READ; GETATTR |
+| `onc_rpc.procedure.name` | string | `conditionally_required`: for NFSv2 and NFSv3 RPCs | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended`: the server's IP address, as the mount option addr= shows it | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
 ## `obi.stat.tcp.failed.connections`
 
 Count of TCP connections that failed to establish, broken down by `reason`.
@@ -1572,7 +1960,7 @@ OBI-emitted rpc.server.call.duration
 | `k8s.daemonset.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a DaemonSet | release_candidate | The name of the DaemonSet. | opentelemetry |
 | `k8s.deployment.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a Deployment | release_candidate | The name of the Deployment. | opentelemetry |
 | `k8s.job.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a Job | release_candidate | The name of the Job. | opentelemetry |
-| `k8s.kind` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.kind` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
 | `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
@@ -1660,7 +2048,7 @@ OBI counterpart of `target.info` for the traces pipeline. Carries the resource a
 | `k8s.daemonset.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a DaemonSet | release_candidate | The name of the DaemonSet. | opentelemetry |
 | `k8s.deployment.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a Deployment | release_candidate | The name of the Deployment. | opentelemetry |
 | `k8s.job.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a Job | release_candidate | The name of the Job. | opentelemetry |
-| `k8s.kind` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.kind` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Kind of the top-level Kubernetes owner of the decorated Pod, or the object's own kind when no owner is resolved (a bare Pod, or a non-Pod object such as a Node). | Deployment; StatefulSet; Pod |
 | `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |

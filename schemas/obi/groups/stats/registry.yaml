@@ -1,17 +1,18 @@
 groups:
   # `obi.ip` / `src.*` / `dst.*` are reused from `registry.obi.network` so we
   # don't duplicate the declarations here. Only the stats-specific `reason`
-  # is introduced.
+  # and `fs.operation` are introduced.
   - id: registry.obi.stats
     type: attribute_group
     display_name: OBI Connection Stats
     brief: >
-      Attributes carried on OBI's per-connection TCP statistics. Emitted
-      when the `stats_tcp_rtt`, `stats_tcp_failed_connections` or
-      `stats_tcp_successful_connections` features are enabled (all rolled
-      into the umbrella `stats` feature). Like
-      network-flow metrics, the per-data-point attribute set is configurable
-      via `attributes.select`.
+      Attributes carried on OBI's per-connection TCP statistics and
+      filesystem I/O stats. Emitted when the `stats_tcp_rtt`,
+      `stats_tcp_failed_connections`, `stats_tcp_successful_connections` or
+      `storage_fs*` features are enabled (the TCP ones are rolled into the
+      umbrella `stats` feature; `storage_fs*` is opt-in and not part of it).
+      Like network-flow metrics, the per-data-point attribute set is
+      configurable via `attributes.select`.
     attributes:
       - id: reason
         type:
@@ -60,3 +61,84 @@ groups:
         brief: >
           Role of the local endpoint in the TCP three-way handshake
           (`client` initiated the SYN, `server` was awaiting it).
+      # Mirrors `FsOpType` in `pkg/internal/statsolly/ebpf/stat.go`.
+      # The filesystem type is identified by which implementation the probe
+      # fired on, not by inspecting the event.
+      - id: fs.operation
+        type:
+          allow_custom_values: false
+          members:
+            - id: read
+              value: read
+              stability: development
+            - id: write
+              value: write
+              stability: development
+            - id: fsync
+              value: fsync
+              stability: development
+            - id: fdatasync
+              value: fdatasync
+              stability: development
+            - id: sync
+              value: sync
+              stability: development
+            - id: syncfs
+              value: syncfs
+              stability: development
+            - id: sync_file_range
+              value: sync_file_range
+              stability: development
+        stability: development
+        brief: Filesystem operation performed.
+      # Mirrors the devInfo cache in pkg/internal/statsolly/ebpf/block_stack.go.
+      # A device is stacked when it does not issue requests to hardware
+      # itself (device-mapper, software RAID, loop, or an NVMe native
+      # multipath head); a partition inherits its whole disk's value.
+      - id: obi.disk.stacked
+        type: boolean
+        stability: development
+        brief: >
+          Whether the disk is a stacked device (device-mapper, software
+          RAID, loop, or an NVMe multipath head) rather than one that issues
+          requests directly to hardware.
+        examples: [true, false]
+      # The fs join label of step 10 (FEATURES-V3-SPEC.md section 1.2):
+      # userspace sysfs walk from a filesystem's block device to the disks
+      # that do not themselves issue requests to hardware
+      # (obi.disk.stacked=false), through device-mapper, software RAID,
+      # NVMe multipath and loop backing files. Lets a filesystem series be
+      # joined to the disk series of the physical hardware underneath it,
+      # without a topology metric.
+      - id: obi.disk.physical_device
+        type: string
+        stability: development
+        brief: >
+          Physical disk(s) behind a filesystem's block device: sorted,
+          comma-joined, at most 8. Omitted when the filesystem is not
+          block-backed, or the walk cannot resolve one.
+        examples: ["vdb", "nvme0n1,nvme1n1"]
+      # Opt-in with `system.filesystem.mountpoint`, which is the host path
+      # (the kubelet's mount of the volume, as hostmetrics and the kubelet
+      # name it). This one is the path the application sees.
+      - id: obi.fs.container.mountpoint
+        type: string
+        stability: development
+        brief: >
+          Path at which the container of the process mounts the filesystem
+          the operation went through, read from the process's mount table.
+        examples: ["/data"]
+      # Mirrors `BlockIo.PartDev` (via `deviceName`) in
+      # `pkg/internal/statsolly/ebpf/stat.go`. Opt-in (`attributes.select`):
+      # read at `block_rq_issue` from the request's first bio, falling back
+      # to its `rq->part` when it has none, only when selected on a disk
+      # metric that carries it.
+      - id: obi.disk.partition
+        type: string
+        stability: development
+        brief: >
+          Sysfs name of the partition a block I/O request targeted, when the
+          request named a partition rather than the whole disk. Omitted for
+          whole-disk I/O, for flush requests (which have no partition) and
+          for a request whose partition could not be resolved.
+        examples: ["nvme0n1p1", "sda1", "dm-4"]

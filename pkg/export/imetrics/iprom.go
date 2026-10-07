@@ -6,6 +6,7 @@ package imetrics // import "go.opentelemetry.io/obi/pkg/export/imetrics"
 import (
 	"context"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -54,6 +55,10 @@ type PrometheusReporter struct {
 	totalIgnoredPackets   uint64
 	bpfPacketCount        prometheus.Counter
 	bpfIgnoredPacketCount prometheus.Counter
+
+	bpfStorageDrops           *prometheus.CounterVec
+	bpfStorageRecursionMisses *prometheus.CounterVec
+	bpfMapInsertFailures      *totalCounterVec
 
 	queueCapacityRatio *prometheus.GaugeVec
 }
@@ -150,6 +155,18 @@ func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.Promet
 			Name: internalNames.BpfNetworkPackets.Prom,
 			Help: "How many network packets have been internally accounted",
 		}),
+		bpfStorageDrops: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: internalNames.BpfStorageDrops.Prom,
+			Help: "Operations the storage eBPF programs could not record, missing from the storage metrics",
+		}, []string{attr.BpfDropReason.Prom()}),
+		bpfStorageRecursionMisses: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: internalNames.BpfStorageRecursionMisses.Prom,
+			Help: "Executions the kernel skipped of a storage eBPF program because another eBPF program was already running on the CPU",
+		}, []string{attr.BpfProbeName.Prom()}),
+		bpfMapInsertFailures: newTotalCounterVec(prometheus.CounterOpts{
+			Name: internalNames.BpfMapInsertFailures.Prom,
+			Help: "Inserts into a BPF map that failed because the map was full: what its programs could not count",
+		}, attr.BpfMapName.Prom()),
 		queueCapacityRatio: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: internalNames.QueueCapacityRatio.Prom,
 			Help: "Ratio [0-1] between the unread messages of an internal Go channel and its total capacity",
@@ -184,6 +201,9 @@ func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.Promet
 		pr.informerLag,
 		pr.bpfPacketCount,
 		pr.bpfIgnoredPacketCount,
+		pr.bpfStorageDrops,
+		pr.bpfStorageRecursionMisses,
+		pr.bpfMapInsertFailures.vec,
 		pr.queueCapacityRatio,
 	}
 	if pr.avoidedServices != nil {
@@ -283,6 +303,45 @@ func (p *PrometheusReporter) BPFPacketStats(count, ignored uint64) {
 	p.bpfPacketCount.Add(float64(count - p.totalPackets))
 	p.bpfIgnoredPacketCount.Add(float64(ignored - p.totalIgnoredPackets))
 	p.totalPackets, p.totalIgnoredPackets = count, ignored
+}
+
+func (p *PrometheusReporter) BpfStorageDrops(reason string, dropped uint64) {
+	p.bpfStorageDrops.WithLabelValues(reason).Add(float64(dropped))
+}
+
+func (p *PrometheusReporter) BpfStorageRecursionMisses(program string, misses uint64) {
+	p.bpfStorageRecursionMisses.WithLabelValues(program).Add(float64(misses))
+}
+
+func (p *PrometheusReporter) BpfMapInsertFailures(mapName string, total uint64) {
+	p.bpfMapInsertFailures.set(mapName, total)
+}
+
+// totalCounterVec is a counter vector, with one label, fed with the totals of
+// a counter kept elsewhere (a kernel counter) rather than with increments.
+type totalCounterVec struct {
+	vec  *prometheus.CounterVec
+	mu   sync.Mutex
+	last map[string]uint64
+}
+
+func newTotalCounterVec(opts prometheus.CounterOpts, label string) *totalCounterVec {
+	return &totalCounterVec{vec: prometheus.NewCounterVec(opts, []string{label}), last: map[string]uint64{}}
+}
+
+// set adds what total counted since the previous call. A total below the
+// previous one restarted from zero (its map or program was recreated), so all
+// of it is new.
+func (c *totalCounterVec) set(label string, total uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	counter := c.vec.WithLabelValues(label)
+	last := c.last[label]
+	if total < last {
+		last = 0
+	}
+	counter.Add(float64(total - last))
+	c.last[label] = total
 }
 
 func (p *PrometheusReporter) QueueBufferUtilization(subscriber string, ratio float64) {

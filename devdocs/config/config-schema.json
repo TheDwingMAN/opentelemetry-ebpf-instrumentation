@@ -259,6 +259,96 @@
             8192
           ]
         },
+        "stat_disk_operation_duration_histogram": {
+          "items": {
+            "type": "number"
+          },
+          "type": "array",
+          "default": [
+            0.0001,
+            0.00025,
+            0.0005,
+            0.001,
+            0.0025,
+            0.005,
+            0.01,
+            0.025,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1,
+            2.5,
+            5
+          ]
+        },
+        "stat_disk_queue_depth_histogram": {
+          "items": {
+            "type": "number"
+          },
+          "type": "array",
+          "default": [
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+            64,
+            128,
+            256,
+            512,
+            1024
+          ]
+        },
+        "stat_fs_operation_duration_histogram": {
+          "items": {
+            "type": "number"
+          },
+          "type": "array",
+          "default": [
+            0.0001,
+            0.00025,
+            0.0005,
+            0.001,
+            0.0025,
+            0.005,
+            0.01,
+            0.025,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1,
+            2.5,
+            5
+          ]
+        },
+        "stat_nfs_client_rpc_duration_histogram": {
+          "items": {
+            "type": "number"
+          },
+          "type": "array",
+          "description": "Counts NFS client RPC attempts in the kernel, whose explicit layout holds at most 32 bounds: the union of the OTel and Prometheus bounds must fit in it.",
+          "default": [
+            0.0001,
+            0.00025,
+            0.0005,
+            0.001,
+            0.0025,
+            0.005,
+            0.01,
+            0.025,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1,
+            2.5,
+            5,
+            10
+          ]
+        },
         "stat_tcp_rtt_histogram": {
           "items": {
             "type": "number"
@@ -926,6 +1016,10 @@
           "default": 4096,
           "x-env-var": "OTEL_EBPF_STATS_WAKEUP_DATA_BYTES"
         },
+        "storage_aggregation": {
+          "$ref": "#/$defs/StorageAggregation",
+          "description": "How the storage metrics are counted in the kernel."
+        },
         "track_request_headers": {
           "type": "boolean",
           "description": "Enables the kprobes based HTTP request tracking to start tracking the request headers to process any 'Traceparent' fields.",
@@ -1067,16 +1161,37 @@
               "stats_tcp_io",
               "stats_tcp_retransmits",
               "stats_tcp_rtt",
-              "stats_tcp_successful_connections"
+              "stats_tcp_successful_connections",
+              "storage_block",
+              "storage_block_discard",
+              "storage_block_duration",
+              "storage_block_errors",
+              "storage_block_flush",
+              "storage_block_io",
+              "storage_block_pending",
+              "storage_block_pod",
+              "storage_block_queue",
+              "storage_block_volumes",
+              "storage_fs",
+              "storage_fs_duration",
+              "storage_fs_errors",
+              "storage_fs_io",
+              "storage_fs_sync",
+              "storage_nfs",
+              "storage_nfs_duration",
+              "storage_nfs_errors",
+              "storage_nfs_io",
+              "storage_nfs_retransmits"
             ]
           },
           {
             "type": "string",
             "enum": [
               "application_span",
-              "application_span_sizes"
+              "application_span_sizes",
+              "storage_block_queue_depth"
             ],
-            "description": "Deprecated feature names, kept for backwards compatibility: application_span (use application_span_otel), application_span_sizes (no direct replacement).",
+            "description": "Deprecated feature names, kept for backwards compatibility: application_span (use application_span_otel), application_span_sizes (no direct replacement), storage_block_queue_depth (no direct replacement).",
             "deprecated": true
           }
         ]
@@ -3045,6 +3160,36 @@
       },
       "type": "object",
       "description": "TODO: see if there is a way to merge common fields with NetworkConfig"
+    },
+    "StorageAggregation": {
+      "properties": {
+        "block_maps_budget_bytes": {
+          "type": "integer",
+          "description": "Caps the memory of the block aggregation maps, which the kernel allocates up front, once per possible CPU, and charges to OBI's memory limit. A node whose devices need more keys than fit drops the completions of the keys that do not, and counts the drops.",
+          "default": 8388608,
+          "x-env-var": "OTEL_EBPF_STORAGE_AGGREGATION_BLOCK_MAPS_BUDGET_BYTES"
+        },
+        "block_pod_maps_budget_bytes": {
+          "type": "integer",
+          "description": "Caps the memory of the map that counts block reads and writes per cgroup for storage_block_pod, allocated up front once per possible CPU, as the block aggregation maps are. It is counted in the kernel even when Disabled is set: the pod-attributed counters have no per-event path.",
+          "default": 8388608,
+          "x-env-var": "OTEL_EBPF_STORAGE_AGGREGATION_BLOCK_POD_MAPS_BUDGET_BYTES"
+        },
+        "disabled": {
+          "type": "boolean",
+          "description": "Sends an event per block request and filesystem operation to userspace instead, as earlier releases did: the same metrics, at a userspace cost that grows with the request rate. For comparisons and debugging.",
+          "default": false,
+          "x-env-var": "OTEL_EBPF_STORAGE_AGGREGATION_DISABLED"
+        },
+        "exponential_histograms": {
+          "type": "boolean",
+          "description": "Counts the storage histograms in base-2 exponential buckets at a fixed scale of 2, exported as Prometheus native histograms and OTLP exponential histograms, instead of the configured explicit buckets. Also chosen when the OTLP exporter's histogram_aggregation is base2_exponential_bucket_histogram.",
+          "default": false,
+          "x-env-var": "OTEL_EBPF_STORAGE_AGGREGATION_EXPONENTIAL_HISTOGRAMS"
+        }
+      },
+      "type": "object",
+      "description": "StorageAggregation configures the kernel aggregation of the storage metrics: the eBPF programs count block requests and filesystem operations in kernel maps, which OBI reads, instead of sending an event per request or operation to userspace. They are still sent one by one when print_stats is enabled, block requests when the deprecated obi.stat.disk.queue.depth metric is, and either when the enabled histograms' buckets in the enabled exporters have more than 32 distinct bounds together."
     },
     "SvcMetricsConfig": {
       "properties": {

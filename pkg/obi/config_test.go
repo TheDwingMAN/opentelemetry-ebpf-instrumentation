@@ -39,6 +39,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/health"
 	"go.opentelemetry.io/obi/pkg/internal/avoidedsvc"
 	"go.opentelemetry.io/obi/pkg/internal/pipe/cidr"
+	"go.opentelemetry.io/obi/pkg/internal/statsolly/statagg"
 	"go.opentelemetry.io/obi/pkg/kube"
 	"go.opentelemetry.io/obi/pkg/kube/kubeflags"
 	"go.opentelemetry.io/obi/pkg/metadata"
@@ -265,6 +266,10 @@ discovery:
 			},
 			BPFFSPath:      "/sys/fs/bpf/",
 			InstrumentCuda: config.CudaModeAuto,
+			StorageAggregation: config.StorageAggregation{
+				BlockMapsBudgetBytes:    8 << 20,
+				BlockPodMapsBudgetBytes: 8 << 20,
+			},
 		},
 		NetworkFlows: nc,
 		Stats:        sc,
@@ -279,14 +284,18 @@ discovery:
 			Protocol:          otelcfg.ProtocolUnset,
 			ReportersCacheLen: ReporterLRUSize,
 			Buckets: export.Buckets{
-				DurationHistogram:            []float64{0, 1, 2},
-				RequestSizeHistogram:         export.DefaultBuckets.RequestSizeHistogram,
-				ResponseSizeHistogram:        export.DefaultBuckets.ResponseSizeHistogram,
-				GenAITokenUsageHistogram:     export.DefaultBuckets.GenAITokenUsageHistogram,
-				GenAIClientDurationHistogram: export.DefaultBuckets.GenAIClientDurationHistogram,
-				StatTCPRttHistogram:          export.DefaultBuckets.StatTCPRttHistogram,
-				V8JSGCDurationHistogram:      export.DefaultBuckets.V8JSGCDurationHistogram,
-				JVMGCDurationHistogram:       export.DefaultBuckets.JVMGCDurationHistogram,
+				DurationHistogram:                  []float64{0, 1, 2},
+				RequestSizeHistogram:               export.DefaultBuckets.RequestSizeHistogram,
+				ResponseSizeHistogram:              export.DefaultBuckets.ResponseSizeHistogram,
+				GenAITokenUsageHistogram:           export.DefaultBuckets.GenAITokenUsageHistogram,
+				GenAIClientDurationHistogram:       export.DefaultBuckets.GenAIClientDurationHistogram,
+				StatTCPRttHistogram:                export.DefaultBuckets.StatTCPRttHistogram,
+				StatDiskOperationDurationHistogram: export.DefaultBuckets.StatDiskOperationDurationHistogram,
+				StatDiskQueueDepthHistogram:        export.DefaultBuckets.StatDiskQueueDepthHistogram,
+				StatFsOperationDurationHistogram:   export.DefaultBuckets.StatFsOperationDurationHistogram,
+				V8JSGCDurationHistogram:            export.DefaultBuckets.V8JSGCDurationHistogram,
+				JVMGCDurationHistogram:             export.DefaultBuckets.JVMGCDurationHistogram,
+				StatNFSClientRPCDurationHistogram:  export.DefaultBuckets.StatNFSClientRPCDurationHistogram,
 			},
 			Instrumentations: []instrumentations.Instrumentation{
 				instrumentations.InstrumentationALL,
@@ -332,14 +341,18 @@ discovery:
 			SpanMetricsServiceCacheSize: 10000,
 			NativeHistogram:             prom.DefaultNativeHistogramConfig,
 			Buckets: export.Buckets{
-				DurationHistogram:            export.DefaultBuckets.DurationHistogram,
-				RequestSizeHistogram:         []float64{0, 10, 20, 22},
-				ResponseSizeHistogram:        []float64{0, 10, 20, 22},
-				GenAITokenUsageHistogram:     []float64{1, 2, 3, 4},
-				GenAIClientDurationHistogram: []float64{5, 6, 7, 8},
-				StatTCPRttHistogram:          export.DefaultBuckets.StatTCPRttHistogram,
-				V8JSGCDurationHistogram:      export.DefaultBuckets.V8JSGCDurationHistogram,
-				JVMGCDurationHistogram:       export.DefaultBuckets.JVMGCDurationHistogram,
+				DurationHistogram:                  export.DefaultBuckets.DurationHistogram,
+				RequestSizeHistogram:               []float64{0, 10, 20, 22},
+				ResponseSizeHistogram:              []float64{0, 10, 20, 22},
+				GenAITokenUsageHistogram:           []float64{1, 2, 3, 4},
+				GenAIClientDurationHistogram:       []float64{5, 6, 7, 8},
+				StatTCPRttHistogram:                export.DefaultBuckets.StatTCPRttHistogram,
+				StatDiskOperationDurationHistogram: export.DefaultBuckets.StatDiskOperationDurationHistogram,
+				StatDiskQueueDepthHistogram:        export.DefaultBuckets.StatDiskQueueDepthHistogram,
+				StatFsOperationDurationHistogram:   export.DefaultBuckets.StatFsOperationDurationHistogram,
+				V8JSGCDurationHistogram:            export.DefaultBuckets.V8JSGCDurationHistogram,
+				JVMGCDurationHistogram:             export.DefaultBuckets.JVMGCDurationHistogram,
+				StatNFSClientRPCDurationHistogram:  export.DefaultBuckets.StatNFSClientRPCDurationHistogram,
 			},
 		},
 		InternalMetrics: imetrics.InternalMetricsConfig{
@@ -984,6 +997,40 @@ discovery:
 	})
 }
 
+// storage_block_volumes adds devices to the block metrics. Without one of
+// them it does nothing, and says so once at startup instead of staying silent.
+func TestConfigValidate_StorageBlockVolumesAloneWarning(t *testing.T) {
+	validateWithFeatures := func(t *testing.T, features string) string {
+		t.Helper()
+		var logs bytes.Buffer
+		restore := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		t.Cleanup(func() { slog.SetDefault(restore) })
+
+		require.NoError(t, loadConfig(t, envMap{
+			"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "localhost:1234",
+			"OTEL_EBPF_EXECUTABLE_PATH":           "foo",
+			"OTEL_EBPF_METRICS_FEATURES":          features,
+		}).Validate())
+		return logs.String()
+	}
+
+	t.Run("alone", func(t *testing.T) {
+		logs := validateWithFeatures(t, "application,storage_block_volumes")
+		assert.Contains(t, logs, "feature=storage_block_volumes")
+		assert.Contains(t, logs, "it has no effect")
+	})
+	t.Run("with the umbrella", func(t *testing.T) {
+		assert.NotContains(t, validateWithFeatures(t, "storage_block,storage_block_volumes"), "storage_block_volumes")
+	})
+	t.Run("with one block metric", func(t *testing.T) {
+		assert.NotContains(t, validateWithFeatures(t, "storage_block_io,storage_block_volumes"), "storage_block_volumes")
+	})
+	t.Run("off", func(t *testing.T) {
+		assert.NotContains(t, validateWithFeatures(t, "storage_block"), "storage_block_volumes")
+	})
+}
+
 func TestConfigValidate_error(t *testing.T) {
 	testCases := []envMap{
 		{"OTEL_EXPORTER_OTLP_ENDPOINT": "localhost:1234", "INSTRUMENT_FUNC_NAME": "bar"},
@@ -1152,8 +1199,42 @@ func TestConfigValidateForReceiverUsesHostMetricsForStats(t *testing.T) {
 	cfg := loadConfig(t, envMap{})
 	cfg.Metrics.Features = export.FeatureStats
 
-	require.ErrorContains(t, cfg.Validate(), "at least one of 'network', 'application' or 'stats'")
+	require.ErrorContains(t, cfg.Validate(), "at least one of 'network', 'application', 'stats', 'storage_block', 'storage_fs' or 'storage_nfs'")
 	require.NoError(t, cfg.ValidateForReceiver())
+}
+
+// The NFS client RPC histogram is counted in the kernel, over the union of
+// the enabled exporters' buckets: more than 32 bounds is a configuration
+// error, whatever buckets a disabled exporter has.
+func TestConfigValidate_NFSBucketsFitTheKernelLayout(t *testing.T) {
+	many := make([]float64, 20)
+	others := make([]float64, 20)
+	for i := range many {
+		many[i] = float64(i+1) / 1000
+		others[i] = float64(i+1)/1000 + 0.0005
+	}
+	cfg := loadConfig(t, envMap{"OTEL_EBPF_PROMETHEUS_PORT": "8999"})
+	cfg.Metrics.Features = export.FeatureStorageNFS
+	cfg.Prometheus.Buckets.StatNFSClientRPCDurationHistogram = many
+	cfg.OTELMetrics.Buckets.StatNFSClientRPCDurationHistogram = others
+	require.NoError(t, cfg.Validate(), "the OTel exporter is off: its buckets do not count")
+
+	layout, err := cfg.NFSHistogramLayout(false)
+	require.NoError(t, err)
+	assert.Equal(t, many, layout.Bounds)
+
+	cfg.OTELMetrics.CommonEndpoint = "http://localhost:4318"
+	require.ErrorContains(t, cfg.Validate(), "stat_nfs_client_rpc_duration_histogram")
+
+	cfg.Metrics.Features = export.FeatureStorageNFSErrors
+	require.NoError(t, cfg.Validate(), "no NFS histogram: no bounds")
+
+	cfg.Metrics.Features = export.FeatureStorageNFS
+	cfg.OTELMetrics.HistogramAggregation = otelcfg.HistogramAggregationExponential
+	require.NoError(t, cfg.Validate(), "exponential OTel histograms: the fixed exponential layout")
+	layout, err = cfg.NFSHistogramLayout(true)
+	require.NoError(t, err)
+	assert.Equal(t, statagg.LayoutExponential, layout.Kind)
 }
 
 func TestConfigValidateStaticSkipsHostCompatibility(t *testing.T) {
