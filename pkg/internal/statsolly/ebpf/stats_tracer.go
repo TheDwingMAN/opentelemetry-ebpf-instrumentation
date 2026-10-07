@@ -78,7 +78,7 @@ const (
 	progObiStatsKprobeSysSyncfs                           = "obi_stats_kprobe_sys_syncfs"
 	progObiStatsKprobeSysSyncFileRange                    = "obi_stats_kprobe_sys_sync_file_range"
 	progObiStatsKprobeSysSync                             = "obi_stats_kprobe_sys_sync"
-	progObiStatsKretprobeSysFsSync                        = "obi_stats_kretprobe_sys_fs_sync"
+	progObiStatsKretprobeSysSync                          = "obi_stats_kretprobe_sys_sync"
 )
 
 // Hook point names, grouped by attach type.
@@ -411,7 +411,7 @@ func attachSyncSyscalls(log *slog.Logger, objects *StatsObjects) []io.Closer {
 		{KprobeSysSyncFileRange, objects.ObiStatsKprobeSysSyncFileRange},
 		{KprobeSysSync, objects.ObiStatsKprobeSysSync},
 	} {
-		links, err := attachFsSyncPair(log, syscall.name, syscall.entry, objects.ObiStatsKretprobeSysFsSync)
+		links, err := attachFsSyncPair(log, syscall.name, syscall.entry, objects.ObiStatsKretprobeSysSync)
 		if err != nil {
 			log.Debug("skipping sync system call", "syscall", syscall.name, "error", err)
 			continue

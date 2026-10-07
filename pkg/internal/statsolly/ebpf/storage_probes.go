@@ -30,7 +30,7 @@ var fsSyncPrograms = []string{
 	progObiStatsKprobeVfsFsyncRange, progObiStatsKretprobeVfsFsyncRange,
 	progObiStatsKprobeDoFsync, progObiStatsKretprobeDoFsync,
 	progObiStatsKprobeSysFsync, progObiStatsKprobeSysFdatasync, progObiStatsKprobeSysSyncfs,
-	progObiStatsKprobeSysSyncFileRange, progObiStatsKprobeSysSync, progObiStatsKretprobeSysFsSync,
+	progObiStatsKprobeSysSyncFileRange, progObiStatsKprobeSysSync, progObiStatsKretprobeSysSync,
 }
 
 // storageProbes tells which storage probes are loaded and attached. The storage features are

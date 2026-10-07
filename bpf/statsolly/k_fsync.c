@@ -209,7 +209,7 @@ int BPF_KPROBE(obi_stats_kprobe_sys_sync) {
 
 // the return probe of every sync system call
 SEC("kretprobe/sys_sync")
-int BPF_KRETPROBE(obi_stats_kretprobe_sys_fs_sync, long ret) {
+int BPF_KRETPROBE(obi_stats_kretprobe_sys_sync, long ret) {
     (void)ctx;
     fs_sync_returned(ret, true);
     return 0;
