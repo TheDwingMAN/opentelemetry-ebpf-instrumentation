@@ -135,7 +135,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Disk, file sync, NFS client and pod volume metrics of OBI's StatsO11y (`metrics.features`: `stats_disk`, `stats_fs_sync_duration`, `stats_nfs`, `stats_disk_pod_volumes`). Totals add up the devices where `obi_disk_stacked` is `false`, so that the I/O of LVM, md RAID and loop devices is not counted twice. See `devdocs/metrics.md` in the OBI repository."
+        "content": "Disk, file sync, NFS client and pod volume metrics of OBI's StatsO11y (`metrics.features`: `stats_disk`, `stats_fs_sync`, `stats_nfs`, `stats_disk_pod_volumes`). Totals add up the devices where `obi_disk_stacked` is `false`, so that the I/O of LVM, md RAID and loop devices is not counted twice. See `devdocs/metrics.md` in the OBI repository."
       }
     },
     {
@@ -832,13 +832,48 @@
       "options": {}
     },
     {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Average file sync time per workload",
+      "description": "Average time of the file syncs of each workload, from the file sync counters.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 62,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (k8s_namespace_name, k8s_owner_name, obi_fs_sync_type) (rate(obi_stat_fs_sync_operation_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", k8s_owner_name!=\"\"}[$__rate_interval])) / sum by (k8s_namespace_name, k8s_owner_name, obi_fs_sync_type) (rate(obi_stat_fs_sync_operations_total{instance=~\"$instance\", obi_ip=~\"$node\", k8s_owner_name!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{k8s_namespace_name}}/{{k8s_owner_name}} {{obi_fs_sync_type}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
       "id": 22,
       "type": "row",
       "title": "NFS client",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 62,
+        "y": 70,
         "w": 24,
         "h": 1
       },
@@ -855,7 +890,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 63,
+        "y": 71,
         "w": 8,
         "h": 8
       },
@@ -890,7 +925,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 63,
+        "y": 71,
         "w": 8,
         "h": 8
       },
@@ -925,7 +960,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 63,
+        "y": 71,
         "w": 8,
         "h": 8
       },
@@ -960,8 +995,8 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 71,
-        "w": 24,
+        "y": 79,
+        "w": 12,
         "h": 8
       },
       "targets": [
@@ -985,13 +1020,48 @@
       "options": {}
     },
     {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Average NFS RPC time per workload",
+      "description": "Average time of the NFS RPCs of each workload, per server, from the NFS procedure counters.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 79,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (k8s_namespace_name, k8s_owner_name, server_address) (rate(obi_stat_nfs_client_procedure_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", k8s_owner_name!=\"\"}[$__rate_interval])) / sum by (k8s_namespace_name, k8s_owner_name, server_address) (rate(obi_stat_nfs_client_procedure_count_total{instance=~\"$instance\", obi_ip=~\"$node\", k8s_owner_name!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{k8s_namespace_name}}/{{k8s_owner_name}} {{server_address}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
       "id": 27,
       "type": "row",
       "title": "Pod volumes",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 79,
+        "y": 87,
         "w": 24,
         "h": 1
       },
@@ -1008,7 +1078,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 80,
+        "y": 88,
         "w": 24,
         "h": 14
       },
@@ -1094,7 +1164,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 94,
+        "y": 102,
         "w": 24,
         "h": 8
       },

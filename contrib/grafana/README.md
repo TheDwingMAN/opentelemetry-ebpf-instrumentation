@@ -10,12 +10,13 @@ source:
 - **Workloads**: the workloads that read and write the most, and their service
   time.
 - **File syncs** and **NFS client**: rates and 99th percentiles, per call, per
-  filesystem, per server and procedure.
+  filesystem, per server and procedure, and the average sync and RPC time of
+  each workload.
 - **Pod volumes**: a node graph from the pods to their PersistentVolumeClaims,
   PersistentVolumes, the devices they are mounted from and the disks those are
   on, and the throughput of those disks.
 
-Enable the metrics with the `stats_disk`, `stats_fs_sync_duration`,
+Enable the metrics with the `stats_disk`, `stats_fs_sync`,
 `stats_nfs` and `stats_disk_pod_volumes` features, and select the Kubernetes
 attributes to see the workloads. The partition and file system panels need the
 opt-in `obi.disk.partition` and `system.filesystem.mountpoint` attributes. See
