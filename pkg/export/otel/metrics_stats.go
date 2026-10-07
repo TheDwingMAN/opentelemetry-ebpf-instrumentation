@@ -78,6 +78,7 @@ func newStatMeterProvider(res *resource.Resource, exporter *sdkmetric.Exporter, 
 		metric.WithResource(res),
 		metric.WithReader(metric.NewPeriodicReader(*exporter, metric.WithInterval(interval))),
 		metric.WithView(statHistogramView(attributes.StatTCPRtt.OTEL, cfg.Buckets.StatTCPRttHistogram, isExponential, cfg.ExponentialHistogram)),
+		metric.WithView(statHistogramView(attributes.StatDiskOperationDuration.OTEL, cfg.Buckets.StatDiskOperationDuration, isExponential, cfg.ExponentialHistogram)),
 	)
 }
 
@@ -91,6 +92,7 @@ type statMetricsExporter struct {
 	tcpRetransmits           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	tcpIo                    *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	tcpSuccessfulConnections *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	diskOperationDuration    *Expirer[*ebpf.Stat, metric2.Float64Histogram, float64]
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
 }
@@ -229,6 +231,25 @@ func newStatMetricsExporter(
 		nme.tcpSuccessfulConnections = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, tcpSuccessfulConnections, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskIo() {
+		log := log.With("metricFamily", "StatsDiskIo")
+
+		diskOperationDuration, err := ebpfEvents.Float64Histogram(
+			attributes.StatDiskOperationDuration.OTEL,
+			metric2.WithUnit(attributes.StatDiskOperationDuration.Unit),
+		)
+		if err != nil {
+			log.Error("creating stats disk operation duration histogram", "error", err)
+			return nil, err
+		}
+
+		attrs := attributes.OpenTelemetryGetters(
+			ebpf.StatGetters,
+			attrProv.For(attributes.StatDiskOperationDuration))
+
+		nme.diskOperationDuration = NewExpirer[*ebpf.Stat, metric2.Float64Histogram, float64](ctx, diskOperationDuration, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -255,6 +276,12 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if me.tcpIo != nil && v.TCPIo != nil {
 				tcpIo, attrs := me.tcpIo.ForRecord(v)
 				tcpIo.Add(ctx, int64(v.TCPIo.Bytes), metric2.WithAttributeSet(attrs))
+			}
+			if me.diskOperationDuration != nil && v.DiskIo != nil {
+				diskOperationDuration, attrs := me.diskOperationDuration.ForRecord(v)
+				for _, latencyUs := range v.DiskIo.LatencyUs {
+					diskOperationDuration.Record(ctx, float64(latencyUs)/1_000_000.0, metric2.WithAttributeSet(attrs))
+				}
 			}
 		}
 	}

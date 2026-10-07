@@ -149,12 +149,21 @@ The RST **sender** is not affected because it goes through the normal applicatio
 
 StatsO11y probes fire at different points relative to `inet_put_port()`, so the behaviour is not uniform across metrics. For example, `obi_kprobe_tcp_close_srtt` (kprobe on `tcp_close`) may still observe a valid port in some RST-receiver scenarios, while `obi_tracepoint_inet_sock_set_state` (tracepoint on `inet_sock_set_state`) consistently sees `0`. Metrics with `src_port="0"` still carry useful signal — `dst_port`, `src_address`, `dst_address`, `reason`, and `network_tcp_handshake_role` remain valid.
 
+### Block I/O latency
+
+`obi.stat.disk.operation.duration` (`stats_disk_io`) is a histogram of the time between a block request being issued to the device driver (`block_rq_issue`) and its completion (`block_rq_complete`), per block device and `disk.io.direction`. Both probes are raw tracepoints ([bpf/statsolly/tp_block.c](../bpf/statsolly/tp_block.c)): the issue probe stores a timestamp keyed by `struct request *`, the completion probe computes the latency and appends it to a per-device batch (`disk_io_accum`) that is flushed to the ring buffer when full or after one second. Requests other than reads and writes (flush, discard, zone operations) are not reported.
+
+`block_rq_issue` lost its leading `struct request_queue *` argument in Linux 5.11. [stats_tracer.go](../pkg/internal/statsolly/ebpf/stats_tracer.go) inspects the kernel BTF for `btf_trace_block_rq_issue` and injects the argument position as the `g_block_rq_issue_rq_arg_idx` constant, so the same program runs on 5.8+ kernels. The device number is resolved to a name through `/sys/dev/block` in userspace.
+
+The metric describes the node, not a connection: it carries no source or destination attributes and no Kubernetes decoration. It is not part of the `stats` aggregate feature because the completion probe fires on every block request.
+
 ### Performance considerations
 
 Some stat metrics attach to kernel functions that are called very frequently (e.g. `tcp_sendmsg`, `tcp_cleanup_rbuf` for TCP IO). These probes add a small overhead on every call, so the aggregate cost is proportional to the rate of TCP sends/receives on the node. Consider:
 
 - If you need RTT, failed connections, or retransmits **without** TCP IO overhead, enable those individually (`stats_tcp_rtt`, `stats_tcp_failed_connections`, `stats_tcp_successful_connections`, `stats_tcp_retransmits`) instead of using the `stats` aggregate feature — `stats` includes `stats_tcp_io`, which fires on every `tcp_sendmsg` and `tcp_cleanup_rbuf` call.
-- The `stats_events` ring buffer and the per-metric eBPF maps (e.g. `tcp_io_accum`) have default size limits; on nodes with a very large number of concurrent connections these can be resized via the `ebpf.*` configuration knobs if events start being dropped.
+- `stats_disk_io` adds one map update per block request issue and one lookup per completion; the cost is proportional to the node's IOPS. Samples are batched (`k_disk_io_batch_size`) before reaching userspace.
+- The `stats_events` ring buffer and the per-metric eBPF maps (e.g. `tcp_io_accum`, `disk_io_accum`) have default size limits; on nodes with a very large number of concurrent connections these can be resized via the `ebpf.*` configuration knobs if events start being dropped.
 
 ### Final notes
 

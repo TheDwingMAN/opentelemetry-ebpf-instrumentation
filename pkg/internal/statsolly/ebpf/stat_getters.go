@@ -71,6 +71,22 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.NetworkIoDirection), networkIoDirectionStr(NetworkIoDirectionCode(direction)))
 		}
+	case attr.DiskIoDirection:
+		getter = func(s *Stat) attribute.KeyValue {
+			var direction uint8
+			if s.DiskIo != nil {
+				direction = s.DiskIo.Direction
+			}
+			return attribute.String(string(attr.DiskIoDirection), diskIoDirectionStr(DiskIoDirectionCode(direction)))
+		}
+	case attr.SystemDeviceName:
+		getter = func(s *Stat) attribute.KeyValue {
+			var device string
+			if s.DiskIo != nil {
+				device = s.DiskIo.Device
+			}
+			return attribute.String(string(attr.SystemDeviceName), device)
+		}
 
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
@@ -121,6 +137,16 @@ func networkIoDirectionStr(d NetworkIoDirectionCode) string {
 		return string(DirectionTransmit)
 	case CodeDirectionReceive:
 		return string(DirectionReceive)
+	}
+	return ""
+}
+
+func diskIoDirectionStr(d DiskIoDirectionCode) string {
+	switch d {
+	case CodeDiskIoRead:
+		return string(DiskIoRead)
+	case CodeDiskIoWrite:
+		return string(DiskIoWrite)
 	}
 	return ""
 }

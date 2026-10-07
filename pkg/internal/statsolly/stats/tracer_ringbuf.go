@@ -72,6 +72,8 @@ func handleStatEvent(record *ringbuf.Record) (ebpf.Stat, error) {
 		return readTCPRetransmitIntoStat(record)
 	case ebpf.StatTypeTCPIo:
 		return readTCPIoIntoStat(record)
+	case ebpf.StatTypeDiskIo:
+		return readDiskIoIntoStat(record)
 	default:
 		return ebpf.Stat{}, fmt.Errorf("unknown stats event [type %d]", uint8(eventType))
 	}
@@ -161,5 +163,24 @@ func readTCPIoIntoStat(record *ringbuf.Record) (ebpf.Stat, error) {
 			Bytes:     total,
 		},
 		CommonAttrs: connToCommonAttrs(event.Conn),
+	}, nil
+}
+
+func readDiskIoIntoStat(record *ringbuf.Record) (ebpf.Stat, error) {
+	event, err := ebpfcommon.ReinterpretCast[ebpf.StatsDiskIo](record.RawSample)
+	if err != nil {
+		return ebpf.Stat{}, err
+	}
+	count := min(int(event.Count), ebpf.DiskIoBatchSize)
+	latencies := make([]uint32, count)
+	copy(latencies, event.LatencyUs[:count])
+	return ebpf.Stat{
+		Type: ebpf.StatTypeDiskIo,
+		DiskIo: &ebpf.DiskIo{
+			Direction: event.Direction,
+			Dev:       event.Dev,
+			Device:    blockDeviceName(event.Dev),
+			LatencyUs: latencies,
+		},
 	}, nil
 }

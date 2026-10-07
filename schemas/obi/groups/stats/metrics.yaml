@@ -378,3 +378,18 @@ groups:
         requirement_level: opt_in
       - ref: service.peer.namespace
         requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.disk.operation.duration
+    type: metric
+    metric_name: obi.stat.disk.operation.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Time between a block I/O request being issued to the device driver and
+      its completion, observed for every request on the node.
+    attributes:
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: system.device.name
+        requirement_level: recommended

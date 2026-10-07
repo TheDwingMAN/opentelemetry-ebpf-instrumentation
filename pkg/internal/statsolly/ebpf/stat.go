@@ -19,6 +19,7 @@ const (
 	StatTypeTCPRetransmit           = StatType(StatsStatTypeK_statTypeTcpRetransmit)
 	StatTypeTCPIo                   = StatType(StatsStatTypeK_statTypeTcpIo)
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
+	StatTypeDiskIo                  = StatType(StatsStatTypeK_statTypeDiskIo)
 )
 
 type TCPFailReasonType string
@@ -81,6 +82,22 @@ const (
 	CodeDirectionTransmit = NetworkIoDirectionCode(StatsNetworkIoDirectionDirectionTransmit)
 )
 
+type DiskIoDirectionType string
+
+const (
+	DiskIoRead  DiskIoDirectionType = "read"
+	DiskIoWrite DiskIoDirectionType = "write"
+)
+
+// DiskIoDirectionCode aliases the bpf2go-generated constants derived from
+// enum disk_io_direction in bpf/statsolly/types.h.
+type DiskIoDirectionCode uint8
+
+const (
+	CodeDiskIoRead  = DiskIoDirectionCode(StatsDiskIoDirectionDiskIoRead)
+	CodeDiskIoWrite = DiskIoDirectionCode(StatsDiskIoDirectionDiskIoWrite)
+)
+
 // Stat contains accumulated metrics from a stat, with extra metadata
 // that is added from the user space
 // REMINDER: any attribute here must be also added to the functions StatGetters
@@ -93,6 +110,7 @@ type Stat struct {
 	TCPSuccessfulConnection *TCPSuccessfulConnection `json:"-"`
 	TCPRetransmit           bool                     `json:"-"`
 	TCPIo                   *TCPIo                   `json:"-"`
+	DiskIo                  *DiskIo                  `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -115,6 +133,14 @@ type TCPSuccessfulConnection struct {
 type TCPIo struct {
 	Direction uint8  `json:"direction"`
 	Bytes     uint32 `json:"bytes"`
+}
+
+// DiskIo carries a batch of block request latencies for one device and direction.
+type DiskIo struct {
+	Direction uint8    `json:"direction"`
+	Dev       uint32   `json:"dev"`
+	Device    string   `json:"device"`
+	LatencyUs []uint32 `json:"latency_us"`
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.
@@ -171,3 +197,16 @@ type StatsTCPIo struct {
 
 // TCPIoBatchSize mirrors k_tcp_io_batch_size in bpf/statsolly/types.h.
 const TCPIoBatchSize = 10
+
+type StatsDiskIo struct {
+	_         structs.HostLayout
+	Flags     uint8
+	Direction uint8
+	Count     uint8
+	Pad       [1]uint8
+	Dev       uint32
+	LatencyUs [DiskIoBatchSize]uint32
+}
+
+// DiskIoBatchSize mirrors k_disk_io_batch_size in bpf/statsolly/types.h.
+const DiskIoBatchSize = 16

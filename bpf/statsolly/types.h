@@ -14,11 +14,17 @@ enum stat_type : u8 {
     k_stat_type_tcp_retransmit = 3,
     k_stat_type_tcp_io = 4,
     k_stat_type_tcp_successful_connection = 5,
+    k_stat_type_disk_io = 6,
 };
 
 // batch size used in tcp io metric
 enum {
     k_tcp_io_batch_size = 10,
+};
+
+// batch size used in disk io metric
+enum {
+    k_disk_io_batch_size = 16,
 };
 
 enum tcp_handshake_role : u8 {
@@ -40,4 +46,10 @@ enum tcp_fail_reason : u8 {
 enum network_io_direction : u8 {
     direction_receive = 1,
     direction_transmit = 2,
+};
+
+enum disk_io_direction : u8 {
+    disk_io_other = 0,
+    disk_io_read = 1,
+    disk_io_write = 2,
 };

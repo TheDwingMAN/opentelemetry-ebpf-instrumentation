@@ -390,4 +390,6 @@ const (
 	TCPFailedConnectionReason = Name("reason")
 	NetworkTCPHandshakeRole   = Name("network.tcp.handshake.role")
 	NetworkIoDirection        = Name(semconv.NetworkIODirectionKey)
+	DiskIoDirection           = Name(semconv.DiskIODirectionKey)
+	SystemDeviceName          = Name("system.device.name")
 )

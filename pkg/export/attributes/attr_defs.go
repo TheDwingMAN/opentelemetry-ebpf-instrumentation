@@ -127,6 +127,17 @@ func getDefinitions(
 		extraGroupAttributes[GroupStats],
 	)
 
+	// disk stat metrics describe a block device, not a connection
+	statsDiskAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.DiskIoDirection:  true,
+			attr.SystemDeviceName: true,
+		},
+		extraGroupAttributes[GroupStats],
+	)
+
 	// attributes to be reported exclusively for network metrics when
 	// kubernetes metadata is enabled
 	networkKubeAttributes := NewAttrReportGroup(
@@ -906,6 +917,10 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{
 				attr.NetworkTCPHandshakeRole: false,
 			},
+		},
+		StatDiskOperationDuration.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{},
 		},
 
 		// span and service graph metrics don't yet implement attribute selection,

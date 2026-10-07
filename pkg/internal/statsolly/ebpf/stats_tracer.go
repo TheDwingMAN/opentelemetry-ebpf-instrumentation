@@ -44,6 +44,8 @@ const (
 	progObiStatsKprobeTCPSendmsg                          = "obi_stats_kprobe_tcp_sendmsg"
 	progObiStatsKretprobeTCPSendmsg                       = "obi_stats_kretprobe_tcp_sendmsg"
 	progObiStatsKprobeTCPCleanupRbuf                      = "obi_stats_kprobe_tcp_cleanup_rbuf"
+	progObiStatsRawTpBlockRqIssue                         = "obi_stats_raw_tp_block_rq_issue"
+	progObiStatsRawTpBlockRqComplete                      = "obi_stats_raw_tp_block_rq_complete"
 )
 
 // Hook point names, grouped by attach type.
@@ -58,10 +60,16 @@ const (
 
 	// Raw tracepoints: name only (no group prefix).
 	RawTracepointTCPRetransmitSkb = "tcp_retransmit_skb"
+	RawTracepointBlockRqIssue     = "block_rq_issue"
+	RawTracepointBlockRqComplete  = "block_rq_complete"
 )
 
+// constBlockRqIssueRqArgIdx is the eBPF constant telling obi_stats_raw_tp_block_rq_issue
+// where the struct request argument sits (see blockRqIssueRqArgIndex).
+const constBlockRqIssueRqArgIdx = "g_block_rq_issue_rq_arg_idx"
+
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_io_direction -type tcp_io_t -type disk_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -119,6 +127,18 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	if !features.StatsTCPIo() {
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
+	if !features.StatsDiskIo() {
+		toDisable = append(toDisable, progObiStatsRawTpBlockRqIssue, progObiStatsRawTpBlockRqComplete)
+	}
+
+	var blockRqArgIdx uint32
+	if features.StatsDiskIo() {
+		idx, err := blockRqIssueRqArgIndex()
+		if err != nil {
+			return nil, fmt.Errorf("resolving block_rq_issue arguments: %w", err)
+		}
+		blockRqArgIdx = idx
+	}
 
 	if err := fixupSpec(spec, toDisable); err != nil {
 		return nil, fmt.Errorf("fixing up BPF spec: %w", err)
@@ -131,6 +151,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	if err := ebpfconvenience.LoadSpec(spec, &objects, map[string]any{
 		"g_bpf_debug":             cfg.BpfDebug,
 		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
+		constBlockRqIssueRqArgIdx: blockRqArgIdx,
 	}, sharedMaps, &mu, "", nil); err != nil {
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
@@ -234,6 +255,16 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 			name:    RawTracepointTCPRetransmitSkb,
 			program: objects.ObiStatsRawTpTcpRetransmitSkb,
 			enabled: features.StatsTCPRetransmits(),
+		},
+		{
+			name:    RawTracepointBlockRqIssue,
+			program: objects.ObiStatsRawTpBlockRqIssue,
+			enabled: features.StatsDiskIo(),
+		},
+		{
+			name:    RawTracepointBlockRqComplete,
+			program: objects.ObiStatsRawTpBlockRqComplete,
+			enabled: features.StatsDiskIo(),
 		},
 	} {
 		if !t.enabled {

@@ -56,6 +56,9 @@ const (
 	FeatureGraph
 	FeatureApplicationRuntime
 	FeatureEBPF
+	// FeatureStatsDiskIo emits the block I/O latency histogram. It is not part of the
+	// "stats" aggregate: it fires on every block request completion.
+	FeatureStatsDiskIo
 	FeatureAll = Features(^uint(0)) // all bits to 1
 )
 
@@ -74,6 +77,7 @@ var FeatureMapper = map[string]Features{
 	"stats_tcp_retransmits":            FeatureStatsTCPRetransmits,
 	"stats_tcp_io":                     FeatureStatsTCPIo,
 	"stats_tcp_successful_connections": FeatureStatsTCPSuccessfulConnections,
+	"stats_disk_io":                    FeatureStatsDiskIo,
 	"network":                          FeatureNetwork,
 	"network_inter_zone":               FeatureNetworkInterZone,
 	"network_flow_packets":             FeatureNetworkFlowPackets,
@@ -375,7 +379,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats)
+	return f.any(FeatureStats | FeatureStatsDiskIo)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -396,6 +400,10 @@ func (f Features) StatsTCPRetransmits() bool {
 
 func (f Features) StatsTCPIo() bool {
 	return f.any(FeatureStatsTCPIo)
+}
+
+func (f Features) StatsDiskIo() bool {
+	return f.any(FeatureStatsDiskIo)
 }
 
 func (f Features) NetworkInterZone() bool {
