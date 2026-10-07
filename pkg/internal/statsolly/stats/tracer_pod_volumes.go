@@ -41,7 +41,7 @@ type podVolumeSource interface {
 type PodVolumesTracer struct {
 	store    podVolumeSource
 	nodeName string
-	// mounts returns the mount table of the host
+	// mounts returns the mount table that has the volumes that the kubelet mounts
 	mounts   func() ([]*procfs.MountInfo, error)
 	devices  *deviceNames
 	stack    *deviceStack
@@ -49,13 +49,15 @@ type PodVolumesTracer struct {
 
 	// reported are the volume devices of the previous resolution, to report the ones that are gone
 	reported map[ebpf.PodVolume]bool
+	// noKubeletMounts is set when a previous resolution found no mount of the kubelet, and warned
+	noKubeletMounts bool
 }
 
 func NewPodVolumesTracer(store podVolumeSource, nodeName string) *PodVolumesTracer {
 	return &PodVolumesTracer{
 		store:    store,
 		nodeName: nodeName,
-		mounts:   func() ([]*procfs.MountInfo, error) { return procfs.GetProcMounts(1) },
+		mounts:   func() ([]*procfs.MountInfo, error) { return readHostMounts(procfs.DefaultMountPoint) },
 		devices:  &deviceNames{sysRoot: "/sys", procRoot: "/proc"},
 		stack:    newDeviceStack("/sys"),
 		interval: podVolumesInterval,
@@ -95,9 +97,11 @@ func (p *PodVolumesTracer) readStats() []*ebpf.Stat {
 		dtlog().Debug("can't read the mount table", "error", err)
 		return nil
 	}
+	pods := p.store.PodsWithVolumeClaims(p.nodeName)
+	p.warnWithoutKubeletMounts(mounts, len(pods) > 0)
 	current := map[ebpf.PodVolume]bool{}
 	var stats []*ebpf.Stat
-	for _, pod := range p.store.PodsWithVolumeClaims(p.nodeName) {
+	for _, pod := range pods {
 		for _, claim := range pod.Pod.VolumeClaims {
 			for _, volume := range p.volumeDevices(pod, claim, mounts) {
 				current[volume] = true
@@ -112,6 +116,23 @@ func (p *PodVolumesTracer) readStats() []*ebpf.Stat {
 	}
 	p.reported = current
 	return stats
+}
+
+// warnWithoutKubeletMounts warns, once until the mounts of the kubelet are visible again, that pods
+// mount volumes while the mount table has no mount of the kubelet. Without such pods, it can't
+// tell, so it keeps the state of the previous resolution.
+func (p *PodVolumesTracer) warnWithoutKubeletMounts(mounts []*procfs.MountInfo, podsWithVolumes bool) {
+	if !podsWithVolumes {
+		return
+	}
+	missing := !hasKubeletVolumeMount(mounts)
+	if missing && !p.noKubeletMounts {
+		dtlog().Warn("no volume mount of the kubelet is visible: the devices of the pod volumes are not reported. "+
+			"OBI needs the host PID namespace to read the mount table of the host, and, with OpenShift's mount "+
+			"namespace encapsulation (kubens), CAP_SYS_PTRACE to find the mount namespace pinned at /"+kubensMount,
+			"mounts", len(mounts))
+	}
+	p.noKubeletMounts = missing
 }
 
 // volumeDevices resolves a volume of a pod into one PodVolume per disk that it is on

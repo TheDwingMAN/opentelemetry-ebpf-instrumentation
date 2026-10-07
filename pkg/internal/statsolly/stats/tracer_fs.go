@@ -5,6 +5,11 @@ package stats // import "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
 	"time"
 
 	"github.com/prometheus/procfs"
@@ -15,13 +20,25 @@ import (
 // filesystems to new ones, e.g. the overlay filesystems of containers.
 const filesystemsRefreshPeriod = 30 * time.Second
 
+// hostInitPID is the PID of the init process of the host, when OBI shares its PID namespace
+const hostInitPID = 1
+
+// kubensMount is where OpenShift's kubens.service pins the mount namespace of the kubelet and
+// CRI-O, in the root of the host
+const kubensMount = "run/kubens/mnt"
+
+// kubeletVolumeMount matches the mount points of the volumes of the pods:
+// <kubelet root>/pods/<pod UID>/volumes/
+var kubeletVolumeMount = regexp.MustCompile(`/pods/[^/]+/volumes/`)
+
 type filesystem struct {
 	mountpoint string
 	fsType     string
 }
 
 // filesystems resolves the device numbers of filesystems into where they are mounted and their
-// type, from the mount table of the host (that of PID 1, when OBI shares the host PID namespace)
+// type, from the mount table of the host (that of PID 1, when OBI shares the host PID namespace),
+// or of the kubelet's mount namespace
 type filesystems struct {
 	mounts      func() ([]*procfs.MountInfo, error)
 	now         func() time.Time
@@ -31,9 +48,58 @@ type filesystems struct {
 
 func newFilesystems() *filesystems {
 	return &filesystems{
-		mounts: func() ([]*procfs.MountInfo, error) { return procfs.GetProcMounts(1) },
+		mounts: func() ([]*procfs.MountInfo, error) { return readHostMounts(procfs.DefaultMountPoint) },
 		now:    time.Now,
 	}
+}
+
+// readHostMounts reads the mount table that has the volumes that the kubelet mounts for the pods:
+// that of the host (PID 1), or, when the kubelet runs in a mount namespace of its own, like with
+// OpenShift's mount namespace encapsulation, that of a process in that namespace, whose mounts the
+// host doesn't see
+func readHostMounts(procRoot string) ([]*procfs.MountInfo, error) {
+	fs, err := procfs.NewFS(procRoot)
+	if err != nil {
+		return nil, err
+	}
+	mounts, err := fs.GetProcMounts(hostInitPID)
+	if err != nil || hasKubeletVolumeMount(mounts) {
+		return mounts, err
+	}
+	if kubeletMounts, ok := kubensMounts(fs, procRoot); ok {
+		return kubeletMounts, nil
+	}
+	return mounts, nil
+}
+
+func hasKubeletVolumeMount(mounts []*procfs.MountInfo) bool {
+	return slices.ContainsFunc(mounts, func(m *procfs.MountInfo) bool {
+		return kubeletVolumeMount.MatchString(m.MountPoint)
+	})
+}
+
+// kubensMounts reads the mount table of a process in the mount namespace that kubens pins. The
+// process is found by the namespace and not as the kubelet, which the namespace outlives when it
+// restarts.
+func kubensMounts(fs procfs.FS, procRoot string) ([]*procfs.MountInfo, bool) {
+	pinned, err := os.Stat(filepath.Join(procRoot, strconv.Itoa(hostInitPID), "root", kubensMount))
+	if err != nil {
+		return nil, false
+	}
+	procs, err := fs.AllProcs()
+	if err != nil {
+		return nil, false
+	}
+	for _, proc := range procs {
+		namespace, err := os.Stat(filepath.Join(procRoot, strconv.Itoa(proc.PID), "ns", "mnt"))
+		if err != nil || !os.SameFile(pinned, namespace) {
+			continue
+		}
+		if mounts, err := proc.MountInfo(); err == nil {
+			return mounts, true
+		}
+	}
+	return nil, false
 }
 
 // lookup returns the filesystem of a kernel dev_t, from a mount table read at most
