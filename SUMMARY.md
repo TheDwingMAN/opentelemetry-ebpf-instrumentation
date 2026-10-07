@@ -13,6 +13,11 @@ About the matrix's only failure, `nfs-late-setup` (8 kernels: every kernel where
 - It is the precondition of the payload's "nfs late attach" step, not an OBI check: `modprobe -r nfs` in the guest removes `nfs` and `lockd` only and leaves `sunrpc` (and `grace`) loaded with refcnt 0 and no holders, so `[ ! -e /sys/module/sunrpc/initstate ]` fails. A diagnostic run on v6.6.157 shows it (`out/extra/diag-nfs-late-setup-v6.6.157.out`, script next to it): after `modprobe -r nfs` three retries over 21 s change nothing, and `modprobe -r sunrpc` then unloads it at once. Nothing pins the module.
 - The consequence: on those 8 kernels the checks behind it (`nfs-waiting-warn`, `nfs-late-attach`, `e2e-nfs-late-io`, `nfs-modules-pinned`) did not run in the matrix. The privileged test `TestNFSProbesAttachWhenTheirModulesAreLoaded` passed on all 8.
 - rhel8.9, rhel8.10 and v5.8.18 pass `nfs-late-setup` because the privileged test skips there without loading the modules; they take the `nfs-stays-off` branch.
+- Supplement (below): a copy of `payloads/final` with only that line changed (`out/extra/final-nfsfix-run.sh.diff`: `modprobe -r sunrpc` after `modprobe -r nfs`), same binaries, on the 8 kernels. All 8 exit 0 with no FAIL, and `nfs-late-setup`, `nfs-waiting-warn`, `nfs-late-attach`, `e2e-nfs-late-io` and `nfs-modules-pinned` pass on each. The lab kit itself was not changed.
+
+Status of this results set: the kernel matrix, k3s and iostats blocks at `0b5d13939` are complete. The NVMe multipath repeat was **not run** at `0b5d13939`: the branch moved on to a newer commit while these blocks ran, and the NVMe rounds were left to the lab session that runs the newer commit.
+
+Host suspend: the host was suspended from 20:40:56 to 22:20:06 local time. One run was in progress (iostats on v6.12.111); it is set aside and was repeated. No other run of this set overlapped the suspend.
 
 ## Kernel matrix
 
@@ -61,6 +66,34 @@ About the matrix's only failure, `nfs-late-setup` (8 kernels: every kernel where
 - v7.2.6: `SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel`
 
 The payload output of every kernel is in `out/matrix/<kernel>.out`.
+
+## Supplement: the final payload with the sunrpc unload fixed (a patched copy, not the lab kit's)
+
+`./run-matrix.sh <copy of payloads/final with out/extra/final-nfsfix-run.sh.diff> 1200 <the 8 kernels that failed nfs-late-setup>`, payload built from `0b5d13939`.
+
+| kernel | exit | verdict | PASS | FAIL | SKIP | accel | boot | payload | total |
+|---|---|---|---|---|---|---|---|---|---|
+| rhel9.6 | 0 | PASS | 41 | 0 | 1 | kvm | 1.0s | 230.3s | 231.4s |
+| v5.10.270 | 0 | PASS | 42 | 0 | 0 | kvm | 1.1s | 88.5s | 89.7s |
+| v5.15.221 | 0 | PASS | 43 | 0 | 0 | kvm | 0.8s | 91.1s | 92.0s |
+| v6.1.188 | 0 | PASS | 43 | 0 | 0 | kvm | 0.9s | 90.1s | 91.0s |
+| v6.6.157 | 0 | PASS | 43 | 0 | 0 | kvm | 1.0s | 89.8s | 90.8s |
+| v6.12.111 | 0 | PASS | 42 | 0 | 1 | kvm | 0.9s | 219.4s | 220.4s |
+| v6.18.54 | 0 | PASS | 42 | 0 | 1 | kvm | 0.9s | 248.1s | 249.1s |
+| v7.2.6 | 0 | PASS | 42 | 0 | 1 | kvm | 0.9s | 234.8s | 235.8s |
+
+### Failures
+
+None: every kernel exited 0 with no `RESULT ... FAIL` line.
+
+### SKIP lines
+
+- rhel9.6: `SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel`
+- v6.12.111: `SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel`
+- v6.18.54: `SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel`
+- v7.2.6: `SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel`
+
+The payload output of every kernel is in `out/nfsfix/<kernel>.out`.
 
 ## k3s
 

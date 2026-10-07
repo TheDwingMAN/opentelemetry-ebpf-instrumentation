@@ -1,0 +1,9 @@
+kernel	exit	verdict	accel	PASS	FAIL	SKIP	boot	payload	total
+rhel9.6	0	PASS	kvm	41	0	1	1.0s	230.3s	231.4s
+v5.10.270	0	PASS	kvm	42	0	0	1.1s	88.5s	89.7s
+v5.15.221	0	PASS	kvm	43	0	0	0.8s	91.1s	92.0s
+v6.1.188	0	PASS	kvm	43	0	0	0.9s	90.1s	91.0s
+v6.6.157	0	PASS	kvm	43	0	0	1.0s	89.8s	90.8s
+v6.12.111	0	PASS	kvm	42	0	1	0.9s	219.4s	220.4s
+v6.18.54	0	PASS	kvm	42	0	1	0.9s	248.1s	249.1s
+v7.2.6	0	PASS	kvm	42	0	1	0.9s	234.8s	235.8s
