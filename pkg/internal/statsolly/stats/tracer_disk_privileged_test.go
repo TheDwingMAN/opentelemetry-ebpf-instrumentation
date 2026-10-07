@@ -594,7 +594,10 @@ func TestFsSyncTypesAndFilesystems(t *testing.T) {
 	require.NoError(t, unix.Fsync(fd))
 	require.NoError(t, unix.Fdatasync(fd))
 	require.NoError(t, unix.Fdatasync(fd))
+	// a hint that doesn't wait for the writeback is not a sync
 	require.NoError(t, unix.SyncFileRange(fd, 0, 0, unix.SYNC_FILE_RANGE_WRITE))
+	require.NoError(t, unix.SyncFileRange(fd, 0, 0,
+		unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER))
 	require.NoError(t, unix.Syncfs(fd))
 	unix.Sync()
 

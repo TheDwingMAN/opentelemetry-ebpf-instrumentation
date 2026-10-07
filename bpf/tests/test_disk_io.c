@@ -134,6 +134,18 @@ static void test_fs_sync_status(void) {
     assert_true(fs_sync_attempted(0), "a successful sync is a file sync");
 }
 
+static void test_sync_file_range_waits(void) {
+    assert_true(!sync_file_range_waits(k_sync_file_range_write),
+                "a SYNC_FILE_RANGE_WRITE hint doesn't wait for the writeback");
+    assert_true(!sync_file_range_waits(0), "a call without flags doesn't wait");
+    assert_true(sync_file_range_waits(k_sync_file_range_wait_before), "WAIT_BEFORE waits");
+    assert_true(sync_file_range_waits(k_sync_file_range_wait_after), "WAIT_AFTER waits");
+    assert_true(sync_file_range_waits(k_sync_file_range_wait_before | k_sync_file_range_write |
+                                      k_sync_file_range_wait_after),
+                "WAIT_BEFORE|WRITE|WAIT_AFTER waits");
+    assert_true(!sync_file_range_waits(0xfffffff8u), "bits above the three flags are not waits");
+}
+
 int main(void) {
     test_latency_bucket_is_upper_inclusive();
     test_latency_bucket_without_bounds();
@@ -145,6 +157,7 @@ int main(void) {
     test_queue_ns();
     test_rq_bytes();
     test_fs_sync_status();
+    test_sync_file_range_waits();
 
     if (failed_assertions) {
         printf("%u assertion(s) failed\n", failed_assertions);

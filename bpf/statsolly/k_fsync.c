@@ -72,6 +72,19 @@ static __always_inline u32 syscall_fd(struct pt_regs *ctx) {
     return fd;
 }
 
+// The flags of sync_file_range(2), its fourth argument, from the pt_regs of the caller. System
+// calls get their fourth argument in r10 on x86-64, because SYSCALL overwrites rcx.
+static __always_inline u32 syscall_sync_file_range_flags(struct pt_regs *ctx) {
+    struct pt_regs *regs = (struct pt_regs *)PT_REGS_PARM1(ctx);
+    u32 flags = 0;
+#if defined(__TARGET_ARCH_x86)
+    bpf_probe_read_kernel(&flags, sizeof(flags), &regs->r10);
+#else
+    bpf_probe_read_kernel(&flags, sizeof(flags), (void *)&PT_REGS_PARM4(regs));
+#endif
+    return flags;
+}
+
 // Starts measuring a sync system call of the current thread, which the kernel functions it
 // calls leave alone
 static __always_inline void syscall_sync_started(const enum fs_sync_type type, const u32 s_dev) {
@@ -177,6 +190,12 @@ int BPF_KPROBE(obi_stats_kprobe_sys_syncfs) {
 
 SEC("kprobe/sys_sync_file_range")
 int BPF_KPROBE(obi_stats_kprobe_sys_sync_file_range) {
+    if (!sync_file_range_waits(syscall_sync_file_range_flags(ctx))) {
+        // a thread is in one system call at a time: any start it still has is stale
+        const u64 pid_tgid = bpf_get_current_pid_tgid();
+        bpf_map_delete_elem(&fs_sync_start, &pid_tgid);
+        return 0;
+    }
     fd_syscall_sync_started(ctx, fs_sync_type_sync_file_range);
     return 0;
 }

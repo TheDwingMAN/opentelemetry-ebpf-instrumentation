@@ -198,6 +198,7 @@ The `obi.fs.sync.type` attribute tells the system call apart: syncs outside of t
 - A sync is charged to the workload of the thread that called it, through the cgroup of its `io` controller (`blkio` on cgroup v1), so the same cgroup name rules as the disk metrics apply.
 - Stacked filesystems, like overlayfs, sync the file of the filesystem below them: outside of the system calls, the sync of the lower file is measured, once per call, with the filesystem of the lower file.
 - The writeback of dirty pages by the kernel is not measured.
+- `sync_file_range(2)` is measured only when its flags wait for the writeback (`SYNC_FILE_RANGE_WAIT_BEFORE` or `SYNC_FILE_RANGE_WAIT_AFTER`). A call with `SYNC_FILE_RANGE_WRITE` alone, like the flush hints of PostgreSQL and RocksDB, starts the writeback and returns, so it is not a sync and is not counted.
 
 [`contrib/grafana/obi-disk-stats.json`](../contrib/grafana/obi-disk-stats.json) is a Grafana dashboard of the disk, file sync, NFS client and pod volume metrics.
 

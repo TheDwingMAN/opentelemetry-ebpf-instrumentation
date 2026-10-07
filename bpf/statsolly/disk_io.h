@@ -123,6 +123,21 @@ static __always_inline bool fs_sync_attempted(const s32 ret) {
     return ret != -k_errno_ebadf;
 }
 
+// The flags of sync_file_range(2), from include/uapi/linux/fs.h. They are preprocessor constants:
+// the kernel BTF doesn't have them.
+enum {
+    k_sync_file_range_wait_before = 1,
+    k_sync_file_range_write = 2,
+    k_sync_file_range_wait_after = 4,
+};
+
+// sync_file_range(2) only waits for the writeback with SYNC_FILE_RANGE_WAIT_BEFORE or
+// SYNC_FILE_RANGE_WAIT_AFTER. SYNC_FILE_RANGE_WRITE alone, as the flush hints of PostgreSQL and
+// RocksDB do, starts the writeback and returns: it is not a sync.
+static __always_inline bool sync_file_range_waits(const u32 flags) {
+    return (flags & (k_sync_file_range_wait_before | k_sync_file_range_wait_after)) != 0;
+}
+
 // vfs_fsync_range returns 0 or a negative errno. Normalized to the errno, 0 on success.
 static __always_inline u8 fs_sync_status(const s32 ret) {
     if (ret >= 0) {
