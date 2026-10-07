@@ -370,6 +370,8 @@ func TestFsSyncReader(t *testing.T) {
 		byError[stat.FsSync.ErrorType] = stat.FsSync
 	}
 	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 4}}, byError[""].Latency)
+	assert.Equal(t, uint64(4), byError[""].Operations)
+	assert.InDelta(t, 0.008, byError[""].Time, 1e-12)
 	assert.Equal(t, ebpf.CodeFsSyncFdatasync, byError[""].Type)
 	assert.Equal(t, "/data", byError[""].Mountpoint)
 	assert.Equal(t, "xfs", byError[""].FilesystemType)
@@ -379,4 +381,6 @@ func TestFsSyncReader(t *testing.T) {
 	stats = r.readStats()
 	require.Len(t, stats, 1)
 	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 2}}, stats[0].FsSync.Latency)
+	assert.Equal(t, uint64(2), stats[0].FsSync.Operations)
+	assert.InDelta(t, 0.004, stats[0].FsSync.Time, 1e-12)
 }

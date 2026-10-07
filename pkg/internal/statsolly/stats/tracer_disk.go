@@ -392,6 +392,8 @@ func (f *fsSyncStats) stat(key ebpf.StatsFsSyncKeyT, current, previous ebpf.Stat
 			// file syncs report errnos on every kernel version
 			ErrorType:   diskErrorType(key.Status, false),
 			ContainerID: f.containers.containerID(key.CgroupId),
+			Operations:  delta.operations,
+			Time:        delta.seconds(),
 			Latency:     delta.latency,
 		},
 	}

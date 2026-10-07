@@ -101,10 +101,30 @@ func TestFeatureStatsFsSyncIsOptIn(t *testing.T) {
 	}
 }
 
+func TestFeatureStatsFsSyncGroup(t *testing.T) {
+	group, err := LoadFeatures([]string{"stats_fs_sync"})
+	require.NoError(t, err)
+	assert.True(t, group.StatsFsSyncDuration())
+	assert.True(t, group.StatsFsSyncOperations())
+	assert.True(t, group.StatsFsSyncOperationTime())
+
+	counters, err := LoadFeatures([]string{"stats_fs_sync_operations"})
+	require.NoError(t, err)
+	assert.True(t, counters.StatsFsSync(), "a file sync counter needs the file sync probes")
+	assert.True(t, counters.StatMetrics())
+	assert.False(t, counters.StatsFsSyncDuration())
+
+	all, err := LoadFeatures([]string{"all"})
+	require.NoError(t, err)
+	assert.False(t, all.StatsFsSync(), "all must not enable file sync stats")
+}
+
 func TestFeatureStatsNFSIsOptIn(t *testing.T) {
 	nfs, err := LoadFeatures([]string{"stats_nfs"})
 	require.NoError(t, err)
 	assert.True(t, nfs.StatsNFSClientProcedureDuration())
+	assert.True(t, nfs.StatsNFSClientProcedureCount())
+	assert.True(t, nfs.StatsNFSClientProcedureTime())
 	assert.True(t, nfs.StatsNFSClientIO())
 	assert.True(t, nfs.StatMetrics(), "an NFS only selection must still enable the stats pipeline")
 	assert.False(t, nfs.StatsDisk())
@@ -113,6 +133,11 @@ func TestFeatureStatsNFSIsOptIn(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, io.StatsNFS())
 	assert.False(t, io.StatsNFSClientProcedureDuration())
+	assert.False(t, io.StatsNFSClientProcedures(), "the I/O metric doesn't need the RPC probes")
+
+	count, err := LoadFeatures([]string{"stats_nfs_client_procedure_count"})
+	require.NoError(t, err)
+	assert.True(t, count.StatsNFSClientProcedures(), "a procedure counter needs the RPC probes")
 
 	for _, aggregate := range []string{"stats", "stats_disk"} {
 		features, err := LoadFeatures([]string{aggregate})

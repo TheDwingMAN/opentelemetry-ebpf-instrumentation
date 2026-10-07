@@ -358,17 +358,21 @@ func TestDiskPendingOperationsOfSeveralStatsInOneSeries(t *testing.T) {
 }
 
 func TestFsSyncStats(t *testing.T) {
-	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsFsSyncDuration)
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsFsSync)
 
 	diskEvents <- []*ebpf.Stat{
 		{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{
-			Type:    ebpf.CodeFsSyncFsync,
-			Latency: []ebpf.LatencySample{{Seconds: 0.004, Count: 3}},
+			Type:       ebpf.CodeFsSyncFsync,
+			Operations: 3,
+			Time:       0.012,
+			Latency:    []ebpf.LatencySample{{Seconds: 0.004, Count: 3}},
 		}},
 		{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{
-			Type:      ebpf.CodeFsSyncFdatasync,
-			ErrorType: "EIO",
-			Latency:   []ebpf.LatencySample{{Seconds: 0.02, Count: 1}},
+			Type:       ebpf.CodeFsSyncFdatasync,
+			ErrorType:  "EIO",
+			Operations: 1,
+			Time:       0.02,
+			Latency:    []ebpf.LatencySample{{Seconds: 0.02, Count: 1}},
 		}},
 	}
 
@@ -383,6 +387,14 @@ func TestFsSyncStats(t *testing.T) {
 			{Name: "obi_stat_fs_sync_duration_seconds_sum", Value: 0.012, Labels: ok},
 			{Name: "obi_stat_fs_sync_duration_seconds_sum", Value: 0.02, Labels: failed},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_duration_seconds_sum"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_operations_total", Value: 3, Labels: ok},
+			{Name: "obi_stat_fs_sync_operations_total", Value: 1, Labels: failed},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_operations_total"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_operation_time_seconds_total", Value: 0.012, Labels: map[string]string{"obi_fs_sync_type": "fsync"}},
+			{Name: "obi_stat_fs_sync_operation_time_seconds_total", Value: 0.02, Labels: map[string]string{"obi_fs_sync_type": "fdatasync"}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_operation_time_seconds_total"))
 	}, timeout, 100*time.Millisecond)
 }
 
@@ -391,11 +403,11 @@ func TestNFSStats(t *testing.T) {
 
 	diskEvents <- []*ebpf.Stat{
 		{Type: ebpf.StatTypeNFSProcedure, NFSProcedure: &ebpf.NFSProcedure{
-			Server: "10.0.0.5", Procedure: "READ", Version: 4,
+			Server: "10.0.0.5", Procedure: "READ", Version: 4, Calls: 3, Time: 0.012,
 			Latency: []ebpf.LatencySample{{Seconds: 0.004, Count: 3}},
 		}},
 		{Type: ebpf.StatTypeNFSProcedure, NFSProcedure: &ebpf.NFSProcedure{
-			Server: "10.0.0.5", Procedure: "GETATTR", Version: 4, ErrorType: "ESTALE",
+			Server: "10.0.0.5", Procedure: "GETATTR", Version: 4, ErrorType: "ESTALE", Calls: 1, Time: 0.02,
 			Latency: []ebpf.LatencySample{{Seconds: 0.02, Count: 1}},
 		}},
 		{Type: ebpf.StatTypeNFSIO, NFSIO: &ebpf.NFSIO{
@@ -413,6 +425,16 @@ func TestNFSStats(t *testing.T) {
 			{Name: "obi_stat_nfs_client_procedure_duration_seconds_count", Value: 3, Labels: read},
 			{Name: "obi_stat_nfs_client_procedure_duration_seconds_count", Value: 1, Labels: stale},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_nfs_client_procedure_duration_seconds_count"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_nfs_client_procedure_count_total", Value: 3, Labels: read},
+			{Name: "obi_stat_nfs_client_procedure_count_total", Value: 1, Labels: stale},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_nfs_client_procedure_count_total"))
+		readTime := map[string]string{"server_address": "10.0.0.5", "onc_rpc_procedure_name": "READ", "onc_rpc_version": "4"}
+		staleTime := map[string]string{"server_address": "10.0.0.5", "onc_rpc_procedure_name": "GETATTR", "onc_rpc_version": "4"}
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_nfs_client_procedure_time_seconds_total", Value: 0.012, Labels: readTime},
+			{Name: "obi_stat_nfs_client_procedure_time_seconds_total", Value: 0.02, Labels: staleTime},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_nfs_client_procedure_time_seconds_total"))
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
 			{Name: "obi_stat_nfs_client_io_bytes_total", Value: 1 << 20, Labels: map[string]string{
 				"server_address": "10.0.0.5", "network_io_direction": "receive",

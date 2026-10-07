@@ -194,7 +194,7 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 // branch of the pipeline, and its Kubernetes decorator, is only added then.
 func (s *Stats) storageStatsEnabled() bool {
 	features := s.cfg.Metrics.Features
-	return features.StatsDisk() || features.StatsDiskPendingOperations() || features.StatsFsSyncDuration() ||
+	return features.StatsDisk() || features.StatsDiskPendingOperations() || features.StatsFsSync() ||
 		features.StatsNFS() || features.StatsDiskVolumeDevices() || features.StatsDiskPodVolumes()
 }
 

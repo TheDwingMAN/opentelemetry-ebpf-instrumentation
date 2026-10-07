@@ -421,6 +421,12 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsFsSyncDuration() {
 		want = append(want, "fs_sync_duration")
 	}
+	if features.StatsFsSyncOperations() {
+		want = append(want, "fs_sync_operations")
+	}
+	if features.StatsFsSyncOperationTime() {
+		want = append(want, "fs_sync_operation_time")
+	}
 	if features.StatsDiskQueueDuration() {
 		want = append(want, "disk_queue_duration")
 	}
@@ -438,6 +444,12 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	}
 	if features.StatsNFSClientProcedureDuration() {
 		want = append(want, "nfs_client_procedure_duration")
+	}
+	if features.StatsNFSClientProcedureCount() {
+		want = append(want, "nfs_client_procedure_count")
+	}
+	if features.StatsNFSClientProcedureTime() {
+		want = append(want, "nfs_client_procedure_time")
 	}
 	if features.StatsNFSClientIO() {
 		want = append(want, "nfs_client_io")

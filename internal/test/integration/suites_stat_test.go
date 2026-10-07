@@ -43,6 +43,7 @@ func TestStat_GoDiskStatMetrics(t *testing.T) {
 	})
 	t.Run("Go Stat Metrics file sync duration tests", func(t *testing.T) {
 		testStatMetricsFsSyncDuration(t, containerID)
+		testStatMetricsFsSyncCounters(t, containerID)
 	})
 	t.Run("Go Stat Metrics disk queue duration tests", func(t *testing.T) {
 		testStatMetricsDiskQueueDuration(t, containerID)

@@ -574,6 +574,81 @@ groups:
       - ref: k8s.container.name
         requirement_level: opt_in
 
+  - id: metric.obi.obi.stat.fs.sync.operations
+    type: metric
+    metric_name: obi.stat.fs.sync.operations
+    instrument: counter
+    unit: "{operation}"
+    stability: development
+    brief: >
+      Completed file syncs (fsync, fdatasync, sync, syncfs and
+      sync_file_range), per call, outcome and workload that synced.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: obi.fs.sync.type
+        requirement_level: recommended
+      - ref: system.filesystem.mountpoint
+        requirement_level: opt_in
+      - ref: system.filesystem.type
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the file sync failed
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that synced runs in a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that synced runs in a pod
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.fs.sync.operation_time
+    type: metric
+    metric_name: obi.stat.fs.sync.operation_time
+    instrument: counter
+    unit: "s"
+    stability: development
+    brief: >
+      Sum of the durations of the completed file syncs, per call and workload
+      that synced.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: obi.fs.sync.type
+        requirement_level: recommended
+      - ref: system.filesystem.mountpoint
+        requirement_level: opt_in
+      - ref: system.filesystem.type
+        requirement_level: opt_in
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that synced runs in a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that synced runs in a pod
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
   - id: metric.obi.obi.stat.disk.queue.duration
     type: metric
     metric_name: obi.stat.disk.queue.duration
@@ -768,6 +843,86 @@ groups:
       - ref: error.type
         requirement_level:
           conditionally_required: if the RPC failed
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.nfs.client.procedure.count
+    type: metric
+    metric_name: obi.stat.nfs.client.procedure.count
+    instrument: counter
+    unit: "{procedure}"
+    stability: development
+    brief: >
+      Completed RPCs of the kernel NFS client, per server, procedure, outcome
+      and workload that started them.
+    note: >
+      Like the semantic conventions' `nfs.client.procedure.count`, with the
+      server, the outcome and the workload. For NFSv4, `onc_rpc.procedure.name`
+      is the name the kernel client gives to each kind of COMPOUND request.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: server.address
+        requirement_level: recommended
+      - ref: onc_rpc.procedure.name
+        requirement_level: recommended
+      - ref: onc_rpc.version
+        requirement_level: recommended
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the RPC failed
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.nfs.client.procedure.time
+    type: metric
+    metric_name: obi.stat.nfs.client.procedure.time
+    instrument: counter
+    unit: "s"
+    stability: development
+    brief: >
+      Sum of the durations of the completed RPCs of the kernel NFS client, from
+      their start to their completion, per server, procedure and workload that
+      started them.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: server.address
+        requirement_level: recommended
+      - ref: onc_rpc.procedure.name
+        requirement_level: recommended
+      - ref: onc_rpc.version
+        requirement_level: recommended
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name

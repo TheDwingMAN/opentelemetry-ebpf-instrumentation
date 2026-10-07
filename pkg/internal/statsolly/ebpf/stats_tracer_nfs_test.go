@@ -80,6 +80,10 @@ func TestNFSLoadFor(t *testing.T) {
 	assert.Equal(t, nfsLoad{taskBegin: true, statsLatency: true, pgio: true},
 		nfsLoadFor(&all, available))
 	assert.Equal(t, nfsLoad{taskBegin: true, statsLatency: true}, nfsLoadFor(&procedures, available))
+	for _, counter := range []export.Features{export.FeatureStatsNFSClientProcedureCount, export.FeatureStatsNFSClientProcedureTime} {
+		assert.Equal(t, nfsLoad{taskBegin: true, statsLatency: true}, nfsLoadFor(&counter, available),
+			"the procedure counters need the RPC probes too")
+	}
 	assert.Equal(t, nfsLoad{taskBegin: true, pgio: true}, nfsLoadFor(&bytes, available))
 	assert.Equal(t, nfsLoad{}, nfsLoadFor(&none, available))
 

@@ -20,8 +20,8 @@ import (
 const (
 	featureDiskRequests   = "the block I/O metrics (stats_disk_*)"
 	featureStackedVolumes = "the I/O of the stacked volumes (stats_disk_stacked_volumes)"
-	featureFsSync         = "the file sync metric (stats_fs_sync_duration)"
-	featureNFSProcedures  = "the NFS client procedure metric (stats_nfs_client_procedure_duration)"
+	featureFsSync         = "the file sync metrics (stats_fs_sync_*)"
+	featureNFSProcedures  = "the NFS client procedure metrics (stats_nfs_client_procedure_*)"
 	featureNFSIO          = "the NFS client I/O metric (stats_nfs_client_io)"
 )
 
@@ -65,10 +65,10 @@ func planStorageProbes(log *slog.Logger, features *export.Features) storageProbe
 			s.bio = true
 		}
 	}
-	s.fsSync = features.StatsFsSyncDuration()
+	s.fsSync = features.StatsFsSync()
 	if features.StatsNFS() {
 		probes := kernelNFSProbes()
-		if features.StatsNFSClientProcedureDuration() && probes.rpc != nil {
+		if features.StatsNFSClientProcedures() && probes.rpc != nil {
 			s.disable(featureNFSProcedures, probes.rpc)
 		}
 		if features.StatsNFSClientIO() && probes.pgio != nil {

@@ -42,6 +42,7 @@ func FeatureDiskStats() features.Feature {
 		Assess("charges block I/O to the workload that did it", testDiskIOChargedToWorkload).
 		Assess("reports the disk latency of the workload", testDiskLatencyPerWorkload).
 		Assess("reports the file syncs of the workload", testFsSyncPerWorkload).
+		Assess("counts the file syncs of the workload", testFsSyncCountersPerWorkload).
 		Assess("reports how long the I/O of the workload waits before its issue", testDiskQueuePerWorkload).
 		Assess("reports the requests in flight of the disks of the workload", testDiskPendingOfWorkloadDevices).
 		Assess("links the pods to the disks of their PersistentVolumeClaims", testPodVolumeDevices).
@@ -169,6 +170,25 @@ func testFsSyncPerWorkload(ctx context.Context, t *testing.T, _ *envconf.Config)
 		require.NoError(ct, err)
 		assertHistogramBounds(ct, buckets, export.DefaultBuckets.StatFsSyncDurationHistogram)
 	}, testTimeout, pollInterval)
+	return ctx
+}
+
+func testFsSyncCountersPerWorkload(ctx context.Context, t *testing.T, _ *envconf.Config) context.Context {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	selector := `{` + workload + `}`
+	for _, metric := range []string{
+		"obi_stat_fs_sync_operations_total",
+		"obi_stat_fs_sync_operation_time_seconds_total",
+	} {
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			results, err := pq.Query(metric + selector + ` > 0`)
+			require.NoError(ct, err)
+			require.NotEmpty(ct, results)
+			for _, res := range results {
+				assertDiskStatLabels(ct, res.Metric, fsSyncLabels())
+			}
+		}, testTimeout, pollInterval)
+	}
 	return ctx
 }
 

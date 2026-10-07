@@ -385,12 +385,16 @@ const (
 	statsFeatureDiskOperationTime          = "disk_operation_time"
 	statsFeatureDiskOperationDuration      = "disk_operation_duration"
 	statsFeatureFsSyncDuration             = "fs_sync_duration"
+	statsFeatureFsSyncOperations           = "fs_sync_operations"
+	statsFeatureFsSyncOperationTime        = "fs_sync_operation_time"
 	statsFeatureDiskQueueDuration          = "disk_queue_duration"
 	statsFeatureDiskFlush                  = "disk_flush"
 	statsFeatureDiskDiscard                = "disk_discard"
 	statsFeatureDiskPendingOperations      = "disk_pending_operations"
 	statsFeatureDiskStackedVolumes         = "disk_stacked_volumes"
 	statsFeatureNFSClientProcedureDuration = "nfs_client_procedure_duration"
+	statsFeatureNFSClientProcedureCount    = "nfs_client_procedure_count"
+	statsFeatureNFSClientProcedureTime     = "nfs_client_procedure_time"
 	statsFeatureNFSClientIO                = "nfs_client_io"
 	statsFeatureDiskPodVolumes             = "disk_pod_volumes"
 	statsFeatureDiskVolumeDevices          = "disk_volume_devices"
@@ -428,6 +432,12 @@ func statsFeatures(features featureexport.Features) []string {
 	if features.StatsFsSyncDuration() {
 		out = append(out, statsFeatureFsSyncDuration)
 	}
+	if features.StatsFsSyncOperations() {
+		out = append(out, statsFeatureFsSyncOperations)
+	}
+	if features.StatsFsSyncOperationTime() {
+		out = append(out, statsFeatureFsSyncOperationTime)
+	}
 	if features.StatsDiskQueueDuration() {
 		out = append(out, statsFeatureDiskQueueDuration)
 	}
@@ -445,6 +455,12 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsNFSClientProcedureDuration() {
 		out = append(out, statsFeatureNFSClientProcedureDuration)
+	}
+	if features.StatsNFSClientProcedureCount() {
+		out = append(out, statsFeatureNFSClientProcedureCount)
+	}
+	if features.StatsNFSClientProcedureTime() {
+		out = append(out, statsFeatureNFSClientProcedureTime)
 	}
 	if features.StatsNFSClientIO() {
 		out = append(out, statsFeatureNFSClientIO)

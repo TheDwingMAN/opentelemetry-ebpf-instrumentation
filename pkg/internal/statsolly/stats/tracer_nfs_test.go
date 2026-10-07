@@ -71,6 +71,8 @@ func TestNFSProcedureReader(t *testing.T) {
 	assert.Equal(t, uint32(4), byProcedure["READ"].Version)
 	assert.Empty(t, byProcedure["READ"].ErrorType)
 	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 4}}, byProcedure["READ"].Latency)
+	assert.Equal(t, uint64(4), byProcedure["READ"].Calls)
+	assert.InDelta(t, 0.008, byProcedure["READ"].Time, 1e-12)
 	assert.Equal(t, uint32(3), byProcedure["GETATTR"].Version)
 	assert.Equal(t, "ESTALE", byProcedure["GETATTR"].ErrorType)
 
@@ -78,6 +80,8 @@ func TestNFSProcedureReader(t *testing.T) {
 	stats = r.readStats()
 	require.Len(t, stats, 1)
 	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 2}}, stats[0].NFSProcedure.Latency)
+	assert.Equal(t, uint64(2), stats[0].NFSProcedure.Calls)
+	assert.InDelta(t, 0.004, stats[0].NFSProcedure.Time, 1e-12)
 }
 
 func TestNFSIOReader(t *testing.T) {

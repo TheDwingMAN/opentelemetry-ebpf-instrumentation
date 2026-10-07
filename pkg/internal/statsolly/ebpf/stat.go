@@ -42,12 +42,17 @@ var statTypeMetrics = map[StatType][]attributes.Name{
 		attributes.StatDiskOperationTime, attributes.StatDiskQueueDuration, attributes.StatDiskFlushDuration,
 		attributes.StatDiskDiscardDuration, attributes.StatDiskDiscardIO,
 	},
-	StatTypeFsSync:       {attributes.StatFsSyncDuration},
-	StatTypeDiskPending:  {attributes.StatDiskPendingOperations},
-	StatTypeNFSProcedure: {attributes.StatNFSClientProcedureDuration},
-	StatTypeNFSIO:        {attributes.StatNFSClientIO},
-	StatTypePodVolume:    {attributes.StatK8sPodVolumeDevice},
-	StatTypeDiskVolume:   {attributes.StatDiskVolumeDevice},
+	StatTypeFsSync: {
+		attributes.StatFsSyncDuration, attributes.StatFsSyncOperations, attributes.StatFsSyncOperationTime,
+	},
+	StatTypeDiskPending: {attributes.StatDiskPendingOperations},
+	StatTypeNFSProcedure: {
+		attributes.StatNFSClientProcedureDuration, attributes.StatNFSClientProcedureCount,
+		attributes.StatNFSClientProcedureTime,
+	},
+	StatTypeNFSIO:      {attributes.StatNFSClientIO},
+	StatTypePodVolume:  {attributes.StatK8sPodVolumeDevice},
+	StatTypeDiskVolume: {attributes.StatDiskVolumeDevice},
 }
 
 // StatTypeMetrics returns the metrics that report the stats of each type
@@ -256,6 +261,10 @@ type FsSync struct {
 	ErrorType string
 	// ContainerID of the cgroup of the thread that synced. Empty outside containers.
 	ContainerID string
+
+	Operations uint64
+	// Time is the sum of the latencies of the syncs, in seconds
+	Time float64
 	// Latency of the syncs, as one representative value per kernel histogram bucket
 	Latency []LatencySample
 }
@@ -273,6 +282,10 @@ type NFSProcedure struct {
 	ErrorType string
 	// ContainerID of the cgroup of the thread that started the RPCs. Empty outside containers.
 	ContainerID string
+
+	Calls uint64
+	// Time is the sum of the latencies of the RPCs, in seconds
+	Time float64
 	// Latency of the RPCs, as one representative value per kernel histogram bucket
 	Latency []LatencySample
 }

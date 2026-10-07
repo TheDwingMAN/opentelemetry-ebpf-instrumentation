@@ -45,6 +45,8 @@ func (n *nfsProcedureStats) stat(key ebpf.StatsNfsProcedureKeyT, current, previo
 			Version:     key.Version,
 			ErrorType:   nfsErrorType(key.Status),
 			ContainerID: n.containers.containerID(key.CgroupId),
+			Calls:       delta.operations,
+			Time:        delta.seconds(),
 			Latency:     delta.latency,
 		},
 	}

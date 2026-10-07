@@ -1545,6 +1545,51 @@ Duration of file syncs (fsync, fdatasync, sync, syncfs and sync_file_range), per
 | `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
 | `system.filesystem.type` | enum | `opt_in` | development | The filesystem type | ext4 |
 
+## `obi.stat.fs.sync.operation_time`
+
+Sum of the durations of the completed file syncs, per call and workload that synced.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.fs.sync.type` | enum | `recommended` | development | System call that synced the files. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
+| `system.filesystem.type` | enum | `opt_in` | development | The filesystem type | ext4 |
+
+## `obi.stat.fs.sync.operations`
+
+Completed file syncs (fsync, fdatasync, sync, syncfs and sync_file_range), per call, outcome and workload that synced.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the file sync failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.fs.sync.type` | enum | `recommended` | development | System call that synced the files. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
+| `system.filesystem.type` | enum | `opt_in` | development | The filesystem type | ext4 |
+
 ## `obi.stat.k8s.pod.volume.device`
 
 1 for each disk that a volume that a pod mounts from a PersistentVolumeClaim is on, and 0 once the pod no longer mounts it.
@@ -1589,6 +1634,29 @@ Bytes that the kernel NFS client read from (`receive`) and wrote to (`transmit`)
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
 
+## `obi.stat.nfs.client.procedure.count`
+
+Completed RPCs of the kernel NFS client, per server, procedure, outcome and workload that started them.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {procedure} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the RPC failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `onc_rpc.procedure.name` | string | `recommended` | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
 ## `obi.stat.nfs.client.procedure.duration`
 
 Duration of the RPCs of the kernel NFS client, from their start to their completion, per server, procedure, outcome and workload that started them.
@@ -1601,6 +1669,28 @@ Duration of the RPCs of the kernel NFS client, from their start to their complet
 | --- | --- | --- | --- | --- | --- |
 | `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
 | `error.type` | string | `conditionally_required`: if the RPC failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `onc_rpc.procedure.name` | string | `recommended` | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
+## `obi.stat.nfs.client.procedure.time`
+
+Sum of the durations of the completed RPCs of the kernel NFS client, from their start to their completion, per server, procedure and workload that started them.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
 | `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
 | `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
 | `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |

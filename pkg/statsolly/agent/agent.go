@@ -171,7 +171,7 @@ func filteredAttributes(filters filter.AttributeFamilyConfig) []attr.Name {
 
 // storageProbesEnabled tells whether any enabled storage metric needs probes
 func storageProbesEnabled(features *export.Features) bool {
-	return features.StatsDisk() || features.StatsFsSyncDuration() || features.StatsNFS()
+	return features.StatsDisk() || features.StatsFsSync() || features.StatsNFS()
 }
 
 // warnDisabledStorage logs the enabled storage features whose probes can't be loaded or attached

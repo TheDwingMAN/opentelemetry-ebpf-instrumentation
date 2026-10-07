@@ -2525,6 +2525,10 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsDiskOperationDuration
 		case statsFeatureFsSyncDuration:
 			out |= export.FeatureStatsFsSyncDuration
+		case statsFeatureFsSyncOperations:
+			out |= export.FeatureStatsFsSyncOperations
+		case statsFeatureFsSyncOperationTime:
+			out |= export.FeatureStatsFsSyncOperationTime
 		case statsFeatureDiskQueueDuration:
 			out |= export.FeatureStatsDiskQueueDuration
 		case statsFeatureDiskFlush:
@@ -2537,6 +2541,10 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsDiskStackedVolumes
 		case statsFeatureNFSClientProcedureDuration:
 			out |= export.FeatureStatsNFSClientProcedureDuration
+		case statsFeatureNFSClientProcedureCount:
+			out |= export.FeatureStatsNFSClientProcedureCount
+		case statsFeatureNFSClientProcedureTime:
+			out |= export.FeatureStatsNFSClientProcedureTime
 		case statsFeatureNFSClientIO:
 			out |= export.FeatureStatsNFSClientIO
 		case statsFeatureDiskPodVolumes:

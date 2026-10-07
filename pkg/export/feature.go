@@ -70,6 +70,10 @@ const (
 	FeatureStatsNFSClientIO
 	FeatureStatsDiskPodVolumes
 	FeatureStatsDiskVolumeDevices
+	FeatureStatsFsSyncOperations
+	FeatureStatsFsSyncOperationTime
+	FeatureStatsNFSClientProcedureCount
+	FeatureStatsNFSClientProcedureTime
 	// FeatureAll enables all the features but the storage stat ones, which must be named
 	FeatureAll = Features(^uint(0)) &^ featureStatsStorage
 )
@@ -87,8 +91,16 @@ const FeatureStatsDisk = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO 
 	FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard | FeatureStatsDiskPendingOperations |
 	FeatureStatsDiskStackedVolumes | FeatureStatsDiskVolumeDevices
 
+// FeatureStatsFsSync groups the file sync stat metrics. They are not part of the `stats` aggregate.
+const FeatureStatsFsSync = FeatureStatsFsSyncDuration | FeatureStatsFsSyncOperations | FeatureStatsFsSyncOperationTime
+
 // FeatureStatsNFS groups the NFS client stat metrics. They are not part of the `stats` aggregate.
-const FeatureStatsNFS = FeatureStatsNFSClientProcedureDuration | FeatureStatsNFSClientIO
+const FeatureStatsNFS = FeatureStatsNFSClientProcedureDuration | FeatureStatsNFSClientProcedureCount |
+	FeatureStatsNFSClientProcedureTime | FeatureStatsNFSClientIO
+
+// featureStatsNFSProcedures are the NFS client stat metrics that the RPC probes measure
+const featureStatsNFSProcedures = FeatureStatsNFSClientProcedureDuration | FeatureStatsNFSClientProcedureCount |
+	FeatureStatsNFSClientProcedureTime
 
 // featureStatsDiskRequests are the block I/O stat metrics that the block probes measure, on every
 // block request
@@ -98,7 +110,7 @@ const featureStatsDiskRequests = FeatureStatsDiskOperationDuration | FeatureStat
 // featureStatsStorage are the storage stat features, which `all` and `*` don't enable: their probes
 // fire on every block request, file sync or NFS RPC, and the pod volumes need to watch the
 // PersistentVolumes of the cluster, so they have to be named.
-const featureStatsStorage = FeatureStatsDisk | FeatureStatsFsSyncDuration | FeatureStatsNFS | FeatureStatsDiskPodVolumes
+const featureStatsStorage = FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFS | FeatureStatsDiskPodVolumes
 
 // FeatureMapper stays public so any extension package can add and remove feature
 // definitions before loading them.
@@ -114,7 +126,10 @@ var FeatureMapper = map[string]Features{
 	"stats_disk_operations":               FeatureStatsDiskOperations,
 	"stats_disk_operation_time":           FeatureStatsDiskOperationTime,
 	"stats_disk_operation_duration":       FeatureStatsDiskOperationDuration,
+	"stats_fs_sync":                       FeatureStatsFsSync,
 	"stats_fs_sync_duration":              FeatureStatsFsSyncDuration,
+	"stats_fs_sync_operations":            FeatureStatsFsSyncOperations,
+	"stats_fs_sync_operation_time":        FeatureStatsFsSyncOperationTime,
 	"stats_disk_queue_duration":           FeatureStatsDiskQueueDuration,
 	"stats_disk_flush":                    FeatureStatsDiskFlush,
 	"stats_disk_discard":                  FeatureStatsDiskDiscard,
@@ -122,6 +137,8 @@ var FeatureMapper = map[string]Features{
 	"stats_disk_stacked_volumes":          FeatureStatsDiskStackedVolumes,
 	"stats_nfs":                           FeatureStatsNFS,
 	"stats_nfs_client_procedure_duration": FeatureStatsNFSClientProcedureDuration,
+	"stats_nfs_client_procedure_count":    FeatureStatsNFSClientProcedureCount,
+	"stats_nfs_client_procedure_time":     FeatureStatsNFSClientProcedureTime,
 	"stats_nfs_client_io":                 FeatureStatsNFSClientIO,
 	"stats_disk_pod_volumes":              FeatureStatsDiskPodVolumes,
 	"stats_disk_volume_devices":           FeatureStatsDiskVolumeDevices,
@@ -426,7 +443,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStatsDisk | FeatureStatsFsSyncDuration | FeatureStatsNFS | FeatureStatsDiskPodVolumes)
+	return f.any(FeatureStats | FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFS | FeatureStatsDiskPodVolumes)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -472,8 +489,21 @@ func (f Features) StatsDiskOperationDuration() bool {
 	return f.any(FeatureStatsDiskOperationDuration)
 }
 
+// StatsFsSync reports whether any file sync stat metric is enabled
+func (f Features) StatsFsSync() bool {
+	return f.any(FeatureStatsFsSync)
+}
+
 func (f Features) StatsFsSyncDuration() bool {
 	return f.any(FeatureStatsFsSyncDuration)
+}
+
+func (f Features) StatsFsSyncOperations() bool {
+	return f.any(FeatureStatsFsSyncOperations)
+}
+
+func (f Features) StatsFsSyncOperationTime() bool {
+	return f.any(FeatureStatsFsSyncOperationTime)
 }
 
 func (f Features) StatsDiskQueueDuration() bool {
@@ -503,8 +533,21 @@ func (f Features) StatsNFS() bool {
 	return f.any(FeatureStatsNFS)
 }
 
+// StatsNFSClientProcedures reports whether any NFS client stat metric of the RPCs is enabled
+func (f Features) StatsNFSClientProcedures() bool {
+	return f.any(featureStatsNFSProcedures)
+}
+
 func (f Features) StatsNFSClientProcedureDuration() bool {
 	return f.any(FeatureStatsNFSClientProcedureDuration)
+}
+
+func (f Features) StatsNFSClientProcedureCount() bool {
+	return f.any(FeatureStatsNFSClientProcedureCount)
+}
+
+func (f Features) StatsNFSClientProcedureTime() bool {
+	return f.any(FeatureStatsNFSClientProcedureTime)
 }
 
 func (f Features) StatsNFSClientIO() bool {

@@ -252,6 +252,34 @@ func testStatMetricsFsSyncDuration(t *testing.T, containerID string) {
 	}, testTimeout, 100*time.Millisecond)
 }
 
+// testStatMetricsFsSyncCounters checks that the file syncs of the disk-io container are counted,
+// and charged to it, by the file sync counters, as by the histogram
+func testStatMetricsFsSyncCounters(t *testing.T, containerID string) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	selector := `{container_id="` + containerID + `"}`
+	for _, metric := range []string{
+		"obi_stat_fs_sync_operations_total",
+		"obi_stat_fs_sync_operation_time_seconds_total",
+	} {
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			results, err := pq.Query(metric + selector + ` > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, results)
+			for _, res := range results {
+				assertDiskStatLabels(ct, res.Metric, fsSyncLabels(containerID))
+			}
+		}, testTimeout, 100*time.Millisecond)
+	}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		// both are reported from the same syncs, so they are equal in every scrape
+		mismatches, err := pq.Query(`obi_stat_fs_sync_duration_seconds_count` + selector +
+			` != obi_stat_fs_sync_operations_total` + selector)
+		require.NoError(ct, err)
+		assert.Empty(ct, mismatches, "the histogram must count the same syncs as the operations counter")
+	}, testTimeout, 100*time.Millisecond)
+}
+
 // testStatMetricsDiskQueueDuration checks the histogram of the time the requests of the disk-io
 // container wait before their issue: the kernel knows it for every request of the host disks,
 // which keep I/O statistics

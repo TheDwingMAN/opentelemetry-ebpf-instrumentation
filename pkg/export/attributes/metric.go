@@ -697,6 +697,19 @@ var (
 		Unit:    "s",
 		Type:    InstrumentHistogram,
 	})
+	StatFsSyncOperations = metric(Name{
+		Section: "obi.stat.fs.sync.operations",
+		OTEL:    "obi.stat.fs.sync.operations",
+		Unit:    "{operation}",
+		Type:    InstrumentCounter,
+	})
+	StatFsSyncOperationTime = metric(Name{
+		// normalized like the attributes.select keys, which have their underscores replaced by dots
+		Section: "obi.stat.fs.sync.operation.time",
+		OTEL:    "obi.stat.fs.sync.operation_time",
+		Unit:    "s",
+		Type:    InstrumentCounter,
+	})
 	StatDiskQueueDuration = metric(Name{
 		Section: "obi.stat.disk.queue.duration",
 		OTEL:    "obi.stat.disk.queue.duration",
@@ -733,6 +746,18 @@ var (
 		OTEL:    "obi.stat.nfs.client.procedure.duration",
 		Unit:    "s",
 		Type:    InstrumentHistogram,
+	})
+	StatNFSClientProcedureCount = metric(Name{
+		Section: "obi.stat.nfs.client.procedure.count",
+		OTEL:    "obi.stat.nfs.client.procedure.count",
+		Unit:    "{procedure}",
+		Type:    InstrumentCounter,
+	})
+	StatNFSClientProcedureTime = metric(Name{
+		Section: "obi.stat.nfs.client.procedure.time",
+		OTEL:    "obi.stat.nfs.client.procedure.time",
+		Unit:    "s",
+		Type:    InstrumentCounter,
 	})
 	StatNFSClientIO = metric(Name{
 		Section: "obi.stat.nfs.client.io",

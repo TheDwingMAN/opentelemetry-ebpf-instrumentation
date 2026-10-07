@@ -102,12 +102,16 @@ type statMetricsExporter struct {
 	diskOperations           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskOperationTime        *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
 	fsSyncDuration           *kernelHistogram
+	fsSyncOperations         *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	fsSyncOperationTime      *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
 	diskQueueDuration        *kernelHistogram
 	diskFlushDuration        *kernelHistogram
 	diskDiscardDuration      *kernelHistogram
 	diskDiscardIO            *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskPendingOperations    *currentUpDownCounter[*ebpf.Stat]
 	nfsProcedureDuration     *kernelHistogram
+	nfsProcedureCount        *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	nfsProcedureTime         *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
 	nfsIO                    *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	k8sPodVolumeDevice       *currentUpDownCounter[*ebpf.Stat]
 	diskVolumeDevice         *currentUpDownCounter[*ebpf.Stat]
@@ -288,10 +292,8 @@ func newStatMetricsExporter(
 		nme.diskOperationTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, diskOperationTime, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
-	if cfg.CommonCfg.Features.StatsFsSyncDuration() {
-		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatFsSyncDuration))
-		nme.fsSyncDuration = kernelHistograms.histogram(attributes.StatFsSyncDuration,
-			cfg.Metrics.Buckets.StatFsSyncDurationHistogram, attrs)
+	if err := nme.createFsSyncMetrics(ctx, ebpfEvents, attrProv, cfg, log); err != nil {
+		return nil, err
 	}
 
 	if err := nme.createDiskOperationMetrics(ctx, ebpfEvents, attrProv, cfg, log); err != nil {
@@ -355,10 +357,10 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				me.recordDiskIO(ctx, v)
 			}
 			if v.FsSync != nil {
-				me.kernelHistograms.record(me.fsSyncDuration, v, v.FsSync.Latency)
+				me.recordFsSync(ctx, v)
 			}
 			if v.NFSProcedure != nil {
-				me.kernelHistograms.record(me.nfsProcedureDuration, v, v.NFSProcedure.Latency)
+				me.recordNFSProcedure(ctx, v)
 			}
 			if me.nfsIO != nil && v.NFSIO != nil {
 				nfsIO, attrs := me.nfsIO.ForRecord(v)
@@ -418,6 +420,45 @@ func recordCurrentSums(
 	for _, s := range sums {
 		counter.Record(s.stat, s.sum)
 	}
+}
+
+// createFsSyncMetrics creates the metrics of the file syncs
+func (me *statMetricsExporter) createFsSyncMetrics(
+	ctx context.Context,
+	meter metric2.Meter,
+	attrProv *attributes.AttrSelector,
+	cfg *StatMetricsConfig,
+	log *slog.Logger,
+) error {
+	features := cfg.CommonCfg.Features
+	if features.StatsFsSyncDuration() {
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatFsSyncDuration))
+		me.fsSyncDuration = me.kernelHistograms.histogram(attributes.StatFsSyncDuration,
+			cfg.Metrics.Buckets.StatFsSyncDurationHistogram, attrs)
+	}
+
+	if features.StatsFsSyncOperations() {
+		name := attributes.StatFsSyncOperations
+		counter, err := meter.Int64Counter(name.OTEL, metric2.WithUnit(name.Unit))
+		if err != nil {
+			log.Error("creating stats file sync operations counter", "error", err)
+			return err
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(name))
+		me.fsSyncOperations = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, counter, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if features.StatsFsSyncOperationTime() {
+		name := attributes.StatFsSyncOperationTime
+		counter, err := meter.Float64Counter(name.OTEL, metric2.WithUnit(name.Unit))
+		if err != nil {
+			log.Error("creating stats file sync operation time counter", "error", err)
+			return err
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(name))
+		me.fsSyncOperationTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, counter, attrs, timeNow, cfg.Metrics.TTL)
+	}
+	return nil
 }
 
 // createDiskOperationMetrics creates the metrics of the block requests beyond reads and writes: their
@@ -486,6 +527,28 @@ func (me *statMetricsExporter) createNFSMetrics(
 		me.nfsProcedureDuration = me.kernelHistograms.histogram(name, cfg.Metrics.Buckets.StatNFSClientProcedureDurationHistogram, attrs)
 	}
 
+	if features.StatsNFSClientProcedureCount() {
+		name := attributes.StatNFSClientProcedureCount
+		counter, err := meter.Int64Counter(name.OTEL, metric2.WithUnit(name.Unit))
+		if err != nil {
+			log.Error("creating stats NFS client procedure count counter", "error", err)
+			return err
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(name))
+		me.nfsProcedureCount = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, counter, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if features.StatsNFSClientProcedureTime() {
+		name := attributes.StatNFSClientProcedureTime
+		counter, err := meter.Float64Counter(name.OTEL, metric2.WithUnit(name.Unit))
+		if err != nil {
+			log.Error("creating stats NFS client procedure time counter", "error", err)
+			return err
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(name))
+		me.nfsProcedureTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, counter, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	if features.StatsNFSClientIO() {
 		name := attributes.StatNFSClientIO
 		counter, err := meter.Int64Counter(name.OTEL, metric2.WithUnit(name.Unit))
@@ -514,6 +577,32 @@ func (me *statMetricsExporter) recordDiskIO(ctx context.Context, v *ebpf.Stat) {
 			discardIO, attrs := me.diskDiscardIO.ForRecord(v)
 			discardIO.Add(ctx, int64(v.DiskIO.Bytes), metric2.WithAttributeSet(attrs))
 		}
+	}
+}
+
+// recordFsSync records the file syncs of a stat
+func (me *statMetricsExporter) recordFsSync(ctx context.Context, v *ebpf.Stat) {
+	me.kernelHistograms.record(me.fsSyncDuration, v, v.FsSync.Latency)
+	if me.fsSyncOperations != nil {
+		operations, attrs := me.fsSyncOperations.ForRecord(v)
+		operations.Add(ctx, int64(v.FsSync.Operations), metric2.WithAttributeSet(attrs))
+	}
+	if me.fsSyncOperationTime != nil {
+		operationTime, attrs := me.fsSyncOperationTime.ForRecord(v)
+		operationTime.Add(ctx, v.FsSync.Time, metric2.WithAttributeSet(attrs))
+	}
+}
+
+// recordNFSProcedure records the NFS client RPCs of a stat
+func (me *statMetricsExporter) recordNFSProcedure(ctx context.Context, v *ebpf.Stat) {
+	me.kernelHistograms.record(me.nfsProcedureDuration, v, v.NFSProcedure.Latency)
+	if me.nfsProcedureCount != nil {
+		count, attrs := me.nfsProcedureCount.ForRecord(v)
+		count.Add(ctx, int64(v.NFSProcedure.Calls), metric2.WithAttributeSet(attrs))
+	}
+	if me.nfsProcedureTime != nil {
+		procedureTime, attrs := me.nfsProcedureTime.ForRecord(v)
+		procedureTime.Add(ctx, v.NFSProcedure.Time, metric2.WithAttributeSet(attrs))
 	}
 }
 

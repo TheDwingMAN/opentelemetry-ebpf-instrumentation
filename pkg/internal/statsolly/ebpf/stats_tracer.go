@@ -752,19 +752,29 @@ type fsSyncReads struct {
 	cgroup, filesystem bool
 }
 
-// fsSyncAttributeReads returns the attributes of the file syncs that the file sync metric reports
-// or that the filters match
+// fsSyncAttributeReads returns the attributes of the file syncs that the enabled file sync metrics
+// report or that the filters match
 func fsSyncAttributeReads(features *export.Features, attrSel *attributes.AttrSelector, filtered []attr.Name) fsSyncReads {
-	var reads fsSyncReads
-	if !features.StatsFsSyncDuration() {
-		return reads
+	metrics := []struct {
+		enabled bool
+		name    attributes.Name
+	}{
+		{enabled: features.StatsFsSyncDuration(), name: attributes.StatFsSyncDuration},
+		{enabled: features.StatsFsSyncOperations(), name: attributes.StatFsSyncOperations},
+		{enabled: features.StatsFsSyncOperationTime(), name: attributes.StatFsSyncOperationTime},
 	}
-	for _, name := range slices.Concat(attrSel.For(attributes.StatFsSyncDuration), filtered) {
-		switch {
-		case sameAttribute(name, attr.FilesystemMountpoint) || sameAttribute(name, attr.FilesystemType):
-			reads.filesystem = true
-		case reportsWorkload(name):
-			reads.cgroup = true
+	var reads fsSyncReads
+	for _, metric := range metrics {
+		if !metric.enabled {
+			continue
+		}
+		for _, name := range slices.Concat(attrSel.For(metric.name), filtered) {
+			switch {
+			case sameAttribute(name, attr.FilesystemMountpoint) || sameAttribute(name, attr.FilesystemType):
+				reads.filesystem = true
+			case reportsWorkload(name):
+				reads.cgroup = true
+			}
 		}
 	}
 	return reads

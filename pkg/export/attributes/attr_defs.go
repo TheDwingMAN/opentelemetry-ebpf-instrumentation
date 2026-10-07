@@ -1094,11 +1094,31 @@ func getDefinitions(
 				attr.ErrorType: true,
 			},
 		},
+		StatFsSyncOperations.Section: {
+			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatFsSyncOperationTime.Section: {
+			SubGroups:  []*AttrReportGroup{&statsFsSyncAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
 		StatNFSClientProcedureDuration.Section: {
 			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsDiskKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
+		},
+		StatNFSClientProcedureCount.Section: {
+			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatNFSClientProcedureTime.Section: {
+			SubGroups:  []*AttrReportGroup{&statsNFSProcedureAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{},
 		},
 		StatNFSClientIO.Section: {
 			SubGroups:  []*AttrReportGroup{&statsNFSIOAttributes, &statsDiskKubeAttributes},

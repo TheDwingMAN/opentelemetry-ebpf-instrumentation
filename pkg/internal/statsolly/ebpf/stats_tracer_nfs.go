@@ -165,7 +165,7 @@ type nfsLoad struct {
 }
 
 func nfsLoadFor(features *export.Features, probes nfsProbes) nfsLoad {
-	procedures := features.StatsNFSClientProcedureDuration() && probes.rpc == nil
+	procedures := features.StatsNFSClientProcedures() && probes.rpc == nil
 	bytes := features.StatsNFSClientIO() && probes.pgio == nil
 	return nfsLoad{
 		// charges both the RPCs and their bytes to the thread that started them

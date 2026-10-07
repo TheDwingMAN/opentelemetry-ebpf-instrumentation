@@ -6,7 +6,7 @@ data:
   obi-config.yml: |
     log_level: debug
     metrics:
-      features: ["stats_disk", "stats_fs_sync_duration", "stats_disk_pod_volumes"]
+      features: ["stats_disk", "stats_fs_sync", "stats_disk_pod_volumes"]
     otel_metrics_export:
       endpoint: http://otelcol.default:4317
     attributes:

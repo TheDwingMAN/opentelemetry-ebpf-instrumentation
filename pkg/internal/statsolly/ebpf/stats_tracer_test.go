@@ -409,6 +409,19 @@ func TestFsSyncAttributeReads(t *testing.T) {
 		reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, &attributes.SelectorConfig{},
 			"k8s.pod.name", "system_filesystem_mountpoint"),
 		"the filters need the attributes that they match, with dots or underscores")
+
+	selectingOperations := &attributes.SelectorConfig{SelectionCfg: attributes.Selection{
+		"obi.stat.fs.sync.operations": attributes.InclusionLists{Include: []string{"container.id"}},
+	}}
+	assert.Equal(t, fsSyncReads{cgroup: true},
+		reads(export.FeatureStatsFsSyncOperations, attributes.UndefinedGroup, selectingOperations),
+		"the attributes of every enabled file sync metric count")
+	assert.Equal(t, fsSyncReads{},
+		reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, selectingOperations),
+		"the attributes of a disabled file sync metric don't count")
+	assert.Equal(t, fsSyncReads{cgroup: true},
+		reads(export.FeatureStatsFsSyncOperationTime, attributes.GroupKubernetes, &attributes.SelectorConfig{}),
+		"the Kubernetes attributes of the workload are reported by default")
 }
 
 func TestSizeInFlightMaps(t *testing.T) {
