@@ -134,6 +134,24 @@ done
 unstacked=$(grep '^obi_stat_disk_operations_total{' "$LAB_RESULTS/after.txt" | grep 'obi_disk_stacked="false"' | grep -F 'disk_io_direction="write"' | grep -vF "system_device=\"$head\"" | grep -F nvme | awk '{s+=$2} END {printf "%d", s}')
 echo "request writes on the paths (by name)=$pw, unstacked nvme write series total=$unstacked"
 [ "$pw" -ge 1064 ] || [ "$unstacked" -ge 1064 ]; result nvme-path-request-writes $?
+# hidden path names: from Linux 6.1, /proc/diskstats names the paths, so their request writes are
+# reported on their nvmeXcYnZ names, never on raw "major:minor" numbers. Older kernels list the paths
+# as 0:0 there, so their writes may keep the numbers (e.g. "259:1"): the names and numbers are summed.
+# The reference is the head's writes in diskstats ($hw equals them in nvme-head-diskstats-match),
+# so the check also holds in the nobio variant, where OBI doesn't measure the head.
+hd=$((w1 - w0))
+raw_writes() { grep '^obi_stat_disk_operations_total{' "$1" | grep -F 'disk_io_direction="write"' | grep -E 'system_device="[0-9]+:[0-9]+"' | awk '{s+=$2} END {printf "%d", s}'; }
+raw=$(grep '^obi_stat_disk_operations_total{' "$LAB_RESULTS/after.txt" | grep -cE 'system_device="[0-9]+:[0-9]+"')
+rw=$(( $(raw_writes "$LAB_RESULTS/after.txt") - $(raw_writes "$LAB_RESULTS/before.txt") ))
+echo "path request writes by name=$pw, on raw major:minor devices=$rw ($raw series), head $head writes: diskstats=$hd measured=$hw"
+kv=$(uname -r | cut -d- -f1)
+if [ "$(printf '%s\n' 6.1 "$kv" | sort -V | head -1)" = 6.1 ]; then
+  [ "$raw" -eq 0 ]; result nvme-path-names-no-raw-numbers $?
+  [ "$pw" -eq "$hd" ]; result nvme-path-names-writes-match-head $?
+else
+  echo "SKIP nvme-path-names-no-raw-numbers kernel $kv before 6.1: /proc/diskstats lists the paths as 0:0, they may keep their numbers"
+  [ $((pw + rw)) -eq "$hd" ]; result nvme-path-names-writes-match-head $?
+fi
 
 pend=$(sum "$LAB_RESULTS/idle.txt" obi_stat_disk_pending_operations "system_device=\"$head\"")
 echo "head pending operations after 10 s idle: $pend"

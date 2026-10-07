@@ -86,16 +86,17 @@ One kernel:
 
 ```sh
 cd ~/obi-work/lab-kit/lab
-./build-payload.sh final       && ./run-vm.sh v6.12.111 payloads/final 900
+./build-payload.sh final       && ./run-vm.sh v6.12.111 payloads/final 1200
 ./build-payload.sh nvme-mpath  && LAB_NVME_MPATH=256M ./run-vm.sh v6.12.111 payloads/nvme-mpath 900
-./build-payload.sh k3s-final   && ./run-vm.sh v6.12.111 payloads/k3s-final 2700
+./build-payload.sh k3s-final   && ./run-vm.sh v6.12.111 payloads/k3s-final 3000
+./build-payload.sh iostats     && LAB_EXTRA_DISKS=1G ./run-vm.sh v6.18.54 payloads/iostats 1800
 ```
 
 The matrix (one VM at a time):
 
 ```sh
-./run-matrix.sh payloads/final 900                          # all 11 kernels
-./run-matrix.sh payloads/k3s-final 2700 v6.12.111 rhel9.6   # the kernels you name
+./run-matrix.sh payloads/final 1200                          # all 11 kernels
+./run-matrix.sh payloads/k3s-final 3000 v6.12.111 rhel9.6   # the kernels you name
 ../devloop/lab-matrix.sh final                              # build from HEAD, run on 6.12, RHEL 8.10, RHEL 9.6, 7.2
 ```
 
@@ -103,6 +104,9 @@ The matrix (one VM at a time):
 (obi from the fork with `lab/docker/obi-image.Dockerfile`, tagged as the
 manifest expects; go-disk-io from the fork; k3s's pause image),
 `otelcol-contrib` 0.161.0 and `prometheus` 3.15.0, the versions the cloud lab ran.
+`final` also gets `ebpf.test` (the privileged tests of `pkg/internal/statsolly/ebpf`) and
+`sfr` (`lab/sfr/`, a `sync_file_range` caller). `iostats` gets `obi` and `MODE`: `fixed` when
+the binary has the RQF_IO_STAT gate, else `current` (`IOSTATS_MODE=fixed|current` overrides it).
 
 ## Where the results are
 

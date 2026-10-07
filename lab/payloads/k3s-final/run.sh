@@ -1,9 +1,14 @@
 #!/bin/bash
-# Final verification of disk-v2-23410d280 on Kubernetes, from the payload that validated disk-v2-3d1a67934: the OpenShift manifest (configs/openshift/obi-openshift.yaml,
-# placeholders filled) with OBI built from 4a3b33f31 on single-node k3s, with workloads in two namespaces,
+# Final verification on Kubernetes (the image is built from the OBI checkout by build-payload.sh, under the
+# tag of manifests/10-obi.yaml; COMMIT says which commit), from the payload that validated disk-v2-3d1a67934
+# and disk-v2-23410d280: the OpenShift manifest (configs/openshift/obi-openshift.yaml,
+# placeholders filled) on single-node k3s, with workloads in two namespaces,
 # a pod with a local PV on LVM and a hostPath PV, a partitioned disk with fstrim, file syncs of every
 # kind and a loopback NFS mount. OBI sends OTLP to a collector on the node, which writes it to a file,
 # and a Prometheus on the node scrapes OBI's port 9400. Both go to $LAB_RESULTS for the dashboards.
+# k3s runs in a mount namespace of its own pinned at /run/kubens/mnt (OpenShift's kubens), the NFS
+# mount comes after OBI starts (late attach), and the checks cover the stall buckets, the kernel
+# filesystem type names and the omitted empty k8s attributes.
 set -u
 echo "uname -r: $(uname -r)"
 DURATION=${DURATION:-960}
@@ -40,6 +45,14 @@ lv_dev=$(dmsetup info -c --noheadings -o blkdevname labvg-pv)
 [ -b /dev/$lv_dev ] || mknod /dev/$lv_dev b $(tr ':' ' ' < /sys/class/block/$lv_dev/dev)
 mkfs.ext4 -q /dev/$lv_dev && mkdir -p /mnt/lab-local && mount /dev/$lv_dev /mnt/lab-local
 mkdir -p /var/lib/obi-lab/hostpath
+# the PV that only the kubelet's mount namespace has: ext4 on a loop device of a file on vda, mounted in
+# that namespace only (at the k3s start), so that the LocalPath fallback (a path on the host) can't hide it
+truncate -s 32M /var/lib/obi-lab/kubens.img; kubens_loop=$(losetup -f --show /var/lib/obi-lab/kubens.img)
+mkfs.ext4 -q $kubens_loop
+mkdir -p /mnt/kubens-only
+# the pin, as kubens.service does it: a namespace file can't be bind-mounted on a shared mount (/ is
+# rshared above), so /run/kubens is first made an unbindable bind mount of itself
+mkdir -p /run/kubens && mount --make-unbindable --bind /run/kubens /run/kubens && touch /run/kubens/mnt
 # a partitioned disk: ext4 on its first partition, trimmed every minute
 truncate -s 96M /tmp/part.img; part_loop=$(losetup -fP --show /tmp/part.img)
 printf 'label: dos\n,48M,L\n,,L\n' | sfdisk -q $part_loop && partx -u $part_loop 2>/dev/null
@@ -48,12 +61,6 @@ for _ in 1 2 3 4 5; do [ -b $p1 ] && break; sleep 1; done
 [ -b $p1 ] || mknod $p1 b $(tr ':' ' ' < /sys/class/block/$(basename $p1)/dev)
 mkfs.ext4 -q $p1 && mkdir -p /mnt/part && mount $p1 /mnt/part
 echo "local PV on $lv_dev over $(basename $pv_loop); partitioned disk $(basename $part_loop)"
-# a loopback NFSv4.2 mount, before OBI starts so that the sunrpc and nfs modules are loaded
-modprobe nfs; modprobe nfsd
-mkdir -p /srv/nfs /mnt/nfs; mount -t tmpfs tmpfs /srv/nfs; mount -t nfsd nfsd /proc/fs/nfsd
-rpcbind -w 2>/dev/null || rpcbind
-exportfs -o rw,no_root_squash,fsid=0,insecure 127.0.0.1:/srv/nfs; rpc.mountd; rpc.nfsd 2
-mount -t nfs -o vers=4.2 127.0.0.1:/ /mnt/nfs && nfs_ok=1 || { nfs_ok=0; echo "can't mount NFS"; }
 
 # a zram disk, whose driver handles bios itself like the PowerFlex SDC
 zram_ok=0
@@ -108,8 +115,74 @@ mkdir -p /var/lib/rancher/k3s/agent/images /var/lib/rancher/k3s/server/manifests
 mv images.tar /var/lib/rancher/k3s/agent/images/
 cp manifests/*.yaml /var/lib/rancher/k3s/server/manifests/
 export PATH=$PATH:$K/bin/aux:$K/bin
-k3s server --disable traefik,servicelb,metrics-server,local-storage,coredns --disable-helm-controller \
-  --disable-network-policy --flannel-backend=host-gw --node-ip 10.0.2.15 --write-kubeconfig-mode 644 \
+cat > /var/lib/rancher/k3s/server/manifests/25-kubens.yaml <<'EOF'
+# a local PersistentVolume whose path only the kubelet's mount namespace has
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: lab-kubens
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 16Mi
+  accessModes: [ReadWriteOnce]
+  local:
+    path: /mnt/kubens-only/pv
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/os
+              operator: In
+              values: [linux]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lab-kubens-claim
+  namespace: default
+spec:
+  storageClassName: manual
+  volumeName: lab-kubens
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 16Mi
+---
+# no role: writer label, so the -ge 4 writers wait below is unchanged
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: disk-io-kubens
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: disk-io-kubens
+  template:
+    metadata:
+      labels:
+        app: disk-io-kubens
+    spec:
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: lab-kubens-claim
+      containers:
+        - name: writer
+          image: go-disk-io:dev
+          imagePullPolicy: Never
+          volumeMounts:
+            - mountPath: /data
+              name: data
+EOF
+# k3s (kubelet and containerd) in a mount namespace of its own, a slave of the host's, pinned at /run/kubens/mnt
+KUBENS_LOOP=$kubens_loop unshare --mount=/run/kubens/mnt --propagation slave sh -c '
+  mount --make-rshared /
+  mount -t tmpfs tmpfs /mnt/kubens-only && mkdir /mnt/kubens-only/pv && mount "$KUBENS_LOOP" /mnt/kubens-only/pv
+  exec k3s server --disable traefik,servicelb,metrics-server,local-storage,coredns --disable-helm-controller \
+    --disable-network-policy --flannel-backend=host-gw --node-ip 10.0.2.15 --write-kubeconfig-mode 644' \
   > "$LAB_RESULTS/k3s.log" 2>&1 &
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
@@ -119,6 +192,22 @@ echo "node name: $node"
 wait_for "obi running" 900 sh -c 'kubectl -n obi get pods -l app.kubernetes.io/name=obi | grep -q "1/1"'; result obi-running $?
 wait_for "workloads running" 900 sh -c '[ $(kubectl get pods -A -l role=writer --no-headers 2>/dev/null | grep -c Running) -ge 4 ]'
 kubectl get pods -A -o wide
+wait_for "the kubens pod" 300 sh -c '[ $(kubectl get pods -l app=disk-io-kubens --no-headers | grep -c Running) -ge 1 ]'
+! grep -q '/pods/[^/]*/volumes/' /proc/1/mountinfo && nsenter --mount=/run/kubens/mnt grep -q '/pods/[^/]*/volumes/' /proc/self/mountinfo
+result kubens-hides-the-mounts $?
+
+kubectl -n obi logs ds/obi | grep -q 'waiting for the tracepoints of the sunrpc kernel module'; result nfs-waiting-warn $?
+# a loopback NFSv4.2 mount, after OBI starts: the NFS probes attach when the modules are loaded
+modprobe nfs; modprobe nfsd
+mkdir -p /srv/nfs /mnt/nfs; mount -t tmpfs tmpfs /srv/nfs; mount -t nfsd nfsd /proc/fs/nfsd
+rpcbind -w 2>/dev/null || rpcbind
+exportfs -o rw,no_root_squash,fsid=0,insecure 127.0.0.1:/srv/nfs; rpc.mountd; rpc.nfsd 2
+mount -t nfs -o vers=4.2 127.0.0.1:/ /mnt/nfs && nfs_ok=1 || { nfs_ok=0; echo "can't mount NFS"; }
+# both families (procedures and I/O) log one INFO each; the 30 s ticker fits twice in 120 s
+[ $nfs_ok = 0 ] || {
+  wait_for "NFS probes attached" 120 sh -c "kubectl -n obi logs ds/obi | grep 'NFS client probes attached' | grep -q stats_nfs_client_procedure && kubectl -n obi logs ds/obi | grep 'NFS client probes attached' | grep -q stats_nfs_client_io"
+  result nfs-late-attach $?
+}
 
 # node activity for DURATION seconds: file syncs of every kind and partition I/O, trims, NFS, and pods
 # coming and going in the batch namespace
@@ -129,11 +218,13 @@ while [ $(($(date +%s) - start)) -lt $DURATION ]; do
   dd if=/dev/urandom of=/mnt/part/f bs=64k count=32 status=none
   sync /mnt/part/f; sync -d /mnt/part/f; sync -f /mnt/part/f
   dd if=/dev/zero of=/var/tmp/synced bs=4k count=4 conv=fsync status=none
+  dd if=/dev/zero of=/dev/shm/synced bs=4k count=1 conv=fsync status=none
   rm -f /mnt/part/f
   if [ $nfs_ok = 1 ]; then
     dd if=/dev/zero of=/mnt/nfs/f bs=64k count=16 oflag=direct status=none
     dd if=/mnt/nfs/f of=/dev/null bs=64k count=16 iflag=direct status=none
     ls /mnt/nfs/nonexistent 2>/dev/null
+    sync /mnt/nfs/f
   fi
   [ $zram_ok = 1 ] && dd if=/dev/zero of=/dev/$zdev bs=4k count=8 oflag=direct status=none
   [ $((i % 6)) = 0 ] && fstrim /mnt/part
@@ -152,15 +243,44 @@ m="$LAB_RESULTS/metrics.txt"
 grep '^obi_stat_disk_io_bytes_total{' $m | grep -q 'k8s_pod_name="report-writer-'; result pod-names $?
 grep '^obi_stat_disk_io_bytes_total{' $m | grep -q 'obi_disk_partition="'"$(basename $p1)"'"'; result partition $?
 grep '^obi_stat_k8s_pod_volume_device{' $m | grep 'k8s_persistentvolume_name="lab-local"' | grep -q ' 1$'; result pod-volumes $?
+grep '^obi_stat_k8s_pod_volume_device{' $m | grep 'k8s_persistentvolume_name="lab-kubens"' \
+  | grep "obi_disk_volume_device=\"$(basename $kubens_loop)\"" | grep 'system_device="vda"' | grep -q ' 1$'
+result pod-volumes-in-kubens-namespace $?
+! grep -q 'no volume mount of the kubelet is visible' "$LAB_RESULTS/obi.log"; result no-mounts-warning-when-visible $?
 grep -q '^obi_stat_disk_discard_io_bytes_total{' $m; result discards $?
 grep '^obi_stat_disk_volume_device{' $m
 grep '^obi_stat_disk_volume_device{' $m | grep "obi_disk_volume_device=\"$lv_dev\"" | grep 'obi_disk_volume_name="labvg-pv"' | grep -q 'system_device="vda"'; result volume-device-lvm-to-vda $?
 grep '^obi_stat_disk_operation_time_seconds_total{' $m | grep -q 'k8s_pod_name="report-writer-'; result operation-time-select-new-key $?
 grep -qF '"obi.stat.disk.operation_time"' /work/collector-out/metrics.json; result otlp-operation-time-new-name $?
 ! grep -qF '{"value":{}}' /work/collector-out/metrics.json; result otlp-no-empty-attribute-key $?
+# no storage data point carries an empty k8s.* attribute over OTLP
+! grep -qE '"key":"k8s\.(namespace|owner|pod|container)\.name","value":\{"stringValue":""\}|"key":"k8s\.(kind|cluster\.name)","value":\{"stringValue":""\}' /work/collector-out/metrics.json; result otlp-no-empty-k8s-attribute $?
+# the I/O of pods keeps its workload over OTLP (guards against omitting too much)
+grep -qE '"key":"k8s\.namespace\.name","value":\{"stringValue":"default"\}' /work/collector-out/metrics.json && grep -qE '"key":"k8s\.owner\.name","value":\{"stringValue":"disk-io"\}' /work/collector-out/metrics.json; result otlp-pod-keeps-k8s-attributes $?
+# OBI's Prometheus endpoint still exposes the pod-less I/O with empty workload labels
+grep '^obi_stat_disk_io_bytes_total{' $m | grep -q 'k8s_namespace_name=""'; result prometheus-keeps-empty-workload-label $?
+# the pod-less series are still exported over OTLP, without the attribute (zram I/O is issued from the host)
+if [ $zram_ok = 1 ]; then
+  grep -qF '"key":"system.device","value":{"stringValue":"'"$zdev"'"}' /work/collector-out/metrics.json; result otlp-pod-less-series-exported $?
+fi
 grep -q '^obi_stat_disk_flush_duration_seconds_count{' $m; result flushes $?
 grep '^obi_stat_fs_sync_duration_seconds_count{' $m | grep -q 'obi_fs_sync_type="syncfs"'; result fs-sync-types $?
 [ $nfs_ok = 0 ] || { grep -q '^obi_stat_nfs_client_procedure_duration_seconds_count{' $m; result nfs $?; }
+# stall buckets at the defaults: OBI runs both exporters, so these cover the OTel and Prometheus union
+for h in disk_operation disk_queue disk_flush fs_sync; do
+  grep -q "^obi_stat_${h}_duration_seconds_bucket{.*le=\"60\"" $m; result stall-bounds-$h $?
+done
+[ $nfs_ok = 0 ] || { grep -q '^obi_stat_nfs_client_procedure_duration_seconds_bucket{.*le="60"' $m; result stall-bounds-nfs $?; }
+grep -q '"explicitBounds":\[[^]]*,2.5,5,10,30,60\]' /work/collector-out/metrics.json; result otlp-stall-bounds $?
+! grep -q 'more histogram buckets than the kernel can keep' "$LAB_RESULTS/obi.log"; result no-approximated-buckets $?
+# the kernel names of the filesystem types
+fs_sync_series=$(grep '^obi_stat_fs_sync_duration_seconds_count{' $m)
+echo "$fs_sync_series" | grep 'system_filesystem_mountpoint="/mnt/part"' | grep -q 'system_filesystem_type="ext4"'; result fs-type-ext4 $?
+echo "$fs_sync_series" | grep 'system_filesystem_mountpoint="/dev/shm"' | grep -q 'system_filesystem_type="tmpfs"'; result fs-type-tmpfs $?
+[ $nfs_ok = 0 ] || { echo "$fs_sync_series" | grep 'system_filesystem_mountpoint="/mnt/nfs"' | grep -q 'system_filesystem_type="nfs4"'; result fs-type-nfs4 $?; }
+[ "$(echo "$fs_sync_series" | grep 'system_filesystem_mountpoint="/' | grep -vc 'system_filesystem_type="[^"]')" = 0 ]; result fs-type-always-set $?
+# tmpfs, not ext4: ext4 was already reported before this change, tmpfs was filtered out
+grep -qF '"system.filesystem.type","value":{"stringValue":"tmpfs"}' /work/collector-out/metrics.json; result otlp-fs-type-string $?
 # G2: the file sync and NFS counters, per workload on Kubernetes
 grep '^obi_stat_fs_sync_operations_total{' $m | grep -q 'k8s_owner_name="disk-io"'; result fs-sync-operations-per-workload $?
 grep '^obi_stat_fs_sync_operation_time_seconds_total{' $m | grep -q 'k8s_owner_name="disk-io"'; result fs-sync-operation-time-per-workload $?
@@ -175,6 +295,13 @@ fi
 grep -o '"host.id","value":{"stringValue":"[^"]*"' /work/collector-out/metrics.json | sort -u | head -3
 grep -q '"host.id","value":{"stringValue":"'"$node"'"' /work/collector-out/metrics.json; result host-id-is-node-name $?
 grep -E '"level":"(WARN|ERROR)"' "$LAB_RESULTS/obi.log" | grep -v 'Cloud metadata' | sed 's/.*"msg":"\([^"]*\)".*/\1/' | sort | uniq -c | head -10
+
+# the kubelet's mount namespace unpinned: its mounts are hidden from OBI, which warns once
+umount /run/kubens/mnt
+sleep 100 # three resolutions of the pod volumes
+kubectl -n obi logs ds/obi --tail=-1 > "$LAB_RESULTS/obi-hidden.log" 2>&1
+[ "$(grep -c 'no volume mount of the kubelet is visible' "$LAB_RESULTS/obi-hidden.log")" = 1 ]
+result mounts-hidden-warns-once $?
 
 kill -TERM $prom_pid; wait $prom_pid 2>/dev/null
 cp -r /work/prom-data "$LAB_RESULTS/prom-data"

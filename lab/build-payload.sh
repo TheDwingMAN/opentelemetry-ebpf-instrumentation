@@ -7,7 +7,10 @@
 #   obi             CGO_ENABLED=0 go build ./cmd/obi
 #   stats.test      CGO_ENABLED=0 go test -c -tags privileged_tests ./pkg/internal/statsolly/stats
 #   verifier.test   CGO_ENABLED=0 go test -c -tags bpf_verifier_tests ./pkg/internal/ebpf/verifier
-#   bpfmaps bpfstats kprobecost   go build of lab/<tool>/
+#   ebpf.test       CGO_ENABLED=0 go test -c -tags privileged_tests ./pkg/internal/statsolly/ebpf
+#   bpfmaps bpfstats kprobecost sfr   go build of lab/<tool>/
+#   MODE            for a payload that reads ./MODE (iostats): "fixed" when obi has the RQF_IO_STAT
+#                   gate (the disk_rqf_io_stat constant), else "current"; IOSTATS_MODE overrides it
 #   k3s-root.tar    docker export of rancher/k3s:$K3S_TAG (cached in cache/k3s/)
 #   images*.tar     docker save of the images the payload's yaml files use: obi:<tag> built from the
 #                   repo with docker/obi-image.Dockerfile, go-disk-io:dev from the repo's component
@@ -24,6 +27,7 @@
 #   DOCKER          the container CLI (default docker; podman-docker and "sudo docker" work too)
 #   OBI_GENERATE    make (default: make generate, incremental) | docker (make docker-generate) | 0
 #   OBI_DOCKERFILE  the obi image Dockerfile (default docker/obi-image.Dockerfile)
+#   IOSTATS_MODE    fixed|current: the MODE to write, whatever the binary has (binary-matches-mode checks it)
 #   K3S_TAG=v1.30.14-k3s2 OTELCOL_VERSION=0.161.0 PROMETHEUS_VERSION=3.15.0 (what the cloud lab ran)
 set -euo pipefail
 LAB="$(cd "$(dirname "$0")" && pwd)"
@@ -54,7 +58,7 @@ COLLECTOR_STANDIN=docker.io/library/busybox:1.37
 die() { echo "build-payload: $*" >&2; exit 1; }
 note() { echo "[build-payload] $*" >&2; }
 
-[ $# -eq 1 ] || { sed -n '2,27p' "$0" >&2; exit 2; }
+[ $# -eq 1 ] || { sed -n '2,31p' "$0" >&2; exit 2; }
 case "$1" in
     */*) P="$(realpath "$1")" ;;
     *) P="$LAB/payloads/$1" ;;
@@ -93,7 +97,7 @@ done
 
 K3S=0; mentions k3s-root.tar && K3S=1
 GO_TARGETS=()
-for t in obi stats.test verifier.test bpfmaps bpfstats kprobecost; do
+for t in obi stats.test verifier.test ebpf.test bpfmaps bpfstats kprobecost sfr; do
     uses "$t" && GO_TARGETS+=("$t")
 done
 if [ "$K3S" = 0 ] && [ "${#GO_TARGETS[@]}" -eq 0 ]; then
@@ -146,9 +150,24 @@ for t in "${GO_TARGETS[@]}"; do
         verifier.test)
             (cd "$REPO" && CGO_ENABLED=0 go test -c -tags bpf_verifier_tests -o "$P/verifier.test" ./pkg/internal/ebpf/verifier/) ||
                 die "verifier.test build failed" ;;
+        ebpf.test)
+            (cd "$REPO" && CGO_ENABLED=0 go test -c -tags privileged_tests -o "$P/ebpf.test" ./pkg/internal/statsolly/ebpf) ||
+                die "ebpf.test build failed" ;;
         *) (cd "$LAB/$t" && CGO_ENABLED=0 go build -o "$P/$t" .) || die "$t build failed" ;;
     esac
 done
+
+# ---- the expectation of the iostats payload
+if grep -qE '(^|[^A-Za-z0-9_.-])\./MODE([^A-Za-z0-9_.-]|$)' "${SCRIPTS[@]}"; then
+    [ -f "$P/obi" ] || die "$(basename "$P") reads ./MODE but has no obi"
+    case "${IOSTATS_MODE:-}" in
+        fixed|current) MODE="$IOSTATS_MODE" ;;
+        "") if grep -aq disk_rqf_io_stat "$P/obi"; then MODE=fixed; else MODE=current; fi ;;
+        *) die "IOSTATS_MODE=$IOSTATS_MODE: use fixed or current" ;;
+    esac
+    echo "$MODE" > "$P/MODE"
+    note "MODE=$MODE (obi has disk_rqf_io_stat: $(grep -ac disk_rqf_io_stat "$P/obi") hits)"
+fi
 
 # ---- k3s payloads
 
@@ -278,7 +297,7 @@ k3s_images() {
     "${DOCKER[@]}" pull "docker.io/rancher/mirrored-pause@$PAUSE_DIGEST" >&2
     "${DOCKER[@]}" tag "docker.io/rancher/mirrored-pause@$PAUSE_DIGEST" "$PAUSE_IMAGE"
     other_images+=("$PAUSE_IMAGE")
-    if ! grep -E '^[[:space:]]*k3s server' "$P/run.sh" | grep -q coredns; then
+    if ! grep -E '^[[:space:]]*(exec[[:space:]]+)?k3s server' "$P/run.sh" | grep -q coredns; then
         "${DOCKER[@]}" pull "$COREDNS_IMAGE" >&2
         other_images+=("$COREDNS_IMAGE")
     fi

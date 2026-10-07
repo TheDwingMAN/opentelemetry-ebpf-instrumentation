@@ -113,7 +113,7 @@ Guest environment set up by `/lab-init.sh`:
 | `rootfs/lab-init.sh` | Guest PID 1 (`init=/lab-init.sh`): mounts, modprobes, mounts the 9p shares (or unpacks the payload disk), runs the payload, prints `LAB_EXIT=<rc>`, powers off via sysrq. |
 | `run-vm.sh` | Creates a throwaway `qcow2` overlay backed by `base.raw`, boots with `-accel kvm -cpu host` (or `-accel tcg,thread=multi -cpu max`) `-smp 2 -m 4096`, parses the console. |
 | `run-matrix.sh` | Loops `run-vm.sh` over kernels; writes `results/<payload>-<ts>.tsv`. |
-| `build-payload.sh <name>` | Builds what a payload's `run.sh` uses from the OBI checkout (`OBI_REPO`): `obi`, `stats.test`, `verifier.test`, the lab helper tools, and for k3s payloads `k3s-root.tar`, `images*.tar`, `otelcol-contrib`, `prometheus`. |
+| `build-payload.sh <name>` | Builds what a payload's `run.sh` uses from the OBI checkout (`OBI_REPO`): `obi`, `stats.test`, `verifier.test`, `ebpf.test`, the lab helper tools (`sfr` among them), `MODE` for `iostats`, and for k3s payloads `k3s-root.tar`, `images*.tar`, `otelcol-contrib`, `prometheus`. |
 
 Kernel cmdline: `console=ttyS0 root=/dev/vda rw init=/lab-init.sh panic=-1
 cgroup_no_v1=all mitigations=off loglevel=4 rcupdate.rcu_cpu_stall_timeout=120`.

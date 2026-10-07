@@ -11,6 +11,9 @@ lab/payloads/*/obi
 lab/payloads/*/obi-dynsel
 lab/payloads/*/stats.test
 lab/payloads/*/verifier.test
+lab/payloads/*/ebpf.test
+lab/payloads/*/sfr
+lab/payloads/*/MODE
 lab/payloads/*/bpfmaps
 lab/payloads/*/bpfstats
 lab/payloads/*/kprobecost
@@ -30,6 +33,7 @@ lab/bpfstats/bpfstats
 lab/bpfstats/obi.log
 lab/bpfstats/disk.*
 lab/kprobecost/kprobecost
+lab/sfr/sfr
 lab/bench/obi
 lab/bench/results-*/
 lab/bench/contention/
