@@ -66,6 +66,13 @@ func (f *fakeBlockDevices) device(dir, numbers, name string, reads, writes int) 
 	f.write()
 }
 
+// hiddenDisk adds a block device that /proc/diskstats lists, but that sysfs doesn't link from
+// /sys/dev/block, like the path devices of NVMe native multipath
+func (f *fakeBlockDevices) hiddenDisk(numbers, name string) {
+	f.diskstats = append(f.diskstats, &diskstatsLine{numbers: numbers, name: name})
+	f.write()
+}
+
 // complete makes a device report more completed reads and writes
 func (f *fakeBlockDevices) complete(name string, reads, writes int) {
 	for _, line := range f.diskstats {
@@ -93,7 +100,7 @@ func (f *fakeBlockDevices) write() {
 }
 
 func (f *fakeBlockDevices) reader() *pendingReader {
-	return newPendingReader(f.procRoot, &deviceNames{sysRoot: f.sysRoot})
+	return newPendingReader(f.procRoot, &deviceNames{sysRoot: f.sysRoot, procRoot: f.procRoot})
 }
 
 func pendingByDevice(stats []*ebpf.Stat) map[string]int64 {
@@ -141,6 +148,18 @@ func TestPendingReaderReportsDevicesThatDidIO(t *testing.T) {
 	devices.complete("nvme0n1", 0, 2)
 	assert.Equal(t, map[string]int64{"nvme0n1/read": 0, "nvme0n1/write": 0}, pendingByDevice(r.readStats()),
 		"the partitions are reported as their disk, which counts their I/O")
+}
+
+func TestPendingReaderReportsHiddenNVMePaths(t *testing.T) {
+	devices := newFakeBlockDevices(t)
+	devices.disk("259:2", "nvme1n1", 0, 0)
+	devices.hiddenDisk("259:1", "nvme1c0n1")
+	r := devices.reader()
+	assert.Empty(t, r.readStats())
+
+	devices.complete("nvme1c0n1", 0, 2)
+	assert.Equal(t, map[string]int64{"nvme1c0n1/write": 0}, pendingByDevice(r.readStats()),
+		"named from /proc/diskstats, as sysfs hides the paths of NVMe native multipath")
 }
 
 func TestPendingReaderCountsPartitionsOnOlderKernels(t *testing.T) {

@@ -62,7 +62,7 @@ func (f fakeCgroupNames) name(cgroupID uint64) (string, bool) {
 }
 
 func newTestDiskReader(src *fakeDiskAccum) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
-	return newDiskReader(src, testBounds, false, &deviceNames{sysRoot: "/nonexistent"},
+	return newDiskReader(src, testBounds, false, &deviceNames{sysRoot: "/nonexistent", procRoot: "/nonexistent"},
 		newCgroupContainers(fakeCgroupNames{}))
 }
 
@@ -178,7 +178,7 @@ func TestDeviceNames(t *testing.T) {
 		[]byte("MAJOR=259\nMINOR=0\nDEVNAME=nvme0n1\nDEVTYPE=disk\n"), 0o644))
 
 	now := time.Now()
-	names := &deviceNames{sysRoot: root, now: func() time.Time { return now }}
+	names := &deviceNames{sysRoot: root, procRoot: root, now: func() time.Time { return now }}
 	assert.Equal(t, "nvme0n1", names.name(259, 0))
 	assert.Equal(t, "8:0", names.name(8, 0), "falls back to major:minor when sysfs has no name")
 
@@ -194,6 +194,52 @@ func TestDeviceNames(t *testing.T) {
 	require.NoError(t, os.MkdirAll(other, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(other, "uevent"), []byte("DEVNAME=sda\n"), 0o644))
 	assert.Equal(t, "sda", names.name(8, 0))
+}
+
+func TestDeviceNamesOfHiddenNVMePaths(t *testing.T) {
+	// NVMe native multipath: sysfs links the numbers of the head, but not of its path devices
+	devices := newFakeBlockDevices(t)
+	devices.disk("259:2", "nvme1n1", 0, 0)
+	devices.hiddenDisk("259:1", "nvme1c0n1")
+	devices.hiddenDisk("259:0", "nvme1c1n1")
+	// before Linux 6.1, the kernel lists the paths without their numbers
+	devices.hiddenDisk("0:0", "nvme2c0n1")
+	devices.hiddenDisk("0:0", "nvme2c1n1")
+	now := time.Now()
+	names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot, now: func() time.Time { return now }}
+
+	for _, tc := range []struct {
+		name         string
+		major, minor uint32
+		want         string
+	}{
+		{name: "the head, from sysfs", major: 259, minor: 2, want: "nvme1n1"},
+		{name: "a path, from /proc/diskstats", major: 259, minor: 1, want: "nvme1c0n1"},
+		{name: "another path, from /proc/diskstats", major: 259, minor: 0, want: "nvme1c1n1"},
+		{name: "a device that neither lists", major: 259, minor: 3, want: "259:3"},
+		{name: "the paths listed without their numbers", major: 0, minor: 0, want: "0:0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, names.name(tc.major, tc.minor))
+		})
+	}
+
+	// the paths are request-based disks
+	assert.False(t, names.stacked(259, 1))
+	assert.Empty(t, names.partition(259, 1, kernelDev(259, 1), 0))
+	assert.Empty(t, names.partition(259, 1, 0, 1))
+
+	// /proc/diskstats is read once per cache period: a path that appears or is renamed within it
+	// is named after the period
+	devices.removeAll()
+	devices.hiddenDisk("259:1", "nvme1c2n1")
+	devices.hiddenDisk("259:3", "nvme3c0n1")
+	assert.Equal(t, "nvme1c0n1", names.name(259, 1))
+	assert.Equal(t, "259:3", names.name(259, 3))
+
+	now = now.Add(deviceNamesCachePeriod)
+	assert.Equal(t, "nvme1c2n1", names.name(259, 1))
+	assert.Equal(t, "nvme3c0n1", names.name(259, 3))
 }
 
 // fakeSysBlock creates the sysfs entries of a disk and its partitions: /dev/block/<maj:min>/uevent
@@ -224,7 +270,7 @@ func TestDevicePartitions(t *testing.T) {
 	root := t.TempDir()
 	// NVMe partitions have extended device numbers, unrelated to the disk's
 	fakeSysBlock(t, root, "nvme0n1", 259, 0, map[string][2]uint32{"nvme0n1p1": {259, 1}})
-	names := &deviceNames{sysRoot: root}
+	names := &deviceNames{sysRoot: root, procRoot: root}
 
 	assert.Equal(t, "nvme0n1p1", names.partition(259, 0, kernelDev(259, 1), 0), "from the partition dev_t (Linux 5.12+)")
 	assert.Equal(t, "nvme0n1p1", names.partition(259, 0, 0, 1), "from the partition number (older kernels)")
@@ -243,7 +289,7 @@ func TestDiskReaderForwardsPartitionAndQueue(t *testing.T) {
 	current.QueueCount[1] = 1
 	current.QueueSumNs[1] = 2_000_000
 	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{key: current}}
-	r := newDiskReader(src, testBounds, false, &deviceNames{sysRoot: root}, newCgroupContainers(fakeCgroupNames{}))
+	r := newDiskReader(src, testBounds, false, &deviceNames{sysRoot: root, procRoot: root}, newCgroupContainers(fakeCgroupNames{}))
 
 	stats := r.readStats()
 	require.Len(t, stats, 1)
@@ -317,7 +363,7 @@ func TestDiskReaderResolvesContainers(t *testing.T) {
 		inSlice:     accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}),
 		unnamed:     accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}),
 	}}
-	r := newDiskReader(src, testBounds, false, &deviceNames{sysRoot: "/nonexistent"},
+	r := newDiskReader(src, testBounds, false, &deviceNames{sysRoot: "/nonexistent", procRoot: "/nonexistent"},
 		newCgroupContainers(fakeCgroupNames{
 			100: "cri-containerd-" + containerID + ".scope",
 			200: "system.slice",

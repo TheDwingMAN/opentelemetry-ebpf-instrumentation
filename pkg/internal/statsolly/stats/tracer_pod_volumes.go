@@ -56,7 +56,7 @@ func NewPodVolumesTracer(store podVolumeSource, nodeName string) *PodVolumesTrac
 		store:    store,
 		nodeName: nodeName,
 		mounts:   func() ([]*procfs.MountInfo, error) { return procfs.GetProcMounts(1) },
-		devices:  &deviceNames{sysRoot: "/sys"},
+		devices:  &deviceNames{sysRoot: "/sys", procRoot: "/proc"},
 		stack:    newDeviceStack("/sys"),
 		interval: podVolumesInterval,
 		reported: map[ebpf.PodVolume]bool{},

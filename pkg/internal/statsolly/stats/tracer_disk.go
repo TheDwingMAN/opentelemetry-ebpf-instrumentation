@@ -133,7 +133,7 @@ type statReader interface {
 
 func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 	containers := newCgroupContainers(ebpfCgroupNames{names: cfg.CgroupNames})
-	devices := &deviceNames{sysRoot: "/sys"}
+	devices := &deviceNames{sysRoot: "/sys", procRoot: "/proc"}
 	var readers []statReader
 	if cfg.DiskIOAccum != nil {
 		readers = append(readers, newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskIOAccum},
@@ -506,7 +506,7 @@ const deviceNamesCachePeriod = 30 * time.Second
 
 // deviceNames resolves block device numbers to their kernel names, e.g. 259:0 to nvme0n1
 type deviceNames struct {
-	sysRoot string
+	sysRoot, procRoot string
 	// now returns the current time, time.Now if nil
 	now      func() time.Time
 	cachedAt time.Time
@@ -514,6 +514,7 @@ type deviceNames struct {
 	cache      map[[2]uint32]string
 	partitions map[partitionKey]string
 	stack      map[[2]uint32]bool
+	diskstats  map[[2]uint32]string
 }
 
 // expire forgets what is cached once deviceNamesCachePeriod passed since it started caching
@@ -529,6 +530,7 @@ func (d *deviceNames) expire() {
 	d.cache = map[[2]uint32]string{}
 	d.partitions = map[partitionKey]string{}
 	d.stack = map[[2]uint32]bool{}
+	d.diskstats = nil
 }
 
 // stacked tells whether a block device is built on other block devices (see isStacked and
@@ -594,17 +596,18 @@ func (d *deviceNames) partitionByNumber(disk string, partno uint8) string {
 	return ""
 }
 
-// name returns the name of a block device, or its "major:minor" numbers when sysfs doesn't name it
+// name returns the name of a block device, or its "major:minor" numbers when neither sysfs nor
+// /proc/diskstats names it
 func (d *deviceNames) name(major, minor uint32) string {
 	if name := d.knownName(major, minor); name != "" {
 		return name
 	}
-	// e.g. hidden NVMe multipath path devices, or a device removed since its last I/O
+	// e.g. a device removed since its last I/O
 	return fmt.Sprintf("%d:%d", major, minor)
 }
 
-// knownName returns the name of a block device from sysfs, or an empty string. Unknown devices
-// are not cached, as their numbers may be given to another device.
+// knownName returns the name of a block device from sysfs or /proc/diskstats, or an empty string.
+// Unknown devices are not cached, as their numbers may be given to another device.
 func (d *deviceNames) knownName(major, minor uint32) string {
 	d.expire()
 	if name, ok := d.cache[[2]uint32{major, minor}]; ok {
@@ -612,10 +615,32 @@ func (d *deviceNames) knownName(major, minor uint32) string {
 	}
 	numbers := fmt.Sprintf("%d:%d", major, minor)
 	name := devNameFromUevent(filepath.Join(d.sysRoot, "dev", "block", numbers, "uevent"))
+	if name == "" {
+		// the path devices of NVMe native multipath (nvmeXcYnZ) are hidden: sysfs doesn't link
+		// their numbers, but /proc/diskstats lists them
+		name = d.diskstatsName(major, minor)
+	}
 	if name != "" {
 		d.cache[[2]uint32{major, minor}] = name
 	}
 	return name
+}
+
+// diskstatsName returns the name that /proc/diskstats lists a block device with, or an empty
+// string. It reads /proc/diskstats once per cache period.
+func (d *deviceNames) diskstatsName(major, minor uint32) string {
+	if d.diskstats == nil {
+		d.diskstats = map[[2]uint32]string{}
+		diskstats, _ := procDiskstats(d.procRoot, d.sysRoot)
+		for _, stat := range diskstats {
+			// before Linux 6.1, the kernel lists all the hidden NVMe path devices as 0:0
+			if stat.MajorNumber == 0 {
+				continue
+			}
+			d.diskstats[[2]uint32{stat.MajorNumber, stat.MinorNumber}] = stat.DeviceName
+		}
+	}
+	return d.diskstats[[2]uint32{major, minor}]
 }
 
 func devNameFromUevent(path string) string {

@@ -50,7 +50,7 @@ func newPendingReader(procRoot string, devices *deviceNames) *pendingReader {
 }
 
 func (p *pendingReader) readStats() []*ebpf.Stat {
-	diskstats, err := p.diskstats()
+	diskstats, err := procDiskstats(p.procRoot, p.devices.sysRoot)
 	if err != nil {
 		// a partial read would undercount: skip it, the next read reports the current count
 		p.log.Debug("can't read the requests in flight", "error", err)
@@ -151,8 +151,8 @@ func (p *pendingReader) diskOf(numbers string) (disk string, partition bool) {
 	return strings.TrimSpace(string(content)), true
 }
 
-func (p *pendingReader) diskstats() ([]blockdevice.Diskstats, error) {
-	fs, err := blockdevice.NewFS(p.procRoot, p.devices.sysRoot)
+func procDiskstats(procRoot, sysRoot string) ([]blockdevice.Diskstats, error) {
+	fs, err := blockdevice.NewFS(procRoot, sysRoot)
 	if err != nil {
 		return nil, err
 	}

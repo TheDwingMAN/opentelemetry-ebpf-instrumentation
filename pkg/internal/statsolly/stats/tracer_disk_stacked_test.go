@@ -84,7 +84,8 @@ func fakeHostDevices(t *testing.T) string {
 }
 
 func TestStackedDevices(t *testing.T) {
-	names := &deviceNames{sysRoot: fakeHostDevices(t)}
+	root := fakeHostDevices(t)
+	names := &deviceNames{sysRoot: root, procRoot: root}
 	assert.False(t, names.stacked(259, 0), "a disk")
 	assert.False(t, names.stacked(8, 16), "a path of a multipath device")
 	assert.True(t, names.stacked(7, 0), "a loop device")

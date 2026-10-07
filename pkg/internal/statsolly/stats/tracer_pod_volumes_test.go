@@ -134,7 +134,7 @@ func testPV(name, claim, localPath string) *informer.ObjectMeta {
 func newTestPodVolumesTracer(t *testing.T, store *fakePodVolumes, mounts []*procfs.MountInfo) *PodVolumesTracer {
 	tracer := NewPodVolumesTracer(store, "node-1")
 	root := fakeVolumeHost(t)
-	tracer.devices = &deviceNames{sysRoot: root}
+	tracer.devices = &deviceNames{sysRoot: root, procRoot: root}
 	tracer.stack = &deviceStack{sysRoot: root, deviceOf: fakeHostDeviceOf}
 	tracer.mounts = func() ([]*procfs.MountInfo, error) { return mounts, nil }
 	return tracer
