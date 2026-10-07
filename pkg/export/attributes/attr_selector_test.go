@@ -299,11 +299,21 @@ func TestDefault_StatFsSyncDuration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []attr.Name{
 		attr.ErrorType,
+		attr.FsSyncType,
+	}, p.For(StatFsSyncDuration), "the workload is opt-in on the histogram")
+	assert.Equal(t, []attr.Name{
+		attr.ErrorType,
 		attr.K8sClusterName,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.FsSyncType,
-	}, p.For(StatFsSyncDuration))
+	}, p.For(StatFsSyncOperations), "the counters carry the workload")
+	assert.Equal(t, []attr.Name{
+		attr.K8sClusterName,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.FsSyncType,
+	}, p.For(StatFsSyncOperationTime))
 
 	p, err = NewAttrSelector(GroupKubernetes, &SelectorConfig{
 		SelectionCfg: Selection{"obi.stat.fs.sync.duration": InclusionLists{Include: []string{"*"}}},
@@ -330,13 +340,27 @@ func TestDefault_StatNFSClient(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []attr.Name{
 		attr.ErrorType,
+		attr.OncRPCProcedureName,
+		attr.OncRPCVersion,
+		attr.ServerAddr,
+	}, p.For(StatNFSClientProcedureDuration), "the workload is opt-in on the histogram")
+	assert.Equal(t, []attr.Name{
+		attr.ErrorType,
 		attr.K8sClusterName,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.OncRPCProcedureName,
 		attr.OncRPCVersion,
 		attr.ServerAddr,
-	}, p.For(StatNFSClientProcedureDuration))
+	}, p.For(StatNFSClientProcedureCount), "the counters carry the workload")
+	assert.Equal(t, []attr.Name{
+		attr.K8sClusterName,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.OncRPCProcedureName,
+		attr.OncRPCVersion,
+		attr.ServerAddr,
+	}, p.For(StatNFSClientProcedureTime))
 	assert.Equal(t, []attr.Name{
 		attr.K8sClusterName,
 		attr.K8sNamespaceName,

@@ -394,8 +394,8 @@ func TestFsSyncAttributeReads(t *testing.T) {
 
 	assert.Equal(t, fsSyncReads{}, reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, &attributes.SelectorConfig{}),
 		"no default attribute of the file sync metric needs the cgroup or the filesystem outside Kubernetes")
-	assert.Equal(t, fsSyncReads{cgroup: true}, reads(export.FeatureStatsFsSyncDuration, attributes.GroupKubernetes, &attributes.SelectorConfig{}),
-		"the Kubernetes attributes of the workload are reported by default")
+	assert.Equal(t, fsSyncReads{}, reads(export.FeatureStatsFsSyncDuration, attributes.GroupKubernetes, &attributes.SelectorConfig{}),
+		"the Kubernetes attributes of the workload are opt-in on the histogram")
 	assert.Equal(t, fsSyncReads{cgroup: true},
 		reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, selecting("container.id")))
 	assert.Equal(t, fsSyncReads{filesystem: true},

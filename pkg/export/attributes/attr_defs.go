@@ -272,8 +272,8 @@ func getDefinitions(
 		nil,
 	)
 
-	// the same workload attributes, all opt-in, for the block I/O histograms, whose
-	// series count is multiplied by the number of buckets
+	// the same workload attributes, all opt-in, for the latency histograms of the storage stats,
+	// whose series count is multiplied by the number of buckets. Their counters carry the workload.
 	statsDiskKubeOptInAttributes := NewAttrReportGroup(
 		!kubeEnabled,
 		nil,
@@ -1089,7 +1089,7 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{},
 		},
 		StatFsSyncDuration.Section: {
-			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsDiskKubeAttributes},
+			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsDiskKubeOptInAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
@@ -1105,7 +1105,7 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{},
 		},
 		StatNFSClientProcedureDuration.Section: {
-			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsDiskKubeAttributes},
+			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsDiskKubeOptInAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
