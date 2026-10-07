@@ -1,0 +1,1 @@
+[run-vm] exit=1 kernel=rhel9.6 (5.14.0-570.62.1.0.1.el9_6.x86_64) accel=kvm boot=1.0s payload=124.5s total=125.5s log=~/obi-work/lab-kit/lab/logs/rhel9.6-20261007-232843.log results=~/obi-work/lab-kit/lab/runs/rhel9.6-20261007-232843/results

@@ -1,11 +1,11 @@
 # KVM lab results for PR #4 (OBI storage metrics)
 
-## State (updated 2026-10-07 22:55 +03:00)
+## State (updated 2026-10-07 23:32 +03:00)
 
 This branch is written by the KVM lab on the user's workstation. Two shas are involved:
 
 - `0b5d13939` (the code before `ec314571`): the kernel matrix, k3s and iostats blocks, and a supplement (the final payload with its NFS module unload line fixed, on the 8 kernels that failed `nfs-late-setup`), were run by an earlier lab session and are summarised in the second half of this file; their files are at the root of the branch (`matrix-final.tsv`, `matrix-final-nfsfix.tsv`, `k3s-final.tsv`, `iostats.tsv`, `out/`, `failures/`). All four are complete: none was cut off. No NVMe multipath run was made at this sha.
-- the passthrough fix (the commit on top of `ec314571173bc0ab9bc170da76e161da382e06a4`): **not pushed to `feat/statso11y-disk-metrics-v2` yet**; the lab polls the branch every 2 minutes (since 22:29 +03:00, for up to 3 hours). When it arrives, the payloads `final`, `iostats`, `nvme-mpath-nobio` and `nvme-mpath-bio` are rebuilt and run in this order: matrix on v6.12.111 v6.18.54 v7.2.6 rhel9.6 rhel8.10; matrix on the other six kernels; iostats; 20 rounds of the NVMe multipath repeat. Their results go under `<sha9>/` and into the first half of this file.
+- `a285b5b3485227f0ea636a9c791c1a2a3521a3e0` (the passthrough fix: `7c6ab26c8` "statsolly: keep passthrough commands out of the block request timing" plus `a285b5b34` "statsolly: make the passthrough commands test robust", on top of `ec314571`): seen on `feat/statso11y-disk-metrics-v2` at 23:20 +03:00. The payloads `final`, `iostats`, `nvme-mpath-nobio` and `nvme-mpath-bio` were rebuilt from it and are run in this order: matrix on v6.12.111 v6.18.54 v7.2.6 rhel9.6 rhel8.10 (step a); matrix on the other six kernels (step b); iostats (step c); 20 rounds of the NVMe multipath repeat (step d), published every 5 rounds. Their results are under `a285b5b34/` and in the first half of this file. **Progress: step a done (5 kernels); step b running; iostats and NVMe not started.**
 
 Nothing was run at `ec314571` itself.
 
@@ -15,6 +15,72 @@ Things to know about the earlier blocks:
 - Single runs of 2026-10-07 outside the blocks: two `payloads/rhel-smoke` boots from `setup.sh` (v6.12.111 and rhel8.10, both exit 0) and one NFS module diagnostic on v6.6.157 (`out/extra/`).
 - The matrix's only FAIL at `0b5d13939` is `RESULT nfs-late-setup FAIL (rc=1)` on 8 of 11 kernels: `modprobe -r nfs` in `payloads/final/run.sh` leaves `sunrpc` loaded, so the precondition of the late-attach step fails (the payload, not OBI; the supplement passes with 0 FAIL on all 8). The lab kit is unchanged, so the same 8 FAIL lines are expected at the new sha.
 - NFS checks (`nfs-*`, `e2e-nfs-*`) are reported but do not block anything: NFS is deferred.
+
+## Runs at `a285b5b3485227f0ea636a9c791c1a2a3521a3e0`
+
+OBI `feat/statso11y-disk-metrics-v2` at `a285b5b3485227f0ea636a9c791c1a2a3521a3e0` (HEAD: "statsolly: make the passthrough commands test robust"; the commit below it: "statsolly: keep passthrough commands out of the block request timing" (7c6ab26c8)). Lab kit `c865634`. `LAB_SMP=2 LAB_MEM=4096`, one VM at a time. 5 VM runs so far: all with `accel=kvm`. Files of this sha are under `a285b5b34/`.
+
+### Kernel matrix (final payload)
+
+`./run-matrix.sh payloads/final 1200 v6.12.111 v6.18.54 v7.2.6 rhel9.6 rhel8.10` (step a) and then `./run-matrix.sh payloads/final 1200 v5.8.18 v5.10.270 v5.15.221 v6.1.188 v6.6.157 rhel8.9`, payload built from `a285b5b34`.
+
+**In progress or stopped: 5 of 11 kernels.**
+
+| kernel | exit | verdict | PASS | FAIL | FAIL not NFS | SKIP | accel | boot | payload | total |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v6.12.111 | 1 | FAIL | 37 | 1 | 0 | 1 | kvm | 0.9s | 128.9s | 129.9s |
+| v6.18.54 | 1 | FAIL | 37 | 1 | 0 | 1 | kvm | 0.9s | 141.8s | 142.8s |
+| v7.2.6 | 1 | FAIL | 37 | 1 | 0 | 1 | kvm | 0.9s | 127.9s | 128.8s |
+| rhel9.6 | 1 | FAIL | 36 | 1 | 0 | 1 | kvm | 1.0s | 124.5s | 125.5s |
+| rhel8.10 | 0 | PASS | 35 | 0 | 0 | 0 | kvm | 1.4s | 73.2s | 74.7s |
+
+`verdict` is the VM's exit code (PASS = 0, TIMEOUT = 124, INFRA = 125: the guest never reported an exit code). NFS checks are reported but were deferred by the user: they do not block anything.
+
+#### TestDiskPassthroughCommands
+
+| kernel | result | line and skip reason (from the run's `privileged.log`) |
+|---|---|---|
+| v6.12.111 | PASS | `--- PASS: TestDiskPassthroughCommands (3.00s)` |
+| v6.18.54 | PASS | `--- PASS: TestDiskPassthroughCommands (2.94s)` |
+| v7.2.6 | PASS | `--- PASS: TestDiskPassthroughCommands (3.12s)` |
+| rhel9.6 | PASS | `--- PASS: TestDiskPassthroughCommands (2.96s)` |
+| rhel8.10 | PASS | `--- PASS: TestDiskPassthroughCommands (2.95s)` |
+
+The whole `privileged.log` of every kernel is in `a285b5b34/out/matrix/<kernel>.privileged.log`.
+
+#### Failures
+
+- **v6.12.111**: exit 1 (FAIL), 1 FAIL; logs in `a285b5b34/failures/matrix-v6.12.111/`
+  - `RESULT nfs-late-setup FAIL (rc=1)` (NFS, deferred)
+- **v6.18.54**: exit 1 (FAIL), 1 FAIL; logs in `a285b5b34/failures/matrix-v6.18.54/`
+  - `RESULT nfs-late-setup FAIL (rc=1)` (NFS, deferred)
+- **v7.2.6**: exit 1 (FAIL), 1 FAIL; logs in `a285b5b34/failures/matrix-v7.2.6/`
+  - `RESULT nfs-late-setup FAIL (rc=1)` (NFS, deferred)
+- **rhel9.6**: exit 1 (FAIL), 1 FAIL; logs in `a285b5b34/failures/matrix-rhel9.6/`
+  - `RESULT nfs-late-setup FAIL (rc=1)` (NFS, deferred)
+
+#### SKIP lines
+
+- v6.12.111: `SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel`
+- v6.18.54: `SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel`
+- v7.2.6: `SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel`
+- rhel9.6: `SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel`
+
+The payload output of every kernel is in `a285b5b34/out/matrix/<kernel>.out`.
+
+### iostats (stale request starts, the RQF_IO_STAT gate)
+
+`LAB_EXTRA_DISKS="1G" ./run-matrix.sh payloads/iostats 1800 v6.18.54 v7.2.6 v6.12.111 rhel9.6`, payload built from `a285b5b34`.
+
+MODE: `payloads/iostats/MODE` after the build: `fixed`; printed by the payload in the runs: `-`.
+
+No valid run yet.
+
+### NVMe native multipath stall repeat (F-NVMe-2)
+
+20 rounds; per round, in order: nvme-mpath-nobio and nvme-mpath-bio on v6.12.111, then on rhel9.6, each as `LAB_NVME_MPATH=256M ./run-vm.sh <kernel> payloads/<variant> 600`. Payloads built from `a285b5b34` (nobio) and `a285b5b34` (bio).
+
+Not run yet.
 
 ## Earlier runs at `0b5d13939` (by the earlier lab session; files at the root of this branch)
 

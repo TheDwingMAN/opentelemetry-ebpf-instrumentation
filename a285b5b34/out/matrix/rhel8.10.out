@@ -1,0 +1,128 @@
+uname -r: 4.18.0-553.146.1.el8_10.x86_64
+
+##### privileged tests
+--- PASS: TestDiskLatencyIsAccumulatedPerDevice (0.23s)
+--- PASS: TestDiskPartitions (0.18s)
+--- PASS: TestDiskFlushesAndDiscards (0.16s)
+--- PASS: TestDiskFileSyncsAreCountedLikeTheKernel (0.20s)
+--- PASS: TestDiskWriteZeroesAreCountedLikeTheKernel (0.14s)
+--- PASS: TestDiskStartsOfRequestsWithoutIOStatistics (4.39s)
+--- PASS: TestDiskPassthroughCommands (2.95s)
+--- PASS: TestDiskStackedVolumes (0.26s)
+--- PASS: TestDiskBioBasedDisks (0.15s)
+--- PASS: TestDiskPendingRequests (1.51s)
+--- PASS: TestDiskPendingStackedVolumes (1.54s)
+PASS
+PASS
+--- PASS: TestDiskIOIsChargedPerCgroup (0.18s)
+    tracer_disk_privileged_test.go:960: only runs as a child process of TestDiskIOIsChargedPerCgroup
+--- PASS: TestFsSyncTypesAndFilesystems (0.52s)
+PASS
+--- PASS: TestFsSyncIsChargedPerCgroup (0.50s)
+PASS
+--- PASS: TestFsSyncWithoutCgroupsOrFilesystems (0.50s)
+    tracer_disk_privileged_test.go:1114: only runs as a child process of TestFsSyncIsChargedPerCgroup
+--- SKIP: TestFsSyncProcess (0.00s)
+    tracer_disk_privileged_test.go:1331: storage features not measured: [{the NFS client procedure metrics (stats_nfs_client_procedure_*) can't tell the arguments of rpc_stats_latency on kernels older than 5.8} {the NFS client I/O metric (stats_nfs_client_io) can't tell the arguments of rpc_stats_latency on kernels older than 5.8}]
+--- PASS: TestNFSStatsAreOptional (0.21s)
+    tracer_disk_privileged_test.go:1355: the kernel can't load the NFS client probes before their modules: can't tell the arguments of rpc_stats_latency on kernels older than 5.8
+--- SKIP: TestNFSProbesAttachWhenTheirModulesAreLoaded (0.07s)
+--- PASS: TestDiskVolumesTracer (0.00s)
+--- PASS: TestNFSProcedureReader (0.00s)
+--- PASS: TestNFSIOReader (0.00s)
+--- PASS: TestNFSErrorType (0.00s)
+RESULT privileged PASS
+RESULT nfs-error-names PASS
+
+##### zone append op
+--- PASS: TestKernelBlockTracepointLayoutZoneAppendOp (0.08s)
+PASS
+RESULT zone-append-op PASS
+
+##### nfs late attach
+RESULT nfs-late-setup PASS
+RESULT nfs-stays-off PASS
+
+##### obi end to end
+stacked volumes: LVM dm-0 on loop1, md0 on loop2 loop3
+stall: dm-delay dm-1 on loop4, loop on top: /dev/loop5 (dio=1)
+zram0: scheduler 'none'
+write-zeroes: loop loop7, LVM volume dm-2
+blkdiscard: Operation forced, data will be lost!
+queue: writes=200 (want 200) reads=300 (want 300)
+RESULT e2e-queue PASS
+partition: writes on loop0p1=16 (want 16)
+RESULT e2e-partition PASS
+flush: 1 (want >=1)
+RESULT e2e-flush PASS
+discard: bytes=1048576 (want 1048576) requests=1 (want >=1)
+RESULT e2e-discard PASS
+write-zeroes (loop): obi writes=1 bytes=1048576 discards=0, diskstats writes=1 bytes=1048576 (want 1, 1048576 and 0 discards)
+RESULT e2e-write-zeroes PASS
+write-zeroes (LVM bio): obi writes=1 bytes=1048576, diskstats writes=1 bytes=1048576 (want equal, 1048576 bytes)
+RESULT e2e-write-zeroes-lvm PASS
+pending: series of nullb0=2 (want 2: read and write, now 0)
+RESULT e2e-pending PASS
+LVM volume: writes=32 (want 32) bytes=2097152 (want 2097152)
+RESULT e2e-lvm PASS
+md volume: writes=16 (md needs Linux 5.15+)
+stacked label: loop series stacked=2 (want >=1), null_blk series not stacked=2 (want >=1)
+RESULT e2e-stacked-label PASS
+file sync: fsync on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-fsync PASS
+file sync counter: fsync on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-counter-fsync PASS
+file sync: fdatasync on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-fdatasync PASS
+file sync counter: fdatasync on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-counter-fdatasync PASS
+file sync: syncfs on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-syncfs PASS
+file sync counter: syncfs on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-counter-syncfs PASS
+file sync type: fsync on /mnt/obifs reported as ext4=1 (want >=1)
+RESULT e2e-fs-type-ext4 PASS
+file sync type: fsync on /mnt/obitmpfs reported as tmpfs=1 (want >=1)
+RESULT e2e-fs-type-tmpfs PASS
+file sync type: fsync on /mnt/nfs reported as nfs4=1 (want >=1)
+RESULT e2e-fs-type-nfs4 PASS
+file sync type: fsync on /mnt/obiovl reported as overlay=1 (want >=1, not yet a RESULT)
+obi_stat_fs_sync_duration_seconds_count{container_id="",error_type="",obi_fs_sync_type="fsync",obi_ip="10.0.2.15",system_filesystem_mountpoint="/mnt/obiovl",system_filesystem_type="overlay"} 1
+file sync series with a mountpoint and no type=0 (want 0)
+RESULT e2e-fs-type-always-set PASS
+file sync: sync_file_range on /mnt/obifs=5 counter=5 (want 5: the 7 WRITE-only hints are not syncs; 12 means the fix is missing, 0 or 12 with the fix means a wrong register)
+RESULT e2e-fs-sync-sync_file_range PASS
+RESULT e2e-fs-sync-counter-sync_file_range PASS
+file syncs: histogram count=37 operations=37, histogram sum=0.006899 operation time=0.006899 (want equal)
+RESULT e2e-fs-sync-counters-match PASS
+file sync: sync=1 without mountpoint (want >=1)
+RESULT e2e-fs-sync-sync PASS
+NFS: no module BTF to check the tracepoint arguments on a kernel older than 5.8, so the NFS metrics are disabled (expected on RHEL 8)
+stall: dd exit=0 (want 0) on /dev/loop5
+RESULT e2e-stall-write PASS
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="5"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="10"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="30"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="60"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="+Inf"} 1
+stall: dm-1 write time sum=12s (want 12..29)
+RESULT e2e-stall-bucket-bio PASS
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="5"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="10"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="30"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="60"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="+Inf"} 1
+RESULT e2e-stall-bucket PASS
+RESULT e2e-stall-bounds PASS
+RESULT e2e-stall-no-approximation PASS
+zram (bio-based disk): writes=32 (want 32) bytes=131072 (want 131072)
+RESULT e2e-bio-based-disk PASS
+loop read/write operations=18 (flushes and discards not included)
+time=2026-10-07T20:31:43.082Z level=WARN msg="a storage latency histogram is reported per pod or container: each pod adds a series per bucket. The operations and time counters give the mean latency per pod at one series each" component=agent.StatsO11y histogram=obi.stat.fs.sync.duration attributes=[container.id]
+time=2026-10-07T20:31:43.707Z level=WARN msg="storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working" component=agent.StatsO11y metrics="the NFS client procedure metrics (stats_nfs_client_procedure_*)" reason="can't tell the arguments of rpc_stats_latency on kernels older than 5.8"
+time=2026-10-07T20:31:43.707Z level=WARN msg="storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working" component=agent.StatsO11y metrics="the NFS client I/O metric (stats_nfs_client_io)" reason="can't tell the arguments of rpc_stats_latency on kernels older than 5.8"
+
+##### optional storage features
+time=2026-10-07T20:31:43.707Z level=WARN msg="storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working" component=agent.StatsO11y metrics="the NFS client procedure metrics (stats_nfs_client_procedure_*)" reason="can't tell the arguments of rpc_stats_latency on kernels older than 5.8"
+time=2026-10-07T20:31:43.707Z level=WARN msg="storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working" component=agent.StatsO11y metrics="the NFS client I/O metric (stats_nfs_client_io)" reason="can't tell the arguments of rpc_stats_latency on kernels older than 5.8"
+RESULT storage-nfs-disabled-warn PASS

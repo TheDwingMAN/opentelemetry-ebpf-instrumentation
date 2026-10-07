@@ -1,0 +1,139 @@
+uname -r: 6.12.111-0612111-generic
+
+##### privileged tests
+--- PASS: TestDiskLatencyIsAccumulatedPerDevice (0.15s)
+--- PASS: TestDiskPartitions (0.08s)
+--- PASS: TestDiskFlushesAndDiscards (0.11s)
+--- PASS: TestDiskFileSyncsAreCountedLikeTheKernel (0.12s)
+--- PASS: TestDiskWriteZeroesAreCountedLikeTheKernel (0.11s)
+--- PASS: TestDiskStartsOfRequestsWithoutIOStatistics (4.38s)
+--- PASS: TestDiskPassthroughCommands (3.00s)
+--- PASS: TestDiskStackedVolumes (0.15s)
+--- PASS: TestDiskBioBasedDisks (0.17s)
+--- PASS: TestDiskPendingRequests (2.02s)
+--- PASS: TestDiskPendingStackedVolumes (2.06s)
+PASS
+PASS
+--- PASS: TestDiskIOIsChargedPerCgroup (0.15s)
+    tracer_disk_privileged_test.go:960: only runs as a child process of TestDiskIOIsChargedPerCgroup
+--- PASS: TestFsSyncTypesAndFilesystems (0.50s)
+PASS
+--- PASS: TestFsSyncIsChargedPerCgroup (0.53s)
+PASS
+--- PASS: TestFsSyncWithoutCgroupsOrFilesystems (0.52s)
+    tracer_disk_privileged_test.go:1114: only runs as a child process of TestFsSyncIsChargedPerCgroup
+--- SKIP: TestFsSyncProcess (0.00s)
+    tracer_disk_privileged_test.go:1331: storage features not measured: [{the NFS client procedure metrics (stats_nfs_client_procedure_*) waiting for the tracepoints of the sunrpc kernel module: the probes are attached when they exist} {the NFS client I/O metric (stats_nfs_client_io) waiting for the tracepoints of the nfs kernel module: the probes are attached when they exist}]
+--- PASS: TestNFSStatsAreOptional (0.27s)
+--- PASS: TestNFSProbesAttachWhenTheirModulesAreLoaded (0.31s)
+--- PASS: TestDiskVolumesTracer (0.01s)
+--- PASS: TestNFSProcedureReader (0.00s)
+--- PASS: TestNFSIOReader (0.00s)
+--- PASS: TestNFSErrorType (0.00s)
+PASS
+RESULT privileged PASS
+RESULT nfs-error-names PASS
+
+##### zone append op
+--- PASS: TestKernelBlockTracepointLayoutZoneAppendOp (0.05s)
+PASS
+RESULT zone-append-op PASS
+
+##### nfs late attach
+sunrpc still loaded, holders: 
+RESULT nfs-late-setup FAIL (rc=1)
+
+##### obi end to end
+stacked volumes: LVM dm-0 on loop1, md0 on loop2 loop3
+stall: dm-delay dm-1 on loop4, loop on top: /dev/loop5 (dio=1)
+zram0: scheduler 'absent'
+write-zeroes: loop loop7, LVM volume dm-2
+blkdiscard: Operation forced, data will be lost!
+queue: writes=200 (want 200) reads=300 (want 300)
+RESULT e2e-queue PASS
+partition: writes on loop0p1=16 (want 16)
+RESULT e2e-partition PASS
+flush: 1 (want >=1)
+RESULT e2e-flush PASS
+discard: bytes=1048576 (want 1048576) requests=1 (want >=1)
+RESULT e2e-discard PASS
+write-zeroes (loop): obi writes=1 bytes=1048576 discards=0, diskstats writes=1 bytes=1048576 (want 1, 1048576 and 0 discards)
+RESULT e2e-write-zeroes PASS
+SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel
+pending: series of ok=2 (want 2: read and write, now 0)
+RESULT e2e-pending PASS
+LVM volume: writes=32 (want 32) bytes=2097152 (want 2097152)
+RESULT e2e-lvm PASS
+md volume: writes=16 (want >=16)
+RESULT e2e-md PASS
+stacked label: loop series stacked=2 (want >=1), null_blk series not stacked=2 (want >=1)
+RESULT e2e-stacked-label PASS
+file sync: fsync on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-fsync PASS
+file sync counter: fsync on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-counter-fsync PASS
+file sync: fdatasync on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-fdatasync PASS
+file sync counter: fdatasync on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-counter-fdatasync PASS
+file sync: syncfs on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-syncfs PASS
+file sync counter: syncfs on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-counter-syncfs PASS
+file sync type: fsync on /mnt/obifs reported as ext4=1 (want >=1)
+RESULT e2e-fs-type-ext4 PASS
+file sync type: fsync on /mnt/obitmpfs reported as tmpfs=1 (want >=1)
+RESULT e2e-fs-type-tmpfs PASS
+file sync type: fsync on /mnt/nfs reported as nfs4=1 (want >=1)
+RESULT e2e-fs-type-nfs4 PASS
+file sync type: fsync on /mnt/obiovl reported as overlay=1 (want >=1, not yet a RESULT)
+obi_stat_fs_sync_duration_seconds_count{container_id="",error_type="",obi_fs_sync_type="fsync",obi_ip="10.0.2.15",system_filesystem_mountpoint="/mnt/obiovl",system_filesystem_type="overlay"} 1
+file sync series with a mountpoint and no type=0 (want 0)
+RESULT e2e-fs-type-always-set PASS
+file sync: sync_file_range on /mnt/obifs=5 counter=5 (want 5: the 7 WRITE-only hints are not syncs; 12 means the fix is missing, 0 or 12 with the fix means a wrong register)
+RESULT e2e-fs-sync-sync_file_range PASS
+RESULT e2e-fs-sync-counter-sync_file_range PASS
+file syncs: histogram count=13 operations=13, histogram sum=0.008597 operation time=0.008597 (want equal)
+RESULT e2e-fs-sync-counters-match PASS
+file sync: sync=1 without mountpoint (want >=1)
+RESULT e2e-fs-sync-sync PASS
+NFS io: written=1048576 read=1048576 (want 1048576 each)
+RESULT e2e-nfs-io PASS
+NFS procedures: WRITE=16 READ=16 (want >=16 each), ENOENT series=1 (want >=1)
+obi_stat_nfs_client_procedure_duration_seconds_count{error_type="",onc_rpc_procedure_name="ACCESS",onc_rpc_version="4",server_address="127.0.0.1"} 1
+obi_stat_nfs_client_procedure_duration_seconds_count{error_type="",onc_rpc_procedure_name="CLOSE",onc_rpc_version="4",server_address="127.0.0.1"} 3
+obi_stat_nfs_client_procedure_duration_seconds_count{error_type="",onc_rpc_procedure_name="OPEN",onc_rpc_version="4",server_address="127.0.0.1"} 1
+obi_stat_nfs_client_procedure_duration_seconds_count{error_type="",onc_rpc_procedure_name="OPEN_NOATTR",onc_rpc_version="4",server_address="127.0.0.1"} 2
+obi_stat_nfs_client_procedure_duration_seconds_count{error_type="",onc_rpc_procedure_name="READ",onc_rpc_version="4",server_address="127.0.0.1"} 16
+obi_stat_nfs_client_procedure_duration_seconds_count{error_type="",onc_rpc_procedure_name="WRITE",onc_rpc_version="4",server_address="127.0.0.1"} 16
+obi_stat_nfs_client_procedure_duration_seconds_count{error_type="ENOENT",onc_rpc_procedure_name="LOOKUP",onc_rpc_version="4",server_address="127.0.0.1"} 1
+obi_stat_nfs_client_procedure_duration_seconds_count{error_type="NFS4ERR_GRACE",onc_rpc_procedure_name="OPEN",onc_rpc_version="4",server_address="127.0.0.1"} 12
+RESULT e2e-nfs-procedures PASS
+NFS counters: count=52 (histogram 52), WRITE=16 (histogram 16)
+RESULT e2e-nfs-counters PASS
+stall: dd exit=0 (want 0) on /dev/loop5
+RESULT e2e-stall-write PASS
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="5"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="10"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="30"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="60"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="+Inf"} 1
+stall: dm-1 write time sum=12s (want 12..29)
+RESULT e2e-stall-bucket-bio PASS
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="5"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="10"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="30"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="60"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="+Inf"} 1
+RESULT e2e-stall-bucket PASS
+RESULT e2e-stall-bounds PASS
+RESULT e2e-stall-bounds-nfs PASS
+RESULT e2e-stall-no-approximation PASS
+zram (bio-based disk): writes=32 (want 32) bytes=131072 (want 131072)
+RESULT e2e-bio-based-disk PASS
+loop read/write operations=18 (flushes and discards not included)
+time=2026-10-07T20:22:33.523Z level=WARN msg="a storage latency histogram is reported per pod or container: each pod adds a series per bucket. The operations and time counters give the mean latency per pod at one series each" component=agent.StatsO11y histogram=obi.stat.fs.sync.duration attributes=[container.id]
+
+##### optional storage features
+time=2026-10-07T20:22:33.784Z level=INFO msg="the probes of the enabled storage metrics are loaded" component=agent.StatsO11y
+RESULT storage-all-loaded PASS
