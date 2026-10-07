@@ -177,7 +177,7 @@ func TestFeatureStatsDiskAggregate(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, disk.StatsDiskIO())
 	assert.True(t, disk.StatsDiskOperations())
-	assert.True(t, disk.StatsDiskOperationTime())
+	assert.True(t, disk.StatsDiskServiceTime())
 	assert.True(t, disk.StatsDiskOperationDuration())
 	assert.True(t, disk.StatsDiskQueueDuration())
 	assert.True(t, disk.StatsDiskFlush())
@@ -203,7 +203,7 @@ func TestFeatureStatsDiskAggregate(t *testing.T) {
 		assert.True(t, features.StatMetrics(), "%s enables the stats pipeline", feature)
 	}
 
-	counters, err := LoadFeatures([]string{"stats_disk_io", "stats_disk_operations", "stats_disk_operation_time"})
+	counters, err := LoadFeatures([]string{"stats_disk_io", "stats_disk_operations", "stats_disk_service_time"})
 	require.NoError(t, err)
 	assert.True(t, counters.StatsDisk())
 	assert.False(t, counters.StatsDiskOperationDuration())

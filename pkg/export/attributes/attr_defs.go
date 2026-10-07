@@ -1094,7 +1094,7 @@ func getDefinitions(
 				attr.ErrorType: true,
 			},
 		},
-		StatDiskOperationTime.Section: {
+		StatDiskServiceTime.Section: {
 			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},

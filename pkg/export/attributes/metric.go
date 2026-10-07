@@ -696,10 +696,10 @@ var (
 		Unit:    "{operation}",
 		Type:    InstrumentCounter,
 	})
-	StatDiskOperationTime = metric(Name{
+	StatDiskServiceTime = metric(Name{
 		// normalized like the attributes.select keys, which have their underscores replaced by dots
-		Section: "obi.stat.disk.operation.time",
-		OTEL:    "obi.stat.disk.operation_time",
+		Section: "obi.stat.disk.service.time",
+		OTEL:    "obi.stat.disk.service_time",
 		Unit:    "s",
 		Type:    InstrumentCounter,
 	})

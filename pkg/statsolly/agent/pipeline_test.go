@@ -258,7 +258,7 @@ func TestDiskStats(t *testing.T) {
 
 func TestDiskCounters(t *testing.T) {
 	diskEvents, promURL := startDiskPipeline(t,
-		export.FeatureStatsDiskIO|export.FeatureStatsDiskOperations|export.FeatureStatsDiskOperationTime)
+		export.FeatureStatsDiskIO|export.FeatureStatsDiskOperations|export.FeatureStatsDiskServiceTime)
 
 	write := fakeDiskRecord("vda", ebpf.CodeDiskOpWrite, "")
 	write.DiskIO.Operations, write.DiskIO.Time, write.DiskIO.Bytes = 3, 0.25, 12288
@@ -288,9 +288,9 @@ func TestDiskCounters(t *testing.T) {
 			}},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operations_total"))
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_disk_operation_time_seconds_total", Value: 0.75, Labels: vdaWrite},
-			{Name: "obi_stat_disk_operation_time_seconds_total", Value: 0.125, Labels: vdaRead},
-		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_time_seconds_total"))
+			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.75, Labels: vdaWrite},
+			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.125, Labels: vdaRead},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_service_time_seconds_total"))
 	}, timeout, 100*time.Millisecond)
 }
 

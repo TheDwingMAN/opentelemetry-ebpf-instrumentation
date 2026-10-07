@@ -2519,8 +2519,8 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsDiskIO
 		case statsFeatureDiskOperations:
 			out |= export.FeatureStatsDiskOperations
-		case statsFeatureDiskOperationTime:
-			out |= export.FeatureStatsDiskOperationTime
+		case statsFeatureDiskServiceTime:
+			out |= export.FeatureStatsDiskServiceTime
 		case statsFeatureDiskOperationDuration:
 			out |= export.FeatureStatsDiskOperationDuration
 		case statsFeatureFsSyncDuration:

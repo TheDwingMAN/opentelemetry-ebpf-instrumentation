@@ -212,7 +212,7 @@ func testStatMetricsDiskCounters(t *testing.T, containerID string) {
 	for _, metric := range []string{
 		"obi_stat_disk_io_bytes_total",
 		"obi_stat_disk_operations_total",
-		"obi_stat_disk_operation_time_seconds_total",
+		"obi_stat_disk_service_time_seconds_total",
 	} {
 		for _, direction := range []string{"read", "write"} {
 			require.EventuallyWithT(t, func(ct *assert.CollectT) {

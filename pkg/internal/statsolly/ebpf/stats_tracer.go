@@ -768,7 +768,7 @@ func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelec
 		{enabled: features.StatsDiskOperationDuration(), name: attributes.StatDiskOperationDuration},
 		{enabled: features.StatsDiskIO(), name: attributes.StatDiskIO},
 		{enabled: features.StatsDiskOperations(), name: attributes.StatDiskOperations},
-		{enabled: features.StatsDiskOperationTime(), name: attributes.StatDiskOperationTime},
+		{enabled: features.StatsDiskServiceTime(), name: attributes.StatDiskServiceTime},
 		{enabled: features.StatsDiskQueueDuration(), name: attributes.StatDiskQueueDuration},
 		{enabled: features.StatsDiskFlush(), name: attributes.StatDiskFlushDuration},
 		{enabled: features.StatsDiskDiscard(), name: attributes.StatDiskDiscardDuration},

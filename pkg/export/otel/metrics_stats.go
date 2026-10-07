@@ -100,7 +100,7 @@ type statMetricsExporter struct {
 	diskOperationDuration    *kernelHistogram
 	diskIO                   *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskOperations           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
-	diskOperationTime        *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
+	diskServiceTime          *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
 	fsSyncDuration           *kernelHistogram
 	fsSyncOperations         *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	fsSyncOperationTime      *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
@@ -282,14 +282,14 @@ func newStatMetricsExporter(
 		nme.diskOperations = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, diskOperations, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
-	if cfg.CommonCfg.Features.StatsDiskOperationTime() {
-		diskOperationTime, err := ebpfEvents.Float64Counter(attributes.StatDiskOperationTime.OTEL, metric2.WithUnit(attributes.StatDiskOperationTime.Unit))
+	if cfg.CommonCfg.Features.StatsDiskServiceTime() {
+		diskServiceTime, err := ebpfEvents.Float64Counter(attributes.StatDiskServiceTime.OTEL, metric2.WithUnit(attributes.StatDiskServiceTime.Unit))
 		if err != nil {
-			log.Error("creating stats disk operation time counter", "error", err)
+			log.Error("creating stats disk service time counter", "error", err)
 			return nil, err
 		}
-		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskOperationTime))
-		nme.diskOperationTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, diskOperationTime, attrs, timeNow, cfg.Metrics.TTL)
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskServiceTime))
+		nme.diskServiceTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, diskServiceTime, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	if err := nme.createFsSyncMetrics(ctx, ebpfEvents, attrProv, cfg, log); err != nil {
@@ -615,8 +615,8 @@ func (me *statMetricsExporter) recordDiskCounters(ctx context.Context, v *ebpf.S
 		diskOperations, attrs := me.diskOperations.ForRecord(v)
 		diskOperations.Add(ctx, int64(v.DiskIO.Operations), metric2.WithAttributeSet(attrs))
 	}
-	if me.diskOperationTime != nil {
-		diskOperationTime, attrs := me.diskOperationTime.ForRecord(v)
-		diskOperationTime.Add(ctx, v.DiskIO.Time, metric2.WithAttributeSet(attrs))
+	if me.diskServiceTime != nil {
+		diskServiceTime, attrs := me.diskServiceTime.ForRecord(v)
+		diskServiceTime.Add(ctx, v.DiskIO.Time, metric2.WithAttributeSet(attrs))
 	}
 }

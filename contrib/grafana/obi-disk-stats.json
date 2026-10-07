@@ -347,7 +347,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (obi_ip, system_device) (rate(obi_stat_disk_operation_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])) + sum by (obi_ip, system_device) (rate(obi_stat_disk_queue_duration_seconds_sum{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "expr": "sum by (obi_ip, system_device) (rate(obi_stat_disk_service_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])) + sum by (obi_ip, system_device) (rate(obi_stat_disk_queue_duration_seconds_sum{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
           "legendFormat": "{{obi_ip}} {{system_device}}",
           "refId": "A",
           "format": "time_series"
@@ -664,7 +664,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (k8s_namespace_name, k8s_owner_name, disk_io_direction) (rate(obi_stat_disk_operation_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__rate_interval])) / sum by (k8s_namespace_name, k8s_owner_name, disk_io_direction) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__rate_interval]))",
+          "expr": "sum by (k8s_namespace_name, k8s_owner_name, disk_io_direction) (rate(obi_stat_disk_service_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__rate_interval])) / sum by (k8s_namespace_name, k8s_owner_name, disk_io_direction) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\", k8s_owner_name!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{k8s_namespace_name}}/{{k8s_owner_name}} {{disk_io_direction}}",
           "refId": "A",
           "format": "time_series"

@@ -496,16 +496,24 @@ groups:
         requirement_level:
           conditionally_required: if the block I/O request failed
 
-  - id: metric.obi.obi.stat.disk.operation_time
+  - id: metric.obi.obi.stat.disk.service_time
     type: metric
-    metric_name: obi.stat.disk.operation_time
+    metric_name: obi.stat.disk.service_time
     instrument: counter
     unit: "s"
     stability: development
     brief: >
-      Sum of the durations of the completed block I/O requests, from their
-      issue to the device until their completion, per block device, direction
-      and workload the I/O is charged to.
+      Sum of the device service times of the completed block reads and writes
+      (the sum of `obi.stat.disk.operation.duration`), per block device,
+      direction and workload the I/O is charged to. Unlike
+      `system.disk.operation_time` (/proc/diskstats), it excludes the wait in
+      the I/O scheduler.
+    note: >
+      Divided by `obi.stat.disk.operations`, it is the mean service time per
+      workload. Its rate is the average number of requests that the device
+      serves at once (above 1 on devices that serve requests in parallel). Plus
+      the sum of `obi.stat.disk.queue.duration`, it is the time that
+      /proc/diskstats counts and iostat's await averages.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in

@@ -248,7 +248,7 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 		attr.SystemDevice,
 	}
 	assert.Equal(t, workload, p.For(StatDiskIO))
-	assert.Equal(t, workload, p.For(StatDiskOperationTime))
+	assert.Equal(t, workload, p.For(StatDiskServiceTime))
 	assert.Equal(t, []attr.Name{
 		attr.DiskIODirection,
 		attr.ErrorType,
@@ -265,19 +265,19 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 	assert.Equal(t, []attr.Name{attr.DiskIODirection, attr.DiskStacked, attr.SystemDevice}, p.For(StatDiskIO))
 }
 
-func TestStatDiskOperationTimeSelection(t *testing.T) {
-	// the attributes.select keys are normalized: the former name, obi.stat.disk.operation.time,
-	// still selects the metric
+func TestStatDiskServiceTimeSelection(t *testing.T) {
+	// the attributes.select keys are normalized: the name with dots, obi.stat.disk.service.time,
+	// selects the metric too
 	for _, key := range []Section{
-		"obi.stat.disk.operation_time",
-		"obi.stat.disk.operation.time",
-		"obi_stat_disk_operation_time_seconds_total",
+		"obi.stat.disk.service_time",
+		"obi.stat.disk.service.time",
+		"obi_stat_disk_service_time_seconds_total",
 	} {
 		selection := Selection{key: InclusionLists{Include: []string{"k8s.pod.name"}}}
 		selection.Normalize()
 		p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: selection})
 		require.NoError(t, err)
-		assert.Equal(t, []attr.Name{attr.K8sPodName}, p.For(StatDiskOperationTime), key)
+		assert.Equal(t, []attr.Name{attr.K8sPodName}, p.For(StatDiskServiceTime), key)
 	}
 }
 

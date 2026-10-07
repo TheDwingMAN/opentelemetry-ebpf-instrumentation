@@ -166,7 +166,7 @@ The storage stats (disk, file sync and NFS client) are optional, as OBI's option
 - The exporters add up the requests of each kernel bucket into their own buckets, once per read of the kernel maps, so these histograms are exported with explicit buckets: the exponential histograms of the OTLP exporter (`histogram_aggregation`) and the native histograms of the Prometheus exporter don't apply to them, as their resolution is the kernel's.
 - The tracepoint arguments changed across kernel versions (and some of those changes were backported to older kernels), so OBI reads them from the kernel BTF instead of guessing from the kernel version. If the kernel BTF lacks the tracepoint prototypes, the disk probes are not loaded and a warning is logged; the other stat metrics keep working.
 
-The latency histograms of the storage stats (disk, file sync and NFS client) multiply their series by the number of buckets, so their workload attributes (`k8s.*`, `container.id`) are opt-in: select them in `attributes.select` to get a latency distribution per workload. The counters carry the workload by default, and the ratio of a time counter to its count counter (e.g. `obi.stat.disk.operation_time` / `obi.stat.disk.operations`) is the mean latency of each workload.
+The latency histograms of the storage stats (disk, file sync and NFS client) multiply their series by the number of buckets, so their workload attributes (`k8s.*`, `container.id`) are opt-in: select them in `attributes.select` to get a latency distribution per workload. The counters carry the workload by default, and the ratio of a time counter to its count counter (e.g. `obi.stat.disk.service_time` / `obi.stat.disk.operations`) is the mean latency of each workload.
 
 The disk metrics are charged to the workload that owns the I/O: the cgroup that the request's first bio is charged to, which is the cgroup the kernel also uses for `io.stat` and `io.max`. OBI reads the cgroup name in the kernel, takes the container ID from it, and decorates the metrics with the pod and container of that ID. Limitations:
 
@@ -256,7 +256,7 @@ Minimal:
 
 ```yaml
 metrics:
-  features: [stats_disk_io, stats_disk_operations, stats_disk_operation_time, stats_disk_flush,
+  features: [stats_disk_io, stats_disk_operations, stats_disk_service_time, stats_disk_flush,
              stats_fs_sync_operations, stats_fs_sync_operation_time]
 ```
 
@@ -280,7 +280,7 @@ attributes:
       exclude: [obi.ip, obi.disk.partition, container.id, k8s.pod.name, k8s.container.name, k8s.kind]
 ```
 
-The mean latency per workload doesn't need the detailed profile: it is the ratio of a time counter to its count counter, e.g. `rate(obi_stat_disk_operation_time_seconds_total[5m]) / rate(obi_stat_disk_operations_total[5m])`. Selecting `k8s.pod.name`, `k8s.container.name` or `container.id` on a latency histogram makes a series per bucket for each pod, and OBI warns about it at startup. With config v2, list the families in `capture.network.stats.features` without the `stats_` prefix, and the selection in `extensions.obi.enrich.attributes.select`. Config v2 has no group names: in place of `stats_disk`, `stats_fs_sync` and `stats_nfs`, list each of their families (`disk_io`, `disk_operations` and so on, as [config v2](config/version-2.0/config-v2.md) lists them). Unknown names, like `disk`, are ignored.
+The mean latency per workload doesn't need the detailed profile: it is the ratio of a time counter to its count counter, e.g. `rate(obi_stat_disk_service_time_seconds_total[5m]) / rate(obi_stat_disk_operations_total[5m])`. Selecting `k8s.pod.name`, `k8s.container.name` or `container.id` on a latency histogram makes a series per bucket for each pod, and OBI warns about it at startup. With config v2, list the families in `capture.network.stats.features` without the `stats_` prefix, and the selection in `extensions.obi.enrich.attributes.select`. Config v2 has no group names: in place of `stats_disk`, `stats_fs_sync` and `stats_nfs`, list each of their families (`disk_io`, `disk_operations` and so on, as [config v2](config/version-2.0/config-v2.md) lists them). Unknown names, like `disk`, are ignored.
 
 #### Storage stats under dynamic application selection
 

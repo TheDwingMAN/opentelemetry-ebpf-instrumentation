@@ -45,7 +45,7 @@ type statMetricsReporter struct {
 	diskOperationDuration    *kernelHistogramVec
 	diskIO                   *Expirer[prometheus.Counter]
 	diskOperations           *Expirer[prometheus.Counter]
-	diskOperationTime        *Expirer[prometheus.Counter]
+	diskServiceTime          *Expirer[prometheus.Counter]
 	fsSyncDuration           *kernelHistogramVec
 	fsSyncOperations         *Expirer[prometheus.Counter]
 	fsSyncOperationTime      *Expirer[prometheus.Counter]
@@ -71,7 +71,7 @@ type statMetricsReporter struct {
 	diskOperationDurationAttrs    []attributes.Field[*ebpf.Stat, string]
 	diskIOAttrs                   []attributes.Field[*ebpf.Stat, string]
 	diskOperationsAttrs           []attributes.Field[*ebpf.Stat, string]
-	diskOperationTimeAttrs        []attributes.Field[*ebpf.Stat, string]
+	diskServiceTimeAttrs          []attributes.Field[*ebpf.Stat, string]
 	fsSyncDurationAttrs           []attributes.Field[*ebpf.Stat, string]
 	fsSyncOperationsAttrs         []attributes.Field[*ebpf.Stat, string]
 	fsSyncOperationTimeAttrs      []attributes.Field[*ebpf.Stat, string]
@@ -244,13 +244,13 @@ func newStatsReporter(
 		register = append(register, mr.diskOperations)
 	}
 
-	if cfg.CommonCfg.Features.StatsDiskOperationTime() {
-		mr.diskOperationTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskOperationTime))
-		mr.diskOperationTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: attributes.StatDiskOperationTime.Prom,
-			Help: "sum of the durations of the completed block I/O requests, in seconds",
-		}, labelNames(mr.diskOperationTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
-		register = append(register, mr.diskOperationTime)
+	if cfg.CommonCfg.Features.StatsDiskServiceTime() {
+		mr.diskServiceTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskServiceTime))
+		mr.diskServiceTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskServiceTime.Prom,
+			Help: "sum of the device service times of the completed block reads and writes (without the I/O scheduler wait), in seconds",
+		}, labelNames(mr.diskServiceTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskServiceTime)
 	}
 
 	register = append(register, mr.registerFsSyncMetrics(cfg, provider)...)
@@ -520,8 +520,8 @@ func (r *statMetricsReporter) observeDiskCounters(stat *ebpf.Stat) {
 		r.diskOperations.WithLabelValues(labelValues(stat, r.diskOperationsAttrs)...).
 			Metric.Add(float64(stat.DiskIO.Operations))
 	}
-	if r.diskOperationTime != nil {
-		r.diskOperationTime.WithLabelValues(labelValues(stat, r.diskOperationTimeAttrs)...).
+	if r.diskServiceTime != nil {
+		r.diskServiceTime.WithLabelValues(labelValues(stat, r.diskServiceTimeAttrs)...).
 			Metric.Add(stat.DiskIO.Time)
 	}
 }

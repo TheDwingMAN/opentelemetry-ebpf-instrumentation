@@ -59,7 +59,7 @@ const (
 	FeatureStatsDiskOperationDuration
 	FeatureStatsDiskIO
 	FeatureStatsDiskOperations
-	FeatureStatsDiskOperationTime
+	FeatureStatsDiskServiceTime
 	FeatureStatsFsSyncDuration
 	FeatureStatsDiskQueueDuration
 	FeatureStatsDiskFlush
@@ -87,7 +87,7 @@ const FeatureStats = FeatureStatsTCPRtt | FeatureStatsTCPFailedConnections | Fea
 // FeatureStatsDisk groups the block I/O stat metrics, and the disks of the stacked volumes. They are
 // not part of the `stats` aggregate: the block probes fire on every block request, so they have to
 // be enabled explicitly.
-const FeatureStatsDisk = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskOperationTime |
+const FeatureStatsDisk = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskServiceTime |
 	FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard | FeatureStatsDiskPendingOperations |
 	FeatureStatsDiskStackedVolumes | FeatureStatsDiskVolumeDevices
 
@@ -105,7 +105,7 @@ const featureStatsNFSProcedures = FeatureStatsNFSClientProcedureDuration | Featu
 // featureStatsDiskRequests are the block I/O stat metrics that the block probes measure, on every
 // block request
 const featureStatsDiskRequests = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations |
-	FeatureStatsDiskOperationTime | FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard
+	FeatureStatsDiskServiceTime | FeatureStatsDiskQueueDuration | FeatureStatsDiskFlush | FeatureStatsDiskDiscard
 
 // featureStatsStorage are the storage stat features, which `all` and `*` don't enable: their probes
 // fire on every block request, file sync or NFS RPC, and the pod volumes need to watch the
@@ -124,7 +124,7 @@ var FeatureMapper = map[string]Features{
 	"stats_disk":                          FeatureStatsDisk,
 	"stats_disk_io":                       FeatureStatsDiskIO,
 	"stats_disk_operations":               FeatureStatsDiskOperations,
-	"stats_disk_operation_time":           FeatureStatsDiskOperationTime,
+	"stats_disk_service_time":             FeatureStatsDiskServiceTime,
 	"stats_disk_operation_duration":       FeatureStatsDiskOperationDuration,
 	"stats_fs_sync":                       FeatureStatsFsSync,
 	"stats_fs_sync_duration":              FeatureStatsFsSyncDuration,
@@ -481,8 +481,8 @@ func (f Features) StatsDiskOperations() bool {
 	return f.any(FeatureStatsDiskOperations)
 }
 
-func (f Features) StatsDiskOperationTime() bool {
-	return f.any(FeatureStatsDiskOperationTime)
+func (f Features) StatsDiskServiceTime() bool {
+	return f.any(FeatureStatsDiskServiceTime)
 }
 
 func (f Features) StatsDiskOperationDuration() bool {

@@ -1061,7 +1061,7 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 			"tcp_rtt",
 			"disk_io",
 			"disk_operations",
-			"disk_operation_time",
+			"disk_service_time",
 			"disk_operation_duration",
 			"disk_queue_duration",
 			"disk_flush",

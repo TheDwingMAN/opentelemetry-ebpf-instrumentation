@@ -382,7 +382,7 @@ const (
 	statsFeatureTCPIo                      = "tcp_io"
 	statsFeatureDiskIO                     = "disk_io"
 	statsFeatureDiskOperations             = "disk_operations"
-	statsFeatureDiskOperationTime          = "disk_operation_time"
+	statsFeatureDiskServiceTime            = "disk_service_time"
 	statsFeatureDiskOperationDuration      = "disk_operation_duration"
 	statsFeatureFsSyncDuration             = "fs_sync_duration"
 	statsFeatureFsSyncOperations           = "fs_sync_operations"
@@ -423,8 +423,8 @@ func statsFeatures(features featureexport.Features) []string {
 	if features.StatsDiskOperations() {
 		out = append(out, statsFeatureDiskOperations)
 	}
-	if features.StatsDiskOperationTime() {
-		out = append(out, statsFeatureDiskOperationTime)
+	if features.StatsDiskServiceTime() {
+		out = append(out, statsFeatureDiskServiceTime)
 	}
 	if features.StatsDiskOperationDuration() {
 		out = append(out, statsFeatureDiskOperationDuration)

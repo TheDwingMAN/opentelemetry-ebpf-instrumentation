@@ -39,7 +39,7 @@ var statTypeMetrics = map[StatType][]attributes.Name{
 	StatTypeTCPSuccessfulConnection: {attributes.StatTCPSuccessfulConnections},
 	StatTypeDiskIO: {
 		attributes.StatDiskOperationDuration, attributes.StatDiskIO, attributes.StatDiskOperations,
-		attributes.StatDiskOperationTime, attributes.StatDiskQueueDuration, attributes.StatDiskFlushDuration,
+		attributes.StatDiskServiceTime, attributes.StatDiskQueueDuration, attributes.StatDiskFlushDuration,
 		attributes.StatDiskDiscardDuration, attributes.StatDiskDiscardIO,
 	},
 	StatTypeFsSync: {
