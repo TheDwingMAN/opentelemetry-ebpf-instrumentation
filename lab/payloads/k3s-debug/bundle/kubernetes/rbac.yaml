@@ -1,0 +1,29 @@
+# OBI gets the metadata of the workloads from the k8s-cache (kubernetes/k8s-cache.yaml). It only
+# asks the Kubernetes API for its own node: its name, which the pod volume metric needs, and its
+# metadata.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: obi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obi
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obi
+subjects:
+  - kind: ServiceAccount
+    name: obi
+    namespace: obi
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obi

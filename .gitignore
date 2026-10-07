@@ -1,0 +1,36 @@
+# Built, downloaded or written by the lab: never committed
+lab/cache/
+lab/runs/
+lab/logs/
+lab/results/
+lab/.vm.lock
+devloop/bin/
+
+# payload artifacts (build-payload.sh, lab-matrix.sh, or put there by hand)
+lab/payloads/*/obi
+lab/payloads/*/obi-dynsel
+lab/payloads/*/stats.test
+lab/payloads/*/verifier.test
+lab/payloads/*/bpfmaps
+lab/payloads/*/bpfstats
+lab/payloads/*/kprobecost
+lab/payloads/*/fsyncargs
+lab/payloads/*/v2probe
+lab/payloads/*/otelcol-contrib
+lab/payloads/*/prometheus
+lab/payloads/*/*.tar
+lab/payloads/*/*.o
+lab/payloads/*/COMMIT
+lab/payloads/*/BUILT_FROM
+lab/payloads/smoke/blkprobe/
+
+# host-side helpers and their output
+lab/bpfmaps/bpfmaps
+lab/bpfstats/bpfstats
+lab/bpfstats/obi.log
+lab/bpfstats/disk.*
+lab/kprobecost/kprobecost
+lab/bench/obi
+lab/bench/results-*/
+lab/bench/contention/
+lab/soak/run-*/

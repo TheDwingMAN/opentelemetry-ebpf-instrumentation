@@ -1,0 +1,8 @@
+# Loads grafana/dashboards/obi-disk-stats.json, copied or mounted to the path below
+apiVersion: 1
+providers:
+  - name: obi
+    folder: OBI
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards/obi

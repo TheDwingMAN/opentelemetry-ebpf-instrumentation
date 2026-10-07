@@ -1,0 +1,7 @@
+attributes:
+  select:
+    obi.stat.fs.sync.duration:
+      include:
+        - obi.fs.sync.type
+        - system.filesystem.mountpoint
+        - system.filesystem.type

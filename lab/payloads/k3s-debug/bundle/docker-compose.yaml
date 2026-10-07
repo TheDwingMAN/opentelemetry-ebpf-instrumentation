@@ -1,0 +1,12 @@
+# OBI with the storage metrics on a host without Kubernetes: docker compose up -d
+services:
+  obi:
+    image: ${OBI_IMAGE:-registry.example.com/obi:disk-v2}
+    command: ["-config", "/config/obi-config.yaml"]
+    # eBPF programs, the cgroups of the processes and the mounts of the host
+    privileged: true
+    pid: host
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./obi-config.yaml:/config/obi-config.yaml:ro

@@ -1,0 +1,50 @@
+# An OpenTelemetry Collector 0.161.0 in the cluster, from the otelcol-contrib binary of the payload
+# (the image is busybox tagged as the collector image, so the debug script finds it by image name).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: otel
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: otel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+    spec:
+      containers:
+        - name: otelcol
+          image: otel/opentelemetry-collector-contrib:lab
+          imagePullPolicy: Never
+          command: ["/otel/otelcol-contrib", "--config=/conf/config.yaml"]
+          ports:
+            - {name: otlp-http, containerPort: 4318}
+            - {name: otlp-grpc, containerPort: 4317}
+          volumeMounts:
+            - {name: binary, mountPath: /otel, readOnly: true}
+            - {name: config, mountPath: /conf}
+      volumes:
+        - name: binary
+          hostPath: {path: /work, type: Directory}
+        - name: config
+          configMap: {name: otel-collector-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: otel
+spec:
+  selector:
+    app.kubernetes.io/name: otel-collector
+  ports:
+    - {name: otlp-http, port: 4318}
+    - {name: otlp-grpc, port: 4317}

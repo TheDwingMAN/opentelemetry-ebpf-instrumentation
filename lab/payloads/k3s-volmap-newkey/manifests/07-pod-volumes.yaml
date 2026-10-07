@@ -1,0 +1,130 @@
+# a local PersistentVolume, which the kubelet bind-mounts into the pod: an ext4 filesystem on an
+# LVM volume over a loop device whose file is on the root disk (set up by run.sh)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: lab-local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 16Mi
+  accessModes: [ReadWriteOnce]
+  local:
+    path: /mnt/lab-local
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/os
+              operator: In
+              values: [linux]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lab-local-claim
+  namespace: default
+spec:
+  storageClassName: manual
+  volumeName: lab-local
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 16Mi
+---
+# a hostPath PersistentVolume, which the kubelet doesn't mount
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: lab-hostpath
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 16Mi
+  accessModes: [ReadWriteOnce]
+  hostPath:
+    path: /var/lib/obi-lab/hostpath
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lab-hostpath-claim
+  namespace: default
+spec:
+  storageClassName: manual
+  volumeName: lab-hostpath
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 16Mi
+---
+# a local PersistentVolume on a loop device whose file is on tmpfs, which is on no block device: the
+# loop device stays the disk of the volume
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: lab-tmpfs-loop
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 16Mi
+  accessModes: [ReadWriteOnce]
+  local:
+    path: /mnt/lab-tmpfs-loop
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/os
+              operator: In
+              values: [linux]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lab-tmpfs-loop-claim
+  namespace: default
+spec:
+  storageClassName: manual
+  volumeName: lab-tmpfs-loop
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 16Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: disk-io-pvc
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: disk-io-pvc
+  template:
+    metadata:
+      labels:
+        app: disk-io-pvc
+    spec:
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: lab-local-claim
+        - name: extra
+          persistentVolumeClaim:
+            claimName: lab-hostpath-claim
+        - name: scratch
+          persistentVolumeClaim:
+            claimName: lab-tmpfs-loop-claim
+      containers:
+        - name: writer
+          image: go-disk-io:dev
+          imagePullPolicy: Never
+          volumeMounts:
+            - mountPath: /data
+              name: data
+            - mountPath: /extra
+              name: extra
+            - mountPath: /scratch
+              name: scratch

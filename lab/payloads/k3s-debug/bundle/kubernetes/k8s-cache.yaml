@@ -1,0 +1,82 @@
+# The Kubernetes metadata cache: the only component that watches the Kubernetes API for the
+# metadata of the workloads. The OBI pods get it from here over gRPC, so they don't need
+# permissions on pods, services or PersistentVolumes.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: obi-k8s-cache
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obi-k8s-cache
+rules:
+  - apiGroups: [""]
+    # persistentvolumes: for the devices of the pod volumes (stats_disk_pod_volumes)
+    resources: ["pods", "services", "nodes", "persistentvolumes"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obi-k8s-cache
+subjects:
+  - kind: ServiceAccount
+    name: obi-k8s-cache
+    namespace: obi
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obi-k8s-cache
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obi-k8s-cache
+  labels:
+    app.kubernetes.io/name: obi-k8s-cache
+spec:
+  # one is enough for a cluster; two keep the metadata available while one restarts
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: obi-k8s-cache
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: obi-k8s-cache
+    spec:
+      serviceAccountName: obi-k8s-cache
+      containers:
+        - name: k8s-cache
+          image: obi-k8s-cache
+          env:
+            - name: OTEL_EBPF_K8S_CACHE_PORT
+              value: "50055"
+            # watch the PersistentVolumes too, for OBI's pod volume metric
+            - name: OTEL_EBPF_K8S_CACHE_PERSISTENT_VOLUMES
+              value: "true"
+          ports:
+            - name: grpc
+              containerPort: 50055
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: obi-k8s-cache
+spec:
+  selector:
+    app.kubernetes.io/name: obi-k8s-cache
+  ports:
+    - name: grpc
+      port: 50055
+      protocol: TCP

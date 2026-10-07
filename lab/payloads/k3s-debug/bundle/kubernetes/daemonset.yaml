@@ -1,0 +1,60 @@
+# One OBI per node. It needs to be privileged and to share the host's PID namespace: it loads
+# eBPF programs, reads the cgroups of the processes, and finds the devices of the pod volumes
+# from the mounts of the host. It shares the host network so that it reports the node's IP and
+# Prometheus scrapes it at <node IP>:9400.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: obi
+  labels:
+    app.kubernetes.io/name: obi
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: obi
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: obi
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9400"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: obi
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists # every node, control plane included
+      containers:
+        - name: obi
+          image: obi
+          args: ["-config", "/config/obi-config.yaml"]
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          env:
+            # the Kubernetes metadata from the k8s-cache service (kubernetes/k8s-cache.yaml),
+            # instead of watching the Kubernetes API from every node
+            - name: OTEL_EBPF_KUBE_META_CACHE_ADDRESS
+              value: obi-k8s-cache.obi.svc:50055
+            # reported as k8s.cluster.name: set it to the name of your cluster
+            - name: OTEL_EBPF_KUBE_CLUSTER_NAME
+              value: on-prem
+          ports:
+            - name: metrics
+              containerPort: 9400
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+      volumes:
+        - name: config
+          configMap:
+            name: obi-config

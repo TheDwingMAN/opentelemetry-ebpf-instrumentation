@@ -1,0 +1,56 @@
+# OBI configuration, format v1 (no `file_format` header), for the storage metrics of
+# feat/statso11y-disk-metrics-v2. A released OBI rejects these feature names: run a build of
+# that branch.
+#
+# OBI needs to run privileged, in the host PID namespace, with /sys/fs/cgroup and the host's
+# /proc visible (as for the other stats metrics).
+
+log_level: info
+
+metrics:
+  features:
+    - stats_disk              # block I/O: latency, queue time, bytes, operations, busy time,
+                              # flushes, discards, pending operations, LVM and md volumes
+    - stats_fs_sync_duration  # fsync, fdatasync, sync, syncfs, sync_file_range (kprobes)
+    - stats_nfs               # NFS client RPC latency and bytes (needs the nfs module loaded
+                              # when OBI starts, and module BTF: Linux 5.11+, RHEL 9)
+    - stats_disk_pod_volumes  # Kubernetes only: pod -> PVC -> PV -> disk. Needs list and watch
+                              # on persistentvolumes (or `persistent_volumes: true` in k8s-cache).
+                              # Without Kubernetes it reports nothing.
+
+stats:
+  # Take the reported host IP from the local interfaces. The default ("external") looks up the
+  # route to 8.8.8.8 and OBI fails to start on hosts that have no default route.
+  agent_ip_iface: local
+
+attributes:
+  kubernetes:
+    enable: autodetect
+  select:
+    # An include list replaces the default attributes of the metric, so the defaults are listed
+    # too. Kubernetes attributes are ignored when OBI doesn't run in Kubernetes.
+    obi.stat.fs.sync.duration:
+      include:
+        - obi.fs.sync.type
+        - error.type
+        - system.filesystem.mountpoint
+        - system.filesystem.type
+        - k8s.namespace.name
+        - k8s.owner.name
+        - k8s.cluster.name
+    # To split the disk I/O per partition (e.g. nvme0n1p1), which costs one more kernel read per
+    # request, uncomment:
+    # obi.stat.disk.io:
+    #   include: [system.device, obi.disk.stacked, obi.disk.partition, disk.io.direction,
+    #             k8s.namespace.name, k8s.owner.name, k8s.cluster.name]
+    # obi.stat.disk.operations:
+    #   include: [system.device, obi.disk.stacked, obi.disk.partition, disk.io.direction,
+    #             error.type, k8s.namespace.name, k8s.owner.name, k8s.cluster.name]
+
+prometheus_export:
+  port: 9400
+  path: /metrics
+
+# For OTLP instead of (or besides) Prometheus:
+# otel_metrics_export:
+#   endpoint: http://otel-collector:4318

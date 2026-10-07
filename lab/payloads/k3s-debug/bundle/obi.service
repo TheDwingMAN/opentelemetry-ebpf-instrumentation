@@ -1,0 +1,19 @@
+# OBI with the storage metrics as a systemd service, on a host without containers.
+# Install the binary as /usr/local/bin/obi and the configuration as /etc/obi/obi-config.yaml
+# (see README.md), then: systemctl daemon-reload && systemctl enable --now obi
+[Unit]
+Description=OpenTelemetry eBPF Instrumentation (storage metrics)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/obi -config /etc/obi/obi-config.yaml
+Restart=on-failure
+RestartSec=5
+# loading eBPF programs needs root; kernels before 5.11, such as RHEL 8's, also charge the
+# eBPF maps to the locked memory limit
+User=root
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,48 @@
+#!/bin/bash
+# Lab-only docker shim for running OBI's kind suites in this sandbox. Put lab/bin first in PATH.
+#  1. `docker build -t TAG` is skipped when TAG is in LAB_PREBUILT (comma list) and exists locally:
+#     build containers here don't trust the sandbox proxy CA, so `go mod download` fails in them.
+#  2. kind node containers get the sandbox proxy CA bundle, so their containerd can pull through the
+#     proxy with TLS verification on.
+#  3. images in LAB_KIND_EXTRA_IMAGES (comma list) are imported into every kind node once its
+#     containerd is up, for registries the proxy blocks (quay.io).
+# Outside the sandbox: LAB_REAL_DOCKER is the real docker CLI; the CA bundle (LAB_DOCKER_CA) is only
+# mounted when the file exists, so on a host without a TLS-intercepting proxy kind runs unchanged.
+REAL=${LAB_REAL_DOCKER:-/usr/bin/docker}
+CA=${LAB_DOCKER_CA:-/root/.ccr/ca-bundle.crt}
+
+if [ "$1" = build ]; then
+  tag="" prev=""
+  for a in "$@"; do [ "$prev" = "-t" ] && tag=$a; prev=$a; done
+  if [ -n "$tag" ] && [[ ",$LAB_PREBUILT," == *",$tag,"* ]] && $REAL image inspect "$tag" >/dev/null 2>&1; then
+    echo "lab-docker-shim: using prebuilt image $tag"
+    exit 0
+  fi
+fi
+
+if [ "$1" = run ] && [[ " $* " == *" kindest/node"* ]]; then
+  name="" prev=""
+  for a in "$@"; do
+    [ "$prev" = "--name" ] && name=$a
+    case $a in --name=*) name=${a#--name=} ;; esac
+    prev=$a
+  done
+  if [ -n "$name" ] && [ -n "$LAB_KIND_EXTRA_IMAGES" ]; then
+    (
+      for _ in $(seq 1 300); do
+        $REAL exec "$name" ctr -n k8s.io version >/dev/null 2>&1 && break
+        sleep 1
+      done
+      IFS=, read -ra imgs <<<"$LAB_KIND_EXTRA_IMAGES"
+      for img in "${imgs[@]}"; do
+        $REAL save "$img" | $REAL exec -i "$name" ctr -n k8s.io images import --all-platforms - >/dev/null 2>&1 \
+          && echo "lab-docker-shim: imported $img into $name" >&2
+      done
+    ) </dev/null >/dev/null 2>>/tmp/lab-docker-shim.log &
+  fi
+  shift
+  [ -f "$CA" ] && exec $REAL run -v "$CA:/etc/ssl/certs/ca-certificates.crt:ro" "$@"
+  exec $REAL run "$@"
+fi
+
+exec $REAL "$@"

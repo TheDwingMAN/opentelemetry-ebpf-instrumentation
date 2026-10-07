@@ -1,0 +1,61 @@
+# a local PersistentVolume on an LVM volume over a whole extra virtio disk, without a loop device
+# (set up by run.sh), and a Deployment that writes it with O_DIRECT and fsync, so that its I/O
+# reaches the disk
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: lab-lvm
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 32Mi
+  accessModes: [ReadWriteOnce]
+  local:
+    path: /mnt/lab-lvm
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/os
+              operator: In
+              values: [linux]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lab-lvm-claim
+  namespace: default
+spec:
+  storageClassName: manual
+  volumeName: lab-lvm
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 32Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: disk-io-lvm
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: disk-io-lvm
+  template:
+    metadata:
+      labels:
+        app: disk-io-lvm
+    spec:
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: lab-lvm-claim
+      containers:
+        - name: writer
+          image: go-disk-io:dev
+          imagePullPolicy: Never
+          volumeMounts:
+            - mountPath: /data
+              name: data

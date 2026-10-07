@@ -1,0 +1,32 @@
+#!/bin/busybox sh
+# Minimal initramfs: load virtio_blk (a module on Ubuntu kernels < 6.6),
+# mount /dev/vda and switch_root into the real init given by init= on the cmdline.
+/bin/busybox mkdir -p /proc /sys /dev /newroot
+/bin/busybox mount -t proc proc /proc
+/bin/busybox mount -t sysfs sysfs /sys
+/bin/busybox mount -t devtmpfs devtmpfs /dev
+
+for ko in /modules/*.ko; do
+    [ -e "$ko" ] && /bin/busybox insmod "$ko"
+done
+
+realinit=/sbin/init
+for kv in $(/bin/busybox cat /proc/cmdline); do
+    case "$kv" in init=*) realinit="${kv#init=}" ;; esac
+done
+
+i=0
+while [ ! -b /dev/vda ] && [ $i -lt 100 ]; do
+    /bin/busybox usleep 100000
+    i=$((i + 1))
+done
+if ! /bin/busybox mount -t ext4 -o rw /dev/vda /newroot; then
+    echo "LAB_ERROR=initramfs could not mount /dev/vda"
+    echo "LAB_EXIT=253"
+    echo o > /proc/sysrq-trigger
+    /bin/busybox sleep 30
+fi
+
+/bin/busybox mount -o move /dev /newroot/dev
+/bin/busybox umount /proc /sys
+exec /bin/busybox switch_root /newroot "$realinit"

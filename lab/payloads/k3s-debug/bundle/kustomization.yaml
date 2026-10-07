@@ -1,0 +1,22 @@
+# OBI with the storage metrics on Kubernetes, with the Kubernetes metadata cache: kubectl apply -k .
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: obi
+resources:
+  - kubernetes/namespace.yaml
+  - kubernetes/k8s-cache.yaml
+  - kubernetes/rbac.yaml
+  - kubernetes/daemonset.yaml
+# the OBI configuration of this directory, also used on hosts without Kubernetes
+configMapGenerator:
+  - name: obi-config
+    files:
+      - obi-config.yaml
+# the images built from feat/statso11y-disk-metrics-v2 (see README.md)
+images:
+  - name: obi
+    newName: obi
+    newTag: bundle-test
+  - name: obi-k8s-cache
+    newName: obi-k8s-cache
+    newTag: bundle-test

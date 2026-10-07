@@ -1,0 +1,241 @@
+# OBI with the storage metrics on OpenShift: oc apply -f obi-openshift.yaml
+#
+# Before applying, replace:
+#   <REGISTRY>               the registry you pushed the image to (obi:disk-v2-f2361d005)
+#   otel-collector.otel.svc.cluster.local              the OTLP/HTTP address of your OpenTelemetry Collector, e.g.
+#                            otel-collector.observability.svc.cluster.local
+#   lab-cluster           reported as k8s.cluster.name
+#
+# OBI needs no disk and no host directory: it reads the host's files through /proc/1/root and
+# /proc (it shares the host's PID namespace) and the block devices through /sys.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: obi
+  labels:
+    # OBI's pods are privileged: let pod security admission accept them
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+    security.openshift.io/scc.podSecurityLabelSync: "false"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: obi
+  namespace: obi
+---
+# The Kubernetes metadata of the workloads (pods, their owners, services and nodes), and the
+# PersistentVolumes for the devices of the pod volumes (stats_disk_pod_volumes)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obi
+rules:
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "nodes", "persistentvolumes"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obi
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obi
+subjects:
+  - kind: ServiceAccount
+    name: obi
+    namespace: obi
+---
+# OpenShift admits a privileged pod that runs as root in the host's PID and network namespaces
+# only for service accounts allowed to use the privileged SCC (what
+# `oc adm policy add-scc-to-user privileged -z obi -n obi` grants). Without it, the DaemonSet
+# creates no pod at all.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obi-scc-privileged
+rules:
+  - apiGroups: ["security.openshift.io"]
+    resources: ["securitycontextconstraints"]
+    resourceNames: ["privileged"]
+    verbs: ["use"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: obi-scc-privileged
+  namespace: obi
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obi-scc-privileged
+subjects:
+  - kind: ServiceAccount
+    name: obi
+    namespace: obi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: obi-config
+  namespace: obi
+data:
+  obi-config.yaml: |
+    # OBI configuration, format v1. OBI ignores keys it doesn't know without an error: a
+    # misspelled key is silently dropped.
+    log_format: json
+    # prints the configuration OBI actually uses at startup: check metrics.features in it
+    log_config: yaml
+
+    attributes:
+      kubernetes:
+        enable: true
+        cluster_name: lab-cluster
+      select:
+        # include replaces the default attributes of a metric: list them all. k8s.pod.name only on
+        # these counters, not on the latency histograms, to keep the number of series down.
+        obi.stat.disk.io:
+          include: [system.device, obi.disk.stacked, obi.disk.partition, disk.io.direction,
+                    k8s.namespace.name, k8s.owner.name, k8s.pod.name, k8s.cluster.name]
+        obi.stat.disk.operations:
+          include: [system.device, obi.disk.stacked, obi.disk.partition, disk.io.direction, error.type,
+                    k8s.namespace.name, k8s.owner.name, k8s.pod.name, k8s.cluster.name]
+        obi.stat.disk.operation.time:
+          include: [system.device, obi.disk.stacked, obi.disk.partition, disk.io.direction,
+                    k8s.namespace.name, k8s.owner.name, k8s.pod.name, k8s.cluster.name]
+        obi.stat.fs.sync.duration:
+          include:
+            - obi.fs.sync.type
+            - error.type
+            - system.filesystem.mountpoint
+            # only set for ext4, exfat, ntfs, hfsplus, fat32 and refs: absent on xfs and overlay
+            - system.filesystem.type
+            - k8s.namespace.name
+            - k8s.owner.name
+            - k8s.cluster.name
+
+    discovery:
+      exclude_instrument:
+        - exe_path: '{*ebpf_instrument,*otelcol,*obi}'
+        - k8s_namespace: obi
+        - k8s_namespace: observability
+        - k8s_namespace: ook
+        - k8s_namespace: '*clickhouse'
+      instrument:
+        - k8s_namespace: '*'
+        - exe_path: /bin/kubelet
+
+    ebpf:
+      buffer_sizes:
+        http: 8192
+        kafka: 8192
+        mssql: 8192
+        mysql: 8192
+        postgres: 8192
+        tcp: 8192
+      context_propagation: all
+
+    filter:
+      network:
+        k8s_dst_owner_name:
+          not_match: '{kube*,*jaeger-agent*,*prometheus*,*promtail*,*grafana-agent*}'
+        k8s_src_owner_name:
+          not_match: '{kube*,*jaeger-agent*,*prometheus*,*promtail*,*grafana-agent*}'
+
+    metrics:
+      # replaces OBI's default list: everything to export goes here, and only here (a
+      # `features` list under prometheus_export or otel_metrics_export adds to it)
+      features:
+        - application
+        - network
+        - stats_disk
+        - stats_fs_sync_duration
+        - stats_nfs
+        # pod -> PersistentVolumeClaim -> PersistentVolume -> disk (needs persistentvolumes in the ClusterRole)
+        - stats_disk_pod_volumes
+
+    stats:
+      # the node IP from the local interfaces, instead of the route to 8.8.8.8
+      agent_ip_iface: local
+
+    network:
+      enable: true
+
+    otel_metrics_export:
+      endpoint: http://otel-collector.otel.svc.cluster.local:4318
+      protocol: http/protobuf
+      instrumentations:
+        - '*'
+
+    otel_traces_export:
+      endpoint: http://otel-collector.otel.svc.cluster.local:4318
+      protocol: http/protobuf
+      instrumentations:
+        - '*'
+
+    # also served on the node, to check what OBI measures: curl <node IP>:9400/metrics
+    prometheus_export:
+      port: 9400
+      path: /metrics
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: obi
+  namespace: obi
+  labels:
+    app.kubernetes.io/name: obi
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: obi
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: obi
+    spec:
+      serviceAccountName: obi
+      # the host's processes, cgroups and mounts (through /proc/1/root): needed by every metric
+      hostPID: true
+      # the node's network: needed by the network metrics, and reports the node's IP
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists # every node, control plane included
+      containers:
+        - name: obi
+          image: docker.io/library/obi:disk-v2-ccb2404e6
+          imagePullPolicy: IfNotPresent
+          args: ["-config", "/config/obi-config.yaml"]
+          env:
+            # host.id: the node's name instead of its machine ID, to tell the nodes apart in the dashboards
+            - name: OTEL_EBPF_HOST_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            # loads eBPF programs and attaches them to the kernel
+            privileged: true
+            runAsUser: 0
+          ports:
+            - name: metrics
+              containerPort: 9400
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+      volumes:
+        - name: config
+          configMap:
+            name: obi-config

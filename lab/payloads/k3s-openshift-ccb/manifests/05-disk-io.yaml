@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: disk-io
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: disk-io
+  template:
+    metadata:
+      labels:
+        app: disk-io
+    spec:
+      volumes:
+        - name: data
+          emptyDir: {}
+      containers:
+        - name: writer
+          image: go-disk-io:dev
+          imagePullPolicy: Never
+          volumeMounts:
+            - mountPath: /data
+              name: data

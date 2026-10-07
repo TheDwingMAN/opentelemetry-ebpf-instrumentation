@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: obi-config
+  namespace: default
+data:
+  obi-config.yml: |
+    otel_metrics_export:
+      endpoint: http://127.0.0.1:4318
+      protocol: http/protobuf
+    attributes:
+      select:
+        obi.stat.*:
+          include: ["*"]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: obi
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: obi
+  template:
+    metadata:
+      labels:
+        app: obi
+    spec:
+      hostPID: true
+      hostNetwork: true
+      serviceAccountName: obi
+      volumes:
+        - name: obi-config
+          configMap:
+            name: obi-config
+      containers:
+        - name: obi
+          image: obi:vm
+          imagePullPolicy: Never
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          volumeMounts:
+            - mountPath: /config
+              name: obi-config
+          env:
+            - name: OTEL_EBPF_CONFIG_PATH
+              value: /config/obi-config.yml
+            - name: OTEL_EBPF_METRICS_FEATURES
+              value: "stats_disk,stats_fs_sync_duration,stats_nfs,stats_disk_pod_volumes"
+            - name: OTEL_EBPF_METRICS_INTERVAL
+              value: "5s"
+            - name: OTEL_EBPF_STATS_AGENT_IP
+              value: "10.0.2.15"
+            - name: OTEL_EBPF_KUBE_METADATA_ENABLE
+              value: "true"
+            - name: OTEL_EBPF_KUBE_CLUSTER_NAME
+              value: "lab-k3s"
+            - name: OTEL_EBPF_BPF_BATCH_TIMEOUT
+              value: "1s"
+            - name: OTEL_EBPF_LOG_LEVEL
+              value: "info"

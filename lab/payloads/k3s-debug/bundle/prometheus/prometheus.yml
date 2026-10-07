@@ -1,0 +1,31 @@
+# Prometheus scraping OBI directly, which gives each OBI instance its own `instance` label, as the
+# Grafana dashboard expects. Keep the job that matches your setup.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # OBI on Kubernetes (kubernetes/daemonset.yaml), for a Prometheus that can reach the Kubernetes
+  # API and the nodes: the OBI pods, at <node IP>:9400
+  - job_name: obi-k8s
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [obi]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        regex: obi
+        action: keep
+      - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        regex: (.+);(.+)
+        replacement: $1:$2
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        target_label: node
+
+  # OBI on hosts without Kubernetes (docker-compose.yaml or obi.service), or on Kubernetes nodes
+  # for a Prometheus outside the cluster: list them at <host>:9400
+  - job_name: obi-hosts
+    static_configs:
+      - targets:
+          - host1.example.com:9400
+          - host2.example.com:9400
