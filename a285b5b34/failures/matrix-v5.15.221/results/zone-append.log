@@ -1,0 +1,3 @@
+=== RUN   TestKernelBlockTracepointLayoutZoneAppendOp
+--- PASS: TestKernelBlockTracepointLayoutZoneAppendOp (0.19s)
+PASS

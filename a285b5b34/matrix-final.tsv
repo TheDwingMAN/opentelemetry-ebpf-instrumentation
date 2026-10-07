@@ -4,3 +4,9 @@ v6.18.54	1	FAIL	kvm	37	1	1	0.9s	141.8s	142.8s
 v7.2.6	1	FAIL	kvm	37	1	1	0.9s	127.9s	128.8s
 rhel9.6	1	FAIL	kvm	36	1	1	1.0s	124.5s	125.5s
 rhel8.10	0	PASS	kvm	35	0	0	1.4s	73.2s	74.7s
+v5.8.18	0	PASS	kvm	32	0	2	0.6s	84.2s	84.8s
+v5.10.270	1	FAIL	kvm	37	1	0	1.0s	54.8s	55.8s
+v5.15.221	1	FAIL	kvm	38	1	0	1.0s	57.8s	58.8s
+v6.1.188	1	FAIL	kvm	38	1	0	0.9s	56.8s	57.8s
+v6.6.157	1	FAIL	kvm	38	1	0	1.0s	57.5s	58.6s
+rhel8.9	0	PASS	kvm	35	0	0	1.6s	73.7s	75.4s

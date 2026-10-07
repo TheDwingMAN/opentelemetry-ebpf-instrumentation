@@ -1,0 +1,167 @@
+time=2026-10-07T20:35:10.688Z level=INFO msg="OpenTelemetry eBPF Instrumentation" Version=unset Revision=unset "OpenTelemetry SDK Version"=1.46.0
+time=2026-10-07T20:35:10.689Z level=INFO msg="configuration loaded" version=v1
+time=2026-10-07T20:35:10.691Z level=DEBUG msg="kubeconfig can't be detected. Assuming we are not in Kubernetes" component=kube.MetadataProvider error="can't access kubernetes. Tried using config from: config parameter, KUBECONFIG env, homedir and InClusterConfig. Got: unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined"
+time=2026-10-07T20:35:10.692Z level=DEBUG msg="fetched node metadata" component=meta.NodeMeta fetcher=0 hostID=37550ce7a780481d872cf5f91b22ba5b
+time=2026-10-07T20:35:12.691Z level=WARN msg="timed out while waiting for Cloud metadata. Ignoring" component=meta.NodeMeta.otelNodeFetcher detector=ec2.resourceDetector
+time=2026-10-07T20:35:12.692Z level=DEBUG msg="not reporting internal metrics"
+time=2026-10-07T20:35:12.694Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:12.695Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:12.696Z level=INFO msg="starting OBI in Stat metrics mode"
+time=2026-10-07T20:35:12.696Z level=INFO msg="initializing Stats agent" component=agent.StatsO11y
+time=2026-10-07T20:35:12.697Z level=DEBUG msg="acquiring Agent IP" component=agent.StatsO11y
+time=2026-10-07T20:35:12.698Z level=DEBUG msg="agent IP: 10.0.2.15" component=agent.StatsO11y
+time=2026-10-07T20:35:12.697Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:12.699Z level=WARN msg="a storage latency histogram is reported per pod or container: each pod adds a series per bucket. The operations and time counters give the mean latency per pod at one series each" component=agent.StatsO11y histogram=obi.stat.fs.sync.duration attributes=[container.id]
+time=2026-10-07T20:35:13.094Z level=DEBUG msg="attaching the kretprobe with the default number of instances" component=ebpf.StatFetcher function=do_fsync error="creating tracefs event (arch-specific fallback for \"do_fsync\"): creating probe entry on tracefs: token __x64_do_fsync: not found: write /sys/kernel/tracing/kprobe_events: no such file or directory"
+[line about the CPU removed]
+time=2026-10-07T20:35:13.422Z level=INFO msg="the probes of the enabled storage metrics are loaded" component=agent.StatsO11y
+time=2026-10-07T20:35:13.422Z level=INFO msg="starting Stats agent" component=agent.StatsO11y
+time=2026-10-07T20:35:13.423Z level=DEBUG msg="creating stats processing graph" component=agent.StatsO11y
+time=2026-10-07T20:35:13.423Z level=DEBUG msg="registering stat disk operation duration metric" component=prom.StatsEndpoint
+time=2026-10-07T20:35:13.424Z level=DEBUG msg="registering Prometheus metrics collectors" component=connector.PrometheusManager len=17 port=9400 path=/metrics
+time=2026-10-07T20:35:13.424Z level=INFO msg="Stats agent successfully started" component=agent.StatsO11y
+time=2026-10-07T20:35:13.424Z level=DEBUG msg="start reading and forwarding" component=stat.RingBufTracer
+time=2026-10-07T20:35:13.425Z level=DEBUG msg="starting to read ring buffer" component=stat.RingBufTracer
+time=2026-10-07T20:35:13.425Z level=INFO msg="opening prometheus scrape endpoint" component=connector.PrometheusManager port=9400 path=/metrics
+time=2026-10-07T20:35:13.427Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[dm-0 obivg-lv loop1]"
+time=2026-10-07T20:35:13.429Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[dm-1 slowdm loop4]"
+time=2026-10-07T20:35:13.429Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[dm-2 obivg-lv2 loop1]"
+time=2026-10-07T20:35:13.429Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[md0  loop2]"
+time=2026-10-07T20:35:13.430Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[md0  loop3]"
+time=2026-10-07T20:35:13.700Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:13.730Z level=DEBUG msg="received metrics request" component=connector.PrometheusManager uri=/metrics remoteAddr=[::1]:52240
+time=2026-10-07T20:35:14.702Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:15.704Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:16.226Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write false vda]"
+time=2026-10-07T20:35:16.227Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   false 10.0.2.15 vda]"
+time=2026-10-07T20:35:16.228Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write false vda]"
+time=2026-10-07T20:35:16.229Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write false vda]"
+time=2026-10-07T20:35:16.707Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:16.826Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop0]"
+time=2026-10-07T20:35:16.827Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write  loop0p1 true 10.0.2.15 loop0]"
+time=2026-10-07T20:35:16.827Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop0]"
+time=2026-10-07T20:35:16.828Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[read false nullb0]"
+time=2026-10-07T20:35:16.828Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ read   false 10.0.2.15 nullb0]"
+time=2026-10-07T20:35:16.828Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[read false nullb0]"
+time=2026-10-07T20:35:16.829Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[true loop0]"
+time=2026-10-07T20:35:16.829Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write false nullb0]"
+time=2026-10-07T20:35:16.829Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   false 10.0.2.15 nullb0]"
+time=2026-10-07T20:35:16.830Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write false nullb0]"
+time=2026-10-07T20:35:16.830Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[read false vda]"
+time=2026-10-07T20:35:16.830Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ read   false 10.0.2.15 vda]"
+time=2026-10-07T20:35:16.831Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[read false vda]"
+time=2026-10-07T20:35:16.831Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true dm-1]"
+time=2026-10-07T20:35:16.831Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop5]"
+time=2026-10-07T20:35:16.832Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop0]"
+time=2026-10-07T20:35:16.832Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[read false vda]"
+time=2026-10-07T20:35:16.832Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[read false nullb0]"
+time=2026-10-07T20:35:16.832Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write false nullb0]"
+time=2026-10-07T20:35:17.126Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop7]"
+time=2026-10-07T20:35:17.126Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   true 10.0.2.15 loop7]"
+time=2026-10-07T20:35:17.127Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop7]"
+time=2026-10-07T20:35:17.127Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop7]"
+time=2026-10-07T20:35:17.326Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop1]"
+time=2026-10-07T20:35:17.327Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   true 10.0.2.15 loop1]"
+time=2026-10-07T20:35:17.327Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop1]"
+time=2026-10-07T20:35:17.327Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true dm-2]"
+time=2026-10-07T20:35:17.328Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   true 10.0.2.15 dm-2]"
+time=2026-10-07T20:35:17.328Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true dm-2]"
+time=2026-10-07T20:35:17.328Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop1]"
+time=2026-10-07T20:35:17.328Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true dm-2]"
+time=2026-10-07T20:35:17.427Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[read true loop6]"
+time=2026-10-07T20:35:17.428Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ read   true 10.0.2.15 loop6]"
+time=2026-10-07T20:35:17.428Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[read true loop6]"
+time=2026-10-07T20:35:17.428Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop3]"
+time=2026-10-07T20:35:17.429Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   true 10.0.2.15 loop3]"
+time=2026-10-07T20:35:17.429Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop3]"
+time=2026-10-07T20:35:17.429Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop6]"
+time=2026-10-07T20:35:17.430Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   true 10.0.2.15 loop6]"
+time=2026-10-07T20:35:17.431Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop6]"
+time=2026-10-07T20:35:17.432Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop2]"
+time=2026-10-07T20:35:17.432Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   true 10.0.2.15 loop2]"
+time=2026-10-07T20:35:17.432Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop2]"
+time=2026-10-07T20:35:17.433Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   true 10.0.2.15 loop0]"
+time=2026-10-07T20:35:17.433Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write false zram0]"
+time=2026-10-07T20:35:17.434Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   false 10.0.2.15 zram0]"
+time=2026-10-07T20:35:17.434Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write false zram0]"
+time=2026-10-07T20:35:17.434Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true md0]"
+time=2026-10-07T20:35:17.435Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   true 10.0.2.15 md0]"
+time=2026-10-07T20:35:17.435Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true md0]"
+time=2026-10-07T20:35:17.436Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true dm-0]"
+time=2026-10-07T20:35:17.436Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   true 10.0.2.15 dm-0]"
+time=2026-10-07T20:35:17.437Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true dm-0]"
+time=2026-10-07T20:35:17.438Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[  fsync 10.0.2.15 /mnt/obitmpfs tmpfs]"
+time=2026-10-07T20:35:17.438Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues=[fsync]
+time=2026-10-07T20:35:17.438Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[  fsync 10.0.2.15 /srv/nfs tmpfs]"
+time=2026-10-07T20:35:17.439Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[  fsync 10.0.2.15 /mnt/obiovl overlay]"
+time=2026-10-07T20:35:17.439Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[  fsync 10.0.2.15 /mnt/nfs nfs4]"
+time=2026-10-07T20:35:17.439Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[  syncfs 10.0.2.15 /mnt/obifs ext4]"
+time=2026-10-07T20:35:17.440Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues=[syncfs]
+time=2026-10-07T20:35:17.440Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[  fsync 10.0.2.15 /dev devtmpfs]"
+time=2026-10-07T20:35:17.440Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[  fdatasync 10.0.2.15 /mnt/obifs ext4]"
+time=2026-10-07T20:35:17.440Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues=[fdatasync]
+time=2026-10-07T20:35:17.441Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[  fsync 10.0.2.15 /mnt/obifs ext4]"
+time=2026-10-07T20:35:17.441Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[  sync 10.0.2.15  ]"
+time=2026-10-07T20:35:17.441Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues=[sync]
+time=2026-10-07T20:35:17.441Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[  sync_file_range 10.0.2.15 /mnt/obifs ext4]"
+time=2026-10-07T20:35:17.442Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues=[sync_file_range]
+time=2026-10-07T20:35:17.442Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ WRITE 4 127.0.0.1]"
+time=2026-10-07T20:35:17.442Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[WRITE 4 127.0.0.1]"
+time=2026-10-07T20:35:17.442Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ OPEN 4 127.0.0.1]"
+time=2026-10-07T20:35:17.443Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[OPEN 4 127.0.0.1]"
+time=2026-10-07T20:35:17.443Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ OPEN_NOATTR 4 127.0.0.1]"
+time=2026-10-07T20:35:17.443Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[OPEN_NOATTR 4 127.0.0.1]"
+time=2026-10-07T20:35:17.443Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ CLOSE 4 127.0.0.1]"
+time=2026-10-07T20:35:17.443Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[CLOSE 4 127.0.0.1]"
+time=2026-10-07T20:35:17.444Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ENOENT LOOKUP 4 127.0.0.1]"
+time=2026-10-07T20:35:17.444Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[LOOKUP 4 127.0.0.1]"
+time=2026-10-07T20:35:17.444Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ ACCESS 4 127.0.0.1]"
+time=2026-10-07T20:35:17.444Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ACCESS 4 127.0.0.1]"
+time=2026-10-07T20:35:17.445Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ READ 4 127.0.0.1]"
+time=2026-10-07T20:35:17.445Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[READ 4 127.0.0.1]"
+time=2026-10-07T20:35:17.445Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[transmit 127.0.0.1]"
+time=2026-10-07T20:35:17.445Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[receive 127.0.0.1]"
+time=2026-10-07T20:35:17.446Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[read true loop6]"
+time=2026-10-07T20:35:17.446Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop6]"
+time=2026-10-07T20:35:17.446Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write false zram0]"
+time=2026-10-07T20:35:17.446Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop2]"
+time=2026-10-07T20:35:17.446Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true md0]"
+time=2026-10-07T20:35:17.447Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true dm-0]"
+time=2026-10-07T20:35:17.447Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop3]"
+time=2026-10-07T20:35:17.710Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:18.713Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:19.715Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:20.718Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:21.719Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:22.722Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:23.725Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:24.727Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:25.731Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:26.733Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:27.735Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:28.738Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:29.026Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop4]"
+time=2026-10-07T20:35:29.027Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   true 10.0.2.15 loop4]"
+time=2026-10-07T20:35:29.027Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop4]"
+time=2026-10-07T20:35:29.028Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop5]"
+time=2026-10-07T20:35:29.029Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   true 10.0.2.15 loop5]"
+time=2026-10-07T20:35:29.029Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop5]"
+time=2026-10-07T20:35:29.030Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true dm-1]"
+time=2026-10-07T20:35:29.031Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[ write   true 10.0.2.15 dm-1]"
+time=2026-10-07T20:35:29.032Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true dm-1]"
+time=2026-10-07T20:35:29.033Z level=DEBUG msg="storing new metric label set" component=prom.Expirer labelValues="[write true loop4]"
+time=2026-10-07T20:35:29.741Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:30.743Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:31.745Z level=DEBUG msg="failed to get docker info" component=docker.ContainerStore error="failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory"
+time=2026-10-07T20:35:32.011Z level=DEBUG msg="received metrics request" component=connector.PrometheusManager uri=/metrics remoteAddr=[::1]:34052
+time=2026-10-07T20:35:32.019Z level=DEBUG msg="context is cancelled. Closing events reader" component=stat.RingBufTracer
+time=2026-10-07T20:35:32.019Z level=DEBUG msg="Prometheus endpoint server was closed" component=connector.PrometheusManager port=9400 error="http: Server closed"
+time=2026-10-07T20:35:32.019Z level=INFO msg="stopping Stats agent" component=agent.StatsO11y
+time=2026-10-07T20:35:32.020Z level=DEBUG msg="unregistering eBPF objects" component=ebpf.StatFetcher
+time=2026-10-07T20:35:32.021Z level=DEBUG msg="ring buffer is closed" component=stat.RingBufTracer
+time=2026-10-07T20:35:32.022Z level=DEBUG msg="closing eBPF resources" component=stat.RingBufTracer len=1
+time=2026-10-07T20:35:32.022Z level=DEBUG msg="the eBPF resources are closed" component=stat.RingBufTracer
+time=2026-10-07T20:35:32.424Z level=DEBUG msg="waiting for all nodes to finish their pending work" component=agent.StatsO11y
+time=2026-10-07T20:35:32.425Z level=INFO msg="Stats agent stopped" component=agent.StatsO11y
+time=2026-10-07T20:35:32.425Z level=DEBUG msg="OBI main node finished"
+time=2026-10-07T20:35:32.426Z level=INFO msg="OpenTelemetry eBPF Instrumentation successfully exiting"
