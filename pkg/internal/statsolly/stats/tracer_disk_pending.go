@@ -23,9 +23,9 @@ type pendingKey struct {
 }
 
 // pendingReader counts the reads and writes that each device is serving, as the kernel counts
-// them for iostat. It reports every device that did I/O recently, including those that have no
-// request in flight at the time of the read. It only reads the counters of the kernel, so it
-// doesn't need the block probes.
+// them for iostat. It reports every device that did I/O recently and whose requests in flight it
+// can read, including those that have no request in flight at the time of the read. It only reads
+// the counters of the kernel, so it doesn't need the block probes.
 type pendingReader struct {
 	log       *slog.Logger
 	procRoot  string
@@ -63,9 +63,9 @@ func (p *pendingReader) readStats() []*ebpf.Stat {
 			continue
 		}
 		numbers := devNumbers(stat.MajorNumber, stat.MinorNumber)
-		reads, writes, err := readInflight(filepath.Join(p.devices.sysRoot, "dev", "block", numbers, "inflight"))
+		reads, writes, err := readInflight(p.inflightPath(numbers))
 		if err != nil {
-			// removed since
+			// removed since, or hidden (see observeCompleted)
 			continue
 		}
 		disk, partition := p.diskOf(numbers)
@@ -176,6 +176,11 @@ func (p *pendingReader) observeCompleted(diskstats []blockdevice.Diskstats) {
 		if disk, partition := p.diskOf(numbers); disk == "" || partition {
 			continue
 		}
+		// the hidden path devices of NVMe native multipath have no /sys/dev/block entry to read
+		// their requests in flight from: they would always be reported idle
+		if !exists(p.inflightPath(numbers)) {
+			continue
+		}
 		device := p.devices.name(stat.MajorNumber, stat.MinorNumber)
 		stacked := p.devices.stacked(stat.MajorNumber, stat.MinorNumber)
 		if current.reads != previous.reads {
@@ -190,6 +195,11 @@ func (p *pendingReader) observeCompleted(diskstats []blockdevice.Diskstats) {
 			delete(p.completed, numbers)
 		}
 	}
+}
+
+// inflightPath is the sysfs file of the reads and writes in flight of a block device
+func (p *pendingReader) inflightPath(numbers string) string {
+	return filepath.Join(p.devices.sysRoot, "dev", "block", numbers, "inflight")
 }
 
 func devNumbers(major, minor uint32) string {

@@ -150,7 +150,7 @@ func TestPendingReaderReportsDevicesThatDidIO(t *testing.T) {
 		"the partitions are reported as their disk, which counts their I/O")
 }
 
-func TestPendingReaderReportsHiddenNVMePaths(t *testing.T) {
+func TestPendingReaderSkipsHiddenNVMePaths(t *testing.T) {
 	devices := newFakeBlockDevices(t)
 	devices.disk("259:2", "nvme1n1", 0, 0)
 	devices.hiddenDisk("259:1", "nvme1c0n1")
@@ -158,8 +158,9 @@ func TestPendingReaderReportsHiddenNVMePaths(t *testing.T) {
 	assert.Empty(t, r.readStats())
 
 	devices.complete("nvme1c0n1", 0, 2)
-	assert.Equal(t, map[string]int64{"nvme1c0n1/write": 0}, pendingByDevice(r.readStats()),
-		"named from /proc/diskstats, as sysfs hides the paths of NVMe native multipath")
+	devices.complete("nvme1n1", 0, 2)
+	assert.Equal(t, map[string]int64{"nvme1n1/write": 0}, pendingByDevice(r.readStats()),
+		"the paths of NVMe native multipath have no /sys/dev/block entry to read their requests in flight from")
 }
 
 func TestPendingReaderCountsPartitionsOnOlderKernels(t *testing.T) {
