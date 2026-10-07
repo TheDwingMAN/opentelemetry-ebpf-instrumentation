@@ -64,10 +64,6 @@ func (s Status) String() string {
 
 var errShutdownTimeout = errors.New("graceful shutdown has timed out while waiting for eBPF statsolly to finish")
 
-// disabledStorageReminder is how often the storage features that can't run on the node are logged
-// again, so that the warning is not lost among the startup logs
-const disabledStorageReminder = time.Hour
-
 // nfsProbesRefresh is how often the NFS client probes that wait for their kernel modules are
 // attached, if the modules are loaded
 const nfsProbesRefresh = 30 * time.Second
@@ -186,20 +182,6 @@ func warnDisabledStorage(disabled []ebpf.DisabledFeature) {
 	for _, d := range disabled {
 		alog().Warn("storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working",
 			"metrics", d.Feature, "reason", d.Reason)
-	}
-}
-
-// remindDisabledStorage logs the disabled storage features again, periodically
-func remindDisabledStorage(ctx context.Context, fetcher ebpFetcher) {
-	ticker := time.NewTicker(disabledStorageReminder)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			warnDisabledStorage(fetcher.DisabledStorageFeatures())
-		}
 	}
 }
 
@@ -330,8 +312,8 @@ func (s *Stats) Run(ctx context.Context) error {
 		go logger.ReadDebugEventsMap(runCtx, s.fetcher.DebugEventsMap(),
 			slog.With("component", "statsolly.BPFDebug"))
 	}
+	// the NFS client probes that wait for their kernel modules are listed as disabled
 	if len(s.fetcher.DisabledStorageFeatures()) > 0 {
-		go remindDisabledStorage(runCtx, s.fetcher)
 		go refreshNFSProbes(runCtx, s.fetcher)
 	}
 
