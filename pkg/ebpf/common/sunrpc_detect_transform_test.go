@@ -29,7 +29,7 @@ func TestMatchSunRPC_NFSCallClientSpan(t *testing.T) {
 	assert.False(t, ignore)
 	assert.Equal(t, request.EventTypeSunRPCClient, span.Type)
 	assert.Equal(t, "nfs", span.Path)
-	assert.Equal(t, "6", span.Method)
+	assert.Equal(t, "READ", span.Method)
 	assert.Contains(t, span.Statement, "rpcsec_gss")
 }
 
@@ -163,7 +163,7 @@ func TestDispatchSunRPC_KernelClassified(t *testing.T) {
 	assert.False(t, ignore)
 	assert.Equal(t, request.EventTypeSunRPCClient, span.Type)
 	assert.Equal(t, "portmapper", span.Path)
-	assert.Equal(t, "0", span.Method)
+	assert.Equal(t, "NULL", span.Method)
 }
 
 func buildSunRPCCallRecord(xid, prog, vers, proc uint32, authFlavor string) []byte {

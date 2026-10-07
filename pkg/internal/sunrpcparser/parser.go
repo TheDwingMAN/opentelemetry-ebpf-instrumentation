@@ -387,9 +387,10 @@ func validProgram(prog uint32) bool {
 	return (prog >= 100000 && prog <= 101000) || (prog >= 0x20000000 && prog <= 0x2fffffff)
 }
 
-// ProcedureLabel returns the RPC method label for spans.
-func ProcedureLabel(prog, proc uint32) string {
-	if name := procedureName(prog, proc); name != "" {
+// ProcedureLabel returns the RPC method label for spans: the procedure name
+// when the program and version are known, otherwise the procedure number.
+func ProcedureLabel(prog, vers, proc uint32) string {
+	if name := procedureName(prog, vers, proc); name != "" {
 		return name
 	}
 	return strconv.FormatUint(uint64(proc), 10)

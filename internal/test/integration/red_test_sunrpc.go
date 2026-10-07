@@ -76,7 +76,7 @@ func testREDMetricsGoSunRPC(t *testing.T) {
 			Comm:    "testserver",
 			Spans: []TestCaseSpan{
 				{
-					Name: "portmapper/0",
+					Name: "portmapper/NULL",
 					Attributes: []attribute.KeyValue{
 						attribute.String("span.kind", "client"),
 					},

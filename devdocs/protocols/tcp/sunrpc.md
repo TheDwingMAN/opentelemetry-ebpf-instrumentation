@@ -25,11 +25,11 @@ Spans use [ONC RPC semantic conventions](https://opentelemetry.io/docs/specs/sem
 | `rpc.system` | `onc_rpc` (`semconv.RPCSystemOncRPC`) |
 | `onc_rpc.program.name` | Program name when known (for example `nfs`, `mount`, `portmapper`) |
 | `onc_rpc.procedure.number` | Procedure number from the CALL header |
-| `onc_rpc.procedure.name` | Procedure name when a mapping exists |
+| `onc_rpc.procedure.name` | Procedure name (for example `READ`, `GETPORT`) for portmapper/rpcbind, mount, nfs v2-v4 and nlockmgr; absent for other programs |
 | `onc_rpc.version` | Program version from the CALL header |
 | `onc_rpc.auth.flavor` | Authentication flavor when present (extension until semconv adds it) |
 
-Client spans use `SpanKindClient`; server spans use `SpanKindServer`. Trace names follow `{program}/{procedure}` (for example `portmapper/0`).
+Client spans use `SpanKindClient`; server spans use `SpanKindServer`. Trace names follow `{program}/{procedure}` (for example `portmapper/GETPORT`, or `portmapper/7` when the procedure has no name).
 
 Enable traces with `instrumentations: [sunrpc]` under `otel_traces` (enabled by default in the stock config).
 
@@ -52,7 +52,7 @@ Enable metrics with `instrumentations: [sunrpc]` under `otel_metrics` or `promet
 - Kernel classification requires a complete single-fragment TCP record in the captured buffer.
 - RPCSEC_GSS hides procedure arguments; only header fields are visible.
 - No distributed context propagation on SunRPC.
-- Procedure names are not mapped yet (procedure number only unless extended).
+- Procedure names are mapped only for portmapper/rpcbind, mount, nfs and nlockmgr (`pkg/internal/sunrpcparser/programs.go`); other programs report the procedure number only.
 
 ## Integration tests
 

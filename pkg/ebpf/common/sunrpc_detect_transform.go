@@ -126,7 +126,7 @@ func sunRPCInfoFromCall(call *sunrpcparser.CallInfo, reply *sunrpcparser.ReplyIn
 		Version:     call.Version,
 		Procedure:   call.Procedure,
 		ProgramName: progName,
-		Method:      sunrpcparser.ProcedureLabel(call.Program, call.Procedure),
+		Method:      sunrpcparser.ProcedureLabel(call.Program, call.Version, call.Procedure),
 		AuthFlavor:  sunrpcparser.AuthFlavorName(call.AuthFlavor),
 	}
 
