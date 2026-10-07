@@ -135,6 +135,8 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		Filtered:  filteredAttributes(cfg.Filters.Stats),
 	}
 
+	warnPerPodHistograms(&features, ctxInfo.MetricAttributeGroups, selectorCfg)
+
 	histograms, approximated := latencyHistograms(cfg)
 	if len(approximated) > 0 {
 		alog.Warn("more histogram buckets than the kernel can keep: these histograms are approximated",
