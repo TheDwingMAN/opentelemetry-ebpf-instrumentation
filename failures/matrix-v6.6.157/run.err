@@ -1,0 +1,1 @@
+[run-vm] exit=1 kernel=v6.6.157 (6.6.157-0606157-generic) accel=kvm boot=0.5s payload=49.6s total=50.2s log=~/obi-work/lab-kit/lab/logs/v6.6.157-20261007-194506.log results=~/obi-work/lab-kit/lab/runs/v6.6.157-20261007-194506/results

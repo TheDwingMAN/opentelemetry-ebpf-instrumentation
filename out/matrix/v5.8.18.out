@@ -1,0 +1,132 @@
+uname -r: 5.8.18-050818-generic
+
+##### privileged tests
+--- PASS: TestDiskLatencyIsAccumulatedPerDevice (0.10s)
+--- PASS: TestDiskPartitions (0.11s)
+--- PASS: TestDiskFlushesAndDiscards (0.09s)
+--- PASS: TestDiskFileSyncsAreCountedLikeTheKernel (0.09s)
+--- PASS: TestDiskWriteZeroesAreCountedLikeTheKernel (0.09s)
+--- PASS: TestDiskStartsOfRequestsWithoutIOStatistics (4.27s)
+--- PASS: TestDiskStackedVolumes (0.11s)
+--- PASS: TestDiskBioBasedDisks (0.10s)
+--- PASS: TestDiskPendingRequests (2.03s)
+--- PASS: TestDiskPendingStackedVolumes (2.05s)
+PASS
+PASS
+--- PASS: TestDiskIOIsChargedPerCgroup (0.12s)
+    tracer_disk_privileged_test.go:751: only runs as a child process of TestDiskIOIsChargedPerCgroup
+--- PASS: TestFsSyncTypesAndFilesystems (0.69s)
+PASS
+--- PASS: TestFsSyncIsChargedPerCgroup (0.71s)
+PASS
+--- PASS: TestFsSyncWithoutCgroupsOrFilesystems (0.72s)
+    tracer_disk_privileged_test.go:905: only runs as a child process of TestFsSyncIsChargedPerCgroup
+--- SKIP: TestFsSyncProcess (0.00s)
+    tracer_disk_privileged_test.go:1122: storage features not measured: [{the NFS client procedure metrics (stats_nfs_client_procedure_*) the kernel BTF doesn't describe the sunrpc types: they need the BTF of the sunrpc module (Linux 5.11+), with the module loaded when OBI starts} {the NFS client I/O metric (stats_nfs_client_io) the kernel BTF doesn't describe the sunrpc types: they need the BTF of the sunrpc module (Linux 5.11+), with the module loaded when OBI starts}]
+--- PASS: TestNFSStatsAreOptional (0.10s)
+    tracer_disk_privileged_test.go:1146: the kernel can't load the NFS client probes before their modules: the kernel BTF doesn't describe the sunrpc types: they need the BTF of the sunrpc module (Linux 5.11+), with the module loaded when OBI starts
+--- SKIP: TestNFSProbesAttachWhenTheirModulesAreLoaded (0.03s)
+--- PASS: TestDiskVolumesTracer (0.00s)
+--- PASS: TestNFSProcedureReader (0.00s)
+--- PASS: TestNFSIOReader (0.00s)
+--- PASS: TestNFSErrorType (0.00s)
+PASS
+RESULT privileged PASS
+RESULT nfs-error-names PASS
+
+##### zone append op
+--- PASS: TestKernelBlockTracepointLayoutZoneAppendOp (0.05s)
+PASS
+RESULT zone-append-op PASS
+
+##### nfs late attach
+RESULT nfs-late-setup PASS
+RESULT nfs-stays-off PASS
+
+##### obi end to end
+blockdev: ioctl error on BLKRRPART: Invalid argument
+./run.sh: line 129: /sys/class/block/loop0p1/dev: No such file or directory
+mknod: missing operand after 'b'
+Special files require major and minor device numbers.
+Try 'mknod --help' for more information.
+no partition on loop0
+stacked volumes: LVM dm-0 on loop1, md0 on loop2 loop3
+stall: dm-delay dm-1 on loop4, loop on top: /dev/loop5 (dio=1)
+zram0: scheduler 'none'
+write-zeroes: loop loop7, LVM volume dm-2
+dd: failed to open '/tmp/loop0p1': Invalid argument
+blkdiscard: Operation forced, data will be lost!
+queue: writes=200 (want 200) reads=300 (want 300)
+RESULT e2e-queue PASS
+partition: losetup can't enable partitions on this kernel (TestDiskPartitions covers them)
+flush: 1 (want >=1)
+RESULT e2e-flush PASS
+discard: bytes=1048576 (want 1048576) requests=1 (want >=1)
+RESULT e2e-discard PASS
+SKIP e2e-write-zeroes the loop device has no write-zeroes on this kernel
+SKIP e2e-write-zeroes-lvm the LVM volume has no write-zeroes on this kernel
+pending: series of nullb0=2 (want 2: read and write, now 0)
+RESULT e2e-pending PASS
+LVM volume: writes=32 (want 32) bytes=2097152 (want 2097152)
+RESULT e2e-lvm PASS
+md volume: writes=0 (md needs Linux 5.15+)
+stacked label: loop series stacked=1 (want >=1), null_blk series not stacked=2 (want >=1)
+RESULT e2e-stacked-label PASS
+file sync: fsync on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-fsync PASS
+file sync counter: fsync on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-counter-fsync PASS
+file sync: fdatasync on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-fdatasync PASS
+file sync counter: fdatasync on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-counter-fdatasync PASS
+file sync: syncfs on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-syncfs PASS
+file sync counter: syncfs on /mnt/obifs=1 (want 1)
+RESULT e2e-fs-sync-counter-syncfs PASS
+file sync type: fsync on /mnt/obifs reported as ext4=1 (want >=1)
+RESULT e2e-fs-type-ext4 PASS
+file sync type: fsync on /mnt/obitmpfs reported as tmpfs=1 (want >=1)
+RESULT e2e-fs-type-tmpfs PASS
+file sync type: fsync on /mnt/nfs reported as nfs4=1 (want >=1)
+RESULT e2e-fs-type-nfs4 PASS
+file sync type: fsync on /mnt/obiovl reported as overlay=1 (want >=1, not yet a RESULT)
+obi_stat_fs_sync_duration_seconds_count{container_id="",error_type="",obi_fs_sync_type="fsync",obi_ip="10.0.2.15",system_filesystem_mountpoint="/mnt/obiovl",system_filesystem_type="overlay"} 1
+file sync series with a mountpoint and no type=0 (want 0)
+RESULT e2e-fs-type-always-set PASS
+file sync: sync_file_range on /mnt/obifs=5 counter=5 (want 5: the 7 WRITE-only hints are not syncs; 12 means the fix is missing, 0 or 12 with the fix means a wrong register)
+RESULT e2e-fs-sync-sync_file_range PASS
+RESULT e2e-fs-sync-counter-sync_file_range PASS
+file syncs: histogram count=29 operations=29, histogram sum=0.002904 operation time=0.002904 (want equal)
+RESULT e2e-fs-sync-counters-match PASS
+file sync: sync=1 without mountpoint (want >=1)
+RESULT e2e-fs-sync-sync PASS
+NFS: the kernel has no BTF for the sunrpc types, so the NFS metrics are disabled (expected before 5.11 with sunrpc as a module)
+stall: dd exit=0 (want 0) on /dev/loop5
+RESULT e2e-stall-write PASS
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="5"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="10"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="30"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="60"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="dm-1",le="+Inf"} 1
+stall: dm-1 write time sum=12s (want 12..29)
+RESULT e2e-stall-bucket-bio PASS
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="5"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="10"} 0
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="30"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="60"} 1
+obi_stat_disk_operation_duration_seconds_bucket{disk_io_direction="write",error_type="",obi_disk_stacked="true",system_device="loop5",le="+Inf"} 1
+RESULT e2e-stall-bucket PASS
+RESULT e2e-stall-bounds PASS
+RESULT e2e-stall-no-approximation PASS
+zram (bio-based disk): writes=32 (want 32) bytes=131072 (want 131072)
+RESULT e2e-bio-based-disk PASS
+loop read/write operations=2 (flushes and discards not included)
+time=2026-10-07T16:42:17.284Z level=WARN msg="a storage latency histogram is reported per pod or container: each pod adds a series per bucket. The operations and time counters give the mean latency per pod at one series each" component=agent.StatsO11y histogram=obi.stat.fs.sync.duration attributes=[container.id]
+time=2026-10-07T16:42:17.695Z level=WARN msg="storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working" component=agent.StatsO11y metrics="the NFS client procedure metrics (stats_nfs_client_procedure_*)" reason="the kernel BTF doesn't describe the sunrpc types: they need the BTF of the sunrpc module (Linux 5.11+), with the module loaded when OBI starts"
+time=2026-10-07T16:42:17.695Z level=WARN msg="storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working" component=agent.StatsO11y metrics="the NFS client I/O metric (stats_nfs_client_io)" reason="the kernel BTF doesn't describe the sunrpc types: they need the BTF of the sunrpc module (Linux 5.11+), with the module loaded when OBI starts"
+
+##### optional storage features
+time=2026-10-07T16:42:17.695Z level=WARN msg="storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working" component=agent.StatsO11y metrics="the NFS client procedure metrics (stats_nfs_client_procedure_*)" reason="the kernel BTF doesn't describe the sunrpc types: they need the BTF of the sunrpc module (Linux 5.11+), with the module loaded when OBI starts"
+time=2026-10-07T16:42:17.695Z level=WARN msg="storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working" component=agent.StatsO11y metrics="the NFS client I/O metric (stats_nfs_client_io)" reason="the kernel BTF doesn't describe the sunrpc types: they need the BTF of the sunrpc module (Linux 5.11+), with the module loaded when OBI starts"
+RESULT storage-nfs-disabled-warn PASS

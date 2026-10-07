@@ -1,0 +1,109 @@
+=== RUN   TestDiskLatencyIsAccumulatedPerDevice
+--- PASS: TestDiskLatencyIsAccumulatedPerDevice (0.06s)
+=== RUN   TestDiskPartitions
+--- PASS: TestDiskPartitions (0.06s)
+=== RUN   TestDiskFlushesAndDiscards
+--- PASS: TestDiskFlushesAndDiscards (0.05s)
+=== RUN   TestDiskFileSyncsAreCountedLikeTheKernel
+--- PASS: TestDiskFileSyncsAreCountedLikeTheKernel (0.06s)
+=== RUN   TestDiskWriteZeroesAreCountedLikeTheKernel
+--- PASS: TestDiskWriteZeroesAreCountedLikeTheKernel (0.05s)
+=== RUN   TestDiskStartsOfRequestsWithoutIOStatistics
+=== RUN   TestDiskStartsOfRequestsWithoutIOStatistics/none
+=== RUN   TestDiskStartsOfRequestsWithoutIOStatistics/mq-deadline
+--- PASS: TestDiskStartsOfRequestsWithoutIOStatistics (4.23s)
+    --- PASS: TestDiskStartsOfRequestsWithoutIOStatistics/none (2.12s)
+    --- PASS: TestDiskStartsOfRequestsWithoutIOStatistics/mq-deadline (2.11s)
+=== RUN   TestDiskStackedVolumes
+--- PASS: TestDiskStackedVolumes (0.08s)
+=== RUN   TestDiskBioBasedDisks
+--- PASS: TestDiskBioBasedDisks (0.07s)
+=== RUN   TestDiskPendingRequests
+--- PASS: TestDiskPendingRequests (2.02s)
+=== RUN   TestDiskPendingStackedVolumes
+--- PASS: TestDiskPendingStackedVolumes (2.04s)
+=== RUN   TestDiskIOIsChargedPerCgroup
+PASS
+PASS
+--- PASS: TestDiskIOIsChargedPerCgroup (0.06s)
+=== RUN   TestDiskIOWriterProcess
+    tracer_disk_privileged_test.go:751: only runs as a child process of TestDiskIOIsChargedPerCgroup
+--- SKIP: TestDiskIOWriterProcess (0.00s)
+=== RUN   TestFsSyncTypesAndFilesystems
+--- PASS: TestFsSyncTypesAndFilesystems (0.69s)
+=== RUN   TestFsSyncIsChargedPerCgroup
+PASS
+--- PASS: TestFsSyncIsChargedPerCgroup (0.67s)
+=== RUN   TestFsSyncWithoutCgroupsOrFilesystems
+PASS
+--- PASS: TestFsSyncWithoutCgroupsOrFilesystems (0.68s)
+=== RUN   TestFsSyncProcess
+    tracer_disk_privileged_test.go:905: only runs as a child process of TestFsSyncIsChargedPerCgroup
+--- SKIP: TestFsSyncProcess (0.00s)
+=== RUN   TestNFSStatsAreOptional
+    tracer_disk_privileged_test.go:1122: storage features not measured: [{the NFS client procedure metrics (stats_nfs_client_procedure_*) waiting for the tracepoints of the sunrpc kernel module: the probes are attached when they exist} {the NFS client I/O metric (stats_nfs_client_io) waiting for the tracepoints of the nfs kernel module: the probes are attached when they exist}]
+--- PASS: TestNFSStatsAreOptional (0.08s)
+=== RUN   TestNFSProbesAttachWhenTheirModulesAreLoaded
+2026/10/07 16:47:56 INFO NFS client probes attached component=ebpf.StatFetcher metrics="the NFS client procedure metrics (stats_nfs_client_procedure_*)"
+2026/10/07 16:47:56 INFO NFS client probes attached component=ebpf.StatFetcher metrics="the NFS client I/O metric (stats_nfs_client_io)"
+--- PASS: TestNFSProbesAttachWhenTheirModulesAreLoaded (0.14s)
+=== RUN   TestDiskReaderReadsFullMaps
+2026/10/07 16:47:56 WARN the kernel map is full: the I/O of new workloads and devices is not measured until the entries of idle ones are deleted component=stat.DiskMapTracer map=disk_io_accum entries=1
+--- PASS: TestDiskReaderReadsFullMaps (0.00s)
+=== RUN   TestDiskReaderForwardsDeltas
+--- PASS: TestDiskReaderForwardsDeltas (0.00s)
+=== RUN   TestDiskReaderRestartsAfterEviction
+--- PASS: TestDiskReaderRestartsAfterEviction (0.00s)
+=== RUN   TestDiskReaderRestartsWhenOnlyTheLatencySumDecreased
+--- PASS: TestDiskReaderRestartsWhenOnlyTheLatencySumDecreased (0.00s)
+=== RUN   TestDiskReaderDeletesIdleEntries
+--- PASS: TestDiskReaderDeletesIdleEntries (0.00s)
+=== RUN   TestDiskReaderForwardsPartitionAndQueue
+--- PASS: TestDiskReaderForwardsPartitionAndQueue (0.00s)
+=== RUN   TestDiskReaderForwardsFlushesAndDiscards
+--- PASS: TestDiskReaderForwardsFlushesAndDiscards (0.00s)
+=== RUN   TestDiskErrorType
+--- PASS: TestDiskErrorType (0.00s)
+=== RUN   TestDiskReaderForwardsCounters
+--- PASS: TestDiskReaderForwardsCounters (0.00s)
+=== RUN   TestDiskReaderResolvesContainers
+--- PASS: TestDiskReaderResolvesContainers (0.00s)
+=== RUN   TestFsSyncReader
+--- PASS: TestFsSyncReader (0.00s)
+=== RUN   TestDiskVolumesTracer
+--- PASS: TestDiskVolumesTracer (0.00s)
+=== RUN   TestNFSProcedureReader
+--- PASS: TestNFSProcedureReader (0.00s)
+=== RUN   TestNFSIOReader
+--- PASS: TestNFSIOReader (0.00s)
+=== RUN   TestNFSErrorType
+=== RUN   TestNFSErrorType/success
+=== RUN   TestNFSErrorType/uapi_errno
+=== RUN   TestNFSErrorType/first_kernel-internal_errno
+=== RUN   TestNFSErrorType/NFSv3_not_supported
+=== RUN   TestNFSErrorType/NFSv3_retry_later
+=== RUN   TestNFSErrorType/last_kernel-internal_errno
+=== RUN   TestNFSErrorType/first_NFSv4_status
+=== RUN   TestNFSErrorType/NFSv4_retry_later
+=== RUN   TestNFSErrorType/NFSv4_grace_period
+=== RUN   TestNFSErrorType/last_NFSv4_status
+=== RUN   TestNFSErrorType/unassigned_kernel-internal_errno
+=== RUN   TestNFSErrorType/unassigned_NFSv4_status
+=== RUN   TestNFSErrorType/past_the_NFSv4_statuses
+=== RUN   TestNFSErrorType/internal_pNFS_status
+--- PASS: TestNFSErrorType (0.01s)
+    --- PASS: TestNFSErrorType/success (0.00s)
+    --- PASS: TestNFSErrorType/uapi_errno (0.00s)
+    --- PASS: TestNFSErrorType/first_kernel-internal_errno (0.00s)
+    --- PASS: TestNFSErrorType/NFSv3_not_supported (0.00s)
+    --- PASS: TestNFSErrorType/NFSv3_retry_later (0.00s)
+    --- PASS: TestNFSErrorType/last_kernel-internal_errno (0.00s)
+    --- PASS: TestNFSErrorType/first_NFSv4_status (0.00s)
+    --- PASS: TestNFSErrorType/NFSv4_retry_later (0.00s)
+    --- PASS: TestNFSErrorType/NFSv4_grace_period (0.00s)
+    --- PASS: TestNFSErrorType/last_NFSv4_status (0.00s)
+    --- PASS: TestNFSErrorType/unassigned_kernel-internal_errno (0.00s)
+    --- PASS: TestNFSErrorType/unassigned_NFSv4_status (0.00s)
+    --- PASS: TestNFSErrorType/past_the_NFSv4_statuses (0.00s)
+    --- PASS: TestNFSErrorType/internal_pNFS_status (0.00s)
+PASS
