@@ -657,10 +657,11 @@ groups:
       the device, in the I/O scheduler or in the dispatch queues, per block
       device and direction.
     note: >
-      Only requests whose allocation the kernel timestamps are measured: those
-      of devices that keep I/O statistics or use an I/O scheduler. Waits
-      before the allocation, such as those of blk-throttle (io.max) and of
-      writeback throttling, are not included.
+      Only the requests that the kernel accounts in /proc/diskstats are
+      measured, those of devices that keep I/O statistics, and, on Linux 6.10
+      and earlier and RHEL 8 (but not RHEL 9.6), those of devices that use an
+      I/O scheduler. Waits before the allocation, such as those of
+      blk-throttle (io.max) and of writeback throttling, are not included.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in

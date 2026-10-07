@@ -76,15 +76,29 @@ static __always_inline enum disk_op disk_bio_op(const u32 opf,
 
 enum { k_disk_queue_unknown = ~0ULL };
 
-// disk_queue_ns is the time a request waited in the block layer, from its allocation until its
-// issue to the device: in the I/O scheduler or in the dispatch queues. The kernel only records
-// the allocation time (start_ns) when I/O statistics or an I/O scheduler need it, so the wait is
-// k_disk_queue_unknown when start_ns is 0.
+// disk_queue_ns is the time a request waited in the block layer, from its allocation (from Linux
+// 6.13, from the start of its accounting) until its issue to the device: in the I/O scheduler or
+// in the dispatch queues. start_ns is 0 when the start is unknown (see disk_accounted_start_ns), so
+// the wait is k_disk_queue_unknown.
 static __always_inline u64 disk_queue_ns(const u64 start_ns, const u64 issue_ns) {
     if (start_ns == 0 || start_ns > issue_ns) {
         return k_disk_queue_unknown;
     }
     return issue_ns - start_ns;
+}
+
+// disk_accounted_start_ns is the start of a request (rq->start_time_ns) if the kernel accounts it
+// (io_stat_flag, RQF_IO_STAT, in rq_flags), and 0 (unknown) otherwise. From Linux 6.13, the kernel
+// writes the start only when it accounts the request, so a request reused on a device that doesn't
+// keep I/O statistics keeps the start of an earlier use. io_stat_flag is 0 on the kernels that
+// write the time or 0 at every allocation, which need no check.
+static __always_inline u64 disk_accounted_start_ns(const u64 start_ns,
+                                                   const u32 rq_flags,
+                                                   const u32 io_stat_flag) {
+    if (io_stat_flag != 0 && (rq_flags & io_stat_flag) == 0) {
+        return 0;
+    }
+    return start_ns;
 }
 
 // A request can complete in several block_rq_complete calls (partial completions). Each call

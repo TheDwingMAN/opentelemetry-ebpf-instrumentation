@@ -20,6 +20,9 @@ volatile const bool disk_status_is_blk_status;
 // The RQF_FLUSH_SEQ flag of struct request, which userspace finds in the kernel BTF: its bit
 // depends on the kernel version, and some kernels number it in an anonymous enum.
 volatile const u32 disk_rqf_flush_seq;
+// The RQF_IO_STAT flag of struct request, which userspace finds in the kernel BTF: 0 where the
+// kernel numbers its request flags with macros.
+volatile const u32 disk_rqf_io_stat;
 
 // Force structs into the ELF for automatic creation of Golang struct
 const disk_io_key_t *unused_disk_io_key __attribute__((unused));
@@ -79,6 +82,16 @@ static __always_inline void request_partition(struct request *rq, u32 *part_dev,
     *part_dev = BPF_CORE_READ(rq, part, bd_dev);
 }
 
+// request_start_ns is when the kernel started timing a request, or 0 if it didn't. rq_flags is only
+// read on the kernels that need it.
+static __always_inline u64 request_start_ns(struct request *rq) {
+    const u64 start_ns = BPF_CORE_READ(rq, start_time_ns);
+    if (disk_rqf_io_stat == 0) {
+        return start_ns;
+    }
+    return disk_accounted_start_ns(start_ns, BPF_CORE_READ(rq, rq_flags), disk_rqf_io_stat);
+}
+
 // request_queue_key is the key of the queue of a request in disk_timed_queues
 static __always_inline u64 request_queue_key(struct request *rq) {
     return (u64)(uintptr_t)BPF_CORE_READ(rq, q);
@@ -127,7 +140,7 @@ static __always_inline void record_issue(struct request *rq) {
     const u64 key = (u64)(uintptr_t)rq;
     const disk_rq_start_t start = {
         .issued_ns = issued_ns,
-        .queued_ns = disk_queue_ns(BPF_CORE_READ(rq, start_time_ns), issued_ns),
+        .queued_ns = disk_queue_ns(request_start_ns(rq), issued_ns),
         .bytes = BPF_CORE_READ(rq, __data_len),
         .major = BPF_CORE_READ(disk, major),
         .minor = BPF_CORE_READ(disk, first_minor),
@@ -171,7 +184,7 @@ kernel_timed_start(struct request *rq, const u32 completed_bytes, disk_rq_start_
     }
     struct gendisk *disk = request_disk(rq);
     start->issued_ns = issued_ns;
-    start->queued_ns = disk_queue_ns(BPF_CORE_READ(rq, start_time_ns), issued_ns);
+    start->queued_ns = disk_queue_ns(request_start_ns(rq), issued_ns);
     start->bytes = disk_rq_bytes(completed_bytes, BPF_CORE_READ(rq, stats_sectors));
     start->major = BPF_CORE_READ(disk, major);
     start->minor = BPF_CORE_READ(disk, first_minor);
@@ -186,10 +199,11 @@ kernel_timed_start(struct request *rq, const u32 completed_bytes, disk_rq_start_
 static __always_inline bool recorded_start(struct request *rq, disk_rq_start_t *start) {
     const u64 rq_key = (u64)(uintptr_t)rq;
     const disk_rq_start_t *recorded = bpf_map_lookup_elem(&disk_rq_start, &rq_key);
-    // what was recorded before the allocation of the request belongs to an earlier request at
-    // the same address, which the kernel timed
-    const u64 allocated_ns = BPF_CORE_READ(rq, start_time_ns);
-    if (recorded && recorded->issued_ns < allocated_ns) {
+    // what was recorded before the request started being timed belongs to an earlier request at
+    // the same address, which the kernel timed. A start left by an earlier use (see
+    // disk_accounted_start_ns) is older than this use, so it can only miss such a record.
+    const u64 started_ns = BPF_CORE_READ(rq, start_time_ns);
+    if (recorded && recorded->issued_ns < started_ns) {
         bpf_map_delete_elem(&disk_rq_start, &rq_key);
         recorded = 0;
     }
@@ -205,17 +219,17 @@ static __always_inline bool recorded_start(struct request *rq, disk_rq_start_t *
     return true;
 }
 
-// never_issued_start fills start for a request that was never issued: from its allocation, which
-// the kernel also times it from in /proc/diskstats. The kernel doesn't count requests that it
+// never_issued_start fills start for a request that was never issued: from when the kernel
+// started timing it, as it also does in /proc/diskstats. The kernel doesn't count requests that it
 // doesn't time.
 static __always_inline bool
 never_issued_start(struct request *rq, const u32 completed_bytes, disk_rq_start_t *start) {
-    const u64 allocated_ns = BPF_CORE_READ(rq, start_time_ns);
-    if (allocated_ns == 0) {
+    const u64 started_ns = request_start_ns(rq);
+    if (started_ns == 0) {
         return false;
     }
     struct gendisk *disk = request_disk(rq);
-    start->issued_ns = allocated_ns;
+    start->issued_ns = started_ns;
     start->queued_ns = k_disk_queue_unknown;
     start->bytes = completed_bytes;
     start->major = BPF_CORE_READ(disk, major);

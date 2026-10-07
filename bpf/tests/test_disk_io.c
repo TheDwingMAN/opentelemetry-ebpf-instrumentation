@@ -149,6 +149,24 @@ static void test_queue_ns(void) {
                 "an allocation time after the issue is not trusted");
 }
 
+static void test_accounted_start_ns(void) {
+    const u32 io_stat = 0x100;
+    assert_true(disk_accounted_start_ns(1000, 0x20, 0) == 1000,
+                "a kernel that writes the start at every allocation needs no flag");
+    assert_true(disk_accounted_start_ns(0, 0, 0) == 0,
+                "a start the kernel didn't record stays unknown without a flag");
+    assert_true(disk_accounted_start_ns(1000, io_stat, io_stat) == 1000,
+                "the start of an accounted request");
+    assert_true(disk_accounted_start_ns(1000, io_stat | 0x2, io_stat) == 1000,
+                "the start of an accounted request in a flush sequence");
+    assert_true(disk_accounted_start_ns(1000, 0x20, io_stat) == 0,
+                "the start of a request that is not accounted may be left by an earlier use");
+    assert_true(disk_accounted_start_ns(1000, 0, io_stat) == 0,
+                "a request without flags is not accounted");
+    assert_true(disk_accounted_start_ns(0, io_stat, io_stat) == 0,
+                "an accounted request without a start stays unknown");
+}
+
 static void test_rq_bytes(void) {
     assert_true(disk_rq_bytes(4096, 8) == 4096, "a request completed at once");
     assert_true(disk_rq_bytes(4096, 16) == 8192,
@@ -194,6 +212,7 @@ int main(void) {
     test_zone_append();
     test_bio_op();
     test_queue_ns();
+    test_accounted_start_ns();
     test_rq_bytes();
     test_fs_sync_status();
     test_sync_file_range_waits();

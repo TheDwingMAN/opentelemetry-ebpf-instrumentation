@@ -233,6 +233,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 			"disk_status_is_blk_status":  storage.layout.completeReportsBlkStatus,
 			"disk_rqf_flush_seq":         storage.layout.flushSeqFlag,
 			"disk_req_op_zone_append":    storage.layout.zoneAppendOp,
+			"disk_rqf_io_stat":           storage.layout.ioStatFlag,
 			"disk_read_cgroup":           diskReads.cgroup,
 			"disk_read_partition":        diskReads.partition,
 			"fs_sync_latency_bounds_ns":  fsSyncLatencyBoundsNs,
@@ -559,6 +560,9 @@ type blockTracepointLayout struct {
 	flushSeqFlag uint32
 	// zoneAppendOp is REQ_OP_ZONE_APPEND, whose value depends on the kernel, or 0 if the kernel has none
 	zoneAppendOp uint32
+	// ioStatFlag is the RQF_IO_STAT flag of the block requests, 0 where the kernel numbers its
+	// flags with macros
+	ioStatFlag uint32
 }
 
 // kernelBlockTracepointLayout reads the block tracepoint prototypes from the kernel BTF. The kernel
@@ -580,6 +584,7 @@ func kernelBlockTracepointLayout(log *slog.Logger) (blockTracepointLayout, error
 	}
 	zoneAppendOp, _ := enumerator(spec)("REQ_OP_ZONE_APPEND")
 	layout.zoneAppendOp = uint32(zoneAppendOp)
+	layout.ioStatFlag = requestIOStatFlag(enumerator(spec))
 	return layout, nil
 }
 
@@ -622,6 +627,17 @@ func requestFlushSeqFlag(enumerator func(string) (uint64, bool), kernelMajor, ke
 		return 0
 	}
 	return 1 << rqfFlushSeqBitBeforeEnum
+}
+
+// requestIOStatFlag is the RQF_IO_STAT flag of the block requests. From Linux 6.13, the kernel
+// writes rq->start_time_ns only for the requests it accounts in /proc/diskstats, so a request of a
+// device without I/O statistics keeps the start of an earlier use. The kernels that number their
+// request flags with macros write the time or 0 at every allocation, and need no flag.
+func requestIOStatFlag(enumerator func(string) (uint64, bool)) uint32 {
+	if bit, ok := enumerator("__RQF_IO_STAT"); ok {
+		return 1 << bit
+	}
+	return 0
 }
 
 // enumerator looks up the value of an enumerator in the enums of a BTF spec, named or anonymous

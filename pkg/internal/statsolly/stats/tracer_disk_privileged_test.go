@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -111,7 +113,8 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	assert.Equal(t, perDirection(directIOBlocks), completed)
 	assert.Equal(t, perDirection(directIOBlocks), operations)
 	assert.Equal(t, perDirection(directIOBlocks*directIOBlockSize), transferred)
-	// loop devices keep I/O statistics, so the kernel timestamps the allocation of every request
+	// the kernel records the start of every request of a device that keeps I/O statistics, as loop
+	// devices do
 	assert.Equal(t, perDirection(directIOBlocks), queued, "the wait before issue of every request is known")
 }
 
@@ -273,19 +276,164 @@ func TestDiskWriteZeroesAreCountedLikeTheKernel(t *testing.T) {
 	assert.Zero(t, discards, "writing zeroes is not a discard")
 }
 
+// TestDiskStartsOfRequestsWithoutIOStatistics checks that OBI doesn't time the requests of a device
+// without I/O statistics from a start left by an earlier use. From Linux 6.13, the kernel records
+// the start of a request only when it accounts it, so a request reused after queue/iostats is
+// turned off keeps the start of its last accounted use. That age would be added to the queue time
+// of the reads, and would be the latency of the empty flushes of the file syncs, which complete
+// without being issued. Without the RQF_IO_STAT check, it fails on those kernels; it passes either
+// way on older ones.
+func TestDiskStartsOfRequestsWithoutIOStatistics(t *testing.T) {
+	const (
+		staleAge = 2 * time.Second
+		reads    = 64
+	)
+	for _, scheduler := range []string{"none", "mq-deadline"} {
+		t.Run(scheduler, func(t *testing.T) {
+			// a request takes the tag last freed on the CPU that allocates it: keep the I/O on one
+			// CPU so that it reuses the tags of the accounted requests. The locked thread exits with
+			// the subtest, and its CPU affinity with it.
+			runtime.LockOSThread()
+			var allowed, oneCPU unix.CPUSet
+			require.NoError(t, unix.SchedGetaffinity(0, &allowed))
+			cpu := 0
+			for !allowed.IsSet(cpu) {
+				cpu++
+			}
+			oneCPU.Set(cpu)
+			require.NoError(t, unix.SchedSetaffinity(0, &oneCPU))
+
+			loopDev := attachLoopDevice(t)
+			device := filepath.Base(loopDev)
+			previousScheduler, available := queueSchedulers(t, device)
+			if !slices.Contains(available, scheduler) {
+				t.Skipf("%s is not available", scheduler)
+			}
+			previousIOStats := readQueueAttribute(t, device, "iostats")
+			t.Cleanup(func() {
+				writeQueueAttribute(t, device, "scheduler", previousScheduler)
+				writeQueueAttribute(t, device, "iostats", previousIOStats)
+			})
+			writeQueueAttribute(t, device, "scheduler", scheduler)
+			writeQueueAttribute(t, device, "iostats", "1")
+			reader := attachDiskReader(t, export.FeatureStatsDisk)
+
+			f, err := os.OpenFile(loopDev, os.O_RDWR|unix.O_DIRECT, 0)
+			require.NoError(t, err)
+			defer f.Close()
+			block := alignedBuffer(t, directIOBlockSize)
+			readBlocks := func(count int) {
+				t.Helper()
+				for i := range count {
+					_, err := f.ReadAt(block, int64(i%directIOBlocks*directIOBlockSize))
+					require.NoError(t, err)
+				}
+			}
+			syncDevice := func() {
+				t.Helper()
+				for range fileSyncs {
+					require.NoError(t, unix.Fsync(int(f.Fd())))
+				}
+			}
+
+			nrRequests, err := strconv.Atoi(readQueueAttribute(t, device, "nr_requests"))
+			require.NoError(t, err)
+			readBlocks(4 * nrRequests)
+			syncDevice()
+
+			writeQueueAttribute(t, device, "iostats", "0")
+			time.Sleep(staleAge)
+			reader.readStats()
+			before := readKernelDiskStats(t, device)
+			readBlocks(reads)
+			syncDevice()
+			after := readKernelDiskStats(t, device)
+			stale := readDiskTimings(reader, device)
+			assert.GreaterOrEqual(t, stale.reads, uint64(reads))
+			assert.Equal(t, before.reads, after.reads, "the kernel doesn't account the reads")
+			assert.Equal(t, before.writes, after.writes, "the kernel doesn't account the flushes")
+			assert.Less(t, stale.longest, staleAge.Seconds(), "no request is timed from an earlier use")
+
+			writeQueueAttribute(t, device, "iostats", "1")
+			readBlocks(reads)
+			accounted := readDiskTimings(reader, device)
+			assert.GreaterOrEqual(t, accounted.reads, uint64(reads))
+			assert.Equal(t, accounted.reads, accounted.queuedReads, "the wait before issue of every read is known")
+			assert.Less(t, accounted.longest, staleAge.Seconds())
+		})
+	}
+}
+
+type diskTimings struct {
+	reads, queuedReads uint64
+	// the longest mean of the queue times and of the write latencies
+	longest float64
+}
+
+func readDiskTimings(reader *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT], device string) diskTimings {
+	var timings diskTimings
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != device {
+			continue
+		}
+		for _, wait := range stat.DiskIO.Queue {
+			timings.longest = max(timings.longest, wait.Seconds)
+		}
+		switch stat.DiskIO.Op {
+		case ebpf.CodeDiskOpRead:
+			timings.reads += stat.DiskIO.Operations
+			for _, wait := range stat.DiskIO.Queue {
+				timings.queuedReads += wait.Count
+			}
+		case ebpf.CodeDiskOpWrite:
+			for _, latency := range stat.DiskIO.Latency {
+				timings.longest = max(timings.longest, latency.Seconds)
+			}
+		}
+	}
+	return timings
+}
+
+func readQueueAttribute(t *testing.T, device, name string) string {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join("/sys/block", device, "queue", name))
+	require.NoError(t, err)
+	return strings.TrimSpace(string(content))
+}
+
+// queueSchedulers reads the current I/O scheduler of a device and the ones it can use, which
+// sysfs lists with the current one in brackets
+func queueSchedulers(t *testing.T, device string) (current string, available []string) {
+	t.Helper()
+	for scheduler := range strings.FieldsSeq(readQueueAttribute(t, device, "scheduler")) {
+		if name, ok := strings.CutPrefix(scheduler, "["); ok {
+			scheduler = strings.TrimSuffix(name, "]")
+			current = scheduler
+		}
+		available = append(available, scheduler)
+	}
+	return current, available
+}
+
+func writeQueueAttribute(t *testing.T, device, name, value string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join("/sys/block", device, "queue", name), []byte(value), 0o644))
+}
+
 const kernelSectorSize = 512
 
 type kernelDiskStats struct {
-	writes, sectorsWritten, flushes uint64
+	reads, writes, sectorsWritten, flushes uint64
 	// the kernel reports flushes since Linux 5.5
 	hasFlushes bool
 }
 
-// readKernelDiskStats reads the completed writes, written sectors and flushes of a device in
+// readKernelDiskStats reads the completed reads, writes, written sectors and flushes of a device in
 // /proc/diskstats
 func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 	t.Helper()
 	const (
+		readsField   = 3
 		writesField  = 7
 		sectorsField = 9
 		flushesField = 18
@@ -302,7 +450,7 @@ func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 			require.NoError(t, err)
 			return value
 		}
-		stats := kernelDiskStats{writes: field(writesField), sectorsWritten: field(sectorsField)}
+		stats := kernelDiskStats{reads: field(readsField), writes: field(writesField), sectorsWritten: field(sectorsField)}
 		if len(fields) > flushesField {
 			stats.flushes, stats.hasFlushes = field(flushesField), true
 		}

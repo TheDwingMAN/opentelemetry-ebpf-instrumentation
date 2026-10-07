@@ -299,38 +299,65 @@ func TestBlockTracepointLayoutFromBTF(t *testing.T) {
 	require.Error(t, err, "an unexpected prototype is an error, not a guess")
 }
 
+// requestFlags is the enum of the request flags, which some kernels leave anonymous
+func requestFlags(name string) *btf.Enum {
+	return &btf.Enum{Name: name, Size: 4, Values: []btf.EnumValue{
+		{Name: "__RQF_STARTED", Value: 0}, {Name: "__RQF_FLUSH_SEQ", Value: 1}, {Name: "__RQF_IO_STAT", Value: 8},
+	}}
+}
+
+// requestFlagsMacros stands for the BTF of a kernel that numbers the request flags with macros
+var requestFlagsMacros = &btf.Int{Name: "int", Size: 4}
+
+func btfSpecOf(t *testing.T, typ btf.Type) *btf.Spec {
+	t.Helper()
+	builder, err := btf.NewBuilder([]btf.Type{typ}, nil)
+	require.NoError(t, err)
+	raw, err := builder.Marshal(nil, nil)
+	require.NoError(t, err)
+	spec, err := btf.LoadSpecFromReader(bytes.NewReader(raw))
+	require.NoError(t, err)
+	return spec
+}
+
 // The request flags were macros, then numbered by an enum that some kernels leave anonymous, and
 // that some older kernels have backported (RHEL 9.6)
 func TestRequestFlushSeqFlag(t *testing.T) {
-	flags := func(name string) *btf.Enum {
-		return &btf.Enum{Name: name, Size: 4, Values: []btf.EnumValue{
-			{Name: "__RQF_STARTED", Value: 0}, {Name: "__RQF_FLUSH_SEQ", Value: 1},
-		}}
-	}
-	noEnum := &btf.Int{Name: "int", Size: 4}
 	for _, tc := range []struct {
 		name         string
 		typ          btf.Type
 		major, minor int
 		want         uint32
 	}{
-		{"macros", noEnum, 6, 10, 1 << 4},
-		{"macros, RHEL 8", noEnum, 4, 18, 1 << 4},
-		{"anonymous enum", flags(""), 6, 12, 1 << 1},
-		{"named enum", flags("rqf_flags"), 6, 18, 1 << 1},
-		{"backported enum", flags(""), 5, 14, 1 << 1},
+		{"macros", requestFlagsMacros, 6, 10, 1 << 4},
+		{"macros, RHEL 8", requestFlagsMacros, 4, 18, 1 << 4},
+		{"anonymous enum", requestFlags(""), 6, 12, 1 << 1},
+		{"named enum", requestFlags("rqf_flags"), 6, 18, 1 << 1},
+		{"backported enum", requestFlags(""), 5, 14, 1 << 1},
 		// the bit of the macros is RQF_SCHED_TAGS in the enum: no flag rather than a wrong one
-		{"enum kernel without the enum in its BTF", noEnum, 6, 11, 0},
-		{"later enum kernel without the enum in its BTF", noEnum, 7, 0, 0},
+		{"enum kernel without the enum in its BTF", requestFlagsMacros, 6, 11, 0},
+		{"later enum kernel without the enum in its BTF", requestFlagsMacros, 7, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			builder, err := btf.NewBuilder([]btf.Type{tc.typ}, nil)
-			require.NoError(t, err)
-			raw, err := builder.Marshal(nil, nil)
-			require.NoError(t, err)
-			spec, err := btf.LoadSpecFromReader(bytes.NewReader(raw))
-			require.NoError(t, err)
+			spec := btfSpecOf(t, tc.typ)
 			assert.Equal(t, tc.want, requestFlushSeqFlag(enumerator(spec), tc.major, tc.minor))
+		})
+	}
+}
+
+// Only the kernels that number the request flags with an enum need RQF_IO_STAT
+func TestRequestIOStatFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  btf.Type
+		want uint32
+	}{
+		{"macros", requestFlagsMacros, 0},
+		{"anonymous enum (6.12, RHEL 9.6)", requestFlags(""), 1 << 8},
+		{"named enum (6.18)", requestFlags("rqf_flags"), 1 << 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, requestIOStatFlag(enumerator(btfSpecOf(t, tc.typ))))
 		})
 	}
 }
