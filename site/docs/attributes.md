@@ -256,6 +256,14 @@ OBI override of `rpc.system.name` extending the upstream enum with the RPC syste
 | --- | --- | --- | --- | --- |
 | `rpc.system.name` | enum | release_candidate | The Remote Procedure Call (RPC) system. | grpc; dubbo; connectrpc; jsonrpc; aws-api; onc_rpc |
 
+## `x.obi.system.filesystem`
+
+OBI override of `system.filesystem.type` re-typed as an open-ended string: OBI reports the filesystem type names of the kernel.
+
+| Attribute | Type | Stability | Description | Examples |
+| --- | --- | --- | --- | --- |
+| `system.filesystem.type` | string | development | The filesystem type | ext4; xfs; tmpfs; overlay; nfs4; fuse.sshfs |
+
 ## `x.obi.telemetry`
 
 OBI override of `telemetry.sdk.language` extending the upstream enum with the `generic` language OBI reports for processes with no recognized language runtime.

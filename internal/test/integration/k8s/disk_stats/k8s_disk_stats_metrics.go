@@ -70,8 +70,7 @@ func fsSyncLabels() map[string]*regexp.Regexp {
 	labels := workloadLabels()
 	labels["obi_fs_sync_type"] = regexp.MustCompile(`^fsync$`)
 	labels["system_filesystem_mountpoint"] = regexp.MustCompile(`^/`)
-	// only there when semantic conventions list the type of the filesystem of the node
-	labels["system_filesystem_type"] = regexp.MustCompile(`^(fat32|exfat|ntfs|refs|hfsplus|ext4)?$`)
+	labels["system_filesystem_type"] = regexp.MustCompile(`^[a-z0-9._]+$`)
 	return labels
 }
 

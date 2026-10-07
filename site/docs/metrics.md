@@ -1543,7 +1543,7 @@ Duration of file syncs (fsync, fdatasync, sync, syncfs and sync_file_range), per
 | `obi.fs.sync.type` | enum | `recommended` | development | System call that synced the files. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
-| `system.filesystem.type` | enum | `opt_in` | development | The filesystem type | ext4 |
+| `system.filesystem.type` | string | `opt_in` | development | The filesystem type | ext4; xfs; tmpfs; overlay; nfs4; fuse.sshfs |
 
 ## `obi.stat.fs.sync.operation_time`
 
@@ -1565,7 +1565,7 @@ Sum of the durations of the completed file syncs, per call and workload that syn
 | `obi.fs.sync.type` | enum | `recommended` | development | System call that synced the files. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
-| `system.filesystem.type` | enum | `opt_in` | development | The filesystem type | ext4 |
+| `system.filesystem.type` | string | `opt_in` | development | The filesystem type | ext4; xfs; tmpfs; overlay; nfs4; fuse.sshfs |
 
 ## `obi.stat.fs.sync.operations`
 
@@ -1588,7 +1588,7 @@ Completed file syncs (fsync, fdatasync, sync, syncfs and sync_file_range), per c
 | `obi.fs.sync.type` | enum | `recommended` | development | System call that synced the files. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
-| `system.filesystem.type` | enum | `opt_in` | development | The filesystem type | ext4 |
+| `system.filesystem.type` | string | `opt_in` | development | The filesystem type | ext4; xfs; tmpfs; overlay; nfs4; fuse.sshfs |
 
 ## `obi.stat.k8s.pod.volume.device`
 

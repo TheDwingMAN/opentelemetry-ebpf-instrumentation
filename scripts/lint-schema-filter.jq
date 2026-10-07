@@ -48,7 +48,8 @@ map(select(
         and ($dup.attribute_id
              | IN("messaging.system", "gen_ai.provider.name", "gen_ai.operation.name",
                   "openai.api.type", "telemetry.sdk.language", "db.system.name",
-                  "rpc.system.name", "error.type", "network.type"))
+                  "rpc.system.name", "error.type", "network.type",
+                  "system.filesystem.type"))
         and ((($dup.group_ids // []) | sort) as $groups
              | ($groups | length) == 2
                and ($groups[0] | startswith("registry."))

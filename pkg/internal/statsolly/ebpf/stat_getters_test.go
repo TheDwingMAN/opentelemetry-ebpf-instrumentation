@@ -92,22 +92,41 @@ func TestStatGetters_FsSync(t *testing.T) {
 	assert.False(t, containerID(succeeded).Valid())
 }
 
-func TestStatGetters_FilesystemTypeIsOnlyASemconvMember(t *testing.T) {
+func TestStatGetters_FilesystemType(t *testing.T) {
 	filesystemType, ok := StatGetters(attr.FilesystemType)
+	require.True(t, ok)
+	filesystemTypeString, ok := StatStringGetters(attr.FilesystemType)
 	require.True(t, ok)
 	ofType := func(kernelType string) *Stat {
 		return &Stat{Type: StatTypeFsSync, FsSync: &FsSync{FilesystemType: kernelType}}
 	}
 
-	assert.Equal(t, attribute.String("system.filesystem.type", "ext4"), filesystemType(ofType("ext4")))
-	assert.Equal(t, attribute.String("system.filesystem.type", "exfat"), filesystemType(ofType("exfat")))
-	for _, kernelType := range []string{"xfs", "tmpfs", "overlay", "vfat", "nfs4", ""} {
-		assert.False(t, filesystemType(ofType(kernelType)).Valid(), kernelType)
+	tests := []struct {
+		name string
+		stat *Stat
+		want string
+	}{
+		{name: "ext4", stat: ofType("ext4"), want: "ext4"},
+		{name: "xfs", stat: ofType("xfs"), want: "xfs"},
+		{name: "tmpfs", stat: ofType("tmpfs"), want: "tmpfs"},
+		{name: "overlay", stat: ofType("overlay"), want: "overlay"},
+		{name: "nfs4", stat: ofType("nfs4"), want: "nfs4"},
+		{name: "vfat is not mapped to fat32", stat: ofType("vfat"), want: "vfat"},
+		{name: "fuse subtype", stat: ofType("fuse.sshfs"), want: "fuse.sshfs"},
+		{name: "fuse subtype with a hyphen", stat: ofType("fuse.gvfsd-fuse"), want: "fuse.gvfsd-fuse"},
+		{name: "filesystem not in the mount table", stat: ofType("")},
+		{name: "not a file sync", stat: &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{}}},
 	}
-
-	filesystemTypeString, ok := StatStringGetters(attr.FilesystemType)
-	require.True(t, ok)
-	assert.Empty(t, filesystemTypeString(ofType("xfs")))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, filesystemTypeString(tt.stat))
+			if tt.want == "" {
+				assert.False(t, filesystemType(tt.stat).Valid())
+				return
+			}
+			assert.Equal(t, attribute.String("system.filesystem.type", tt.want), filesystemType(tt.stat))
+		})
+	}
 }
 
 func TestStatGetters_NFSProcedure(t *testing.T) {
