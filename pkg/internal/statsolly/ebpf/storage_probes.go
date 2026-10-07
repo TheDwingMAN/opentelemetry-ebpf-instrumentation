@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 
 	"github.com/cilium/ebpf/link"
 
@@ -117,6 +118,21 @@ func (s *storageProbes) programsToDisable() []string {
 		toDisable = append(toDisable, fsSyncPrograms...)
 	}
 	return append(toDisable, s.nfs.programsToDisable()...)
+}
+
+// loadOrDisable loads the stats programs with the storage ones. When they can't be loaded, as OBI
+// does with an optional tracer that can't be loaded, it disables the storage features and loads the
+// stats programs without them. If that fails too, it returns both errors.
+func (s *storageProbes) loadOrDisable(load func(toDisable []string) error, tcpToDisable []string) error {
+	err := load(slices.Concat(tcpToDisable, s.programsToDisable()))
+	if err == nil || !s.any() {
+		return err
+	}
+	s.disableAll(fmt.Errorf("can't load their BPF programs: %w", err))
+	if retryErr := load(slices.Concat(tcpToDisable, s.programsToDisable())); retryErr != nil {
+		return errors.Join(err, retryErr)
+	}
+	return nil
 }
 
 // attach attaches the loaded storage probes, and disables the features whose probes can't be

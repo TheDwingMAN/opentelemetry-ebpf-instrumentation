@@ -245,14 +245,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 			"nfs_latency_bounds_len":     uint32(len(histograms.NFS)),
 		}, sharedMaps, &mu, "", nil)
 	}
-	err = load(slices.Concat(tcpToDisable, storage.programsToDisable()))
-	if err != nil && storage.any() {
-		// as OBI does with an optional tracer that can't be loaded, the stats go on without the
-		// storage programs
-		storage.disableAll(fmt.Errorf("can't load their BPF programs: %w", err))
-		err = load(slices.Concat(tcpToDisable, storage.programsToDisable()))
-	}
-	if err != nil {
+	if err := storage.loadOrDisable(load, tcpToDisable); err != nil {
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
 

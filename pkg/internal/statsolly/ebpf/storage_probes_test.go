@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // When the storage programs can't be loaded, the stats go on without any of them
@@ -50,4 +51,44 @@ func TestStorageProbesDisableAllOnlyTheLoadedFeatures(t *testing.T) {
 	storage := storageProbes{fsSync: true}
 	storage.disableAll(errors.New("no kprobes"))
 	assert.Equal(t, []DisabledFeature{{Feature: featureFsSync, Reason: "no kprobes"}}, storage.disabled)
+}
+
+// When the storage programs can't be loaded, the stats programs are loaded again without them
+func TestStorageProbesLoadOrDisable(t *testing.T) {
+	storage := storageProbes{fsSync: true}
+	var loads [][]string
+	err := storage.loadOrDisable(func(toDisable []string) error {
+		loads = append(loads, toDisable)
+		if len(loads) == 1 {
+			return errors.New("verifier error")
+		}
+		return nil
+	}, []string{progObiStatsKprobeTCPCleanupRbuf})
+
+	require.NoError(t, err)
+	require.Len(t, loads, 2)
+	assert.NotContains(t, loads[0], progObiStatsKprobeVfsFsyncRange)
+	assert.Contains(t, loads[1], progObiStatsKprobeVfsFsyncRange)
+	assert.Contains(t, loads[1], progObiStatsKprobeTCPCleanupRbuf)
+	assert.Equal(t, []DisabledFeature{
+		{Feature: featureFsSync, Reason: "can't load their BPF programs: verifier error"},
+	}, storage.disabled)
+}
+
+// When the stats programs can't be loaded without the storage ones either, both errors are returned
+func TestStorageProbesLoadOrDisableReturnsBothErrors(t *testing.T) {
+	withStorage, withoutStorage := errors.New("verifier error"), errors.New("operation not permitted")
+	storage := storageProbes{fsSync: true}
+	loads := 0
+	err := storage.loadOrDisable(func([]string) error {
+		loads++
+		if loads == 1 {
+			return withStorage
+		}
+		return withoutStorage
+	}, nil)
+
+	require.ErrorIs(t, err, withStorage)
+	require.ErrorIs(t, err, withoutStorage)
+	assert.Equal(t, 2, loads)
 }
