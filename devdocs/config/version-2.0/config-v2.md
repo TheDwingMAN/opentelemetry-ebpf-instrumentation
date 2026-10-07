@@ -566,7 +566,7 @@ The current shape separates packet/flow capture from TCP stats capture:
 
 `tcp_io` can produce substantially more events than the other stats families, so users should opt into it deliberately when they need per-send/per-receive I/O stats.
 
-The `disk_*` families probe every block I/O request, the `fs_sync_*` families every file sync, the `nfs_client_*` families every NFS RPC, `disk_pod_volumes` watches the Kubernetes PersistentVolumes, and `disk_volume_devices` reads the stacked volumes of the node from sysfs, so they are never enabled by `enabled: true` alone: list them in `features` to opt in.
+The `disk_*` families probe every block I/O request, the `fs_sync_*` families every file sync, the `nfs_client_*` families every NFS RPC, `disk_pending_operations` reads the kernel's counters of requests in flight, `disk_pod_volumes` watches the Kubernetes PersistentVolumes, and `disk_volume_devices` reads the stacked volumes of the node from sysfs, so they are never enabled by `enabled: true` alone: list them in `features` to opt in.
 
 ### `capture.engine` Section
 

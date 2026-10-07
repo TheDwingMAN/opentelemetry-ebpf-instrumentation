@@ -280,7 +280,7 @@ attributes:
       exclude: [obi.ip, obi.disk.partition, container.id, k8s.pod.name, k8s.container.name, k8s.kind]
 ```
 
-The mean latency per workload doesn't need the detailed profile: it is the ratio of a time counter to its count counter, e.g. `rate(obi_stat_disk_operation_time_seconds_total[5m]) / rate(obi_stat_disk_operations_total[5m])`. Selecting `k8s.pod.name`, `k8s.container.name` or `container.id` on a latency histogram makes a series per bucket for each pod, and OBI warns about it at startup. With config v2, list the same families in `capture.network.stats.features` (without the `stats_` prefix) and the selection in `extensions.obi.enrich.attributes.select`.
+The mean latency per workload doesn't need the detailed profile: it is the ratio of a time counter to its count counter, e.g. `rate(obi_stat_disk_operation_time_seconds_total[5m]) / rate(obi_stat_disk_operations_total[5m])`. Selecting `k8s.pod.name`, `k8s.container.name` or `container.id` on a latency histogram makes a series per bucket for each pod, and OBI warns about it at startup. With config v2, list the families in `capture.network.stats.features` without the `stats_` prefix, and the selection in `extensions.obi.enrich.attributes.select`. Config v2 has no group names: in place of `stats_disk`, `stats_fs_sync` and `stats_nfs`, list each of their families (`disk_io`, `disk_operations` and so on, as [config v2](config/version-2.0/config-v2.md) lists them). Unknown names, like `disk`, are ignored.
 
 #### Storage stats under dynamic application selection
 
