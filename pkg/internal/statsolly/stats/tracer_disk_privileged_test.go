@@ -412,8 +412,8 @@ func queueSchedulers(t *testing.T, device string) (current string, available []s
 }
 
 // makeKernelTimeRequests makes the kernel time the requests of a device: it times those of the
-// queues that collect I/O statistics, as writeback throttling makes them do. It skips the test if the
-// kernel has no writeback throttling.
+// queues with QUEUE_FLAG_STATS, which writeback throttling sets, whatever queue/iostats says. It
+// skips the test if the kernel has no writeback throttling.
 func makeKernelTimeRequests(t *testing.T, device string) {
 	t.Helper()
 	wbtLatency, err := os.ReadFile(filepath.Join("/sys/block", device, "queue", "wbt_lat_usec"))

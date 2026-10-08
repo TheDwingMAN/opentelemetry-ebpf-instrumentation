@@ -19,8 +19,8 @@ typedef struct disk_cgroup_name {
 // Name of the cgroups that block I/O is charged to, keyed by cgroup id. The kernel records it
 // when it starts accumulating I/O for a cgroup, so that userspace can tell the container from
 // the name even when the cgroup is not visible from its cgroup namespace, or already gone. An LRU
-// map evicts entries once more than max_entries / 128 CPUs have added some (Linux < 6.16): the
-// kernel records the name again at the next I/O of the cgroup.
+// map evicts entries once more than max_entries / 128 CPUs have added some (before Linux 6.16, and
+// 6.12.39, 6.6.99, RHEL 9.8): the kernel records the name again at the next I/O of the cgroup.
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1 << 13);

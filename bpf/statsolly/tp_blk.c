@@ -113,11 +113,13 @@ static __always_inline bool never_issued(struct request *rq) {
 }
 
 // kernel_times_requests tells whether the kernel records the issue time and the size of the
-// requests (rq->io_start_time_ns and rq->stats_sectors): when the queue collects I/O statistics,
-// which writeback throttling turns on by default. The kernel only decides after block_rq_issue,
-// so this relies on what the completions of the queue found (see disk_timed_queues).
+// requests (rq->io_start_time_ns and rq->stats_sectors): when the queue has QUEUE_FLAG_STATS, which
+// writeback throttling, on by default, and io.cost set, whatever queue/iostats says. The kernel
+// only decides after block_rq_issue, so this relies on what the completions of the queue found
+// (see disk_timed_queues).
 static __always_inline bool kernel_times_requests(struct request *rq) {
-    // before Linux 5.5 (including RHEL 8), the kernel doesn't record the size
+    // the request holds the size from Linux 5.4. RHEL 8 records it in a struct request_aux, which
+    // this check doesn't find, so its requests are recorded at their issue.
     if (!bpf_core_field_exists(rq->stats_sectors)) {
         return false;
     }
