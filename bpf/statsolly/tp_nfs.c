@@ -52,10 +52,11 @@ static __always_inline u64 nfs_task_cgroup_id(const struct rpc_task *task) {
     return cgroup_id ? *cgroup_id : 0;
 }
 
+// The server as the mount names it: the NFS client names its transport after the host of
+// server:/export, which is an address when the mount names the server by its address
 static __always_inline void read_server(unsigned char *server, const struct rpc_task *task) {
-    // address_strings is indexed by enum rpc_display_format_t, whose RPC_DISPLAY_ADDR is 0
     bpf_probe_read_kernel_str(
-        server, k_nfs_server_max_len, BPF_CORE_READ(task, tk_xprt, address_strings[0]));
+        server, k_nfs_server_max_len, BPF_CORE_READ(task, tk_xprt, servername));
 }
 
 // The status of a completed RPC task: 0 on success, otherwise its errno or NFSv4 error

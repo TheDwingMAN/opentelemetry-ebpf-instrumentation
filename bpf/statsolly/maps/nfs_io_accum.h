@@ -13,7 +13,7 @@
 typedef struct nfs_io_key {
     // id of the io controller cgroup of the thread that started the RPC, 0 if unknown
     u64 cgroup_id;
-    // address of the NFS server, as the RPC transport displays it
+    // name of the NFS server, as the mount names it (see read_server)
     unsigned char server[k_nfs_server_max_len];
     // receive for reads, transmit for writes
     enum network_io_direction direction;

@@ -42,8 +42,10 @@ func nfsIOKey(server string, direction ebpf.StatsNetworkIoDirection) ebpf.StatsN
 
 func TestNFSProcedureReader(t *testing.T) {
 	const containerID = "40c03570b6f4c30bc8d69923d37ee698f5cfcced92c7b7df1c47f6f7887378a9"
-	read := nfsProcedureKey("10.0.0.5", "READ", 4, 0)
-	stale := nfsProcedureKey("10.0.0.5", "GETATTR", 3, uint16(unix.ESTALE))
+	// the server as the mount names it
+	const server = "fs-0123456789abcdef0.efs.us-east-1.amazonaws.com"
+	read := nfsProcedureKey(server, "READ", 4, 0)
+	stale := nfsProcedureKey(server, "GETATTR", 3, uint16(unix.ESTALE))
 	rpcs := func(count, latencyNs uint64) ebpf.StatsNfsProcedureAccumT {
 		var a ebpf.StatsNfsProcedureAccumT
 		a.LatencyCount[1], a.LatencySumNs[1] = count, count*latencyNs
@@ -65,7 +67,7 @@ func TestNFSProcedureReader(t *testing.T) {
 	for _, stat := range stats {
 		assert.Equal(t, ebpf.StatTypeNFSProcedure, stat.Type)
 		assert.Equal(t, containerID, stat.NFSProcedure.ContainerID)
-		assert.Equal(t, "10.0.0.5", stat.NFSProcedure.Server)
+		assert.Equal(t, server, stat.NFSProcedure.Server)
 		byProcedure[stat.NFSProcedure.Procedure] = stat.NFSProcedure
 	}
 	assert.Equal(t, uint32(4), byProcedure["READ"].Version)
@@ -85,6 +87,7 @@ func TestNFSProcedureReader(t *testing.T) {
 }
 
 func TestNFSIOReader(t *testing.T) {
+	// a mount that names the server by its address
 	reads := nfsIOKey("fd00::5", ebpf.StatsNetworkIoDirectionDirectionReceive)
 	writes := nfsIOKey("fd00::5", ebpf.StatsNetworkIoDirectionDirectionTransmit)
 	src := &fakeAccum[ebpf.StatsNfsIoKeyT, uint64]{entries: map[ebpf.StatsNfsIoKeyT]uint64{
