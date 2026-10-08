@@ -128,10 +128,21 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		statAttrs, dynamicDecoratedStats, dynamicFilteredStats),
 		swarm.WithID("DynamicPIDFilter"))
 
-	allStats := dynamicFilteredStats
+	tcpFilters, err := tcpStatFilters(s.cfg.Filters.Stats, selectorCfg.ExtraGroupAttributesCfg)
+	if err != nil {
+		return nil, err
+	}
+	filteredStats := s.ctxInfo.OverrideStatsExportQueue
+	if filteredStats == nil {
+		filteredStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredStats")
+	}
+
+	filteredTCPStats := filteredStats
 	if s.storageStatsEnabled() {
-		// Block I/O stats have no network endpoints, so they skip the IP-based nodes above and join
-		// the rest of the stats before the attribute filter.
+		filteredTCPStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredTCPStats")
+
+		// Block I/O stats have no network endpoints, so they skip the IP-based nodes above. They
+		// are filtered on their own attributes, then join the TCP stats before the exporters.
 		diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
 		swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
 
@@ -158,16 +169,15 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		swi.Add(decorate.Decorate(s.agentIP, statAttrs, kubeDecoratedDiskStats, decoratedDiskStats),
 			swarm.WithID("DiskStatsDecorator"))
 
-		allStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "allStats")
-		swi.Add(mergeStats(allStats, dynamicFilteredStats, decoratedDiskStats), swarm.WithID("StatsMerger"))
+		filteredStorageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredStorageStats")
+		swi.Add(filterStorageStatsByAttribute(s.cfg.Filters.Stats, selectorCfg.ExtraGroupAttributesCfg,
+			decoratedDiskStats, filteredStorageStats), swarm.WithID("StorageAttributeFilter"))
+
+		swi.Add(mergeStats(filteredStats, filteredTCPStats, filteredStorageStats), swarm.WithID("StatsMerger"))
 	}
 
-	filteredStats := s.ctxInfo.OverrideStatsExportQueue
-	if filteredStats == nil {
-		filteredStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredStats")
-	}
-	swi.Add(filterStatsByAttribute(s.cfg.Filters.Stats, selectorCfg.ExtraGroupAttributesCfg, allStats, filteredStats),
-		swarm.WithID("AttributeFilter"))
+	swi.Add(filter.ByAttribute(tcpFilters, nil, selectorCfg.ExtraGroupAttributesCfg, ebpf.StatStringGetters,
+		dynamicFilteredStats, filteredTCPStats), swarm.WithID("AttributeFilter"))
 
 	// Terminal nodes export the stats record information out of the pipeline: OTEL, Prom and printer.
 	// Not all the nodes are mandatory here. Is the responsibility of each Provider function to decide

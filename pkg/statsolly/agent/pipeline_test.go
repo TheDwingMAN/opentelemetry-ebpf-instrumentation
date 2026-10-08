@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/export/connector"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
 	"go.opentelemetry.io/obi/pkg/export/prom"
+	"go.opentelemetry.io/obi/pkg/filter"
 	"go.opentelemetry.io/obi/pkg/internal/pipe"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/obi"
@@ -602,6 +603,13 @@ func TestStorageSelectionReportsTheRemovalOfAReportedPodVolume(t *testing.T) {
 // startDiskPipeline runs the stats pipeline with the given disk features, exporting to
 // Prometheus. It returns the channel to send disk stats through and the Prometheus URL.
 func startDiskPipeline(t *testing.T, features export.Features, configure ...func(*Stats)) (chan<- []*ebpf.Stat, string) {
+	_, diskEvents, promURL := startStatsPipeline(t, features, configure...)
+	return diskEvents, promURL
+}
+
+// startStatsPipeline runs the stats pipeline with the given features, exporting to Prometheus. It
+// returns the channels to send TCP and disk stats through, and the Prometheus URL.
+func startStatsPipeline(t *testing.T, features export.Features, configure ...func(*Stats)) (ringBufEvents, diskEvents chan<- []*ebpf.Stat, promURL string) {
 	registry := prometheus.NewRegistry()
 	promServer := httptest.NewServer(promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
 	t.Cleanup(promServer.Close)
@@ -630,21 +638,21 @@ func startDiskPipeline(t *testing.T, features export.Features, configure ...func
 		c(&stats)
 	}
 
-	diskEvents := make(chan []*ebpf.Stat, 10)
+	disk := make(chan []*ebpf.Stat, 10)
 	defaultDiskTracer := newDiskTracer
 	t.Cleanup(func() {
 		newDiskTracer = defaultDiskTracer
-		close(diskEvents)
+		close(disk)
 	})
 	newDiskTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 		return func(ctx context.Context) {
 			defer out.MarkCloseable()
-			for i := range diskEvents {
+			for i := range disk {
 				out.SendCtx(ctx, i)
 			}
 		}
 	}
-	ringBuf := make(chan []*ebpf.Stat)
+	ringBuf := make(chan []*ebpf.Stat, 10)
 	defaultRingBufTracer := newRingBufTracer
 	t.Cleanup(func() {
 		newRingBufTracer = defaultRingBufTracer
@@ -662,7 +670,7 @@ func startDiskPipeline(t *testing.T, features export.Features, configure ...func
 	runner, err := stats.buildPipeline(t.Context())
 	require.NoError(t, err)
 	go runner.Start(t.Context())
-	return diskEvents, promServer.URL
+	return ringBuf, disk, promServer.URL
 }
 
 func scrapeDiskMetrics(ct *assert.CollectT, promURL, namePrefix string) []promtest.ScrapedMetric {
@@ -687,4 +695,37 @@ func fakeDiskRecord(device string, op ebpf.DiskOpCode, errorType string, latency
 			Latency:   latency,
 		},
 	}
+}
+
+// The TCP stats keep the filter semantics they had before the storage stats, and the filters of
+// each family don't drop the stats of the other
+func TestStatFiltersOfBothFamilies(t *testing.T) {
+	ringBuf, diskEvents, promURL := startStatsPipeline(t,
+		export.FeatureStatsTCPRtt|export.FeatureStatsTCPFailedConnections|export.FeatureStatsDiskOperations,
+		func(s *Stats) {
+			s.cfg.Filters.Stats = filter.AttributeFamilyConfig{
+				"reason":        {NotMatch: "unknown"},
+				"system.device": {Match: "sda"},
+			}
+		})
+
+	ringBuf <- []*ebpf.Stat{
+		{Type: ebpf.StatTypeTCPRtt, TCPRtt: &ebpf.TCPRtt{SrttUs: 100}},
+		{Type: ebpf.StatTypeTCPFailedConnection, TCPFailedConnection: &ebpf.TCPFailedConnection{Reason: uint8(ebpf.CodeConnectionRefused)}},
+	}
+	sda := fakeDiskRecord("sda", ebpf.CodeDiskOpRead, "")
+	sda.DiskIO.Operations = 1
+	vda := fakeDiskRecord("vda", ebpf.CodeDiskOpRead, "")
+	vda.DiskIO.Operations = 1
+	diskEvents <- []*ebpf.Stat{sda, vda}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		// as before: the RTT stats have no reason, so a filter on it drops them
+		assert.Empty(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_tcp_rtt"))
+		assert.Len(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_tcp_failed_connections_total"), 1)
+		operations := scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operations_total")
+		if assert.Len(ct, operations, 1) {
+			assert.Equal(ct, "sda", operations[0].Labels["system_device"])
+		}
+	}, timeout, 100*time.Millisecond)
 }

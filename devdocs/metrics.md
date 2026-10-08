@@ -130,6 +130,10 @@ To add a new metric, follow these guidelines:
 
 12. Register the metric in the schema registry: add a `metric.*` entry in [schemas/obi/groups/stats/metrics.yaml](../schemas/obi/groups/stats/metrics.yaml).
 
+### Storage stats
+
+The `filter.stats` attribute filters apply to the TCP and the storage stats separately. The TCP stats are matched against every filter but those on the attributes that only the storage metrics have, such as `system_device`. A storage stat is matched only against the filters on the attributes of its own metrics: a filter on a TCP attribute, such as `dst_port`, doesn't drop the storage stats, and a filter on a disk attribute doesn't drop the file sync or NFS stats. The metrics of each type of storage stat are listed in `storageStatMetrics` in [stat_filter.go](../pkg/statsolly/agent/stat_filter.go), where a new storage metric must be added.
+
 ### Known limitations
 
 #### `src.port` may be reported as `0`

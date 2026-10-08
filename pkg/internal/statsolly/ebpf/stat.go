@@ -4,10 +4,8 @@
 package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
-	"maps"
 	"structs"
 
-	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/internal/pipe"
 )
 
@@ -29,36 +27,6 @@ const (
 	StatTypePodVolume               = StatType(StatsStatTypeK_statTypePodVolume)
 	StatTypeDiskVolume              = StatType(StatsStatTypeK_statTypeDiskVolume)
 )
-
-// statTypeMetrics are the metrics that report the stats of each type
-var statTypeMetrics = map[StatType][]attributes.Name{
-	StatTypeTCPRtt:                  {attributes.StatTCPRtt},
-	StatTypeTCPFailedConnection:     {attributes.StatTCPFailedConnections},
-	StatTypeTCPRetransmit:           {attributes.StatTCPRetransmits},
-	StatTypeTCPIo:                   {attributes.StatTCPIo},
-	StatTypeTCPSuccessfulConnection: {attributes.StatTCPSuccessfulConnections},
-	StatTypeDiskIO: {
-		attributes.StatDiskOperationDuration, attributes.StatDiskIO, attributes.StatDiskOperations,
-		attributes.StatDiskServiceTime, attributes.StatDiskQueueTime, attributes.StatDiskFlushDuration,
-		attributes.StatDiskDiscardDuration, attributes.StatDiskDiscardIO,
-	},
-	StatTypeFsSync: {
-		attributes.StatFsSyncDuration, attributes.StatFsSyncOperations, attributes.StatFsSyncOperationTime,
-	},
-	StatTypeDiskPending: {attributes.StatDiskOperationInflight},
-	StatTypeNFSProcedure: {
-		attributes.StatNFSClientProcedureDuration, attributes.StatNFSClientProcedureCount,
-		attributes.StatNFSClientProcedureTime,
-	},
-	StatTypeNFSIO:      {attributes.StatNFSClientIO},
-	StatTypePodVolume:  {attributes.StatK8sPodVolumeInfo},
-	StatTypeDiskVolume: {attributes.StatDiskVolumeInfo},
-}
-
-// StatTypeMetrics returns the metrics that report the stats of each type
-func StatTypeMetrics() map[StatType][]attributes.Name {
-	return maps.Clone(statTypeMetrics)
-}
 
 type TCPFailReasonType string
 
