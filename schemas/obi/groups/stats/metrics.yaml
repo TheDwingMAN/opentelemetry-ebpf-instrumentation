@@ -508,15 +508,15 @@ groups:
     brief: >
       Sum of the device service times of the completed block reads and writes
       (the sum of `obi.stat.disk.operation.duration`), per block device,
-      direction and workload the I/O is charged to. Unlike
+      direction, outcome and workload the I/O is charged to. Unlike
       `system.disk.operation_time` (/proc/diskstats), it excludes the wait in
       the I/O scheduler.
     note: >
       Divided by `obi.stat.disk.operations`, it is the mean service time per
-      workload. Its rate is the average number of requests that the device
-      serves at once (above 1 on devices that serve requests in parallel). Plus
-      `obi.stat.disk.queue_time`, it is the time that /proc/diskstats counts
-      and iostat's await averages.
+      workload and outcome. Its rate is the average number of requests that the
+      device serves at once (above 1 on devices that serve requests in
+      parallel). Plus `obi.stat.disk.queue_time`, it is the time that
+      /proc/diskstats counts and iostat's await averages.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -545,6 +545,9 @@ groups:
         requirement_level: opt_in
       - ref: k8s.container.name
         requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the block I/O request failed
 
   - id: metric.obi.obi.stat.fs.sync.duration
     type: metric
@@ -628,8 +631,8 @@ groups:
     unit: "s"
     stability: development
     brief: >
-      Sum of the durations of the completed file syncs, per call and workload
-      that synced.
+      Sum of the durations of the completed file syncs, per call, outcome and
+      workload that synced.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -639,6 +642,9 @@ groups:
         requirement_level: opt_in
       - ref: system.filesystem.type
         requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the file sync failed
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
@@ -666,7 +672,7 @@ groups:
     brief: >
       Sum of the time that the completed block reads and writes waited in the
       I/O scheduler before their issue to the device, per block device,
-      direction and workload the I/O is charged to. Plus
+      direction, outcome and workload the I/O is charged to. Plus
       `obi.stat.disk.service_time`, divided by `obi.stat.disk.operations`, it
       is iostat's await per workload.
     note: >
@@ -714,6 +720,9 @@ groups:
         requirement_level: opt_in
       - ref: k8s.container.name
         requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the block I/O request failed
 
   - id: metric.obi.obi.stat.disk.flush.duration
     type: metric
@@ -948,8 +957,8 @@ groups:
     stability: development
     brief: >
       Sum of the durations of the completed RPCs of the kernel NFS client, from
-      their start to their completion, per server, procedure and workload that
-      started them.
+      their start to their completion, per server, procedure, outcome and
+      workload that started them.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -959,6 +968,9 @@ groups:
         requirement_level: recommended
       - ref: onc_rpc.version
         requirement_level: recommended
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the RPC failed
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name

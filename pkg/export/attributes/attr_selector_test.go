@@ -239,18 +239,17 @@ func TestDefault_StatDiskOperationDuration(t *testing.T) {
 func TestDefault_StatDiskCounters(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)
-	workload := []attr.Name{
+	assert.Equal(t, []attr.Name{
 		attr.DiskIODirection,
 		attr.K8sClusterName,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.DiskStacked,
 		attr.SystemDevice,
-	}
-	assert.Equal(t, workload, p.For(StatDiskIO))
-	assert.Equal(t, workload, p.For(StatDiskServiceTime))
-	assert.Equal(t, workload, p.For(StatDiskQueueTime))
-	assert.Equal(t, []attr.Name{
+	}, p.For(StatDiskIO))
+	// the time counters have the attributes of the operations counter, so that their ratio is the
+	// mean time of each outcome too
+	withOutcome := []attr.Name{
 		attr.DiskIODirection,
 		attr.ErrorType,
 		attr.K8sClusterName,
@@ -258,7 +257,10 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 		attr.K8sOwnerName,
 		attr.DiskStacked,
 		attr.SystemDevice,
-	}, p.For(StatDiskOperations))
+	}
+	assert.Equal(t, withOutcome, p.For(StatDiskOperations))
+	assert.Equal(t, withOutcome, p.For(StatDiskServiceTime))
+	assert.Equal(t, withOutcome, p.For(StatDiskQueueTime))
 
 	// outside Kubernetes, the disk counters are reported per device only
 	p, err = NewAttrSelector(0, &SelectorConfig{})
@@ -302,19 +304,15 @@ func TestDefault_StatFsSyncDuration(t *testing.T) {
 		attr.ErrorType,
 		attr.FsSyncType,
 	}, p.For(StatFsSyncDuration), "the workload is opt-in on the histogram")
-	assert.Equal(t, []attr.Name{
+	counters := []attr.Name{
 		attr.ErrorType,
 		attr.K8sClusterName,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.FsSyncType,
-	}, p.For(StatFsSyncOperations), "the counters carry the workload")
-	assert.Equal(t, []attr.Name{
-		attr.K8sClusterName,
-		attr.K8sNamespaceName,
-		attr.K8sOwnerName,
-		attr.FsSyncType,
-	}, p.For(StatFsSyncOperationTime))
+	}
+	assert.Equal(t, counters, p.For(StatFsSyncOperations), "the counters carry the workload")
+	assert.Equal(t, counters, p.For(StatFsSyncOperationTime))
 
 	p, err = NewAttrSelector(GroupKubernetes, &SelectorConfig{
 		SelectionCfg: Selection{"obi.stat.fs.sync.duration": InclusionLists{Include: []string{"*"}}},
@@ -345,7 +343,7 @@ func TestDefault_StatNFSClient(t *testing.T) {
 		attr.OncRPCVersion,
 		attr.ServerAddr,
 	}, p.For(StatNFSClientProcedureDuration), "the workload is opt-in on the histogram")
-	assert.Equal(t, []attr.Name{
+	counters := []attr.Name{
 		attr.ErrorType,
 		attr.K8sClusterName,
 		attr.K8sNamespaceName,
@@ -353,15 +351,9 @@ func TestDefault_StatNFSClient(t *testing.T) {
 		attr.OncRPCProcedureName,
 		attr.OncRPCVersion,
 		attr.ServerAddr,
-	}, p.For(StatNFSClientProcedureCount), "the counters carry the workload")
-	assert.Equal(t, []attr.Name{
-		attr.K8sClusterName,
-		attr.K8sNamespaceName,
-		attr.K8sOwnerName,
-		attr.OncRPCProcedureName,
-		attr.OncRPCVersion,
-		attr.ServerAddr,
-	}, p.For(StatNFSClientProcedureTime))
+	}
+	assert.Equal(t, counters, p.For(StatNFSClientProcedureCount), "the counters carry the workload")
+	assert.Equal(t, counters, p.For(StatNFSClientProcedureTime))
 	assert.Equal(t, []attr.Name{
 		attr.K8sClusterName,
 		attr.K8sNamespaceName,

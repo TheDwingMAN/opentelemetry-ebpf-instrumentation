@@ -1095,8 +1095,10 @@ func getDefinitions(
 			},
 		},
 		StatDiskServiceTime.Section: {
-			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
-			Attributes: map[attr.Name]Default{},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
 		},
 		StatFsSyncDuration.Section: {
 			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsDiskKubeOptInAttributes},
@@ -1111,8 +1113,10 @@ func getDefinitions(
 			},
 		},
 		StatFsSyncOperationTime.Section: {
-			SubGroups:  []*AttrReportGroup{&statsFsSyncAttributes, &statsDiskKubeAttributes},
-			Attributes: map[attr.Name]Default{},
+			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
 		},
 		StatNFSClientProcedureDuration.Section: {
 			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsDiskKubeOptInAttributes},
@@ -1127,8 +1131,10 @@ func getDefinitions(
 			},
 		},
 		StatNFSClientProcedureTime.Section: {
-			SubGroups:  []*AttrReportGroup{&statsNFSProcedureAttributes, &statsDiskKubeAttributes},
-			Attributes: map[attr.Name]Default{},
+			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
 		},
 		StatNFSClientIO.Section: {
 			SubGroups:  []*AttrReportGroup{&statsNFSIOAttributes, &statsDiskKubeAttributes},
@@ -1143,8 +1149,10 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{},
 		},
 		StatDiskQueueTime.Section: {
-			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
-			Attributes: map[attr.Name]Default{},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
 		},
 		StatDiskFlushDuration.Section: {
 			SubGroups: []*AttrReportGroup{&statsDiskOpAttributes, &statsDiskKubeOptInAttributes},

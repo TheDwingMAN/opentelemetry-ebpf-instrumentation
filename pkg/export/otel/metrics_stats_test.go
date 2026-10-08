@@ -171,6 +171,69 @@ func TestStatMetricsExporter_DiskQueueTime(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+func TestStatMetricsExporter_TimeCountersSplitByError(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	exporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: cfg}},
+		&StatMetricsConfig{
+			Metrics:     cfg,
+			SelectorCfg: &attributes.SelectorConfig{SelectionCfg: attributes.Selection{}},
+			CommonCfg: &perapp.GlobalMetricsConfig{
+				Features: export.FeatureStatsDiskOperations | export.FeatureStatsDiskServiceTime | export.FeatureStatsDiskQueueTime,
+			},
+		}, stats)(ctx)
+	require.NoError(t, err)
+
+	go exporter(ctx)
+
+	// 1,000 writes of 0.1 ms, and one that timed out after 30 s
+	stats.Send([]*ebpf.Stat{
+		{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{
+			Device: "vda", Op: ebpf.CodeDiskOpWrite, Operations: 1000, Time: 0.1, QueueTime: 0.05,
+		}},
+		{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{
+			Device: "vda", Op: ebpf.CodeDiskOpWrite, ErrorType: "ETIMEDOUT", Operations: 1, Time: 30, QueueTime: 0.001,
+		}},
+	})
+
+	// the last exported value of each series of the counters, by its error.type
+	operations, serviceTime, queueTime := map[string]int64{}, map[string]float64{}, map[string]float64{}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case record := <-otlp.Records():
+				errorType := record.Attributes["error.type"]
+				switch record.Name {
+				case attributes.StatDiskOperations.OTEL:
+					operations[errorType] = record.IntVal
+				case attributes.StatDiskServiceTime.OTEL:
+					serviceTime[errorType] = record.FloatVal
+				case attributes.StatDiskQueueTime.OTEL:
+					queueTime[errorType] = record.FloatVal
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.Equal(ct, map[string]int64{"": 1000, "ETIMEDOUT": 1}, operations)
+		// the mean service time of the successful writes stays 0.1 ms
+		assert.Equal(ct, map[string]float64{"": 0.1, "ETIMEDOUT": 30}, serviceTime)
+		assert.Equal(ct, map[string]float64{"": 0.05, "ETIMEDOUT": 0.001}, queueTime)
+	}, timeout, 100*time.Millisecond)
+}
+
 // appendNewSeries appends the attributes of the series of the named metric that the
 // records received so far add to series. Each export repeats the series it holds.
 func appendNewSeries(series []map[string]string, inCh <-chan collector.MetricRecord, name string) []map[string]string {

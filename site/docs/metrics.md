@@ -1485,7 +1485,7 @@ Completed block I/O requests, per block device, direction, outcome and workload 
 
 ## `obi.stat.disk.queue_time`
 
-Sum of the time that the completed block reads and writes waited in the I/O scheduler before their issue to the device, per block device, direction and workload the I/O is charged to. Plus `obi.stat.disk.service_time`, divided by `obi.stat.disk.operations`, it is iostat's await per workload.
+Sum of the time that the completed block reads and writes waited in the I/O scheduler before their issue to the device, per block device, direction, outcome and workload the I/O is charged to. Plus `obi.stat.disk.service_time`, divided by `obi.stat.disk.operations`, it is iostat's await per workload.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1495,6 +1495,7 @@ Sum of the time that the completed block reads and writes waited in the I/O sche
 | --- | --- | --- | --- | --- | --- |
 | `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `error.type` | string | `conditionally_required`: if the block I/O request failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
 | `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
 | `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
@@ -1508,7 +1509,7 @@ Sum of the time that the completed block reads and writes waited in the I/O sche
 
 ## `obi.stat.disk.service_time`
 
-Sum of the device service times of the completed block reads and writes (the sum of `obi.stat.disk.operation.duration`), per block device, direction and workload the I/O is charged to. Unlike `system.disk.operation_time` (/proc/diskstats), it excludes the wait in the I/O scheduler.
+Sum of the device service times of the completed block reads and writes (the sum of `obi.stat.disk.operation.duration`), per block device, direction, outcome and workload the I/O is charged to. Unlike `system.disk.operation_time` (/proc/diskstats), it excludes the wait in the I/O scheduler.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1518,6 +1519,7 @@ Sum of the device service times of the completed block reads and writes (the sum
 | --- | --- | --- | --- | --- | --- |
 | `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `error.type` | string | `conditionally_required`: if the block I/O request failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
 | `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
 | `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
@@ -1569,7 +1571,7 @@ Duration of file syncs (fsync, fdatasync, sync, syncfs and sync_file_range), per
 
 ## `obi.stat.fs.sync.operation_time`
 
-Sum of the durations of the completed file syncs, per call and workload that synced.
+Sum of the durations of the completed file syncs, per call, outcome and workload that synced.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1578,6 +1580,7 @@ Sum of the durations of the completed file syncs, per call and workload that syn
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the file sync failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
 | `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
 | `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
@@ -1704,7 +1707,7 @@ Duration of the RPCs of the kernel NFS client, from their start to their complet
 
 ## `obi.stat.nfs.client.procedure.time`
 
-Sum of the durations of the completed RPCs of the kernel NFS client, from their start to their completion, per server, procedure and workload that started them.
+Sum of the durations of the completed RPCs of the kernel NFS client, from their start to their completion, per server, procedure, outcome and workload that started them.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1713,6 +1716,7 @@ Sum of the durations of the completed RPCs of the kernel NFS client, from their 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the RPC failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
 | `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
 | `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |

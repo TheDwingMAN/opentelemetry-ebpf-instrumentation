@@ -278,6 +278,8 @@ func TestDiskCounters(t *testing.T) {
 		maps.Copy(out, vdaWrite)
 		return out
 	}
+	vdaReadOK := map[string]string{"error_type": ""}
+	maps.Copy(vdaReadOK, vdaRead)
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
 			{Name: "obi_stat_disk_io_bytes_total", Value: 12288, Labels: vdaWrite},
@@ -286,17 +288,18 @@ func TestDiskCounters(t *testing.T) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
 			{Name: "obi_stat_disk_operations_total", Value: 3, Labels: withError("")},
 			{Name: "obi_stat_disk_operations_total", Value: 1, Labels: withError("EIO")},
-			{Name: "obi_stat_disk_operations_total", Value: 2, Labels: map[string]string{
-				"obi_disk_stacked": "false", "system_device": "vda", "disk_io_direction": "read", "error_type": "",
-			}},
+			{Name: "obi_stat_disk_operations_total", Value: 2, Labels: vdaReadOK},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operations_total"))
+		// the time of the failed write is not added to that of the successful ones
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.75, Labels: vdaWrite},
-			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.125, Labels: vdaRead},
+			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.25, Labels: withError("")},
+			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.5, Labels: withError("EIO")},
+			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.125, Labels: vdaReadOK},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_service_time_seconds_total"))
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_disk_queue_time_seconds_total", Value: 0.1875, Labels: vdaWrite},
-			{Name: "obi_stat_disk_queue_time_seconds_total", Value: 0.03125, Labels: vdaRead},
+			{Name: "obi_stat_disk_queue_time_seconds_total", Value: 0.0625, Labels: withError("")},
+			{Name: "obi_stat_disk_queue_time_seconds_total", Value: 0.125, Labels: withError("EIO")},
+			{Name: "obi_stat_disk_queue_time_seconds_total", Value: 0.03125, Labels: vdaReadOK},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_queue_time_seconds_total"))
 	}, timeout, 100*time.Millisecond)
 }
@@ -395,8 +398,8 @@ func TestFsSyncStats(t *testing.T) {
 			{Name: "obi_stat_fs_sync_operations_total", Value: 1, Labels: failed},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_operations_total"))
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_fs_sync_operation_time_seconds_total", Value: 0.012, Labels: map[string]string{"obi_fs_sync_type": "fsync"}},
-			{Name: "obi_stat_fs_sync_operation_time_seconds_total", Value: 0.02, Labels: map[string]string{"obi_fs_sync_type": "fdatasync"}},
+			{Name: "obi_stat_fs_sync_operation_time_seconds_total", Value: 0.012, Labels: ok},
+			{Name: "obi_stat_fs_sync_operation_time_seconds_total", Value: 0.02, Labels: failed},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_operation_time_seconds_total"))
 	}, timeout, 100*time.Millisecond)
 }
@@ -432,11 +435,9 @@ func TestNFSStats(t *testing.T) {
 			{Name: "obi_stat_nfs_client_procedure_count_total", Value: 3, Labels: read},
 			{Name: "obi_stat_nfs_client_procedure_count_total", Value: 1, Labels: stale},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_nfs_client_procedure_count_total"))
-		readTime := map[string]string{"server_address": "10.0.0.5", "onc_rpc_procedure_name": "READ", "onc_rpc_version": "4"}
-		staleTime := map[string]string{"server_address": "10.0.0.5", "onc_rpc_procedure_name": "GETATTR", "onc_rpc_version": "4"}
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_nfs_client_procedure_time_seconds_total", Value: 0.012, Labels: readTime},
-			{Name: "obi_stat_nfs_client_procedure_time_seconds_total", Value: 0.02, Labels: staleTime},
+			{Name: "obi_stat_nfs_client_procedure_time_seconds_total", Value: 0.012, Labels: read},
+			{Name: "obi_stat_nfs_client_procedure_time_seconds_total", Value: 0.02, Labels: stale},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_nfs_client_procedure_time_seconds_total"))
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
 			{Name: "obi_stat_nfs_client_io_bytes_total", Value: 1 << 20, Labels: map[string]string{
