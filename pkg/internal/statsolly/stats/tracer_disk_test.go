@@ -112,7 +112,7 @@ func TestDiskReaderForwardsDeltas(t *testing.T) {
 	assert.Empty(t, r.readStats(), "nothing changed, nothing forwarded")
 }
 
-func TestDiskReaderRestartsAfterEviction(t *testing.T) {
+func TestDiskReaderRestartsWhenTheEntryIsRecreated(t *testing.T) {
 	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
 		writeKey(8, 0): accum([]uint64{10, 0, 0}, []uint64{500_000, 0, 0}),
 	}}

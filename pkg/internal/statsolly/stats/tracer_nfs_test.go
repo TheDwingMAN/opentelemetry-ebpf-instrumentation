@@ -115,7 +115,7 @@ func TestNFSIOReader(t *testing.T) {
 	require.Len(t, stats, 1, "only what grew is reported")
 	assert.Equal(t, uint64(2*4096), stats[0].NFSIO.Bytes)
 
-	// the LRU map evicted and re-created the entry
+	// the entry was deleted and re-created: its counter restarted from zero
 	src.entries[writes] = 512
 	stats = r.readStats()
 	require.Len(t, stats, 1)
