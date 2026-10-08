@@ -515,7 +515,7 @@ func TestDiskPassthroughCommands(t *testing.T) {
 // TestDiskQueueTimeOfWaitingRequests keeps more reads and writes in flight than a disk serves at
 // once, so that they wait in its I/O scheduler, and checks that their wait is measured. The kernel
 // times the requests, as on most disks: a request that doesn't wait can then have the same
-// allocation and issue time, which the block plug of its thread caches (Linux 6.10+, RHEL 9.6), so
+// allocation and issue time, which the block plug of its thread caches (Linux 6.9+, RHEL 9.6), so
 // the wait of synchronous I/O at queue depth 1 can sum to 0.
 func TestDiskQueueTimeOfWaitingRequests(t *testing.T) {
 	const (

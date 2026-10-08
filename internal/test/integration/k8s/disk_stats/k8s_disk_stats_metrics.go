@@ -117,7 +117,7 @@ func testDiskIOChargedToWorkload(ctx context.Context, t *testing.T, _ *envconf.C
 		{"obi_stat_disk_operations_total", "> 0"},
 		{"obi_stat_disk_service_time_seconds_total", "> 0"},
 		// the wait can sum to 0: the I/O is synchronous, and the block plug of the thread can give
-		// each request the same time for its allocation and its issue (Linux 6.10+, RHEL 9.6)
+		// each request the same time for its allocation and its issue (Linux 6.9+, RHEL 9.6)
 		{"obi_stat_disk_queue_time_seconds_total", ">= 0"},
 	} {
 		for _, direction := range []string{"read", "write"} {
