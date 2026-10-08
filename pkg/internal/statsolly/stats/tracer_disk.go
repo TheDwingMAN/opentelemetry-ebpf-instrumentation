@@ -300,7 +300,8 @@ func (r *accumReader[K, V]) forgetIfIdle(key K, current V) *ebpf.Stat {
 // deleteEntry deletes the entry of a key, and returns its last value when the kernel can look it
 // up and delete it at once. Otherwise, what the kernel adds to the entry between its read and its
 // deletion is lost. Either way, a probe that found the entry before its deletion can still add to
-// it after, which is lost too.
+// it after. The hash maps are preallocated, so that is lost, or counted once in the entry, of the
+// same key or another, that reuses its element.
 func (r *accumReader[K, V]) deleteEntry(key K) (last V, known bool, err error) {
 	if !r.noLookupAndDelete {
 		last, err = r.accum.lookupAndDelete(key)
