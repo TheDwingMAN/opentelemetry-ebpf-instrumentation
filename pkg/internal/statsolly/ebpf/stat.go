@@ -206,7 +206,8 @@ type DiskIO struct {
 	Time float64
 	// Bytes transferred by the operations that succeeded
 	Bytes uint64
-	// Latency of the completed requests, as one representative value per kernel histogram bucket
+	// Latency of the completed requests, as one representative value per kernel histogram bucket.
+	// Empty on the paths of a multipath device, which reports the latency of the same I/O.
 	Latency []LatencySample
 	// QueueTime is the sum of the time that the requests waited before their issue to the device,
 	// in seconds, for the requests whose wait the kernel knows

@@ -145,6 +145,16 @@ func isStacked(dir string) bool {
 	return err == nil && len(slaves) > 0
 }
 
+// dmMultipathUUIDPrefix starts the device mapper UUID of the multipath devices, which multipathd
+// creates as "mpath-<WWID of the LUN>"
+const dmMultipathUUIDPrefix = "mpath-"
+
+// isDMMultipath tells whether the sysfs directory of a block device is a dm-multipath device
+func isDMMultipath(dir string) bool {
+	uuid, err := os.ReadFile(filepath.Join(dir, "dm", "uuid"))
+	return err == nil && strings.HasPrefix(string(uuid), dmMultipathUUIDPrefix)
+}
+
 // readKernelDev reads the "major:minor" dev file of a block device as a kernel-internal dev_t
 func readKernelDev(dir string) (uint32, bool) {
 	content, err := os.ReadFile(filepath.Join(dir, "dev"))

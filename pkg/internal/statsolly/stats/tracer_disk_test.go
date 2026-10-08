@@ -242,6 +242,148 @@ func TestDeviceNamesOfHiddenNVMePaths(t *testing.T) {
 	assert.Equal(t, "nvme3c0n1", names.name(259, 3))
 }
 
+// sysFile writes a file of the sysfs directory of a fake block device
+func (f *fakeBlockDevices) sysFile(device, path, content string) {
+	file := filepath.Join(f.sysRoot, "block", device, path)
+	require.NoError(f.t, os.MkdirAll(filepath.Dir(file), 0o755))
+	require.NoError(f.t, os.WriteFile(file, []byte(content+"\n"), 0o644))
+}
+
+// blkMQ makes a fake block device request-based, as sysfs shows the devices of blk-mq
+func (f *fakeBlockDevices) blkMQ(device string) {
+	require.NoError(f.t, os.MkdirAll(filepath.Join(f.sysRoot, "block", device, "mq"), 0o755))
+}
+
+// holds links a fake block device from the holders of another, as sysfs does for the devices
+// built on it
+func (f *fakeBlockDevices) holds(holder, device string) {
+	holders := filepath.Join(f.sysRoot, "block", device, "holders")
+	require.NoError(f.t, os.MkdirAll(holders, 0o755))
+	require.NoError(f.t, os.Symlink(filepath.Join(f.sysRoot, "block", holder), filepath.Join(holders, holder)))
+}
+
+// fakeMultipathHost has a request-based dm-multipath device over two paths, a bio-based one over
+// another path, an LVM volume, and NVMe native multipath: a head over a hidden path device
+func fakeMultipathHost(t *testing.T) *fakeBlockDevices {
+	devices := newFakeBlockDevices(t)
+	for _, disk := range []struct{ numbers, name string }{
+		{"8:16", "sdb"}, {"8:32", "sdc"}, {"8:48", "sdd"}, {"8:64", "sde"}, {"259:0", "nvme0n1"},
+	} {
+		devices.disk(disk.numbers, disk.name, 0, 0)
+		devices.blkMQ(disk.name)
+	}
+	devices.disk("253:1", "dm-1", 0, 0)
+	devices.blkMQ("dm-1")
+	devices.sysFile("dm-1", "dm/uuid", "mpath-3600a098038303053453f463045727a51")
+	devices.holds("dm-1", "sdb")
+	devices.holds("dm-1", "sdc")
+	// with queue_mode bio, dm-multipath is bio-based
+	devices.disk("253:2", "dm-2", 0, 0)
+	devices.sysFile("dm-2", "queue/scheduler", "none")
+	devices.sysFile("dm-2", "dm/uuid", "mpath-3600a098038303053453f463045727a52")
+	devices.holds("dm-2", "sdd")
+	devices.disk("253:0", "dm-0", 0, 0)
+	devices.sysFile("dm-0", "queue/scheduler", "none")
+	devices.sysFile("dm-0", "dm/uuid", "LVM-Jx5HfWYhjVTJlsk1Bm5uXPejJ6Np1HMpbTzX1bz9tJw0ZDhIrb3nG5zhpzbBgJpQ")
+	devices.holds("dm-0", "sde")
+	devices.disk("259:2", "nvme1n1", 0, 0)
+	devices.sysFile("nvme1n1", "queue/scheduler", "none")
+	devices.hiddenDisk("259:1", "nvme1c0n1")
+	// a path whose head is gone
+	devices.hiddenDisk("259:9", "nvme5c0n1")
+	return devices
+}
+
+func TestMultipathPaths(t *testing.T) {
+	devices := fakeMultipathHost(t)
+	for _, tc := range []struct {
+		name         string
+		major, minor uint32
+		// what the device is with the bio-based devices measured or not
+		withBios, withoutBios multipathPath
+	}{
+		{name: "a path of a dm-multipath device", major: 8, minor: 16, withBios: dmMultipathPath, withoutBios: dmMultipathPath},
+		{name: "another path of it", major: 8, minor: 32, withBios: dmMultipathPath, withoutBios: dmMultipathPath},
+		{name: "a path of a bio-based dm-multipath device", major: 8, minor: 48, withBios: dmMultipathPath, withoutBios: notMultipathPath},
+		{name: "a disk under an LVM volume", major: 8, minor: 64},
+		{name: "a disk", major: 259, minor: 0},
+		{name: "a dm-multipath device", major: 253, minor: 1},
+		{name: "a path of an NVMe multipath head", major: 259, minor: 1, withBios: nvmeMultipathPath, withoutBios: notMultipathPath},
+		{name: "an NVMe multipath head", major: 259, minor: 2},
+		{name: "a path whose head is gone", major: 259, minor: 9},
+		{name: "an unknown device", major: 8, minor: 99},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withBios := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot, bioMeasured: true}
+			assert.Equal(t, tc.withBios, withBios.multipathPathOf(tc.major, tc.minor), "with the bio-based devices measured")
+			withoutBios := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot}
+			assert.Equal(t, tc.withoutBios, withoutBios.multipathPathOf(tc.major, tc.minor), "without the bio-based devices measured")
+		})
+	}
+}
+
+func TestMultipathPathsAreRefreshedWithTheDeviceNames(t *testing.T) {
+	devices := fakeMultipathHost(t)
+	now := time.Now()
+	names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot, now: func() time.Time { return now }}
+	require.Equal(t, dmMultipathPath, names.multipathPathOf(8, 16))
+
+	// multipathd removed the multipath device
+	require.NoError(t, os.Remove(filepath.Join(devices.sysRoot, "block", "sdb", "holders", "dm-1")))
+	assert.Equal(t, dmMultipathPath, names.multipathPathOf(8, 16), "cached for the cache period")
+	now = now.Add(deviceNamesCachePeriod)
+	assert.Equal(t, notMultipathPath, names.multipathPathOf(8, 16))
+}
+
+func TestDiskReaderReportsNoLatencyOfMultipathPaths(t *testing.T) {
+	devices := fakeMultipathHost(t)
+	flushKey := func(major, minor uint32) ebpf.StatsDiskIoKeyT {
+		return ebpf.StatsDiskIoKeyT{Major: major, Minor: minor, Op: ebpf.StatsDiskOpDiskOpFlush}
+	}
+	written := accum([]uint64{2, 1, 0}, []uint64{500_000, 5_000_000, 0})
+	written.Bytes = 3 * 4096
+	written.QueueNs = 1_000_000
+	flushed := accum([]uint64{1, 0, 0}, []uint64{200_000, 0, 0})
+	entries := map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
+		writeKey(8, 16):  written, // sdb, a path of dm-1
+		writeKey(253, 1): written, // dm-1
+		writeKey(259, 1): written, // nvme1c0n1, a path of nvme1n1
+		flushKey(8, 16):  flushed,
+		flushKey(259, 1): flushed,
+	}
+	type deviceOp struct {
+		device string
+		op     ebpf.DiskOpCode
+	}
+	read := func(bioMeasured bool) map[deviceOp]*ebpf.DiskIO {
+		names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot, bioMeasured: bioMeasured}
+		r := newDiskReader(&fakeDiskAccum{entries: entries}, testBounds, true, names, newCgroupContainers(fakeCgroupNames{}))
+		stats := map[deviceOp]*ebpf.DiskIO{}
+		for _, stat := range r.readStats() {
+			stats[deviceOp{device: stat.DiskIO.Device, op: stat.DiskIO.Op}] = stat.DiskIO
+		}
+		return stats
+	}
+
+	stats := read(true)
+	require.Len(t, stats, len(entries))
+	path := stats[deviceOp{"sdb", ebpf.CodeDiskOpWrite}]
+	assert.Empty(t, path.Latency, "the multipath device reports the latency of the I/O of its paths")
+	assert.Equal(t, uint64(3), path.Operations, "the paths keep their counters")
+	assert.InDelta(t, 0.006, path.Time, 1e-12)
+	assert.Equal(t, uint64(3*4096), path.Bytes)
+	assert.InDelta(t, 0.001, path.QueueTime, 1e-12)
+	assert.NotEmpty(t, stats[deviceOp{"dm-1", ebpf.CodeDiskOpWrite}].Latency)
+	assert.Empty(t, stats[deviceOp{"sdb", ebpf.CodeDiskOpFlush}].Latency)
+	assert.Empty(t, stats[deviceOp{"nvme1c0n1", ebpf.CodeDiskOpWrite}].Latency, "the bios of the head are measured")
+	assert.NotEmpty(t, stats[deviceOp{"nvme1c0n1", ebpf.CodeDiskOpFlush}].Latency,
+		"the head doesn't measure its flushes, whose completion the kernel doesn't trace")
+
+	stats = read(false)
+	assert.Empty(t, stats[deviceOp{"sdb", ebpf.CodeDiskOpWrite}].Latency)
+	assert.NotEmpty(t, stats[deviceOp{"nvme1c0n1", ebpf.CodeDiskOpWrite}].Latency, "the bios of the head are not measured")
+}
+
 // fakeSysBlock creates the sysfs entries of a disk and its partitions: /dev/block/<maj:min>/uevent
 // for each device, and /block/<disk>/<partition>/partition with the partition numbers
 func fakeSysBlock(t *testing.T, root string, disk string, major, minor uint32, partitions map[string][2]uint32) {

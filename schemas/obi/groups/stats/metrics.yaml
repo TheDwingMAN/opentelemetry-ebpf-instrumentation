@@ -387,7 +387,10 @@ groups:
     stability: development
     brief: >
       Duration of block I/O requests, from their issue to the device until
-      their completion, per block device, direction and outcome.
+      their completion, per block device, direction and outcome. It is not
+      reported on the paths of dm-multipath devices, nor, when
+      `stats_disk_bio_devices` measures the NVMe native multipath heads, on
+      their paths: the multipath device reports the same I/O.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -720,7 +723,9 @@ groups:
     stability: development
     brief: >
       Duration of the cache flush requests of block devices, from their issue
-      to the device until their completion, per block device and outcome.
+      to the device until their completion, per block device and outcome. It
+      is not reported on the paths of dm-multipath devices: the multipath
+      device reports the same flushes.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -757,6 +762,9 @@ groups:
     brief: >
       Duration of the block discard (TRIM) and secure erase requests, from their
       issue to the device until their completion, per block device and outcome.
+      It is not reported on the paths of dm-multipath devices, nor, when
+      `stats_disk_bio_devices` measures the NVMe native multipath heads, on
+      their paths: the multipath device reports the same I/O.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in

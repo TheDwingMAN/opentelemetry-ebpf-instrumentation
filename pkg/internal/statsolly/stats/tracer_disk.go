@@ -12,6 +12,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -133,14 +135,15 @@ type statReader interface {
 
 func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 	containers := newCgroupContainers(ebpfCgroupNames{names: cfg.CgroupNames})
-	devices := &deviceNames{sysRoot: "/sys", procRoot: "/proc"}
+	bioMeasured := cfg.DiskBioAccum != nil && cfg.DiskBioDevices != nil
+	devices := &deviceNames{sysRoot: "/sys", procRoot: "/proc", bioMeasured: bioMeasured}
 	var readers []statReader
 	if cfg.DiskIOAccum != nil {
 		readers = append(readers, newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskIOAccum},
 			cfg.DiskLatencyBounds, cfg.DiskStatusIsBlkStatus, devices, containers))
 	}
 	var bios *bioDevices
-	if cfg.DiskBioAccum != nil && cfg.DiskBioDevices != nil {
+	if bioMeasured {
 		readers = append(readers, newBioReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskBioAccum},
 			cfg.DiskLatencyBounds, devices, containers))
 		bios = newBioDevices("/sys", ebpfDeviceSet{set: cfg.DiskBioDevices})
@@ -344,10 +347,27 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 			Operations:  delta.operations,
 			Time:        delta.seconds(),
 			Bytes:       current.Bytes - previous.Bytes,
-			Latency:     delta.latency,
+			Latency:     d.latency(key, delta.latency),
 			QueueTime:   float64(current.QueueNs-previous.QueueNs) / float64(time.Second),
 		},
 	}
+}
+
+// latency returns the latencies that the latency histograms report for the requests of a key.
+// The paths of a multipath device report none: the multipath device reports the latency of the
+// same I/O, and the histograms of its paths would multiply its series by their number. The heads of
+// NVMe native multipath don't measure their flushes, whose completion the kernel doesn't trace
+// there, so their paths keep reporting them.
+func (d *diskStats) latency(key ebpf.StatsDiskIoKeyT, latency []ebpf.LatencySample) []ebpf.LatencySample {
+	switch d.devices.multipathPathOf(key.Major, key.Minor) {
+	case dmMultipathPath:
+		return nil
+	case nvmeMultipathPath:
+		if ebpf.DiskOpCode(key.Op) != ebpf.CodeDiskOpFlush {
+			return nil
+		}
+	}
+	return latency
 }
 
 func newFsSyncReader(
@@ -503,6 +523,9 @@ const deviceNamesCachePeriod = 30 * time.Second
 // deviceNames resolves block device numbers to their kernel names, e.g. 259:0 to nvme0n1
 type deviceNames struct {
 	sysRoot, procRoot string
+	// bioMeasured tells whether the bio-based devices, like the heads of NVMe native multipath,
+	// are measured too (stats_disk_bio_devices)
+	bioMeasured bool
 	// now returns the current time, time.Now if nil
 	now      func() time.Time
 	cachedAt time.Time
@@ -511,6 +534,7 @@ type deviceNames struct {
 	partitions map[partitionKey]string
 	stack      map[[2]uint32]bool
 	diskstats  map[[2]uint32]string
+	paths      map[[2]uint32]multipathPath
 }
 
 // expire forgets what is cached once deviceNamesCachePeriod passed since it started caching
@@ -527,6 +551,7 @@ func (d *deviceNames) expire() {
 	d.partitions = map[partitionKey]string{}
 	d.stack = map[[2]uint32]bool{}
 	d.diskstats = nil
+	d.paths = map[[2]uint32]multipathPath{}
 }
 
 // stacked tells whether a block device is built on other block devices (see isStacked and
@@ -544,6 +569,73 @@ func (d *deviceNames) stacked(major, minor uint32) bool {
 	stacked := isStacked(dir) || stacksWithoutSlaves(dir)
 	d.stack[[2]uint32{major, minor}] = stacked
 	return stacked
+}
+
+// multipathPath tells which multipath device, if any, a block device is a path of
+type multipathPath uint8
+
+const (
+	notMultipathPath multipathPath = iota
+	// dmMultipathPath is a disk that a measured dm-multipath device holds
+	dmMultipathPath
+	// nvmeMultipathPath is a hidden path device (nvmeXcYnZ) of a measured NVMe native multipath head
+	nvmeMultipathPath
+)
+
+// nvmePathName matches the names of the path devices of NVMe native multipath,
+// nvme<subsystem>c<controller>n<namespace>, and captures the name of their head without the
+// controller: nvme<subsystem>n<namespace>
+var nvmePathName = regexp.MustCompile(`^(nvme[0-9]+)c[0-9]+(n[0-9]+)$`)
+
+// multipathPathOf tells whether a block device is a path of a multipath device that OBI measures
+func (d *deviceNames) multipathPathOf(major, minor uint32) multipathPath {
+	d.expire()
+	key := [2]uint32{major, minor}
+	if path, ok := d.paths[key]; ok {
+		return path
+	}
+	dir := filepath.Join(d.sysRoot, "dev", "block", devNumbers(major, minor))
+	name := d.knownName(major, minor)
+	path := notMultipathPath
+	switch {
+	case exists(dir):
+		if d.heldByDMMultipath(dir) {
+			path = dmMultipathPath
+		}
+	case name != "":
+		// the path devices of NVMe native multipath are hidden: sysfs doesn't link their numbers,
+		// but they are named after their head
+		if d.underNVMeHead(name) {
+			path = nvmeMultipathPath
+		}
+	default:
+		// e.g. removed since its last I/O: not cached, the numbers may be given to another device
+		return notMultipathPath
+	}
+	d.paths[key] = path
+	return path
+}
+
+// heldByDMMultipath tells whether the sysfs directory of a block device is a path that a measured
+// dm-multipath device holds
+func (d *deviceNames) heldByDMMultipath(dir string) bool {
+	holders, _ := filepath.Glob(filepath.Join(dir, "holders", "*"))
+	return slices.ContainsFunc(holders, func(holder string) bool {
+		return isDMMultipath(holder) && d.measured(holder)
+	})
+}
+
+// underNVMeHead tells whether a block device is a path device of a measured NVMe native multipath
+// head
+func (d *deviceNames) underNVMeHead(name string) bool {
+	head := nvmePathName.FindStringSubmatch(name)
+	return head != nil && d.measured(filepath.Join(d.sysRoot, "block", head[1]+head[2]))
+}
+
+// measured tells whether OBI measures the I/O of the block device of a sysfs directory: the
+// request-based devices always, and the bio-based ones with stats_disk_bio_devices
+func (d *deviceNames) measured(dir string) bool {
+	return exists(dir) && (d.bioMeasured || !isBioBased(dir))
 }
 
 type partitionKey struct {

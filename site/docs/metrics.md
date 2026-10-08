@@ -1331,7 +1331,7 @@ Ratio [0-1] between the unread messages of an internal Go channel and its total 
 
 ## `obi.stat.disk.discard.duration`
 
-Duration of the block discard (TRIM) and secure erase requests, from their issue to the device until their completion, per block device and outcome.
+Duration of the block discard (TRIM) and secure erase requests, from their issue to the device until their completion, per block device and outcome. It is not reported on the paths of dm-multipath devices, nor, when `stats_disk_bio_devices` measures the NVMe native multipath heads, on their paths: the multipath device reports the same I/O.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1376,7 +1376,7 @@ Bytes discarded by the block discard (TRIM) and secure erase requests that compl
 
 ## `obi.stat.disk.flush.duration`
 
-Duration of the cache flush requests of block devices, from their issue to the device until their completion, per block device and outcome.
+Duration of the cache flush requests of block devices, from their issue to the device until their completion, per block device and outcome. It is not reported on the paths of dm-multipath devices: the multipath device reports the same flushes.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1422,7 +1422,7 @@ Bytes transferred by the block I/O requests that completed successfully, per blo
 
 ## `obi.stat.disk.operation.duration`
 
-Duration of block I/O requests, from their issue to the device until their completion, per block device, direction and outcome.
+Duration of block I/O requests, from their issue to the device until their completion, per block device, direction and outcome. It is not reported on the paths of dm-multipath devices, nor, when `stats_disk_bio_devices` measures the NVMe native multipath heads, on their paths: the multipath device reports the same I/O.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
