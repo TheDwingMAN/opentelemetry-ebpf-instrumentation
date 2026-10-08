@@ -155,6 +155,16 @@ func isDMMultipath(dir string) bool {
 	return err == nil && strings.HasPrefix(string(uuid), dmMultipathUUIDPrefix)
 }
 
+// deviceMapperName returns the name of a device mapper volume from its sysfs directory, as
+// /dev/mapper names it, or an empty string for other devices
+func deviceMapperName(dir string) string {
+	content, err := os.ReadFile(filepath.Join(dir, "dm", "name"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(content))
+}
+
 // readKernelDev reads the "major:minor" dev file of a block device as a kernel-internal dev_t
 func readKernelDev(dir string) (uint32, bool) {
 	content, err := os.ReadFile(filepath.Join(dir, "dev"))

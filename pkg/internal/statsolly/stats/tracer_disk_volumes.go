@@ -6,7 +6,6 @@ package stats // import "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
@@ -94,14 +93,4 @@ func (d *DiskVolumesTracer) volumeDisks(name string) []ebpf.DiskVolume {
 func diskVolumeStat(volume ebpf.DiskVolume, value int64) *ebpf.Stat {
 	volume.Value = value
 	return &ebpf.Stat{Type: ebpf.StatTypeDiskVolume, DiskVolume: &volume}
-}
-
-// deviceMapperName returns the name of a device mapper volume from its sysfs directory, as
-// /dev/mapper names it, or an empty string for other devices
-func deviceMapperName(dir string) string {
-	content, err := os.ReadFile(filepath.Join(dir, "dm", "name"))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(content))
 }
