@@ -477,7 +477,6 @@ func TestPodVolumeStats(t *testing.T) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
 			{Name: "obi_stat_k8s_pod_volume_info", Value: 1, Labels: map[string]string{
 				"k8s_volume_name":                "data",
-				"k8s_volume_type":                "persistentVolumeClaim",
 				"k8s_persistentvolumeclaim_name": "data-db-0",
 				"k8s_persistentvolume_name":      "pvc-5d1c",
 				"obi_disk_volume_device":         "dm-0",

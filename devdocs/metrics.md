@@ -216,7 +216,7 @@ The `obi.fs.sync.type` attribute tells the system call apart: syncs outside of t
 
 #### Pod volume devices
 
-`obi.stat.k8s.pod.volume.info` links the pods to the disks of the block I/O metrics: it is 1 for each disk that a volume that a pod of the node mounts from a PersistentVolumeClaim is on, with the pod, the volume, the claim, the PersistentVolume, the device the volume is mounted from (`obi.disk.volume.device`) and the disk (`system.device`). A volume on a stacked device, like an LVM volume over two disks, has a series for each disk, and a volume on a loop device has the disks of the filesystem that holds the file of the loop device. When a pod no longer mounts a volume, its series are reported once more with 0. For example, the bytes read from the disks of each PersistentVolumeClaim, by any workload:
+`obi.stat.k8s.pod.volume.info` links the pods to the disks of the block I/O metrics: it is 1 for each disk that a volume that a pod of the node mounts from a PersistentVolumeClaim is on, with the pod, the volume, the claim, the PersistentVolume, the device the volume is mounted from (`obi.disk.volume.device`) and the disk (`system.device`). Its `k8s.volume.type` attribute, always `persistentVolumeClaim`, is opt-in. A volume on a stacked device, like an LVM volume over two disks, has a series for each disk, and a volume on a loop device has the disks of the filesystem that holds the file of the loop device. When a pod no longer mounts a volume, its series are reported once more with 0. For example, the bytes read from the disks of each PersistentVolumeClaim, by any workload:
 
 ```promql
 max by (k8s_persistentvolumeclaim_name, system_device) (obi_stat_k8s_pod_volume_info == 1)

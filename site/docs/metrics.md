@@ -1630,7 +1630,7 @@ Info metric that links each volume that a pod of the node mounts from a Persiste
 | `k8s.persistentvolumeclaim.name` | string | `recommended` | development | The name of the PersistentVolumeClaim. | pvc-data-01 |
 | `k8s.pod.name` | string | `recommended` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `k8s.volume.name` | string | `recommended` | development | The name of the K8s volume. | volume0 |
-| `k8s.volume.type` | enum | `recommended` | development | The type of the K8s volume. | emptyDir; persistentVolumeClaim |
+| `k8s.volume.type` | enum | `opt_in` | development | The type of the K8s volume. | emptyDir; persistentVolumeClaim |
 | `obi.disk.volume.device` | string | `recommended` | development | Block device of a volume, such as the one that a pod volume is mounted from: the disk that `system.device` names, or a partition or a stacked device (such as an LVM volume) on it. | dm-0; nvme0n1p1; sdb |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |

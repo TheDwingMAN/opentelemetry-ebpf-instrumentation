@@ -1051,7 +1051,7 @@ groups:
       - ref: k8s.volume.name
         requirement_level: recommended
       - ref: k8s.volume.type
-        requirement_level: recommended
+        requirement_level: opt_in
       - ref: k8s.persistentvolumeclaim.name
         requirement_level: recommended
       - ref: k8s.persistentvolume.name

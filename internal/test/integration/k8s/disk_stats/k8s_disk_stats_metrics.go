@@ -238,7 +238,6 @@ func testPodVolumeDevices(ctx context.Context, t *testing.T, _ *envconf.Config) 
 			"k8s_pod_name":                   regexp.MustCompile(`^disk-io-pvc-`),
 			"k8s_owner_name":                 regexp.MustCompile(`^disk-io-pvc$`),
 			"k8s_volume_name":                regexp.MustCompile(`^data$`),
-			"k8s_volume_type":                regexp.MustCompile(`^persistentVolumeClaim$`),
 			"k8s_persistentvolumeclaim_name": regexp.MustCompile(`^disk-io-data$`),
 			"k8s_persistentvolume_name":      regexp.MustCompile(`^pvc-`),
 			"obi_disk_volume_device":         blockDevicePattern,

@@ -382,7 +382,6 @@ func TestDefault_StatK8sPodVolumeInfo(t *testing.T) {
 		attr.K8sPersistentVolumeClaimName,
 		attr.K8sPodName,
 		attr.K8sVolumeName,
-		attr.K8sVolumeType,
 		attr.DiskVolumeDevice,
 		attr.SystemDevice,
 	}, p.For(StatK8sPodVolumeInfo))

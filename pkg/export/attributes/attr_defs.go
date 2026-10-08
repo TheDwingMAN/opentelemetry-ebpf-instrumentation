@@ -221,7 +221,7 @@ func getDefinitions(
 		map[attr.Name]Default{
 			attr.OBIIP:                        false,
 			attr.K8sVolumeName:                true,
-			attr.K8sVolumeType:                true,
+			attr.K8sVolumeType:                false, // always persistentVolumeClaim: only claims are reported
 			attr.K8sPersistentVolumeClaimName: true,
 			attr.K8sPersistentVolumeName:      true,
 			attr.DiskVolumeDevice:             true,
