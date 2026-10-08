@@ -119,7 +119,7 @@ flowchart TD
     DCF(Dynamic container<br/>filter):::optional --> DK8S
     KSTORE --> DK8S
     DK8S(Kubernetes decorator<br/>by container ID):::optional --> DDEC
-    DDEC(Disk stats<br/>decorator) --> SFLTR
+    DDEC(Disk stats<br/>decorator):::optional --> SFLTR
     SFLTR(Storage attributes<br/>filter):::optional --> MRG
     MRG(Stats<br/>merger):::optional --> OTEL(OpenTelemetry<br/>metrics<br/>export):::optional
     MRG --> PROM(Prometheus<br/>metrics<br/>export):::optional
