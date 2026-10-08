@@ -31,6 +31,14 @@ const kubensMount = "run/kubens/mnt"
 // <kubelet root>/pods/<pod UID>/volumes/
 var kubeletVolumeMount = regexp.MustCompile(`/pods/[^/]+/volumes/`)
 
+// workloadMount matches the mount points that the kubelet and the container runtimes create for
+// each pod or container: the volumes of the pods (<kubelet root>/pods/<pod UID>/volumes/ and
+// volume-subpaths/), the staging directories of the CSI volumes (.../globalmount), and the root
+// filesystems of the containers (.../overlay/<id>/merged, .../overlay2/<id>/merged and
+// .../io.containerd.runtime.v2.task/<namespace>/<id>/rootfs)
+var workloadMount = regexp.MustCompile(
+	`/pods/[^/]+/volume(s|-subpaths)/|/globalmount$|/overlay2?/[^/]+/merged$|/io\.containerd\.runtime\.v2\.task/[^/]+/[^/]+/rootfs$`)
+
 type filesystem struct {
 	mountpoint string
 	fsType     string
@@ -134,16 +142,29 @@ func (f *filesystems) refresh() {
 			continue
 		}
 		chosen[dev] = mount
-		byDev[dev] = filesystem{mountpoint: mount.MountPoint, fsType: mount.FSType}
+		byDev[dev] = filesystem{mountpoint: mountpointOf(mount), fsType: mount.FSType}
 	}
 	f.byDev = byDev
 }
 
-// preferredMount picks, among the mounts of the same filesystem, those of its root directory over
-// bind mounts of its subdirectories, then the shortest mountpoint
+// preferredMount picks, among the mounts of the same filesystem, the mounts of the host over those
+// of the pods and containers, then those of its root directory over bind mounts of its
+// subdirectories, then the shortest mountpoint
 func preferredMount(candidate, current *procfs.MountInfo) bool {
+	if workloadMount.MatchString(candidate.MountPoint) != workloadMount.MatchString(current.MountPoint) {
+		return !workloadMount.MatchString(candidate.MountPoint)
+	}
 	if (candidate.Root == "/") != (current.Root == "/") {
 		return candidate.Root == "/"
 	}
 	return len(candidate.MountPoint) < len(current.MountPoint)
+}
+
+// mountpointOf returns the mountpoint that a mount gives the filesystem, none for the mounts of
+// the pods and containers: their paths change with each pod or container
+func mountpointOf(mount *procfs.MountInfo) string {
+	if workloadMount.MatchString(mount.MountPoint) {
+		return ""
+	}
+	return mount.MountPoint
 }

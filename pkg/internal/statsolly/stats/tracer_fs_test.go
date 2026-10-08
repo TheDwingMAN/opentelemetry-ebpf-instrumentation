@@ -49,6 +49,52 @@ func TestFilesystemsResolveTheMountOfADevice(t *testing.T) {
 	assert.False(t, ok, "an unmounted filesystem")
 }
 
+func TestFilesystemsLeaveOutTheMountsOfPodsAndContainers(t *testing.T) {
+	const pod = "/var/lib/kubelet/pods/0f3d2a6e-8c1b-4f6e-9d4a-2b7c5e1f9a30"
+	// longer than the mount of the volume in the pod
+	hostMount := "/mnt/local-storage/" + strings.Repeat("d", 100)
+	fs := fakeFilesystems(
+		// a local PersistentVolume, mounted on the host and in a pod
+		&procfs.MountInfo{MajorMinorVer: "8:16", Root: "/", MountPoint: pod + "/volumes/kubernetes.io~local-volume/pv-1", FSType: "xfs"},
+		&procfs.MountInfo{MajorMinorVer: "8:16", Root: "/", MountPoint: hostMount, FSType: "xfs"},
+		// a CSI volume, staged by the kubelet and published in a pod
+		&procfs.MountInfo{
+			MajorMinorVer: "253:4", Root: "/", FSType: "ext4",
+			MountPoint: "/var/lib/kubelet/plugins/kubernetes.io/csi/ebs.csi.aws.com/" +
+				"4f2c1d3b6a5e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7a8/globalmount",
+		},
+		&procfs.MountInfo{
+			MajorMinorVer: "253:4", Root: "/", FSType: "ext4",
+			MountPoint: pod + "/volumes/kubernetes.io~csi/pvc-6b1e0c2d-3f4a-4b5c-8d9e-0f1a2b3c4d5e/mount",
+		},
+		&procfs.MountInfo{
+			MajorMinorVer: "253:4", Root: "/data", FSType: "ext4",
+			MountPoint: pod + "/volume-subpaths/data/app/0",
+		},
+		// the root filesystems of containers of CRI-O and containerd
+		&procfs.MountInfo{
+			MajorMinorVer: "0:312", Root: "/", FSType: "overlay",
+			MountPoint: "/var/lib/containers/storage/overlay/8c7e1b0a9f2d3e4c5b6a7f8e9d0c1b2a3f4e5d6c7b8a9f0e1d2c3b4a5f6e7d8c/merged",
+		},
+		&procfs.MountInfo{
+			MajorMinorVer: "0:313", Root: "/", FSType: "overlay",
+			MountPoint: "/run/containerd/io.containerd.runtime.v2.task/k8s.io/2d4f6b8a0c1e3d5f7a9b1c3e5d7f9a0b2c4e6d8f0a1b3c5e7d9f1a2b4c6e8d0f/rootfs",
+		},
+	)
+
+	local, ok := fs.lookup(kernelDev(8, 16))
+	assert.True(t, ok)
+	assert.Equal(t, filesystem{mountpoint: hostMount, fsType: "xfs"}, local,
+		"the mount of the host, although the mount in the pod is shorter")
+
+	for _, dev := range []uint32{kernelDev(253, 4), kernelDev(0, 312), kernelDev(0, 313)} {
+		fsys, ok := fs.lookup(dev)
+		assert.True(t, ok)
+		assert.Empty(t, fsys.mountpoint, "only mounted for pods or containers: a mountpoint per pod or container")
+		assert.NotEmpty(t, fsys.fsType, "the type is the same for every pod or container")
+	}
+}
+
 func TestFilesystemsRereadTheMountTablePeriodically(t *testing.T) {
 	var reads int
 	var mounts []*procfs.MountInfo

@@ -74,8 +74,13 @@ func (d *DiskVolumesTracer) volumeDisks(name string) []ebpf.DiskVolume {
 		return nil
 	}
 	dmName := deviceMapperName(dir)
+	disks := d.stack.physicalDisks(dir, maxDeviceStackDepth)
+	if isDMMultipath(dir) {
+		// the volumes over a multipath device stop at it, but it is on its paths
+		disks = d.stack.slaveDisks(dir, maxDeviceStackDepth)
+	}
 	var volumes []ebpf.DiskVolume
-	for _, disk := range d.stack.physicalDisks(dir, maxDeviceStackDepth) {
+	for _, disk := range disks {
 		if disk == name {
 			continue
 		}

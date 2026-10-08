@@ -1025,7 +1025,9 @@ groups:
     note: >
       A volume over several disks (md RAID1) has a series per disk, a volume
       over another stacked volume has the disks of the bottom one, and a loop
-      device has the disks of the filesystem that holds its file.
+      device has the disks of the filesystem that holds its file. A
+      dm-multipath device has its paths, and a volume over it has the
+      multipath device, which reports the I/O of the paths.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -1052,7 +1054,8 @@ groups:
       `system.device` with the block I/O metrics.
     note: >
       A volume on a stacked device, such as an LVM volume over several disks,
-      has one series per disk.
+      has one series per disk. A volume on a dm-multipath device has the
+      multipath device, which reports the I/O of its paths.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in

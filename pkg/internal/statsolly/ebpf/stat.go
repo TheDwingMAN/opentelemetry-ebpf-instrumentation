@@ -255,7 +255,8 @@ const (
 type FsSync struct {
 	Type FsSyncTypeCode
 	// Mountpoint and FilesystemType of the filesystem that was synced. Empty for sync(2), which
-	// syncs all of them, or when the filesystem is not mounted in the host mount namespace.
+	// syncs all of them, or when the filesystem is not mounted in the host mount namespace. The
+	// Mountpoint is also empty when only the mounts of pods or containers have the filesystem.
 	Mountpoint     string
 	FilesystemType string
 	// ErrorType is empty for successful syncs

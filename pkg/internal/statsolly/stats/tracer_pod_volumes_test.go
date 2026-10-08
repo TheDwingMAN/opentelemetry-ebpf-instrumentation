@@ -82,6 +82,11 @@ func fakeVolumeHost(t *testing.T) string {
 	fakeLoopDevice(t, root, "loop5", "7:5", "/in-a-container.img")
 	// an LVM volume over a loop device
 	fakeSysDevice(t, root, "virtual/block/dm-1", "252:1", "virtual/block/loop0")
+	// a multipath device over two paths, and an LVM volume over it
+	fakeSysDevice(t, root, "pci/block/sdc", "8:32")
+	fakeSysDevice(t, root, "pci/block/sdd", "8:48")
+	fakeMultipathVolume(t, root, "dm-2", "252:2", "mpatha", "pci/block/sdc", "pci/block/sdd")
+	fakeSysDevice(t, root, "virtual/block/dm-3", "252:3", "virtual/block/dm-2")
 	return root
 }
 
@@ -273,6 +278,8 @@ func TestPhysicalDisks(t *testing.T) {
 	assert.Equal(t, []string{"sda"}, disks("7:1"), "a loop device on a file on a partition")
 	assert.ElementsMatch(t, []string{"sda", "sdb"}, disks("7:2"), "a loop device on a file on an LVM volume")
 	assert.Equal(t, []string{"nvme0n1"}, disks("252:1"), "an LVM volume over a loop device")
+	assert.Equal(t, []string{"dm-2"}, disks("252:2"), "a multipath device, which reports the I/O of its paths")
+	assert.Equal(t, []string{"dm-2"}, disks("252:3"), "an LVM volume over a multipath device")
 	assert.Equal(t, []string{"loop3"}, disks("7:3"), "a loop device on a deleted file")
 	assert.Equal(t, []string{"loop4"}, disks("7:4"), "a loop device on a filesystem on no block device")
 	assert.Equal(t, []string{"loop5"}, disks("7:5"), "a loop device on a file that isn't on the host")

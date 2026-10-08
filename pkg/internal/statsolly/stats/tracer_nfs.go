@@ -4,7 +4,6 @@
 package stats // import "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 
 import (
-	"strconv"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -37,13 +36,17 @@ func (n *nfsProcedureStats) stat(key ebpf.StatsNfsProcedureKeyT, current, previo
 	if delta.operations == 0 {
 		return nil
 	}
+	errorType := nfsErrorType(key.Status)
+	if errorType == errorTypeOther {
+		dtlog().Debug("NFS RPCs completed with a status without a name", "status", key.Status, "calls", delta.operations)
+	}
 	return &ebpf.Stat{
 		Type: ebpf.StatTypeNFSProcedure,
 		NFSProcedure: &ebpf.NFSProcedure{
 			Server:      unix.ByteSliceToString(key.Server[:]),
 			Procedure:   unix.ByteSliceToString(key.Procedure[:]),
 			Version:     key.Version,
-			ErrorType:   nfsErrorType(key.Status),
+			ErrorType:   errorType,
 			ContainerID: n.containers.containerID(key.CgroupId),
 			Calls:       delta.operations,
 			Time:        delta.seconds(),
@@ -199,7 +202,8 @@ var nfsStatusNames = map[uint16]string{
 }
 
 // nfsErrorType names the status of an NFS RPC after its errno, or after its name in
-// nfsStatusNames. A status without a name is reported by its number. Empty on success.
+// nfsStatusNames. A status without a name is _OTHER, as its numbers would be an open set of
+// values. Empty on success.
 func nfsErrorType(status uint16) string {
 	if status == 0 {
 		return ""
@@ -210,5 +214,5 @@ func nfsErrorType(status uint16) string {
 	if name, ok := nfsStatusNames[status]; ok {
 		return name
 	}
-	return strconv.Itoa(int(status))
+	return errorTypeOther
 }

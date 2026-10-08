@@ -138,10 +138,10 @@ func TestNFSErrorType(t *testing.T) {
 		{name: "NFSv4 retry later", status: 10008, want: "NFS4ERR_DELAY"},
 		{name: "NFSv4 grace period", status: 10013, want: "NFS4ERR_GRACE"},
 		{name: "last NFSv4 status", status: 10096, want: "NFS4ERR_XATTR2BIG"},
-		{name: "unassigned kernel-internal errno", status: 520, want: "520"},
-		{name: "unassigned NFSv4 status", status: 10073, want: "10073"},
-		{name: "past the NFSv4 statuses", status: 10097, want: "10097"},
-		{name: "internal pNFS status", status: 12001, want: "12001"},
+		{name: "unassigned kernel-internal errno", status: 520, want: "_OTHER"},
+		{name: "unassigned NFSv4 status", status: 10073, want: "_OTHER"},
+		{name: "past the NFSv4 statuses", status: 10097, want: "_OTHER"},
+		{name: "internal pNFS status", status: 12001, want: "_OTHER"},
 	}
 
 	for _, tt := range tests {

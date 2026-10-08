@@ -230,7 +230,9 @@ func (s *deviceStack) blockDeviceDir(major, minor uint32) (string, bool) {
 
 // physicalDisks returns the names of the disks that a block device is on, from its sysfs
 // directory: the disk of a partition, the disks of the filesystem that holds the file of a loop
-// device, or the disks below the slaves of a stacked device
+// device, or the disks below the slaves of a stacked device. The walk stops at the dm-multipath
+// devices, as it does at the heads of NVMe native multipath, which have no slaves: they report
+// the I/O of their paths, so the I/O of a volume on a LUN is on one device.
 func (s *deviceStack) physicalDisks(dir string, depth int) []string {
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil || depth == 0 {
@@ -242,9 +244,18 @@ func (s *deviceStack) physicalDisks(dir string, depth int) []string {
 	if backing, ok := s.loopBackingDevice(resolved); ok {
 		return s.physicalDisks(backing, depth-1)
 	}
-	slaves, _ := filepath.Glob(filepath.Join(resolved, "slaves", "*"))
-	if len(slaves) == 0 {
+	if isDMMultipath(resolved) {
 		return []string{filepath.Base(resolved)}
+	}
+	return s.slaveDisks(resolved, depth)
+}
+
+// slaveDisks returns the names of the disks below the slaves of a block device, from its sysfs
+// directory, or the device itself when it has no slaves
+func (s *deviceStack) slaveDisks(dir string, depth int) []string {
+	slaves, _ := filepath.Glob(filepath.Join(dir, "slaves", "*"))
+	if len(slaves) == 0 {
+		return []string{filepath.Base(dir)}
 	}
 	var disks []string
 	for _, slave := range slaves {

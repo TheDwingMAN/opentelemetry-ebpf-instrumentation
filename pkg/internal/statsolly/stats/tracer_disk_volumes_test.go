@@ -25,6 +25,15 @@ func fakeDMVolume(t *testing.T, root, name, numbers, dmName string, slaves ...st
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "name"), []byte(dmName+"\n"), 0o644))
 }
 
+// fakeMultipathVolume creates the sysfs directory of a dm-multipath device over its paths, with
+// its name and the UUID that multipathd gives it
+func fakeMultipathVolume(t *testing.T, root, name, numbers, dmName string, paths ...string) {
+	t.Helper()
+	fakeDMVolume(t, root, name, numbers, dmName, paths...)
+	uuid := filepath.Join(root, "devices", "virtual", "block", name, "dm", "uuid")
+	require.NoError(t, os.WriteFile(uuid, []byte("mpath-3600a098038303053453f463045727a51\n"), 0o644))
+}
+
 // fakeMDVolume creates the sysfs directory of an md RAID volume over slaves
 func fakeMDVolume(t *testing.T, root, name, numbers string, slaves ...string) {
 	t.Helper()
@@ -51,6 +60,11 @@ func fakeStackedHost(t *testing.T) string {
 	fakeDMVolume(t, root, "dm-3", "252:3", "luks-data", "virtual/block/dm-2")
 	// an md RAID1 volume over two disks
 	fakeMDVolume(t, root, "md0", "9:0", "pci/block/vdd", "pci/block/vde")
+	// a multipath device over two paths, and an LVM volume over it
+	fakeSysDevice(t, root, "pci/block/vdf", "253:80")
+	fakeSysDevice(t, root, "pci/block/vdg", "253:96")
+	fakeMultipathVolume(t, root, "dm-4", "252:4", "mpatha", "pci/block/vdf", "pci/block/vdg")
+	fakeDMVolume(t, root, "dm-5", "252:5", "vg2-lv0", "virtual/block/dm-4")
 	fakeLoopDevice(t, root, "loop0", "7:0", "/var/lib/images/on-disk.img")
 	fakeLoopDevice(t, root, "loop1", "7:1", "/run/on-tmpfs.img")
 	// an unbound loop device, which has no loop directory
@@ -87,6 +101,11 @@ func TestDiskVolumesTracer(t *testing.T) {
 		// an md RAID1 volume is on both disks, and has no device mapper name
 		{Volume: "md0", Device: "vdd"}: 1,
 		{Volume: "md0", Device: "vde"}: 1,
+		// a multipath device is on its paths, and a volume over it is on it, which reports the I/O
+		// of the paths
+		{Volume: "dm-4", Name: "mpatha", Device: "vdf"}:   1,
+		{Volume: "dm-4", Name: "mpatha", Device: "vdg"}:   1,
+		{Volume: "dm-5", Name: "vg2-lv0", Device: "dm-4"}: 1,
 		// a loop device is on the disk of its file
 		{Volume: "loop0", Device: "nvme0n1"}: 1,
 	}
