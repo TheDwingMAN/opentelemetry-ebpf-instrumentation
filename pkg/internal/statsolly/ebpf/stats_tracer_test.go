@@ -482,6 +482,27 @@ func TestNFSReadsCgroup(t *testing.T) {
 		"filters don't need reads of the disabled metrics")
 }
 
+func TestStorageAttributeReadsUnderDynamicSelection(t *testing.T) {
+	features := export.FeatureStatsDisk | export.FeatureStatsFsSync | export.FeatureStatsNFS
+	attrSel, err := attributes.NewAttrSelector(attributes.UndefinedGroup, &attributes.SelectorConfig{})
+	require.NoError(t, err)
+
+	disk, fsSync, nfsCgroup := storageAttributeReads(&features, attrSel, ProbeReads{})
+	assert.Equal(t, diskReads{}, disk)
+	assert.Equal(t, fsSyncReads{}, fsSync)
+	assert.False(t, nfsCgroup, "no default attribute of the storage metrics needs the cgroup outside Kubernetes")
+
+	// dynamic application selection drops the stats that are charged to no selected workload:
+	// without their cgroup, it would drop them all
+	disk, fsSync, nfsCgroup = storageAttributeReads(&features, attrSel, ProbeReads{Workloads: true})
+	assert.Equal(t, diskReads{cgroup: true}, disk)
+	assert.Equal(t, fsSyncReads{cgroup: true}, fsSync)
+	assert.True(t, nfsCgroup)
+
+	disk, _, _ = storageAttributeReads(&features, attrSel, ProbeReads{Workloads: true, Filtered: []attr.Name{"obi.disk.partition"}})
+	assert.Equal(t, diskReads{cgroup: true, partition: true}, disk, "the filters still count")
+}
+
 func TestSizeInFlightMaps(t *testing.T) {
 	newSpec := func() *ebpf.CollectionSpec {
 		return &ebpf.CollectionSpec{Maps: map[string]*ebpf.MapSpec{

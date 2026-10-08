@@ -203,14 +203,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 		tcpToDisable = append(tcpToDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 
-	diskReads := diskAttributeReads(features, attrSel, reads.Filtered)
-	fsSyncReads := fsSyncAttributeReads(features, attrSel, reads.Filtered)
-	nfsCgroup := nfsReadsCgroup(features, attrSel, reads.Filtered)
-	if reads.Workloads {
-		diskReads.cgroup = true
-		fsSyncReads.cgroup = true
-		nfsCgroup = true
-	}
+	diskReads, fsSyncReads, nfsCgroup := storageAttributeReads(features, attrSel, reads)
 	storage := planStorageProbes(tlog, features, nfsCgroup)
 
 	objects := StatsObjects{}
@@ -850,6 +843,21 @@ func nfsReadsCgroup(features *export.Features, attrSel *attributes.AttrSelector,
 		}
 	}
 	return false
+}
+
+// storageAttributeReads returns what the disk, file sync and NFS client probes read: the
+// attributes that the enabled metrics report or that the filters match, and the workload of every
+// operation under dynamic application selection, which drops the stats of no selected workload
+func storageAttributeReads(features *export.Features, attrSel *attributes.AttrSelector, reads ProbeReads) (diskReads, fsSyncReads, bool) {
+	disk := diskAttributeReads(features, attrSel, reads.Filtered)
+	fsSync := fsSyncAttributeReads(features, attrSel, reads.Filtered)
+	nfsCgroup := nfsReadsCgroup(features, attrSel, reads.Filtered)
+	if reads.Workloads {
+		disk.cgroup = true
+		fsSync.cgroup = true
+		nfsCgroup = true
+	}
+	return disk, fsSync, nfsCgroup
 }
 
 // reportsWorkload tells whether an attribute describes the workload that the kernel charges an
