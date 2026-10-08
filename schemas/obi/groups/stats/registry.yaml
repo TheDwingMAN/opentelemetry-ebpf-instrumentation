@@ -101,7 +101,10 @@ groups:
           Name of the device mapper device, as `/dev/mapper` and `dmsetup ls`
           list it: of `obi.disk.volume.device` on the volume metrics, and of
           `system.device` on the block I/O metrics. Omitted for the other
-          devices, such as disks, md RAID and loop devices.
+          devices, such as disks, md RAID and loop devices. OBI refreshes it
+          every 30 seconds, so a new volume that the kernel gives the numbers
+          of a removed one can carry the name of the removed one for up to 30
+          seconds.
         examples: ["rhel-root", "vg0-data", "mpatha"]
 
   - id: registry.obi.fs
