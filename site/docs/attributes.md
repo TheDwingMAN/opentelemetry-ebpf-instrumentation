@@ -27,8 +27,8 @@ Attributes of OBI's block I/O (disk) statistics that the semantic conventions do
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
-| `obi.disk.partition` | string | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
-| `obi.disk.stacked` | boolean | development | Whether the block device (`system.device`) is built on other block devices. |  |
+| `obi.disk.partition` | string | development | Partition of the block device (`system.device`) that the I/O targets. Omitted for I/O on the whole device, and for requests that target no partition, such as cache flushes. Before Linux 5.11 (including RHEL 8), the partition is only known on devices that keep I/O statistics. | nvme0n1p1; sda2 |
+| `obi.disk.stacked` | boolean | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices, the head devices of NVMe native multipath and DRBD devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`. |  |
 | `obi.disk.volume.device` | string | development | Block device of a volume, such as the one that a pod volume is mounted from: the disk that `system.device` names, or a partition or a stacked device (such as an LVM volume) on it. | dm-0; nvme0n1p1; sdb |
 | `obi.disk.volume.name` | string | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. | rhel-root; vg0-data; mpatha |
 
@@ -46,7 +46,7 @@ Attributes of OBI's file sync statistics that the semantic conventions don't def
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
-| `obi.fs.sync.type` | enum | development | System call that synced the files. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
+| `obi.fs.sync.type` | enum | development | How the files were synced: the system call (`fsync`, `fdatasync`, `sync`, `syncfs` or `sync_file_range`) or, for the syncs that the kernel does within other calls (O_SYNC and O_DSYNC writes, msync, io_uring), `fsync` or `fdatasync`, depending on whether the metadata is synced too. `sync` flushes every filesystem, so its syncs have no `system.filesystem.mountpoint`. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
 
 ## `registry.obi.gen_ai`
 
@@ -262,7 +262,7 @@ OBI override of `system.filesystem.type` re-typed as an open-ended string: OBI r
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
-| `system.filesystem.type` | string | development | The filesystem type | ext4; xfs; tmpfs; overlay; nfs4; fuse.sshfs |
+| `system.filesystem.type` | string | development | The filesystem type, as the kernel names it in the mount table, not as the members of the semantic conventions: `vfat` is not `fat32`. The subtype of a FUSE filesystem is appended (`fuse.sshfs`). | ext4; xfs; tmpfs; overlay; nfs4; fuse.sshfs |
 
 ## `x.obi.telemetry`
 

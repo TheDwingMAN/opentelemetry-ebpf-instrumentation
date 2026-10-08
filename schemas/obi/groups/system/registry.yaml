@@ -17,9 +17,8 @@ groups:
       - id: system.filesystem.type
         type: string
         stability: development
-        brief: The filesystem type
-        examples: ['ext4', 'xfs', 'tmpfs', 'overlay', 'nfs4', 'fuse.sshfs']
-        note: >
-          OBI reports the type as the kernel names it in the mount table, not
+        brief: >
+          The filesystem type, as the kernel names it in the mount table, not
           as the members of the semantic conventions: `vfat` is not `fat32`.
           The subtype of a FUSE filesystem is appended (`fuse.sshfs`).
+        examples: ['ext4', 'xfs', 'tmpfs', 'overlay', 'nfs4', 'fuse.sshfs']

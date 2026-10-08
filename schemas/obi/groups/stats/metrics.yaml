@@ -386,11 +386,20 @@ groups:
     unit: "s"
     stability: development
     brief: >
-      Duration of block I/O requests, from their issue to the device until
-      their completion, per block device, direction and outcome. It is not
-      reported on the paths of dm-multipath devices, nor, when
-      `stats_disk_bio_devices` measures the NVMe native multipath heads, on
-      their paths: the multipath device reports the same I/O.
+      Device service time of the block reads and writes: from the issue of each
+      request to the device until its completion, per block device, direction
+      and outcome. It excludes the wait in the I/O scheduler, which
+      `obi.stat.disk.queue_time` adds up. Three cases are timed otherwise: the
+      bios of bio-based devices (LVM, md RAID, NVMe native multipath heads)
+      from their submission, a write with a cache flush (a journal commit)
+      until the end of its flush sequence, and the empty flush write of a file
+      sync, which is never issued, from its allocation. Cache flushes and
+      discards have their own histograms. It is not reported on the paths of
+      dm-multipath devices, nor, when `stats_disk_bio_devices` measures the
+      NVMe native multipath heads, on their paths: the multipath device reports
+      the same I/O. Its workload attributes are opt-in:
+      `obi.stat.disk.service_time` and `obi.stat.disk.operations` give the mean
+      per workload.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -518,17 +527,17 @@ groups:
     unit: "s"
     stability: development
     brief: >
-      Sum of the device service times of the completed block reads and writes
-      (the sum of `obi.stat.disk.operation.duration`), per block device,
+      Sum of the device service times of the completed block reads and writes,
+      as `obi.stat.disk.operation.duration` measures them, per block device,
       direction, outcome and workload the I/O is charged to. Unlike
       `system.disk.operation_time` (/proc/diskstats), it excludes the wait in
-      the I/O scheduler.
-    note: >
-      Divided by `obi.stat.disk.operations`, it is the mean service time per
-      workload and outcome. Its rate is the average number of requests that the
-      device serves at once (above 1 on devices that serve requests in
-      parallel). Plus `obi.stat.disk.queue_time`, it is the time that
-      /proc/diskstats counts and iostat's await averages.
+      the I/O scheduler: plus `obi.stat.disk.queue_time`, it is the time that
+      /proc/diskstats counts for the reads and writes. Divided by
+      `obi.stat.disk.operations`, both summed by the same attributes, it is the
+      mean service time, and, added to `obi.stat.disk.queue_time` first,
+      iostat's r_await or w_await. Its rate is the average number of requests
+      that the device serves at once, above 1 on devices that serve requests
+      in parallel.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -572,8 +581,16 @@ groups:
     unit: "s"
     stability: development
     brief: >
-      Duration of file syncs (fsync, fdatasync, sync, syncfs and
-      sync_file_range), per call, outcome and workload that synced.
+      Time that threads wait for file syncs to make their data durable, per
+      sync type and outcome: the fsync, fdatasync, sync, syncfs and
+      sync_file_range (when it waits) system calls from their entry to their
+      return, and the syncs that the kernel does within other calls (O_SYNC and
+      O_DSYNC writes, msync with MS_SYNC, io_uring fsync). It includes all that
+      a sync waits for, such as the writeback of the dirty pages, the journal
+      commit, the block I/O and the cache flushes, or the COMMIT RPCs on NFS,
+      but not the writeback that the kernel does in the background. Its
+      workload attributes are opt-in: `obi.stat.fs.sync.operation_time` and
+      `obi.stat.fs.sync.operations` give the mean per workload.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -609,8 +626,8 @@ groups:
     unit: "{operation}"
     stability: development
     brief: >
-      Completed file syncs (fsync, fdatasync, sync, syncfs and
-      sync_file_range), per call, outcome and workload that synced.
+      Completed file syncs, those of `obi.stat.fs.sync.duration`, per sync
+      type, outcome and workload whose thread synced.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -649,8 +666,11 @@ groups:
     unit: "s"
     stability: development
     brief: >
-      Sum of the durations of the completed file syncs, per call, outcome and
-      workload that synced.
+      Sum of the durations of the completed file syncs, as
+      `obi.stat.fs.sync.duration` measures them, per sync type, outcome and
+      workload whose thread synced. Divided by `obi.stat.fs.sync.operations`,
+      both summed by the same attributes, it is the mean sync time; its rate
+      is the average number of syncs in progress.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -689,28 +709,24 @@ groups:
     unit: "s"
     stability: development
     brief: >
-      Sum of the time that the completed block reads and writes waited in the
-      I/O scheduler before their issue to the device, per block device,
-      direction, outcome and workload the I/O is charged to. Plus
-      `obi.stat.disk.service_time`, divided by `obi.stat.disk.operations`, it
-      is iostat's await per workload.
-    note: >
-      The wait runs from the allocation of the request (from Linux 6.13, from
-      the start of its accounting) to its issue, in the I/O scheduler or in the
-      dispatch queues. For a write that must follow a cache flush (a journal
-      commit), it includes that flush. Waits before the allocation, such as
-      those of blk-throttle (io.max) and of writeback throttling, are not
-      included. The rate of the sum of both time counters is iostat's aqu-sz
-      for the reads and writes. The wait is measured for the requests that the
-      kernel accounts in /proc/diskstats, those of devices that keep I/O
-      statistics, and, on Linux 6.10 and earlier and RHEL 8 (but not RHEL
-      9.6), for those of devices that use an I/O scheduler. Nothing is added
-      for the other requests, nor for the bios of bio-based volumes (LVM, md
-      RAID, zram) and the empty flush requests of fsyncs, which are never
-      issued: these two are timed from their submission or allocation, so
-      their service time already holds their wait. For the requests of devices
-      without I/O statistics, which /proc/diskstats doesn't count either, the
-      ratio is their service time.
+      Sum of the time that the completed block reads and writes waited between
+      their allocation (from Linux 6.13, the start of their accounting) and
+      their issue to the device, in the I/O scheduler or the dispatch queues,
+      per block device, direction, outcome and workload the I/O is charged to.
+      For a write that must follow a cache flush (a journal commit), it
+      includes that flush. Waits before the allocation, such as those of
+      blk-throttle (io.max) and of writeback throttling, are not included.
+      Plus `obi.stat.disk.service_time`, divided by `obi.stat.disk.operations`,
+      it gives iostat's r_await or w_await of each device or workload, and the
+      rate of the sum of both time counters is iostat's aqu-sz for the reads
+      and writes, without the flushes and discards. The wait is measured for
+      the requests that the kernel accounts in /proc/diskstats, those of
+      devices that keep I/O statistics, and, on Linux 6.10 and earlier and RHEL
+      8 (but not RHEL 9.6), for those of devices that use an I/O scheduler.
+      Nothing is added for the other requests, whose ratio is then their
+      service time, nor for the bios of bio-based devices (LVM, md RAID, zram)
+      and the empty flush writes of file syncs, which are timed from their
+      submission or allocation, so that their service time holds their wait.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -755,9 +771,11 @@ groups:
     stability: development
     brief: >
       Duration of the cache flush requests of block devices, from their issue
-      to the device until their completion, per block device and outcome. It
-      is not reported on the paths of dm-multipath devices: the multipath
-      device reports the same flushes.
+      to the device until their completion, per block device and outcome. The
+      flushes of bio-based devices (such as LVM, md RAID and NVMe native
+      multipath heads), which issue no requests of their own, are timed from
+      the submission of their bio. It is not reported on the paths of
+      dm-multipath devices: the multipath device reports the same flushes.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -798,7 +816,8 @@ groups:
     brief: >
       Duration of the block discard (TRIM) and secure erase requests, from their
       issue to the device until their completion, per block device and outcome.
-      It is not reported on the paths of dm-multipath devices, nor, when
+      The discards of bio-based devices are timed from the submission of their
+      bio. It is not reported on the paths of dm-multipath devices, nor, when
       `stats_disk_bio_devices` measures the NVMe native multipath heads, on
       their paths: the multipath device reports the same I/O.
     attributes:
@@ -880,17 +899,15 @@ groups:
     unit: "{operation}"
     stability: development
     brief: >
-      Block reads and writes that each device is serving when sampled: issued
-      to the device and not yet completed, as `/sys/block/<device>/inflight`
-      counts them, per block device and direction. Requests waiting in the I/O
-      scheduler are not counted.
-    note: >
-      Sampled every `ebpf.batch_timeout`. Discards count as writes. From Linux
-      6.10, /proc/diskstats field 9 (node_exporter's node_disk_io_now, the
-      hostmetrics receiver's system.disk.pending_operations) also counts the
-      requests waiting in the I/O scheduler, so it can be higher. For a
-      bio-based volume (LVM, md RAID), it counts the bios submitted to the
-      volume and not yet completed.
+      Block reads and writes that each device is serving when sampled, every
+      `ebpf.batch_timeout`: issued to the device and not yet completed, as
+      `/sys/block/<device>/inflight` counts them, per block device and
+      direction. Discards count as writes. Requests waiting in the I/O
+      scheduler are not counted: from Linux 6.10 and on RHEL 9.6,
+      /proc/diskstats field 9 (node_exporter's node_disk_io_now, the
+      hostmetrics receiver's system.disk.pending_operations) counts them too,
+      so it can be higher. For a bio-based volume (LVM, md RAID), it counts the
+      bios submitted to the volume and not yet completed.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -914,12 +931,17 @@ groups:
     unit: "s"
     stability: development
     brief: >
-      Duration of the RPCs of the kernel NFS client, from their start to their
-      completion, per server, procedure, outcome and workload that started them.
-    note: >
-      For NFSv4, `onc_rpc.procedure.name` is the name the kernel client gives
-      to each kind of COMPOUND request, after its main operation, e.g. `READ`
-      or `OPEN`.
+      Time that each RPC of the kernel NFS client takes, from the start of its
+      RPC task to its completion, per server, procedure, NFS version and
+      outcome: the wait for a transport slot, the transmissions, the
+      retransmissions and the server's reply. It is the execute time of
+      /proc/self/mountstats (nfsiostat's avg exe), which includes the
+      round-trip time, not the round-trip time alone. For NFSv4,
+      `onc_rpc.procedure.name` is the name that the kernel client gives to
+      each kind of COMPOUND request, after its main operation, e.g. `READ` or
+      `OPEN`. Its workload attributes are opt-in:
+      `obi.stat.nfs.client.procedure.time` and
+      `obi.stat.nfs.client.procedure.count` give the mean per workload.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -955,12 +977,15 @@ groups:
     unit: "{procedure}"
     stability: development
     brief: >
-      Completed RPCs of the kernel NFS client, per server, procedure, outcome
-      and workload that started them.
-    note: >
-      Like the semantic conventions' `nfs.client.procedure.count`, with the
-      server, the outcome and the workload. For NFSv4, `onc_rpc.procedure.name`
-      is the name the kernel client gives to each kind of COMPOUND request.
+      Completed RPCs of the kernel NFS client, those of
+      `obi.stat.nfs.client.procedure.duration`, per server, procedure, NFS
+      version, outcome and workload whose thread started them. For NFSv3, they
+      are the counts of the semantic conventions' `nfs.client.procedure.count`,
+      with the server, the outcome and the workload. For NFSv4,
+      `onc_rpc.procedure.name` is the name that the kernel client gives to each
+      kind of COMPOUND request (e.g. `READ` or `OPEN`), whose counts the
+      hostmetrics receiver reports as `nfs.client.operation.count`, with
+      `nfs.operation.name`.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -999,9 +1024,11 @@ groups:
     unit: "s"
     stability: development
     brief: >
-      Sum of the durations of the completed RPCs of the kernel NFS client, from
-      their start to their completion, per server, procedure, outcome and
-      workload that started them.
+      Sum of the durations of the completed RPCs of the kernel NFS client, as
+      `obi.stat.nfs.client.procedure.duration` measures them, per server,
+      procedure, NFS version, outcome and workload whose thread started them.
+      Divided by `obi.stat.nfs.client.procedure.count`, both summed by the same
+      attributes, it is the mean RPC time.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -1040,8 +1067,11 @@ groups:
     unit: "By"
     stability: development
     brief: >
-      Bytes that the kernel NFS client read from (`receive`) and wrote to
-      (`transmit`) NFS servers, per server and workload that started the RPCs.
+      File data that the READ and WRITE RPCs of the kernel NFS client
+      transferred, per server, direction (`receive`: read from the server,
+      `transmit`: written to it) and workload whose thread started the RPCs:
+      the bytes that the server read and wrote, as /proc/self/mountstats counts
+      them, without the RPC headers and the other procedures.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -1078,13 +1108,12 @@ groups:
       Info metric that links each stacked volume of the node (device mapper,
       md RAID or loop device) to the disks it is on: one series per volume and
       disk, of value 1, reported once more with 0 when the volume is gone.
-      Join it on `system.device` with the block I/O metrics.
-    note: >
-      A volume over several disks (md RAID1) has a series per disk, a volume
-      over another stacked volume has the disks of the bottom one, and a loop
-      device has the disks of the filesystem that holds its file. A
-      dm-multipath device has its paths, and a volume over it has the
-      multipath device, which reports the I/O of the paths.
+      Join it on `system.device` with the block I/O metrics. A volume over
+      several disks (md RAID1) has a series per disk, a volume over another
+      stacked volume has the disks of the bottom one, and a loop device has the
+      disks of the filesystem that holds its file. A dm-multipath device has
+      its paths, and a volume over it has the multipath device, which reports
+      the I/O of the paths.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -1111,11 +1140,10 @@ groups:
       (`obi.disk.volume.device`) and to the disks of that device
       (`system.device`): one series per pod, volume and disk, of value 1,
       reported once more with 0 when the pod no longer mounts it. Join it on
-      `system.device` with the block I/O metrics.
-    note: >
-      A volume on a stacked device, such as an LVM volume over several disks,
-      has one series per disk. A volume on a dm-multipath device has the
-      multipath device, which reports the I/O of its paths.
+      `system.device` with the block I/O metrics. A volume on a stacked
+      device, such as an LVM volume over several disks, has one series per
+      disk. A volume on a dm-multipath device has the multipath device, which
+      reports the I/O of its paths.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
