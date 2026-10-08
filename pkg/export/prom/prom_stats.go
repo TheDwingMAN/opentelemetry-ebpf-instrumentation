@@ -41,6 +41,7 @@ type statMetricsReporter struct {
 	tcpRetransmits           *Expirer[prometheus.Counter]
 	tcpIo                    *Expirer[prometheus.Counter]
 	tcpSuccessfulConnections *Expirer[prometheus.Counter]
+	diskOperationDuration    *kernelHistogramVec
 
 	promConnect *connector.PrometheusManager
 
@@ -49,6 +50,7 @@ type statMetricsReporter struct {
 	tcpRetransmitsAttrs           []attributes.Field[*ebpf.Stat, string]
 	tcpIoAttrs                    []attributes.Field[*ebpf.Stat, string]
 	tcpSuccessfulConnectionsAttrs []attributes.Field[*ebpf.Stat, string]
+	diskOperationDurationAttrs    []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -176,6 +178,19 @@ func newStatsReporter(
 		register = append(register, mr.tcpSuccessfulConnections)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskOperationDuration() {
+		log.Debug("registering stat disk operation duration metric")
+
+		mr.diskOperationDurationAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskOperationDuration))
+
+		mr.diskOperationDuration = newKernelHistogramVec(attributes.StatDiskOperationDuration.Prom,
+			"measures the duration of block I/O requests, from their issue to the device until their completion, in seconds",
+			cfg.Config.Buckets.StatDiskOperationDurationHistogram, labelNames(mr.diskOperationDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.diskOperationDuration)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -199,6 +214,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPSuccessfulConnections(stat)
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
+			r.observeDiskOperationDuration(stat)
 		}
 	}
 }
@@ -241,4 +257,18 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 	}
 	r.tcpIo.WithLabelValues(labelValues(stat, r.tcpIoAttrs)...).
 		Metric.Add(float64(stat.TCPIo.Bytes))
+}
+
+func (r *statMetricsReporter) observeDiskOperationDuration(stat *ebpf.Stat) {
+	if stat.DiskIO == nil {
+		return
+	}
+	observeLatencyIn(r.diskOperationDuration, r.diskOperationDurationAttrs, stat, stat.DiskIO.Latency)
+}
+
+func observeLatencyIn(histogram *kernelHistogramVec, attrs []attributes.Field[*ebpf.Stat, string], stat *ebpf.Stat, latency []ebpf.LatencySample) {
+	if histogram == nil || len(latency) == 0 {
+		return
+	}
+	histogram.observe(labelValues(stat, attrs), latency)
 }

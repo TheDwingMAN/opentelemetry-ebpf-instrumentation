@@ -71,6 +71,43 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.NetworkIoDirection), networkIoDirectionStr(NetworkIoDirectionCode(direction)))
 		}
+	case attr.SystemDevice:
+		getter = func(s *Stat) attribute.KeyValue {
+			if device := diskDevice(s); device != "" {
+				return attribute.String(string(attr.SystemDevice), device)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.DiskStacked:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.DiskIO != nil {
+				return attribute.Bool(string(attr.DiskStacked), s.DiskIO.Stacked)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.DiskVolumeName:
+		getter = func(s *Stat) attribute.KeyValue {
+			if name := diskVolumeName(s); name != "" {
+				return attribute.String(string(attr.DiskVolumeName), name)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.DiskIODirection:
+		getter = func(s *Stat) attribute.KeyValue {
+			if direction := diskIODirectionStr(diskOp(s)); direction != "" {
+				return attribute.String(string(attr.DiskIODirection), direction)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.ErrorType:
+		getter = func(s *Stat) attribute.KeyValue {
+			// error.type only applies to failed operations: return an invalid
+			// KeyValue so the attribute is omitted instead of emitted empty.
+			if errorType := storageErrorType(s); errorType != "" {
+				return attribute.String(string(attr.ErrorType), errorType)
+			}
+			return attribute.KeyValue{}
+		}
 
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
@@ -121,6 +158,49 @@ func networkIoDirectionStr(d NetworkIoDirectionCode) string {
 		return string(DirectionTransmit)
 	case CodeDirectionReceive:
 		return string(DirectionReceive)
+	}
+	return ""
+}
+
+// diskIODirectionStr is the disk.io.direction of reads and writes, empty for other operations
+func diskIODirectionStr(op DiskOpCode) string {
+	switch op {
+	case CodeDiskOpRead:
+		return string(DiskDirectionRead)
+	case CodeDiskOpWrite:
+		return string(DiskDirectionWrite)
+	}
+	return ""
+}
+
+// diskDevice is the device of a block I/O stat, empty for any other stat
+func diskDevice(s *Stat) string {
+	if s.DiskIO != nil {
+		return s.DiskIO.Device
+	}
+	return ""
+}
+
+// diskVolumeName is the device mapper name of the device of a block I/O stat, empty for other
+// devices and stats
+func diskVolumeName(s *Stat) string {
+	if s.DiskIO != nil {
+		return s.DiskIO.VolumeName
+	}
+	return ""
+}
+
+func diskOp(s *Stat) DiskOpCode {
+	if s.DiskIO != nil {
+		return s.DiskIO.Op
+	}
+	return 0
+}
+
+// storageErrorType is the error of a block I/O stat, empty on success
+func storageErrorType(s *Stat) string {
+	if s.DiskIO != nil {
+		return s.DiskIO.ErrorType
 	}
 	return ""
 }
