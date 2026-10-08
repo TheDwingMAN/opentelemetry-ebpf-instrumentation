@@ -340,6 +340,7 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 		DiskIO: &ebpf.DiskIO{
 			Device:      d.devices.name(key.Major, key.Minor),
 			Partition:   d.devices.partition(key.Major, key.Minor, key.PartDev, key.Partno),
+			VolumeName:  d.devices.dmName(key.Major, key.Minor),
 			Stacked:     d.devices.stacked(key.Major, key.Minor),
 			Op:          ebpf.DiskOpCode(key.Op),
 			ErrorType:   diskErrorType(key.Status, d.statusIsBlkStatus),
@@ -536,6 +537,7 @@ type deviceNames struct {
 	stack      map[[2]uint32]bool
 	diskstats  map[[2]uint32]string
 	paths      map[[2]uint32]multipathPath
+	dmNames    map[[2]uint32]string
 }
 
 // expire forgets what is cached once deviceNamesCachePeriod passed since it started caching
@@ -553,6 +555,7 @@ func (d *deviceNames) expire() {
 	d.stack = map[[2]uint32]bool{}
 	d.diskstats = nil
 	d.paths = map[[2]uint32]multipathPath{}
+	d.dmNames = map[[2]uint32]string{}
 }
 
 // stacked tells whether a block device is built on other block devices (see isStacked and
@@ -570,6 +573,24 @@ func (d *deviceNames) stacked(major, minor uint32) bool {
 	stacked := isStacked(dir) || stacksWithoutSlaves(dir)
 	d.stack[[2]uint32{major, minor}] = stacked
 	return stacked
+}
+
+// dmName returns the name of a device mapper device, as /dev/mapper names it, or an empty string
+// for the other devices
+func (d *deviceNames) dmName(major, minor uint32) string {
+	d.expire()
+	key := [2]uint32{major, minor}
+	if name, ok := d.dmNames[key]; ok {
+		return name
+	}
+	dir := filepath.Join(d.sysRoot, "dev", "block", devNumbers(major, minor))
+	if !exists(dir) {
+		// e.g. removed since its last I/O: not cached, the numbers may be given to another device
+		return ""
+	}
+	name := deviceMapperName(dir)
+	d.dmNames[key] = name
+	return name
 }
 
 // multipathPath tells which multipath device, if any, a block device is a path of

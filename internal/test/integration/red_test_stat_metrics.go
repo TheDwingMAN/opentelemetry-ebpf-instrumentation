@@ -101,7 +101,8 @@ func testStatMetricsTCPIoGo(t *testing.T) {
 // diskStatLabels are the Prometheus labels of all the attributes that the disk and file sync stat
 // metrics can have
 var diskStatLabels = []string{
-	"system_device", "obi_disk_partition", "obi_disk_stacked", "disk_io_direction", "error_type", "container_id", "obi_ip",
+	"system_device", "obi_disk_partition", "obi_disk_stacked", "obi_disk_volume_name", "disk_io_direction", "error_type",
+	"container_id", "obi_ip",
 	"k8s_cluster_name", "k8s_namespace_name", "k8s_owner_name", "k8s_kind", "k8s_pod_name", "k8s_container_name",
 	"obi_fs_sync_type", "system_filesystem_mountpoint", "system_filesystem_type",
 }
@@ -115,6 +116,9 @@ var (
 	stackedPattern    = regexp.MustCompile(`^(true|false)$`)
 	mountpointPattern = regexp.MustCompile(`^/`)
 	fsTypePattern     = regexp.MustCompile(`^[a-z0-9._]+$`)
+
+	// the device mapper name of such a volume, only there on device mapper devices
+	optionalVolumeNamePattern = regexp.MustCompile(`^([A-Za-z0-9_.+-]+)?$`)
 )
 
 // assertDiskStatLabels checks that a series of a disk or file sync stat metric has exactly the
@@ -149,6 +153,7 @@ func diskIOLabels(containerID, direction string) map[string]*regexp.Regexp {
 	labels["system_device"] = blockDevicePattern
 	labels["obi_disk_partition"] = optionalPartitionPattern
 	labels["obi_disk_stacked"] = stackedPattern
+	labels["obi_disk_volume_name"] = optionalVolumeNamePattern
 	labels["disk_io_direction"] = regexp.MustCompile("^" + direction + "$")
 	return labels
 }
@@ -157,10 +162,11 @@ func diskIOLabels(containerID, direction string) map[string]*regexp.Regexp {
 // charged to workloads
 func pendingLabels(direction string) map[string]*regexp.Regexp {
 	return map[string]*regexp.Regexp{
-		"system_device":     blockDevicePattern,
-		"obi_disk_stacked":  stackedPattern,
-		"disk_io_direction": regexp.MustCompile("^" + direction + "$"),
-		"obi_ip":            ipPattern,
+		"system_device":        blockDevicePattern,
+		"obi_disk_stacked":     stackedPattern,
+		"obi_disk_volume_name": optionalVolumeNamePattern,
+		"disk_io_direction":    regexp.MustCompile("^" + direction + "$"),
+		"obi_ip":               ipPattern,
 	}
 }
 

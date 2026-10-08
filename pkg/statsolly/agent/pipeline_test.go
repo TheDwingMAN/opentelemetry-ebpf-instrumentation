@@ -231,8 +231,12 @@ func TestDiskStats(t *testing.T) {
 	}
 
 	// the exposition format writes empty labels, which Prometheus treats as absent
-	okWrite := map[string]string{"obi_disk_stacked": "false", "system_device": "nvme0n1", "disk_io_direction": "write", "error_type": ""}
-	failedWrite := map[string]string{"obi_disk_stacked": "false", "system_device": "nvme0n1", "disk_io_direction": "write", "error_type": "EIO"}
+	okWrite := map[string]string{
+		"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "nvme0n1", "disk_io_direction": "write", "error_type": "",
+	}
+	failedWrite := map[string]string{
+		"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "nvme0n1", "disk_io_direction": "write", "error_type": "EIO",
+	}
 	withLe := func(labels map[string]string, le string) map[string]string {
 		out := map[string]string{"le": le}
 		maps.Copy(out, labels)
@@ -271,8 +275,8 @@ func TestDiskCounters(t *testing.T) {
 	flush.DiskIO.Operations, flush.DiskIO.QueueTime = 1, 1
 	diskEvents <- []*ebpf.Stat{write, failedWrite, read, flush}
 
-	vdaWrite := map[string]string{"obi_disk_stacked": "false", "system_device": "vda", "disk_io_direction": "write"}
-	vdaRead := map[string]string{"obi_disk_stacked": "false", "system_device": "vda", "disk_io_direction": "read"}
+	vdaWrite := map[string]string{"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda", "disk_io_direction": "write"}
+	vdaRead := map[string]string{"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda", "disk_io_direction": "read"}
 	withError := func(errorType string) map[string]string {
 		out := map[string]string{"error_type": errorType}
 		maps.Copy(out, vdaWrite)
@@ -318,17 +322,19 @@ func TestDiskOperationsBeyondReadsAndWrites(t *testing.T) {
 		Device: "vda", Op: ebpf.CodeDiskOpRead, Requests: 5,
 	}}
 	lvm := fakeDiskRecord("dm-0", ebpf.CodeDiskOpWrite, "")
-	lvm.DiskIO.Operations, lvm.DiskIO.Stacked = 4, true
+	lvm.DiskIO.Operations, lvm.DiskIO.Stacked, lvm.DiskIO.VolumeName = 4, true, "vg0-data"
 	diskEvents <- []*ebpf.Stat{write, flush, discard, pending, lvm}
 
-	vda := map[string]string{"obi_disk_stacked": "false", "system_device": "vda", "error_type": ""}
+	vda := map[string]string{"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda", "error_type": ""}
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
 			{Name: "obi_stat_disk_operations_total", Value: 2, Labels: map[string]string{
-				"obi_disk_stacked": "false", "system_device": "vda", "disk_io_direction": "write", "error_type": "",
+				"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda", "disk_io_direction": "write",
+				"error_type": "",
 			}},
 			{Name: "obi_stat_disk_operations_total", Value: 4, Labels: map[string]string{
-				"obi_disk_stacked": "true", "system_device": "dm-0", "disk_io_direction": "write", "error_type": "",
+				"obi_disk_stacked": "true", "obi_disk_volume_name": "vg0-data", "system_device": "dm-0", "disk_io_direction": "write",
+				"error_type": "",
 			}},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operations_total"), "flushes and discards have their own metrics")
 		assert.Contains(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_flush_duration_seconds_count"),
@@ -336,10 +342,14 @@ func TestDiskOperationsBeyondReadsAndWrites(t *testing.T) {
 		assert.Contains(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_discard_duration_seconds_count"),
 			promtest.ScrapedMetric{Name: "obi_stat_disk_discard_duration_seconds_count", Value: 1, Labels: vda})
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_disk_discard_io_bytes_total", Value: 1 << 20, Labels: map[string]string{"obi_disk_stacked": "false", "system_device": "vda"}},
+			{Name: "obi_stat_disk_discard_io_bytes_total", Value: 1 << 20, Labels: map[string]string{
+				"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda",
+			}},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_discard_io_bytes_total"))
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_disk_operation_inflight", Value: 5, Labels: map[string]string{"obi_disk_stacked": "false", "system_device": "vda", "disk_io_direction": "read"}},
+			{Name: "obi_stat_disk_operation_inflight", Value: 5, Labels: map[string]string{
+				"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda", "disk_io_direction": "read",
+			}},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_inflight"))
 	}, timeout, 100*time.Millisecond)
 }
@@ -358,7 +368,9 @@ func TestDiskOperationInflightOfSeveralStatsInOneSeries(t *testing.T) {
 
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_disk_operation_inflight", Value: 8, Labels: map[string]string{"obi_disk_stacked": "false", "system_device": "vda"}},
+			{Name: "obi_stat_disk_operation_inflight", Value: 8, Labels: map[string]string{
+				"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda",
+			}},
 		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_inflight"), "the reads and writes add up")
 	}, timeout, 100*time.Millisecond)
 }

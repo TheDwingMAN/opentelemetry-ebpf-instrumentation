@@ -217,7 +217,17 @@ func TestStatGetters_DiskVolume(t *testing.T) {
 	require.True(t, ok)
 	raid := &Stat{Type: StatTypeDiskVolume, DiskVolume: &DiskVolume{Volume: "md0", Device: "sdb", Value: 1}}
 	assert.False(t, volumeName(raid).Valid(), "only device mapper volumes have a name")
-	assert.False(t, volumeName(&Stat{DiskIO: &DiskIO{Device: "sda"}}).Valid(), "block I/O has no volume")
+}
+
+func TestStatGetters_DeviceMapperNameOfBlockIO(t *testing.T) {
+	volumeName, ok := StatGetters(attr.DiskVolumeName)
+	require.True(t, ok)
+	multipathIO := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "dm-1", VolumeName: "mpatha"}}
+	multipathPending := &Stat{Type: StatTypeDiskPending, DiskPending: &DiskPending{Device: "dm-1", VolumeName: "mpatha"}}
+	assert.Equal(t, "mpatha", volumeName(multipathIO).Value.AsString())
+	assert.Equal(t, "mpatha", volumeName(multipathPending).Value.AsString())
+	assert.False(t, volumeName(&Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "sda"}}).Valid(),
+		"omitted for the devices that are not device mapper devices")
 }
 
 func TestStatContainerID(t *testing.T) {

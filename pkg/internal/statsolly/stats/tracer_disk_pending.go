@@ -17,9 +17,10 @@ import (
 )
 
 type pendingKey struct {
-	device  string
-	stacked bool
-	op      ebpf.DiskOpCode
+	device     string
+	volumeName string
+	stacked    bool
+	op         ebpf.DiskOpCode
 }
 
 // pendingReader counts the reads and writes that each device is serving: issued to the device and
@@ -88,13 +89,11 @@ func (p *pendingReader) readStats() []*ebpf.Stat {
 	pending := map[pendingKey]int64{}
 	for numbers, counts := range disks {
 		major, minor := parseDevNumbers(numbers)
-		device := p.devices.name(major, minor)
-		stacked := p.devices.stacked(major, minor)
 		if reads := max(counts.reads, counts.partitionReads); reads > 0 {
-			pending[pendingKey{device: device, stacked: stacked, op: ebpf.CodeDiskOpRead}] = reads
+			pending[p.keyOf(major, minor, ebpf.CodeDiskOpRead)] = reads
 		}
 		if writes := max(counts.writes, counts.partitionWrites); writes > 0 {
-			pending[pendingKey{device: device, stacked: stacked, op: ebpf.CodeDiskOpWrite}] = writes
+			pending[p.keyOf(major, minor, ebpf.CodeDiskOpWrite)] = writes
 		}
 	}
 
@@ -115,14 +114,25 @@ func (p *pendingReader) readStats() []*ebpf.Stat {
 		stats = append(stats, &ebpf.Stat{
 			Type: ebpf.StatTypeDiskPending,
 			DiskPending: &ebpf.DiskPending{
-				Device:   key.device,
-				Stacked:  key.stacked,
-				Op:       key.op,
-				Requests: pending[key],
+				Device:     key.device,
+				VolumeName: key.volumeName,
+				Stacked:    key.stacked,
+				Op:         key.op,
+				Requests:   pending[key],
 			},
 		})
 	}
 	return stats
+}
+
+// keyOf returns the key of the requests of an operation on a block device
+func (p *pendingReader) keyOf(major, minor uint32, op ebpf.DiskOpCode) pendingKey {
+	return pendingKey{
+		device:     p.devices.name(major, minor),
+		volumeName: p.devices.dmName(major, minor),
+		stacked:    p.devices.stacked(major, minor),
+		op:         op,
+	}
 }
 
 // diskInFlight is what a disk and its partitions report in flight. Before Linux 5.11, a disk
@@ -182,13 +192,11 @@ func (p *pendingReader) observeCompleted(diskstats []blockdevice.Diskstats) {
 		if !exists(p.inflightPath(numbers)) {
 			continue
 		}
-		device := p.devices.name(stat.MajorNumber, stat.MinorNumber)
-		stacked := p.devices.stacked(stat.MajorNumber, stat.MinorNumber)
 		if current.reads != previous.reads {
-			p.idleRead[pendingKey{device: device, stacked: stacked, op: ebpf.CodeDiskOpRead}] = 0
+			p.idleRead[p.keyOf(stat.MajorNumber, stat.MinorNumber, ebpf.CodeDiskOpRead)] = 0
 		}
 		if current.writes != previous.writes {
-			p.idleRead[pendingKey{device: device, stacked: stacked, op: ebpf.CodeDiskOpWrite}] = 0
+			p.idleRead[p.keyOf(stat.MajorNumber, stat.MinorNumber, ebpf.CodeDiskOpWrite)] = 0
 		}
 	}
 	for numbers := range p.completed {

@@ -384,6 +384,33 @@ func TestDiskReaderReportsNoLatencyOfMultipathPaths(t *testing.T) {
 	assert.NotEmpty(t, stats[deviceOp{"nvme1c0n1", ebpf.CodeDiskOpWrite}].Latency, "the bios of the head are not measured")
 }
 
+func TestDeviceMapperNames(t *testing.T) {
+	devices := fakeMultipathHost(t)
+	devices.sysFile("dm-0", "dm/name", "vg0-data")
+	devices.sysFile("dm-1", "dm/name", "mpatha")
+	now := time.Now()
+	names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot, now: func() time.Time { return now }}
+
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
+		writeKey(253, 0): accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}), // dm-0, an LVM volume
+		writeKey(253, 1): accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}), // dm-1, a multipath device
+		writeKey(8, 16):  accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}), // sdb, a path of dm-1
+	}}
+	r := newDiskReader(src, testBounds, true, names, newCgroupContainers(fakeCgroupNames{}))
+	volumeNames := map[string]string{}
+	for _, stat := range r.readStats() {
+		volumeNames[stat.DiskIO.Device] = stat.DiskIO.VolumeName
+	}
+	assert.Equal(t, map[string]string{"dm-0": "vg0-data", "dm-1": "mpatha", "sdb": ""}, volumeNames)
+	assert.Empty(t, names.dmName(8, 99), "an unknown device")
+
+	// the multipath device was renamed
+	devices.sysFile("dm-1", "dm/name", "data")
+	assert.Equal(t, "mpatha", names.dmName(253, 1), "cached for the cache period")
+	now = now.Add(deviceNamesCachePeriod)
+	assert.Equal(t, "data", names.dmName(253, 1))
+}
+
 // fakeSysBlock creates the sysfs entries of a disk and its partitions: /dev/block/<maj:min>/uevent
 // for each device, and /block/<disk>/<partition>/partition with the partition numbers
 func fakeSysBlock(t *testing.T, root string, disk string, major, minor uint32, partitions map[string][2]uint32) {

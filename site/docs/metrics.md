@@ -1349,6 +1349,7 @@ Duration of the block discard (TRIM) and secure erase requests, from their issue
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. | rhel-root; vg0-data; mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1371,6 +1372,7 @@ Bytes discarded by the block discard (TRIM) and secure erase requests that compl
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. | rhel-root; vg0-data; mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1394,6 +1396,7 @@ Duration of the cache flush requests of block devices, from their issue to the d
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. | rhel-root; vg0-data; mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1417,6 +1420,7 @@ Bytes transferred by the block I/O requests that completed successfully, per blo
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. | rhel-root; vg0-data; mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1441,6 +1445,7 @@ Duration of block I/O requests, from their issue to the device until their compl
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. | rhel-root; vg0-data; mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1456,6 +1461,7 @@ Block reads and writes that each device is serving when sampled: issued to the d
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. | rhel-root; vg0-data; mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1480,6 +1486,7 @@ Completed block I/O requests, per block device, direction, outcome and workload 
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. | rhel-root; vg0-data; mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1504,6 +1511,7 @@ Sum of the time that the completed block reads and writes waited in the I/O sche
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. | rhel-root; vg0-data; mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1528,6 +1536,7 @@ Sum of the device service times of the completed block reads and writes (the sum
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. | rhel-root; vg0-data; mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
@@ -1542,7 +1551,7 @@ Info metric that links each stacked volume of the node (device mapper, md RAID o
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `obi.disk.volume.device` | string | `recommended` | development | Block device of a volume, such as the one that a pod volume is mounted from: the disk that `system.device` names, or a partition or a stacked device (such as an LVM volume) on it. | dm-0; nvme0n1p1; sdb |
-| `obi.disk.volume.name` | string | `conditionally_required`: if the volume is a device mapper volume | development | Name of the device mapper volume (`obi.disk.volume.device`), as `/dev/mapper` and `dmsetup ls` list it. | rhel-root; vg0-data |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the volume is a device mapper volume | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. | rhel-root; vg0-data; mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 

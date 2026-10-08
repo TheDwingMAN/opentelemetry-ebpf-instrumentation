@@ -193,6 +193,8 @@ type DiskIO struct {
 	Device string
 	// Partition of Device that the I/O targets. Empty for I/O on the whole device.
 	Partition string
+	// VolumeName is the device mapper name of Device, e.g. vg0-data. Empty for other devices.
+	VolumeName string
 	// Stacked devices are built on other block devices, which report the same I/O too
 	Stacked bool
 	Op      DiskOpCode
@@ -216,10 +218,12 @@ type DiskIO struct {
 
 // DiskPending is the number of block requests of an operation that a device is serving
 type DiskPending struct {
-	Device   string
-	Stacked  bool
-	Op       DiskOpCode
-	Requests int64
+	Device string
+	// VolumeName is the device mapper name of Device, e.g. vg0-data. Empty for other devices.
+	VolumeName string
+	Stacked    bool
+	Op         DiskOpCode
+	Requests   int64
 }
 
 // ContainerID returns the container that a block I/O, file sync or NFS stat is charged to, or an

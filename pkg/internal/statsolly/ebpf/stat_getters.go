@@ -133,10 +133,10 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		}
 	case attr.DiskVolumeName:
 		getter = func(s *Stat) attribute.KeyValue {
-			if s.DiskVolume == nil || s.DiskVolume.Name == "" {
-				return attribute.KeyValue{}
+			if name := diskVolumeName(s); name != "" {
+				return attribute.String(string(attr.DiskVolumeName), name)
 			}
-			return attribute.String(string(attr.DiskVolumeName), s.DiskVolume.Name)
+			return attribute.KeyValue{}
 		}
 	case attr.ServerAddr:
 		getter = func(s *Stat) attribute.KeyValue {
@@ -266,6 +266,20 @@ func diskDevice(s *Stat) string {
 		return s.PodVolume.Device
 	case s.DiskVolume != nil:
 		return s.DiskVolume.Device
+	}
+	return ""
+}
+
+// diskVolumeName is the device mapper name of the volume of a disk volume stat, or of the device of a
+// block I/O stat, empty for other devices and stats
+func diskVolumeName(s *Stat) string {
+	switch {
+	case s.DiskIO != nil:
+		return s.DiskIO.VolumeName
+	case s.DiskPending != nil:
+		return s.DiskPending.VolumeName
+	case s.DiskVolume != nil:
+		return s.DiskVolume.Name
 	}
 	return ""
 }

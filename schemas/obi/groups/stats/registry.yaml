@@ -98,12 +98,11 @@ groups:
         type: string
         stability: development
         brief: >
-          Name of the device mapper volume (`obi.disk.volume.device`), as
-          `/dev/mapper` and `dmsetup ls` list it.
-        examples: ["rhel-root", "vg0-data"]
-        note: >
-          Omitted for the volumes that are not device mapper volumes, such as md
-          RAID and loop devices.
+          Name of the device mapper device, as `/dev/mapper` and `dmsetup ls`
+          list it: of `obi.disk.volume.device` on the volume metrics, and of
+          `system.device` on the block I/O metrics. Omitted for the other
+          devices, such as disks, md RAID and loop devices.
+        examples: ["rhel-root", "vg0-data", "mpatha"]
 
   - id: registry.obi.fs
     type: attribute_group

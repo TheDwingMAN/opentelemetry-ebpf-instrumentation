@@ -133,6 +133,19 @@ func TestPendingReaderCountsRequestsInFlight(t *testing.T) {
 	assert.Equal(t, map[string]int64{"sda/read": 0, "sda/write": 0}, pendingByDevice(r.readStats()))
 }
 
+func TestPendingReaderNamesDeviceMapperDevices(t *testing.T) {
+	devices := newFakeBlockDevices(t)
+	devices.disk("253:0", "dm-0", 1, 2)
+	devices.sysFile("dm-0", "dm/name", "vg0-data")
+	devices.disk("8:0", "sda", 1, 0)
+
+	volumeNames := map[string]string{}
+	for _, stat := range devices.reader().readStats() {
+		volumeNames[stat.DiskPending.Device] = stat.DiskPending.VolumeName
+	}
+	assert.Equal(t, map[string]string{"dm-0": "vg0-data", "sda": ""}, volumeNames)
+}
+
 func TestPendingReaderReportsDevicesThatDidIO(t *testing.T) {
 	devices := newFakeBlockDevices(t)
 	devices.disk("259:0", "nvme0n1", 0, 0)

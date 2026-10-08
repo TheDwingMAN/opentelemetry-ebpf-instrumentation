@@ -232,8 +232,20 @@ func TestDefault_StatDiskOperationDuration(t *testing.T) {
 		attr.DiskIODirection,
 		attr.ErrorType,
 		attr.DiskStacked,
+		attr.DiskVolumeName,
 		attr.SystemDevice,
 	}, p.For(StatDiskOperationDuration))
+}
+
+func TestStatDiskMetricsNameTheDeviceMapperDevices(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	for _, metric := range []Name{
+		StatDiskOperationDuration, StatDiskIO, StatDiskOperations, StatDiskServiceTime, StatDiskQueueTime,
+		StatDiskFlushDuration, StatDiskDiscardDuration, StatDiskDiscardIO, StatDiskOperationInflight,
+	} {
+		assert.Contains(t, p.For(metric), attr.DiskVolumeName, metric.OTEL)
+	}
 }
 
 func TestDefault_StatDiskCounters(t *testing.T) {
@@ -245,6 +257,7 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.DiskStacked,
+		attr.DiskVolumeName,
 		attr.SystemDevice,
 	}, p.For(StatDiskIO))
 	// the time counters have the attributes of the operations counter, so that their ratio is the
@@ -256,6 +269,7 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.DiskStacked,
+		attr.DiskVolumeName,
 		attr.SystemDevice,
 	}
 	assert.Equal(t, withOutcome, p.For(StatDiskOperations))
@@ -265,7 +279,8 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 	// outside Kubernetes, the disk counters are reported per device only
 	p, err = NewAttrSelector(0, &SelectorConfig{})
 	require.NoError(t, err)
-	assert.Equal(t, []attr.Name{attr.DiskIODirection, attr.DiskStacked, attr.SystemDevice}, p.For(StatDiskIO))
+	assert.Equal(t, []attr.Name{attr.DiskIODirection, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice},
+		p.For(StatDiskIO))
 }
 
 func TestStatDiskServiceTimeSelection(t *testing.T) {
@@ -408,6 +423,7 @@ func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {
 		attr.K8sPodName,
 		attr.DiskPartition,
 		attr.DiskStacked,
+		attr.DiskVolumeName,
 		attr.OBIIP,
 		attr.SystemDevice,
 	}, p.For(StatDiskOperationDuration))
