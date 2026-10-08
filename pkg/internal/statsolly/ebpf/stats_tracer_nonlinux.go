@@ -15,12 +15,22 @@ import (
 
 type StatsFetcher struct{}
 
-func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig) (*StatsFetcher, error) {
+// LatencyHistograms are the boundaries, in seconds, of the latency histograms that the kernel
+// accumulates
+type LatencyHistograms struct {
+	Disk []float64
+}
+
+func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig, _ LatencyHistograms) (*StatsFetcher, error) {
 	return nil, nil
 }
 
 // Close any resources that are taken
 func (m *StatsFetcher) Close() error {
+	return nil
+}
+
+func (m *StatsFetcher) DisabledStorageFeatures() []DisabledFeature {
 	return nil
 }
 
@@ -30,4 +40,12 @@ func (m *StatsFetcher) StatsEventsMap() *ciliumebpf.Map {
 
 func (m *StatsFetcher) DebugEventsMap() *ciliumebpf.Map {
 	return nil
+}
+
+func (m *StatsFetcher) DiskIOAccumMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) DiskStatusIsBlkStatus() bool {
+	return false
 }

@@ -84,6 +84,7 @@ type ebpFetcher interface {
 	io.Closer
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
+	DisabledStorageFeatures() []ebpf.DisabledFeature
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -107,16 +108,78 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		SelectionCfg:            cfg.Attributes.Select,
 		ExtraGroupAttributesCfg: cfg.Attributes.ExtraGroupAttributes,
 	}
-	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg)
+	features := cfg.Metrics.Features
+
+	histograms, approximated := latencyHistograms(cfg)
+	if len(approximated) > 0 {
+		alog.Warn("more histogram buckets than the kernel can keep: these histograms are approximated",
+			"histograms", approximated)
+	}
+
+	statsFetcher, err = newFetcher(&cfg.EBPF, &features, selectorCfg, histograms)
 	if err != nil {
 		return nil, err
+	}
+	if disabled := statsFetcher.DisabledStorageFeatures(); len(disabled) > 0 {
+		warnDisabledStorage(disabled)
+	} else if storageProbesEnabled(&features) {
+		alog.Info("the probes of the enabled storage metrics are loaded")
 	}
 
 	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
 }
 
-func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg)
+func newFetcher(cfg *config.EBPFTracer, features *export.Features,
+	selectorCfg *attributes.SelectorConfig, histograms ebpf.LatencyHistograms,
+) (ebpFetcher, error) {
+	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, histograms)
+}
+
+// storageProbesEnabled tells whether any enabled storage metric needs probes
+func storageProbesEnabled(features *export.Features) bool {
+	return features.StatsDisk()
+}
+
+// warnDisabledStorage logs the enabled storage features whose probes can't be loaded or attached
+func warnDisabledStorage(disabled []ebpf.DisabledFeature) {
+	for _, d := range disabled {
+		alog().Warn("storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working",
+			"metrics", d.Feature, "reason", d.Reason)
+	}
+}
+
+// latencyHistograms returns the boundaries the kernel buckets latencies with: the union of the
+// boundaries of the enabled histograms in the enabled exporters, so that the kernel buckets refine
+// all of them. It also returns the configuration names of the histograms that have more boundaries
+// than the kernel keeps, which are approximated.
+func latencyHistograms(cfg *obi.Config) (ebpf.LatencyHistograms, []string) {
+	var exporters []export.Buckets
+	if cfg.Prometheus.EndpointEnabled() {
+		exporters = append(exporters, cfg.Prometheus.Buckets)
+	}
+	if cfg.OTELMetrics.EndpointEnabled() {
+		exporters = append(exporters, cfg.OTELMetrics.Buckets)
+	}
+	features := cfg.Metrics.Features
+	var histograms ebpf.LatencyHistograms
+	for _, buckets := range exporters {
+		if features.StatsDiskOperationDuration() {
+			histograms.Disk = append(histograms.Disk, buckets.StatDiskOperationDurationHistogram...)
+		}
+	}
+	var approximated []string
+	for _, group := range []struct {
+		bounds *[]float64
+		names  string
+	}{
+		{&histograms.Disk, "stat_disk_operation_duration_histogram"},
+	} {
+		var exact bool
+		if *group.bounds, exact = ebpf.KernelLatencyBounds(*group.bounds); !exact {
+			approximated = append(approximated, group.names)
+		}
+	}
+	return histograms, approximated
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests

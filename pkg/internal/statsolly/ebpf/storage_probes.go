@@ -1,0 +1,121 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build linux
+
+package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"slices"
+
+	"github.com/cilium/ebpf/link"
+
+	"go.opentelemetry.io/obi/pkg/export"
+)
+
+// The storage features that probes serve, as DisabledFeature names them
+const (
+	featureDiskRequests = "the block I/O metrics (stats_disk_*)"
+)
+
+// storageProbes tells which storage probes are loaded and attached. The storage features are
+// optional: an enabled one whose probes can't be loaded or attached is disabled, with the reason,
+// and the other stats keep working.
+type storageProbes struct {
+	layout   blockTracepointLayout
+	disk     bool
+	disabled []DisabledFeature
+}
+
+// planStorageProbes returns the storage probes of the enabled features that the kernel can load.
+func planStorageProbes(log *slog.Logger, features *export.Features) storageProbes {
+	var s storageProbes
+	if features.StatsDisk() {
+		var err error
+		if s.layout, err = kernelBlockTracepointLayout(log); err != nil {
+			s.disable(featureDiskRequests, fmt.Errorf("can't tell the block tracepoint arguments from the kernel BTF: %w", err))
+		} else {
+			s.disk = true
+		}
+	}
+	return s
+}
+
+func (s *storageProbes) disable(feature string, reason error) {
+	s.disabled = append(s.disabled, DisabledFeature{Feature: feature, Reason: reason.Error()})
+}
+
+// any tells whether any storage program is loaded
+func (s *storageProbes) any() bool {
+	return s.disk
+}
+
+// disableAll disables every storage feature that has programs to load
+func (s *storageProbes) disableAll(reason error) {
+	if s.disk {
+		s.disable(featureDiskRequests, reason)
+	}
+	s.disk = false
+}
+
+// programsToDisable returns the storage programs that must not be loaded
+func (s *storageProbes) programsToDisable() []string {
+	return diskProgramsToDisable(s.disk, s.layout)
+}
+
+// loadOrDisable loads the stats programs with the storage ones. When they can't be loaded, as OBI
+// does with an optional tracer that can't be loaded, it disables the storage features and loads the
+// stats programs without them. If that fails too, it returns both errors.
+func (s *storageProbes) loadOrDisable(load func(toDisable []string) error, tcpToDisable []string) error {
+	err := load(slices.Concat(tcpToDisable, s.programsToDisable()))
+	if err == nil || !s.any() {
+		return err
+	}
+	s.disableAll(fmt.Errorf("can't load their BPF programs: %w", err))
+	if retryErr := load(slices.Concat(tcpToDisable, s.programsToDisable())); retryErr != nil {
+		return errors.Join(err, retryErr)
+	}
+	return nil
+}
+
+// attach attaches the loaded storage probes, and disables the features whose probes can't be
+// attached.
+func (s *storageProbes) attach(objects *StatsObjects) []io.Closer {
+	var closables []io.Closer
+	if s.disk {
+		// the completions are attached before the issues, so that no request is timed without
+		// its completion being measured
+		issue := objects.ObiStatsRawTpBlockRqIssue
+		if s.layout.issueHasQueueArg {
+			issue = objects.ObiStatsRawTpBlockRqIssueLegacy
+		}
+		links, err := attachRawTracepoints([]probe{
+			{name: RawTracepointBlockRqComplete, program: objects.ObiStatsRawTpBlockRqComplete},
+			{name: RawTracepointBlockRqIssue, program: issue},
+		})
+		if err != nil {
+			s.disk = false
+			s.disable(featureDiskRequests, err)
+		}
+		closables = append(closables, links...)
+	}
+	return closables
+}
+
+// attachRawTracepoints attaches raw tracepoint programs, in order, or none of them
+func attachRawTracepoints(probes []probe) ([]io.Closer, error) {
+	var closables []io.Closer
+	for _, t := range probes {
+		l, err := link.AttachRawTracepoint(link.RawTracepointOptions{Name: t.name, Program: t.program})
+		if err != nil {
+			closeAll(closables)
+			return nil, fmt.Errorf("can't attach the %s tracepoint: %w", t.name, err)
+		}
+		closables = append(closables, l)
+	}
+	return closables, nil
+}
