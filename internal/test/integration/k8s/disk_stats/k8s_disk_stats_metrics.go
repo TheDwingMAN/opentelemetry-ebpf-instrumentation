@@ -108,17 +108,19 @@ func assertHistogramBounds(t require.TestingT, buckets []promtest.Result, bounds
 
 func testDiskIOChargedToWorkload(ctx context.Context, t *testing.T, _ *envconf.Config) context.Context {
 	pq := promtest.Client{HostPort: prometheusHostPort}
-	for _, metric := range []string{
-		"obi_stat_disk_io_bytes_total",
-		"obi_stat_disk_operations_total",
-		"obi_stat_disk_service_time_seconds_total",
-		"obi_stat_disk_queue_time_seconds_total",
+	for _, counter := range []struct{ metric, values string }{
+		{"obi_stat_disk_io_bytes_total", "> 0"},
+		{"obi_stat_disk_operations_total", "> 0"},
+		{"obi_stat_disk_service_time_seconds_total", "> 0"},
+		// the wait can sum to 0: the I/O is synchronous, and the block plug of the thread can give
+		// each request the same time for its allocation and its issue (Linux 6.10+, RHEL 9.6)
+		{"obi_stat_disk_queue_time_seconds_total", ">= 0"},
 	} {
 		for _, direction := range []string{"read", "write"} {
 			require.EventuallyWithT(t, func(ct *assert.CollectT) {
-				results, err := pq.Query(metric + `{` + workload + `,disk_io_direction="` + direction + `"} > 0`)
+				results, err := pq.Query(counter.metric + `{` + workload + `,disk_io_direction="` + direction + `"} ` + counter.values)
 				require.NoError(ct, err)
-				require.NotEmpty(ct, results, "%s %s", metric, direction)
+				require.NotEmpty(ct, results, "%s %s", counter.metric, direction)
 				for _, res := range results {
 					assertDiskStatLabels(ct, res.Metric, diskIOLabels(direction))
 				}

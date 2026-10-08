@@ -512,6 +512,62 @@ func TestDiskPassthroughCommands(t *testing.T) {
 	}, operations)
 }
 
+// TestDiskQueueTimeOfWaitingRequests keeps more reads and writes in flight than a disk serves at
+// once, so that they wait in its I/O scheduler, and checks that their wait is measured. The kernel
+// times the requests, as on most disks: a request that doesn't wait can then have the same
+// allocation and issue time, which the block plug of its thread caches (Linux 6.10+, RHEL 9.6), so
+// the wait of synchronous I/O at queue depth 1 can sum to 0.
+func TestDiskQueueTimeOfWaitingRequests(t *testing.T) {
+	const (
+		workers = 4
+		blocks  = 32
+	)
+	device := scsiDebugDisk(t)
+	useIOScheduler(t, device)
+	makeKernelTimeRequests(t, device)
+	// the disk serves one request at a time
+	require.NoError(t, os.WriteFile(filepath.Join("/sys/block", device, "device", "queue_depth"), []byte("1"), 0o644))
+	node := deviceNode(t, device)
+	reader := attachDiskReader(t, export.FeatureStatsDisk)
+
+	start := time.Now()
+	require.NoError(t, writeAndReadConcurrently(t, node, workers, blocks))
+	elapsed := time.Since(start)
+
+	operations := map[ebpf.DiskOpCode]uint64{}
+	var queued, queuedAndServed float64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != device || !stat.DiskIO.Op.IsTransfer() {
+			continue
+		}
+		operations[stat.DiskIO.Op] += stat.DiskIO.Operations
+		queued += stat.DiskIO.QueueTime
+		queuedAndServed += stat.DiskIO.QueueTime + stat.DiskIO.Time
+	}
+	assert.Equal(t, map[ebpf.DiskOpCode]uint64{
+		ebpf.CodeDiskOpRead:  workers * blocks,
+		ebpf.CodeDiskOpWrite: workers * blocks,
+	}, operations)
+	assert.Positive(t, queued, "the requests wait in the I/O scheduler while the disk serves another one")
+	// each worker has one request at a time, from its allocation to its completion
+	assert.LessOrEqual(t, queuedAndServed, workers*elapsed.Seconds(),
+		"the wait before issue and the service time of the requests")
+}
+
+// useIOScheduler makes a device use mq-deadline, or bfq if the kernel lacks mq-deadline. It skips
+// the test if the kernel has neither.
+func useIOScheduler(t *testing.T, device string) {
+	t.Helper()
+	_, available := queueSchedulers(t, device)
+	for _, scheduler := range []string{"mq-deadline", "bfq"} {
+		if slices.Contains(available, scheduler) {
+			writeQueueAttribute(t, device, "scheduler", scheduler)
+			return
+		}
+	}
+	t.Skipf("neither mq-deadline nor bfq is available: %v", available)
+}
+
 // scsiDebugDisk loads scsi_debug with one disk and returns the name of the disk, once udev, if it
 // runs, has probed it. It skips the test if scsi_debug can't be loaded or creates no disk.
 func scsiDebugDisk(t *testing.T) string {

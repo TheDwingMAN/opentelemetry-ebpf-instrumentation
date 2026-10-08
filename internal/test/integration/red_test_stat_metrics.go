@@ -207,19 +207,20 @@ func testStatMetricsDiskOperationDuration(t *testing.T, containerID string) {
 }
 
 // testStatMetricsDiskCounters checks that the I/O of the disk-io container is charged to it, with
-// the wait of its requests before their issue: the kernel knows it for the requests of the host
-// disks, which keep I/O statistics
+// the wait of its requests before their issue
 func testStatMetricsDiskCounters(t *testing.T, containerID string) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
-	for _, metric := range []string{
-		"obi_stat_disk_io_bytes_total",
-		"obi_stat_disk_operations_total",
-		"obi_stat_disk_service_time_seconds_total",
-		"obi_stat_disk_queue_time_seconds_total",
+	for _, counter := range []struct{ metric, values string }{
+		{"obi_stat_disk_io_bytes_total", "> 0"},
+		{"obi_stat_disk_operations_total", "> 0"},
+		{"obi_stat_disk_service_time_seconds_total", "> 0"},
+		// the wait can sum to 0: the I/O is synchronous, and the block plug of the thread can give
+		// each request the same time for its allocation and its issue (Linux 6.10+, RHEL 9.6)
+		{"obi_stat_disk_queue_time_seconds_total", ">= 0"},
 	} {
 		for _, direction := range []string{"read", "write"} {
 			require.EventuallyWithT(t, func(ct *assert.CollectT) {
-				results, err := pq.Query(metric + `{container_id="` + containerID + `",disk_io_direction="` + direction + `"} > 0`)
+				results, err := pq.Query(counter.metric + `{container_id="` + containerID + `",disk_io_direction="` + direction + `"} ` + counter.values)
 				require.NoError(ct, err)
 				enoughPromResults(ct, results)
 				for _, res := range results {

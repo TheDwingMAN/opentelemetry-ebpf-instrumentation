@@ -260,7 +260,7 @@
       "id": 6,
       "type": "timeseries",
       "title": "Service time p99",
-      "description": "99th percentile of the time requests take in the device, from issue to completion.",
+      "description": "99th percentile of the time requests take in the device, from issue to completion. A LUN shows on its multipath device.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -277,7 +277,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le, obi_ip, system_device, disk_io_direction) (rate(obi_stat_disk_operation_duration_seconds_bucket{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le, obi_ip, system_device, disk_io_direction) (rate(obi_stat_disk_operation_duration_seconds_bucket{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\"}[$__rate_interval])))",
           "legendFormat": "{{obi_ip}} {{system_device}} {{disk_io_direction}}",
           "refId": "A",
           "format": "time_series"
@@ -295,7 +295,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "Average queue time",
-      "description": "Average time that the reads and writes wait before their issue to the device (I/O scheduler).",
+      "description": "Average time that the reads and writes wait before their issue to the device (I/O scheduler). Bio-based volumes (LVM, md RAID, NVMe multipath heads) have none: their service time holds it.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -312,7 +312,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (obi_ip, system_device, disk_io_direction) (rate(obi_stat_disk_queue_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])) / sum by (obi_ip, system_device, disk_io_direction) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "expr": "sum by (obi_ip, system_device, disk_io_direction) (rate(obi_stat_disk_queue_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\"}[$__rate_interval])) / sum by (obi_ip, system_device, disk_io_direction) (rate(obi_stat_disk_operations_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{obi_ip}} {{system_device}} {{disk_io_direction}}",
           "refId": "A",
           "format": "time_series"
@@ -347,7 +347,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (obi_ip, system_device) (rate(obi_stat_disk_service_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])) + sum by (obi_ip, system_device) (rate(obi_stat_disk_queue_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval]))",
+          "expr": "sum by (obi_ip, system_device) (rate(obi_stat_disk_service_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\"}[$__rate_interval])) + sum by (obi_ip, system_device) (rate(obi_stat_disk_queue_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{obi_ip}} {{system_device}}",
           "refId": "A",
           "format": "time_series"
@@ -365,7 +365,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Requests in flight",
-      "description": "Reads and writes that each disk is serving (issued to the device, not yet completed), sampled. Requests waiting in the I/O scheduler are not included.",
+      "description": "Reads and writes that each device is serving (issued to the device, not yet completed), sampled. Requests waiting in the I/O scheduler are not included. A LUN shows on its multipath device: the hidden paths of NVMe native multipath report none.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -382,7 +382,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (obi_ip, system_device, disk_io_direction) (obi_stat_disk_operation_inflight{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"})",
+          "expr": "sum by (obi_ip, system_device, disk_io_direction) (obi_stat_disk_operation_inflight{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\"})",
           "legendFormat": "{{obi_ip}} {{system_device}} {{disk_io_direction}}",
           "refId": "A",
           "format": "time_series"
@@ -400,7 +400,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Flush time p99",
-      "description": "99th percentile of the duration of the cache flushes.",
+      "description": "99th percentile of the duration of the cache flushes. A LUN shows on its multipath device.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -417,7 +417,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le, obi_ip, system_device) (rate(obi_stat_disk_flush_duration_seconds_bucket{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\", obi_disk_stacked=\"false\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le, obi_ip, system_device) (rate(obi_stat_disk_flush_duration_seconds_bucket{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\"}[$__rate_interval])))",
           "legendFormat": "{{obi_ip}} {{system_device}}",
           "refId": "A",
           "format": "time_series"
