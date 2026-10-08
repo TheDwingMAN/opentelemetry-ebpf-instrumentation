@@ -27,9 +27,9 @@ type DiskVolumesTracer struct {
 	reported map[ebpf.DiskVolume]bool
 }
 
-func NewDiskVolumesTracer() *DiskVolumesTracer {
+func NewDiskVolumesTracer(bioMeasured bool) *DiskVolumesTracer {
 	return &DiskVolumesTracer{
-		stack:    newDeviceStack("/sys"),
+		stack:    newDeviceStack("/sys", bioMeasured),
 		interval: diskVolumesInterval,
 		reported: map[ebpf.DiskVolume]bool{},
 	}
@@ -74,10 +74,12 @@ func (d *DiskVolumesTracer) volumeDisks(name string) []ebpf.DiskVolume {
 		return nil
 	}
 	dmName := deviceMapperName(dir)
-	disks := d.stack.physicalDisks(dir, maxDeviceStackDepth)
+	var disks []string
 	if isDMMultipath(dir) {
-		// the volumes over a multipath device stop at it, but it is on its paths
+		// the volumes over a multipath device that OBI measures stop at it, but it is on its paths
 		disks = d.stack.slaveDisks(dir, maxDeviceStackDepth)
+	} else {
+		disks = d.stack.physicalDisks(dir, maxDeviceStackDepth)
 	}
 	var volumes []ebpf.DiskVolume
 	for _, disk := range disks {

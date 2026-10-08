@@ -49,7 +49,7 @@ var newDiskVolumesTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.Ru
 	if !s.cfg.Metrics.Features.StatsDiskVolumeDevices() {
 		return func(_ context.Context) { out.MarkCloseable() }
 	}
-	return stats.NewDiskVolumesTracer().TraceLoop(out)
+	return stats.NewDiskVolumesTracer(s.bioDevicesMeasured()).TraceLoop(out)
 }
 
 // newPodVolumesTracer reports the devices of the volumes of the pods of the node. It needs the
@@ -72,7 +72,7 @@ var newPodVolumesTracer = func(ctx context.Context, s *Stats, out *msg.Queue[[]*
 	if err != nil {
 		return nil, fmt.Errorf("getting the node of the pod volumes: %w", err)
 	}
-	return stats.NewPodVolumesTracer(store, nodeName).TraceLoop(out), nil
+	return stats.NewPodVolumesTracer(store, nodeName, s.bioDevicesMeasured()).TraceLoop(out), nil
 }
 
 // buildPipeline defines the different nodes in the OBI's StatsO11y module,
@@ -196,6 +196,12 @@ func (s *Stats) storageStatsEnabled() bool {
 	features := s.cfg.Metrics.Features
 	return features.StatsDisk() || features.StatsDiskOperationInflight() || features.StatsFsSync() ||
 		features.StatsNFS() || features.StatsDiskVolumeDevices() || features.StatsDiskPodVolumes()
+}
+
+// bioDevicesMeasured tells whether the kernel measures the bios of the bio-based devices: with
+// stats_disk_bio_devices, once its probes are attached, as for the disk tracer
+func (s *Stats) bioDevicesMeasured() bool {
+	return s.fetcher.DiskBioAccumMap() != nil && s.fetcher.DiskBioDevicesMap() != nil
 }
 
 // storageStatSelector tells whether a storage stat belongs to a dynamically selected application: a

@@ -622,7 +622,7 @@ func (d *deviceNames) multipathPathOf(major, minor uint32) multipathPath {
 func (d *deviceNames) heldByDMMultipath(dir string) bool {
 	holders, _ := filepath.Glob(filepath.Join(dir, "holders", "*"))
 	return slices.ContainsFunc(holders, func(holder string) bool {
-		return isDMMultipath(holder) && d.measured(holder)
+		return isDMMultipath(holder) && isMeasured(holder, d.bioMeasured)
 	})
 }
 
@@ -630,13 +630,13 @@ func (d *deviceNames) heldByDMMultipath(dir string) bool {
 // head
 func (d *deviceNames) underNVMeHead(name string) bool {
 	head := nvmePathName.FindStringSubmatch(name)
-	return head != nil && d.measured(filepath.Join(d.sysRoot, "block", head[1]+head[2]))
+	return head != nil && isMeasured(filepath.Join(d.sysRoot, "block", head[1]+head[2]), d.bioMeasured)
 }
 
-// measured tells whether OBI measures the I/O of the block device of a sysfs directory: the
-// request-based devices always, and the bio-based ones with stats_disk_bio_devices
-func (d *deviceNames) measured(dir string) bool {
-	return exists(dir) && (d.bioMeasured || !isBioBased(dir))
+// isMeasured tells whether OBI measures the I/O of the block device of a sysfs directory: the
+// request-based devices always, and the bio-based ones when bioMeasured (stats_disk_bio_devices)
+func isMeasured(dir string, bioMeasured bool) bool {
+	return exists(dir) && (bioMeasured || !isBioBased(dir))
 }
 
 type partitionKey struct {

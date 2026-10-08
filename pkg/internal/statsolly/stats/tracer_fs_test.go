@@ -53,16 +53,15 @@ func TestFilesystemsLeaveOutTheMountsOfPodsAndContainers(t *testing.T) {
 	const pod = "/var/lib/kubelet/pods/0f3d2a6e-8c1b-4f6e-9d4a-2b7c5e1f9a30"
 	// longer than the mount of the volume in the pod
 	hostMount := "/mnt/local-storage/" + strings.Repeat("d", 100)
+	// longer than the mount of the CSI volume in the pod
+	csiStaging := "/var/lib/kubelet/plugins/kubernetes.io/csi/ebs.csi.aws.com/" +
+		"4f2c1d3b6a5e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7a8/globalmount"
 	fs := fakeFilesystems(
 		// a local PersistentVolume, mounted on the host and in a pod
 		&procfs.MountInfo{MajorMinorVer: "8:16", Root: "/", MountPoint: pod + "/volumes/kubernetes.io~local-volume/pv-1", FSType: "xfs"},
 		&procfs.MountInfo{MajorMinorVer: "8:16", Root: "/", MountPoint: hostMount, FSType: "xfs"},
 		// a CSI volume, staged by the kubelet and published in a pod
-		&procfs.MountInfo{
-			MajorMinorVer: "253:4", Root: "/", FSType: "ext4",
-			MountPoint: "/var/lib/kubelet/plugins/kubernetes.io/csi/ebs.csi.aws.com/" +
-				"4f2c1d3b6a5e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7a8/globalmount",
-		},
+		&procfs.MountInfo{MajorMinorVer: "253:4", Root: "/", FSType: "ext4", MountPoint: csiStaging},
 		&procfs.MountInfo{
 			MajorMinorVer: "253:4", Root: "/", FSType: "ext4",
 			MountPoint: pod + "/volumes/kubernetes.io~csi/pvc-6b1e0c2d-3f4a-4b5c-8d9e-0f1a2b3c4d5e/mount",
@@ -70,6 +69,11 @@ func TestFilesystemsLeaveOutTheMountsOfPodsAndContainers(t *testing.T) {
 		&procfs.MountInfo{
 			MajorMinorVer: "253:4", Root: "/data", FSType: "ext4",
 			MountPoint: pod + "/volume-subpaths/data/app/0",
+		},
+		// a CSI volume that its driver doesn't stage, only mounted in a pod
+		&procfs.MountInfo{
+			MajorMinorVer: "0:61", Root: "/", FSType: "nfs4",
+			MountPoint: pod + "/volumes/kubernetes.io~csi/pvc-2a7d9e4b-1c3f-4e5a-9b8d-7f6e5d4c3b2a/mount",
 		},
 		// the root filesystems of containers of CRI-O and containerd
 		&procfs.MountInfo{
@@ -87,7 +91,12 @@ func TestFilesystemsLeaveOutTheMountsOfPodsAndContainers(t *testing.T) {
 	assert.Equal(t, filesystem{mountpoint: hostMount, fsType: "xfs"}, local,
 		"the mount of the host, although the mount in the pod is shorter")
 
-	for _, dev := range []uint32{kernelDev(253, 4), kernelDev(0, 312), kernelDev(0, 313)} {
+	csi, ok := fs.lookup(kernelDev(253, 4))
+	assert.True(t, ok)
+	assert.Equal(t, filesystem{mountpoint: csiStaging, fsType: "ext4"}, csi,
+		"the staging directory of the CSI volume, a path per volume, although the mount in the pod is shorter")
+
+	for _, dev := range []uint32{kernelDev(0, 61), kernelDev(0, 312), kernelDev(0, 313)} {
 		fsys, ok := fs.lookup(dev)
 		assert.True(t, ok)
 		assert.Empty(t, fsys.mountpoint, "only mounted for pods or containers: a mountpoint per pod or container")

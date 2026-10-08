@@ -53,13 +53,13 @@ type PodVolumesTracer struct {
 	noKubeletMounts bool
 }
 
-func NewPodVolumesTracer(store podVolumeSource, nodeName string) *PodVolumesTracer {
+func NewPodVolumesTracer(store podVolumeSource, nodeName string, bioMeasured bool) *PodVolumesTracer {
 	return &PodVolumesTracer{
 		store:    store,
 		nodeName: nodeName,
 		mounts:   func() ([]*procfs.MountInfo, error) { return readHostMounts(procfs.DefaultMountPoint) },
 		devices:  &deviceNames{sysRoot: "/sys", procRoot: "/proc"},
-		stack:    newDeviceStack("/sys"),
+		stack:    newDeviceStack("/sys", bioMeasured),
 		interval: podVolumesInterval,
 		reported: map[ebpf.PodVolume]bool{},
 	}
@@ -213,12 +213,15 @@ func volumeMountDevice(mounts []*procfs.MountInfo, podUID, pvName string) (major
 // deviceStack walks sysfs from the block devices of the host to the disks below them
 type deviceStack struct {
 	sysRoot string
+	// bioMeasured tells whether OBI measures the bio-based devices (stats_disk_bio_devices), like
+	// the dm-multipath devices of queue_mode bio
+	bioMeasured bool
 	// deviceOf returns the device of a path of the host
 	deviceOf func(path string) (major, minor uint32, err error)
 }
 
-func newDeviceStack(sysRoot string) *deviceStack {
-	return &deviceStack{sysRoot: sysRoot, deviceOf: hostPathDevice}
+func newDeviceStack(sysRoot string, bioMeasured bool) *deviceStack {
+	return &deviceStack{sysRoot: sysRoot, bioMeasured: bioMeasured, deviceOf: hostPathDevice}
 }
 
 // blockDeviceDir returns the sysfs directory of a block device, and false for the devices of the
@@ -231,8 +234,10 @@ func (s *deviceStack) blockDeviceDir(major, minor uint32) (string, bool) {
 // physicalDisks returns the names of the disks that a block device is on, from its sysfs
 // directory: the disk of a partition, the disks of the filesystem that holds the file of a loop
 // device, or the disks below the slaves of a stacked device. The walk stops at the dm-multipath
-// devices, as it does at the heads of NVMe native multipath, which have no slaves: they report
-// the I/O of their paths, so the I/O of a volume on a LUN is on one device.
+// devices that OBI measures, as it does at the heads of NVMe native multipath, which have no
+// slaves: they report the I/O of their paths, so the I/O of a volume on a LUN is on one device. A
+// bio-based dm-multipath device (queue_mode bio) reports none while OBI doesn't measure the
+// bio-based devices: the walk goes on to its paths.
 func (s *deviceStack) physicalDisks(dir string, depth int) []string {
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil || depth == 0 {
@@ -244,7 +249,7 @@ func (s *deviceStack) physicalDisks(dir string, depth int) []string {
 	if backing, ok := s.loopBackingDevice(resolved); ok {
 		return s.physicalDisks(backing, depth-1)
 	}
-	if isDMMultipath(resolved) {
+	if isDMMultipath(resolved) && isMeasured(resolved, s.bioMeasured) {
 		return []string{filepath.Base(resolved)}
 	}
 	return s.slaveDisks(resolved, depth)

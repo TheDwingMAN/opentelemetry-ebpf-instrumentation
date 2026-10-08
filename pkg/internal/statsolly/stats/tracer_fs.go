@@ -33,11 +33,12 @@ var kubeletVolumeMount = regexp.MustCompile(`/pods/[^/]+/volumes/`)
 
 // workloadMount matches the mount points that the kubelet and the container runtimes create for
 // each pod or container: the volumes of the pods (<kubelet root>/pods/<pod UID>/volumes/ and
-// volume-subpaths/), the staging directories of the CSI volumes (.../globalmount), and the root
-// filesystems of the containers (.../overlay/<id>/merged, .../overlay2/<id>/merged and
-// .../io.containerd.runtime.v2.task/<namespace>/<id>/rootfs)
+// volume-subpaths/), and the root filesystems of the containers (.../overlay/<id>/merged,
+// .../overlay2/<id>/merged and .../io.containerd.runtime.v2.task/<namespace>/<id>/rootfs). The
+// staging directory of a CSI volume (.../globalmount) is not one of them: the kubelet mounts it
+// once per volume on the node, at a path that doesn't change with the pods.
 var workloadMount = regexp.MustCompile(
-	`/pods/[^/]+/volume(s|-subpaths)/|/globalmount$|/overlay2?/[^/]+/merged$|/io\.containerd\.runtime\.v2\.task/[^/]+/[^/]+/rootfs$`)
+	`/pods/[^/]+/volume(s|-subpaths)/|/overlay2?/[^/]+/merged$|/io\.containerd\.runtime\.v2\.task/[^/]+/[^/]+/rootfs$`)
 
 type filesystem struct {
 	mountpoint string

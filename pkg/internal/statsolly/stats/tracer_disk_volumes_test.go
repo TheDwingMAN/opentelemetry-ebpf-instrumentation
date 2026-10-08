@@ -26,8 +26,17 @@ func fakeDMVolume(t *testing.T, root, name, numbers, dmName string, slaves ...st
 }
 
 // fakeMultipathVolume creates the sysfs directory of a dm-multipath device over its paths, with
-// its name and the UUID that multipathd gives it
+// its name and the UUID that multipathd gives it. It is request-based, as multipathd creates them
+// by default.
 func fakeMultipathVolume(t *testing.T, root, name, numbers, dmName string, paths ...string) {
+	t.Helper()
+	fakeBioMultipathVolume(t, root, name, numbers, dmName, paths...)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "devices", "virtual", "block", name, "mq"), 0o755))
+}
+
+// fakeBioMultipathVolume creates the sysfs directory of a dm-multipath device of queue_mode bio,
+// which is bio-based
+func fakeBioMultipathVolume(t *testing.T, root, name, numbers, dmName string, paths ...string) {
 	t.Helper()
 	fakeDMVolume(t, root, name, numbers, dmName, paths...)
 	uuid := filepath.Join(root, "devices", "virtual", "block", name, "dm", "uuid")
@@ -87,7 +96,7 @@ func volumeValues(t *testing.T, stats []*ebpf.Stat) map[ebpf.DiskVolume]int64 {
 
 func TestDiskVolumesTracer(t *testing.T) {
 	root := fakeStackedHost(t)
-	tracer := NewDiskVolumesTracer()
+	tracer := NewDiskVolumesTracer(false)
 	tracer.stack = &deviceStack{sysRoot: root, deviceOf: fakeHostDeviceOf}
 
 	removedLV := ebpf.DiskVolume{Volume: "dm-1", Name: "vg0-lv1", Device: "vdb"}
@@ -124,4 +133,37 @@ func TestDiskVolumesTracer(t *testing.T) {
 	assert.Empty(t, tracer.readStats())
 	tracer.stack.sysRoot = root
 	assert.Equal(t, gone, volumeValues(t, tracer.readStats()))
+}
+
+// A dm-multipath device of queue_mode bio is bio-based: OBI measures it only with
+// stats_disk_bio_devices. Without it, the volumes over it are on its paths, which report their I/O.
+// The multipath device is on its paths either way.
+func TestDiskVolumesOverBioBasedMultipathDevices(t *testing.T) {
+	root := t.TempDir()
+	fakeSysDevice(t, root, "pci/block/sda", "8:0")
+	fakeSysDevice(t, root, "pci/block/sdb", "8:16")
+	fakeBioMultipathVolume(t, root, "dm-0", "252:0", "mpatha", "pci/block/sda", "pci/block/sdb")
+	fakeDMVolume(t, root, "dm-1", "252:1", "vg0-lv0", "virtual/block/dm-0")
+	multipath := map[ebpf.DiskVolume]int64{
+		{Volume: "dm-0", Name: "mpatha", Device: "sda"}: 1,
+		{Volume: "dm-0", Name: "mpatha", Device: "sdb"}: 1,
+	}
+	for _, tc := range []struct {
+		name        string
+		bioMeasured bool
+		lvDisks     []string
+	}{
+		{name: "measured", bioMeasured: true, lvDisks: []string{"dm-0"}},
+		{name: "not measured", bioMeasured: false, lvDisks: []string{"sda", "sdb"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tracer := NewDiskVolumesTracer(tc.bioMeasured)
+			tracer.stack.sysRoot = root
+			volumes := maps.Clone(multipath)
+			for _, disk := range tc.lvDisks {
+				volumes[ebpf.DiskVolume{Volume: "dm-1", Name: "vg0-lv0", Device: disk}] = 1
+			}
+			assert.Equal(t, volumes, volumeValues(t, tracer.readStats()))
+		})
+	}
 }
