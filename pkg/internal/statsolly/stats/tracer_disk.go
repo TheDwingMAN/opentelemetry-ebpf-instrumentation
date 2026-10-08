@@ -100,8 +100,8 @@ type DiskMapTracerConfig struct {
 	DiskIOAccum, FsSyncAccum *ciliumebpf.Map
 	// DiskPending reports the requests in flight of each device
 	DiskPending bool
-	// DiskBioAccum and DiskBioDevices are the accumulation map of the bios of the stacked volumes,
-	// and the set of volumes to measure. Nil unless the stacked volumes are measured.
+	// DiskBioAccum and DiskBioDevices are the accumulation map of the bios of the bio-based
+	// devices, and the set of devices to measure. Nil unless the bio-based devices are measured.
 	DiskBioAccum, DiskBioDevices *ciliumebpf.Map
 	CgroupNames                  *ciliumebpf.Map
 	// DiskLatencyBounds and FsSyncLatencyBounds are the histogram boundaries, in seconds, that
@@ -122,7 +122,7 @@ type DiskMapTracerConfig struct {
 // fills, and forwards what changed since the previous read as ebpf.Stat records.
 type DiskMapTracer struct {
 	readers []statReader
-	// nil unless the stacked volumes are measured
+	// nil unless the bio-based devices are measured
 	bios     *bioDevices
 	interval time.Duration
 }
@@ -295,7 +295,7 @@ func newDiskReader(
 	return newAccumReader("disk_io_accum", accum, d.stat)
 }
 
-// newBioReader reads the accumulated bios of the stacked volumes, whose status is always a
+// newBioReader reads the accumulated bios of the bio-based devices, whose status is always a
 // blk_status_t
 func newBioReader(
 	accum accumSource[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT],

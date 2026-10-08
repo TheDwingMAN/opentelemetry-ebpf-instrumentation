@@ -27,7 +27,7 @@ func TestStorageProbesDisableAll(t *testing.T) {
 	assert.False(t, storage.any())
 	assert.Equal(t, []DisabledFeature{
 		{Feature: featureDiskRequests, Reason: "verifier error"},
-		{Feature: featureStackedVolumes, Reason: "verifier error"},
+		{Feature: featureBioDevices, Reason: "verifier error"},
 		{Feature: featureFsSync, Reason: "verifier error"},
 		{Feature: featureNFSProcedures, Reason: "verifier error"},
 		{Feature: featureNFSIO, Reason: "verifier error"},

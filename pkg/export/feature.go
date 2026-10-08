@@ -65,7 +65,7 @@ const (
 	FeatureStatsDiskFlush
 	FeatureStatsDiskDiscard
 	FeatureStatsDiskOperationInflight
-	FeatureStatsDiskStackedVolumes
+	FeatureStatsDiskBioDevices
 	FeatureStatsNFSClientProcedureDuration
 	FeatureStatsNFSClientIO
 	FeatureStatsDiskPodVolumes
@@ -89,7 +89,7 @@ const FeatureStats = FeatureStatsTCPRtt | FeatureStatsTCPFailedConnections | Fea
 // be enabled explicitly.
 const FeatureStatsDisk = FeatureStatsDiskOperationDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskServiceTime |
 	FeatureStatsDiskQueueTime | FeatureStatsDiskFlush | FeatureStatsDiskDiscard | FeatureStatsDiskOperationInflight |
-	FeatureStatsDiskStackedVolumes | FeatureStatsDiskVolumeDevices
+	FeatureStatsDiskBioDevices | FeatureStatsDiskVolumeDevices
 
 // FeatureStatsFsSync groups the file sync stat metrics. They are not part of the `stats` aggregate.
 const FeatureStatsFsSync = FeatureStatsFsSyncDuration | FeatureStatsFsSyncOperations | FeatureStatsFsSyncOperationTime
@@ -134,7 +134,7 @@ var FeatureMapper = map[string]Features{
 	"stats_disk_flush":                    FeatureStatsDiskFlush,
 	"stats_disk_discard":                  FeatureStatsDiskDiscard,
 	"stats_disk_operation_inflight":       FeatureStatsDiskOperationInflight,
-	"stats_disk_stacked_volumes":          FeatureStatsDiskStackedVolumes,
+	"stats_disk_bio_devices":              FeatureStatsDiskBioDevices,
 	"stats_nfs":                           FeatureStatsNFS,
 	"stats_nfs_client_procedure_duration": FeatureStatsNFSClientProcedureDuration,
 	"stats_nfs_client_procedure_count":    FeatureStatsNFSClientProcedureCount,
@@ -522,11 +522,12 @@ func (f Features) StatsDiskOperationInflight() bool {
 	return f.any(FeatureStatsDiskOperationInflight)
 }
 
-// StatsDiskStackedVolumes reports whether the I/O of the bio-based devices is measured too: the
-// stacked volumes, such as LVM and md RAID volumes, and the disks of drivers that handle bios
-// themselves, such as the PowerFlex SDC, DRBD or zram
-func (f Features) StatsDiskStackedVolumes() bool {
-	return f.any(FeatureStatsDiskStackedVolumes)
+// StatsDiskBioDevices reports whether the I/O of the bio-based devices is measured too: the
+// stacked volumes, such as LVM, md RAID and dm-crypt volumes, the head devices of NVMe native
+// multipath, and the disks of drivers that handle bios themselves, such as the PowerFlex SDC,
+// DRBD, zram, pmem or brd
+func (f Features) StatsDiskBioDevices() bool {
+	return f.any(FeatureStatsDiskBioDevices)
 }
 
 // StatsNFS reports whether any NFS client stat metric is enabled

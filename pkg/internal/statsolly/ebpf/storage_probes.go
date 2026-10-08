@@ -19,11 +19,11 @@ import (
 
 // The storage features that probes serve, as DisabledFeature names them
 const (
-	featureDiskRequests   = "the block I/O metrics (stats_disk_*)"
-	featureStackedVolumes = "the I/O of the stacked volumes (stats_disk_stacked_volumes)"
-	featureFsSync         = "the file sync metrics (stats_fs_sync_*)"
-	featureNFSProcedures  = "the NFS client procedure metrics (stats_nfs_client_procedure_*)"
-	featureNFSIO          = "the NFS client I/O metric (stats_nfs_client_io)"
+	featureDiskRequests  = "the block I/O metrics (stats_disk_*)"
+	featureBioDevices    = "the I/O of the bio-based devices (stats_disk_bio_devices)"
+	featureFsSync        = "the file sync metrics (stats_fs_sync_*)"
+	featureNFSProcedures = "the NFS client procedure metrics (stats_nfs_client_procedure_*)"
+	featureNFSIO         = "the NFS client I/O metric (stats_nfs_client_io)"
 )
 
 // fsSyncPrograms are the programs of the file sync metric
@@ -60,9 +60,9 @@ func planStorageProbes(log *slog.Logger, features *export.Features) storageProbe
 			s.disk = true
 		}
 	}
-	if s.disk && features.StatsDiskStackedVolumes() {
+	if s.disk && features.StatsDiskBioDevices() {
 		if s.layout.bioUnknown {
-			s.disable(featureStackedVolumes, errors.New("can't tell the block_bio_queue tracepoint arguments from the kernel BTF"))
+			s.disable(featureBioDevices, errors.New("can't tell the block_bio_queue tracepoint arguments from the kernel BTF"))
 		} else {
 			s.bio = true
 		}
@@ -96,7 +96,7 @@ func (s *storageProbes) disableAll(reason error) {
 		s.disable(featureDiskRequests, reason)
 	}
 	if s.bio {
-		s.disable(featureStackedVolumes, reason)
+		s.disable(featureBioDevices, reason)
 	}
 	if s.fsSync {
 		s.disable(featureFsSync, reason)
@@ -166,7 +166,7 @@ func (s *storageProbes) attach(log *slog.Logger, objects *StatsObjects) []io.Clo
 	}
 	if s.bio && !s.disk {
 		s.bio = false
-		s.disable(featureStackedVolumes, errors.New("the block I/O probes can't be attached"))
+		s.disable(featureBioDevices, errors.New("the block I/O probes can't be attached"))
 	}
 	if s.bio {
 		// the completions are attached before the starts, so that no start is recorded without
@@ -181,7 +181,7 @@ func (s *storageProbes) attach(log *slog.Logger, objects *StatsObjects) []io.Clo
 			{name: RawTracepointBlockBioQueue, program: queue},
 		})
 		if err != nil {
-			s.disable(featureStackedVolumes, err)
+			s.disable(featureBioDevices, err)
 		}
 		closables = append(closables, links...)
 		s.bio = err == nil

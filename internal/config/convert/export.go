@@ -391,7 +391,7 @@ const (
 	statsFeatureDiskFlush                  = "disk_flush"
 	statsFeatureDiskDiscard                = "disk_discard"
 	statsFeatureDiskOperationInflight      = "disk_operation_inflight"
-	statsFeatureDiskStackedVolumes         = "disk_stacked_volumes"
+	statsFeatureDiskBioDevices             = "disk_bio_devices"
 	statsFeatureNFSClientProcedureDuration = "nfs_client_procedure_duration"
 	statsFeatureNFSClientProcedureCount    = "nfs_client_procedure_count"
 	statsFeatureNFSClientProcedureTime     = "nfs_client_procedure_time"
@@ -450,8 +450,8 @@ func statsFeatures(features featureexport.Features) []string {
 	if features.StatsDiskOperationInflight() {
 		out = append(out, statsFeatureDiskOperationInflight)
 	}
-	if features.StatsDiskStackedVolumes() {
-		out = append(out, statsFeatureDiskStackedVolumes)
+	if features.StatsDiskBioDevices() {
+		out = append(out, statsFeatureDiskBioDevices)
 	}
 	if features.StatsNFSClientProcedureDuration() {
 		out = append(out, statsFeatureNFSClientProcedureDuration)

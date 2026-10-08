@@ -681,7 +681,7 @@ func syncFile(t *testing.T, path string, data []byte) {
 // TestDiskStackedVolumes writes to a device mapper volume, like an LVM one, and checks that its
 // I/O is reported on the volume, as stacked, besides the device below it
 func TestDiskStackedVolumes(t *testing.T) {
-	features := export.FeatureStatsDiskOperations | export.FeatureStatsDiskIO | export.FeatureStatsDiskStackedVolumes
+	features := export.FeatureStatsDiskOperations | export.FeatureStatsDiskIO | export.FeatureStatsDiskBioDevices
 	bounds := []float64{0.001}
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
 		ebpf.LatencyHistograms{Disk: bounds}, ebpf.ProbeReads{})
@@ -725,7 +725,7 @@ func TestDiskStackedVolumes(t *testing.T) {
 // itself like the PowerFlex SDC or DRBD do, and checks that its I/O is measured from its bios, as
 // not stacked
 func TestDiskBioBasedDisks(t *testing.T) {
-	features := export.FeatureStatsDiskOperations | export.FeatureStatsDiskIO | export.FeatureStatsDiskStackedVolumes
+	features := export.FeatureStatsDiskOperations | export.FeatureStatsDiskIO | export.FeatureStatsDiskBioDevices
 	bounds := []float64{0.001}
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
 		ebpf.LatencyHistograms{Disk: bounds}, ebpf.ProbeReads{})

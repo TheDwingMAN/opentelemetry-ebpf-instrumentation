@@ -510,7 +510,7 @@ func (m *StatsFetcher) DiskIOAccumMap() *ebpf.Map {
 	return m.objects.DiskIoAccum
 }
 
-// DiskBioAccumMap returns the map where the kernel accumulates the bios of the stacked volumes, or
+// DiskBioAccumMap returns the map where the kernel accumulates the bios of the bio-based devices, or
 // nil if the bio probes are not attached.
 func (m *StatsFetcher) DiskBioAccumMap() *ebpf.Map {
 	if !m.bioAttached {
@@ -519,7 +519,7 @@ func (m *StatsFetcher) DiskBioAccumMap() *ebpf.Map {
 	return m.objects.DiskBioAccum
 }
 
-// DiskBioDevicesMap returns the map of the stacked volumes whose bios the kernel measures, or nil
+// DiskBioDevicesMap returns the map of the bio-based devices whose bios the kernel measures, or nil
 // if the bio probes are not attached.
 func (m *StatsFetcher) DiskBioDevicesMap() *ebpf.Map {
 	if !m.bioAttached {
@@ -718,7 +718,7 @@ func blockTracepointLayoutFrom(proto func(string) (*btf.FuncProto, error)) (bloc
 	// blk_status_t is a u8, the errno it replaced an int
 	layout.completeReportsBlkStatus = errType.Size == 1
 
-	// the bio tracepoints only measure stacked volumes: without them, the requests still are
+	// the bio tracepoints only measure bio-based devices: without them, the requests still are
 	bioQueue, err := proto("btf_trace_block_bio_queue")
 	switch {
 	case err != nil:

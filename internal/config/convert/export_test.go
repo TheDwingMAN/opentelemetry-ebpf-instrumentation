@@ -1067,7 +1067,7 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 			"disk_flush",
 			"disk_discard",
 			"disk_operation_inflight",
-			"disk_stacked_volumes",
+			"disk_bio_devices",
 			"fs_sync_duration",
 			"fs_sync_operations",
 			"fs_sync_operation_time",

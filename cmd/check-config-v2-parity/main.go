@@ -439,8 +439,8 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsDiskOperationInflight() {
 		want = append(want, "disk_operation_inflight")
 	}
-	if features.StatsDiskStackedVolumes() {
-		want = append(want, "disk_stacked_volumes")
+	if features.StatsDiskBioDevices() {
+		want = append(want, "disk_bio_devices")
 	}
 	if features.StatsNFSClientProcedureDuration() {
 		want = append(want, "nfs_client_procedure_duration")

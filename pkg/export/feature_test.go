@@ -194,9 +194,9 @@ func TestFeatureStatsDiskAggregate(t *testing.T) {
 		assert.False(t, features.StatsDiskOperationDuration(), "%s alone doesn't report the request durations", feature)
 	}
 
-	// the operations in flight are read from the kernel counters, and the stacked volumes are only
+	// the operations in flight are read from the kernel counters, and the bio-based devices are only
 	// measured along with a metric that the block probes measure
-	for _, feature := range []string{"stats_disk_operation_inflight", "stats_disk_stacked_volumes"} {
+	for _, feature := range []string{"stats_disk_operation_inflight", "stats_disk_bio_devices"} {
 		features, err := LoadFeatures([]string{feature})
 		require.NoError(t, err)
 		assert.False(t, features.StatsDisk(), "%s alone loads no block I/O probes", feature)
