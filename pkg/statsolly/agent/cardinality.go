@@ -12,12 +12,13 @@ import (
 )
 
 // perPodAttributes are the attributes that report a metric per pod or container instead of per
-// workload
-var perPodAttributes = []attr.Name{attr.K8sPodName, attr.K8sContainerName, attr.ContainerID}
+// workload, or per volume, like the mountpoints of the PersistentVolumes that the pods mount
+var perPodAttributes = []attr.Name{attr.K8sPodName, attr.K8sContainerName, attr.ContainerID, attr.FilesystemMountpoint}
 
-// perPodHistograms returns the enabled storage latency histograms that are reported per pod or
-// container, with those attributes. Each of their series is multiplied by the number of buckets,
-// and pods come and go, so they are the most expensive way to report the storage stats per pod.
+// perPodHistograms returns the enabled storage latency histograms that are reported per pod,
+// container or volume, with those attributes. Each of their series is multiplied by the number of
+// buckets, and pods and their volumes come and go, so they are the most expensive way to report the
+// storage stats per pod or volume.
 func perPodHistograms(features *export.Features, attrSel *attributes.AttrSelector) map[string][]attr.Name {
 	histograms := []struct {
 		enabled bool
@@ -43,8 +44,8 @@ func perPodHistograms(features *export.Features, attrSel *attributes.AttrSelecto
 	return perPod
 }
 
-// warnPerPodHistograms warns about the storage latency histograms that are reported per pod or
-// container
+// warnPerPodHistograms warns about the storage latency histograms that are reported per pod,
+// container or volume
 func warnPerPodHistograms(features *export.Features, groups attributes.AttrGroups, selectorCfg *attributes.SelectorConfig) {
 	attrSel, err := attributes.NewAttrSelector(groups, selectorCfg)
 	if err != nil {
@@ -52,8 +53,8 @@ func warnPerPodHistograms(features *export.Features, groups attributes.AttrGroup
 		return
 	}
 	for histogram, names := range perPodHistograms(features, attrSel) {
-		alog().Warn("a storage latency histogram is reported per pod or container: each pod adds a series "+
-			"per bucket. The operations and time counters give the mean latency per pod at one series each",
+		alog().Warn("a storage latency histogram is reported per pod, container or volume: each of them adds "+
+			"a series per bucket. The operations and time counters give their mean latency at one series each",
 			"histogram", histogram, "attributes", names)
 	}
 }

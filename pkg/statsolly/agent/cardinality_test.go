@@ -39,17 +39,26 @@ func TestPerPodHistograms(t *testing.T) {
 		"obi.stat.disk.*": {Include: []string{"container.id"}},
 	}))
 
+	assert.Equal(t, map[string][]attr.Name{
+		"obi.stat.fs.sync.duration": {attr.FilesystemMountpoint},
+	}, perPod(export.FeatureStatsFsSync, attributes.Selection{
+		"obi.stat.fs.sync.*": {Include: []string{"system.filesystem.mountpoint", "system.filesystem.type"}},
+	}), "the mountpoint is that of each volume, and the counters don't count")
+
 	assert.Empty(t, perPod(export.FeatureStatsDiskIO, attributes.Selection{
 		"obi.stat.nfs.client.procedure.duration": {Include: []string{"k8s.pod.name"}},
 	}), "disabled histograms don't count")
 }
 
 // TestDetailedProfileIsPerWorkload checks the selection of the detailed profile of the storage stats
-// in devdocs/metrics.md: every storage latency histogram per workload, none per pod
+// in devdocs/metrics.md: every storage latency histogram per workload, none per pod or volume
 func TestDetailedProfileIsPerWorkload(t *testing.T) {
 	selection := attributes.Selection{"obi.stat.*.duration": {
 		Include: []string{"*"},
-		Exclude: []string{"obi.ip", "obi.disk.partition", "container.id", "k8s.pod.name", "k8s.container.name", "k8s.kind"},
+		Exclude: []string{
+			"obi.ip", "obi.disk.partition", "container.id", "k8s.pod.name", "k8s.container.name", "k8s.kind",
+			"system.filesystem.mountpoint",
+		},
 	}}
 	selection.Normalize()
 	attrSel, err := attributes.NewAttrSelector(attributes.GroupKubernetes|attributes.GroupContainer,

@@ -166,12 +166,13 @@ type nfsLoad struct {
 	taskBegin, statsLatency, pgio bool
 }
 
-func nfsLoadFor(features *export.Features, probes nfsProbes) nfsLoad {
+func nfsLoadFor(features *export.Features, probes nfsProbes, readCgroup bool) nfsLoad {
 	procedures := features.StatsNFSClientProcedures() && probes.rpc == nil
 	bytes := features.StatsNFSClientIO() && probes.pgio == nil
 	return nfsLoad{
-		// charges both the RPCs and their bytes to the thread that started them
-		taskBegin:    procedures || bytes,
+		// charges both the RPCs and their bytes to the thread that started them: only the
+		// attributes of the workload need its cgroup, which is all that the program reads
+		taskBegin:    (procedures || bytes) && readCgroup,
 		statsLatency: procedures,
 		pgio:         bytes,
 	}

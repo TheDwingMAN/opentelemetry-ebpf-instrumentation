@@ -203,13 +203,15 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 		tcpToDisable = append(tcpToDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 
-	storage := planStorageProbes(tlog, features)
 	diskReads := diskAttributeReads(features, attrSel, reads.Filtered)
 	fsSyncReads := fsSyncAttributeReads(features, attrSel, reads.Filtered)
+	nfsCgroup := nfsReadsCgroup(features, attrSel, reads.Filtered)
 	if reads.Workloads {
 		diskReads.cgroup = true
 		fsSyncReads.cgroup = true
+		nfsCgroup = true
 	}
+	storage := planStorageProbes(tlog, features, nfsCgroup)
 
 	objects := StatsObjects{}
 	sharedMaps := map[string]*ebpf.Map{}
@@ -826,6 +828,27 @@ func fsSyncAttributeReads(features *export.Features, attrSel *attributes.AttrSel
 		}
 	}
 	return reads
+}
+
+// nfsReadsCgroup tells whether the NFS client probes read the cgroup that each RPC is charged to:
+// when an enabled NFS client metric reports, or the filters match, a container or Kubernetes
+// attribute of the workload
+func nfsReadsCgroup(features *export.Features, attrSel *attributes.AttrSelector, filtered []attr.Name) bool {
+	metrics := []struct {
+		enabled bool
+		name    attributes.Name
+	}{
+		{enabled: features.StatsNFSClientProcedureDuration(), name: attributes.StatNFSClientProcedureDuration},
+		{enabled: features.StatsNFSClientProcedureCount(), name: attributes.StatNFSClientProcedureCount},
+		{enabled: features.StatsNFSClientProcedureTime(), name: attributes.StatNFSClientProcedureTime},
+		{enabled: features.StatsNFSClientIO(), name: attributes.StatNFSClientIO},
+	}
+	for _, metric := range metrics {
+		if metric.enabled && slices.ContainsFunc(slices.Concat(attrSel.For(metric.name), filtered), reportsWorkload) {
+			return true
+		}
+	}
+	return false
 }
 
 // reportsWorkload tells whether an attribute describes the workload that the kernel charges an

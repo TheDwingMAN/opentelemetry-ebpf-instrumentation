@@ -79,18 +79,20 @@ func TestNFSLoadFor(t *testing.T) {
 	none := export.FeatureStatsDisk
 
 	assert.Equal(t, nfsLoad{taskBegin: true, statsLatency: true, pgio: true},
-		nfsLoadFor(&all, available))
-	assert.Equal(t, nfsLoad{taskBegin: true, statsLatency: true}, nfsLoadFor(&procedures, available))
+		nfsLoadFor(&all, available, true))
+	assert.Equal(t, nfsLoad{taskBegin: true, statsLatency: true}, nfsLoadFor(&procedures, available, true))
 	for _, counter := range []export.Features{export.FeatureStatsNFSClientProcedureCount, export.FeatureStatsNFSClientProcedureTime} {
-		assert.Equal(t, nfsLoad{taskBegin: true, statsLatency: true}, nfsLoadFor(&counter, available),
+		assert.Equal(t, nfsLoad{taskBegin: true, statsLatency: true}, nfsLoadFor(&counter, available, true),
 			"the procedure counters need the RPC probes too")
 	}
-	assert.Equal(t, nfsLoad{taskBegin: true, pgio: true}, nfsLoadFor(&bytes, available))
-	assert.Equal(t, nfsLoad{}, nfsLoadFor(&none, available))
+	assert.Equal(t, nfsLoad{taskBegin: true, pgio: true}, nfsLoadFor(&bytes, available, true))
+	assert.Equal(t, nfsLoad{}, nfsLoadFor(&none, available, true))
+	assert.Equal(t, nfsLoad{statsLatency: true, pgio: true}, nfsLoadFor(&all, available, false),
+		"without an attribute of the workload, the threads that start the RPCs are not read")
 
 	withoutNFSTypes := nfsProbes{pgio: assert.AnError}
 	assert.Equal(t, nfsLoad{taskBegin: true, statsLatency: true},
-		nfsLoadFor(&all, withoutNFSTypes))
+		nfsLoadFor(&all, withoutNFSTypes, true))
 
 	assert.ElementsMatch(t, []string{
 		progObiStatsRawTpRPCTaskBegin, progObiStatsRawTpRPCStatsLatency,

@@ -49,8 +49,9 @@ type storageProbes struct {
 	disabled []DisabledFeature
 }
 
-// planStorageProbes returns the storage probes of the enabled features that the kernel can load
-func planStorageProbes(log *slog.Logger, features *export.Features) storageProbes {
+// planStorageProbes returns the storage probes of the enabled features that the kernel can load.
+// nfsCgroup tells whether the NFS client probes read the cgroup that each RPC is charged to.
+func planStorageProbes(log *slog.Logger, features *export.Features, nfsCgroup bool) storageProbes {
 	var s storageProbes
 	if features.StatsDisk() {
 		var err error
@@ -76,7 +77,7 @@ func planStorageProbes(log *slog.Logger, features *export.Features) storageProbe
 		if features.StatsNFSClientIO() && probes.pgio != nil {
 			s.disable(featureNFSIO, probes.pgio)
 		}
-		s.nfs = nfsLoadFor(features, probes)
+		s.nfs = nfsLoadFor(features, probes, nfsCgroup)
 	}
 	return s
 }

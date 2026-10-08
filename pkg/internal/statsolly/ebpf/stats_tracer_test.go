@@ -457,6 +457,31 @@ func TestFsSyncAttributeReads(t *testing.T) {
 		"the Kubernetes attributes of the workload are reported by default")
 }
 
+func TestNFSReadsCgroup(t *testing.T) {
+	reads := func(features export.Features, groups attributes.AttrGroups, selection attributes.Selection,
+		filtered ...attr.Name,
+	) bool {
+		attrSel, err := attributes.NewAttrSelector(groups, &attributes.SelectorConfig{SelectionCfg: selection})
+		require.NoError(t, err)
+		return nfsReadsCgroup(&features, attrSel, filtered)
+	}
+	selectingIO := attributes.Selection{"obi.stat.nfs.client.io": attributes.InclusionLists{Include: []string{"container.id"}}}
+
+	assert.False(t, reads(export.FeatureStatsNFS, attributes.UndefinedGroup, nil),
+		"no default attribute of the NFS metrics needs the cgroup outside Kubernetes")
+	assert.True(t, reads(export.FeatureStatsNFS, attributes.GroupKubernetes, nil),
+		"the counters report the Kubernetes attributes of the workload by default")
+	assert.False(t, reads(export.FeatureStatsNFSClientProcedureDuration, attributes.GroupKubernetes, nil),
+		"the workload is opt-in on the histogram, and its cluster name needs no cgroup")
+	assert.True(t, reads(export.FeatureStatsNFSClientIO, attributes.UndefinedGroup, selectingIO))
+	assert.False(t, reads(export.FeatureStatsNFSClientProcedureDuration, attributes.UndefinedGroup, selectingIO),
+		"the attributes of a disabled metric don't count")
+	assert.True(t, reads(export.FeatureStatsNFSClientIO, attributes.UndefinedGroup, nil, "k8s_owner_name"),
+		"the filters need the attributes that they match")
+	assert.False(t, reads(export.FeatureStatsDisk, attributes.UndefinedGroup, nil, "container.id"),
+		"filters don't need reads of the disabled metrics")
+}
+
 func TestSizeInFlightMaps(t *testing.T) {
 	newSpec := func() *ebpf.CollectionSpec {
 		return &ebpf.CollectionSpec{Maps: map[string]*ebpf.MapSpec{
