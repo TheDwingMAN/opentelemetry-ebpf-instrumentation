@@ -86,8 +86,9 @@ func (e ebpfAccum[K, V]) delete(key K) error {
 func (e ebpfAccum[K, V]) lookupAndDelete(key K) (V, error) {
 	var last V
 	err := e.accum.LookupAndDelete(key, &last)
-	// hash maps support it from Linux 5.14: older kernels return ENOTSUPP, or EINVAL without the
-	// command
+	// hash maps support it from Linux 5.14: older kernels return ENOTSUPP. Kernels without the
+	// command (before 4.20) return EINVAL. OBI supports none, so this only guards eBPF backports
+	// that lack it, whose idle entries would never be deleted otherwise.
 	if errors.Is(err, unix.EINVAL) {
 		return last, fmt.Errorf("%w: %w", ciliumebpf.ErrNotSupported, err)
 	}
