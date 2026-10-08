@@ -255,18 +255,36 @@ func getDefinitions(
 			attr.K8sPodName:       true,
 			attr.K8sOwnerName:     true,
 			attr.K8sClusterName:   true,
-			attr.K8sKind:          false,
+			attr.K8sKind:          true,
 		},
 		nil,
 	)
 
-	// workload that block I/O is charged to, when kubernetes metadata is enabled
+	// workload that block I/O is charged to, when kubernetes metadata is enabled. The kind of the
+	// owner tells the owners of the same name apart, like the Node that owns the static pods.
 	statsDiskKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
 		nil,
 		map[attr.Name]Default{
 			attr.K8sNamespaceName: true,
 			attr.K8sOwnerName:     true,
+			attr.K8sClusterName:   true,
+			attr.K8sKind:          true,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
+		},
+		nil,
+	)
+
+	// the same workload attributes, opt-in, for the latency histograms of the storage stats, whose
+	// series count is multiplied by the number of buckets: their counters carry the workload. The
+	// cluster name is on, as it is the same on every series.
+	statsDiskKubeOptInAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sNamespaceName: false,
+			attr.K8sOwnerName:     false,
 			attr.K8sClusterName:   true,
 			attr.K8sKind:          false,
 			attr.K8sPodName:       false,
@@ -275,18 +293,12 @@ func getDefinitions(
 		nil,
 	)
 
-	// the same workload attributes, all opt-in, for the latency histograms of the storage stats,
-	// whose series count is multiplied by the number of buckets. Their counters carry the workload.
-	statsDiskKubeOptInAttributes := NewAttrReportGroup(
+	// the cluster of the node, for the stats of the devices, which are charged to no workload
+	statsDiskNodeKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
 		nil,
 		map[attr.Name]Default{
-			attr.K8sNamespaceName: false,
-			attr.K8sOwnerName:     false,
-			attr.K8sClusterName:   false,
-			attr.K8sKind:          false,
-			attr.K8sPodName:       false,
-			attr.K8sContainerName: false,
+			attr.K8sClusterName: true,
 		},
 		nil,
 	)
@@ -1148,7 +1160,7 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{},
 		},
 		StatDiskVolumeInfo.Section: {
-			SubGroups:  []*AttrReportGroup{&statsDiskVolumeAttributes},
+			SubGroups:  []*AttrReportGroup{&statsDiskVolumeAttributes, &statsDiskNodeKubeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
 		StatDiskQueueTime.Section: {
@@ -1174,7 +1186,7 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{},
 		},
 		StatDiskOperationInflight.Section: {
-			SubGroups:  []*AttrReportGroup{&statsDiskPendingAttributes},
+			SubGroups:  []*AttrReportGroup{&statsDiskPendingAttributes, &statsDiskNodeKubeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
 

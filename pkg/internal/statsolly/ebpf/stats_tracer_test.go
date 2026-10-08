@@ -404,6 +404,9 @@ func TestDiskAttributeReads(t *testing.T) {
 	assert.Equal(t, diskReads{cgroup: true},
 		reads(export.FeatureStatsDiskIO, attributes.UndefinedGroup, &attributes.SelectorConfig{}, "k8s_namespace_name"))
 	assert.Equal(t, diskReads{},
+		reads(export.FeatureStatsDiskIO, attributes.UndefinedGroup, &attributes.SelectorConfig{}, "k8s_cluster_name"),
+		"the cluster name is the same for every workload")
+	assert.Equal(t, diskReads{},
 		reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, &attributes.SelectorConfig{}, "container.id"),
 		"filters don't need reads of the disabled metrics")
 }
@@ -425,7 +428,7 @@ func TestFsSyncAttributeReads(t *testing.T) {
 	assert.Equal(t, fsSyncReads{}, reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, &attributes.SelectorConfig{}),
 		"no default attribute of the file sync metric needs the cgroup or the filesystem outside Kubernetes")
 	assert.Equal(t, fsSyncReads{}, reads(export.FeatureStatsFsSyncDuration, attributes.GroupKubernetes, &attributes.SelectorConfig{}),
-		"the Kubernetes attributes of the workload are opt-in on the histogram")
+		"the Kubernetes attributes of the workload are opt-in on the histogram, and its cluster name needs no cgroup")
 	assert.Equal(t, fsSyncReads{cgroup: true},
 		reads(export.FeatureStatsFsSyncDuration, attributes.UndefinedGroup, selecting("container.id")))
 	assert.Equal(t, fsSyncReads{filesystem: true},

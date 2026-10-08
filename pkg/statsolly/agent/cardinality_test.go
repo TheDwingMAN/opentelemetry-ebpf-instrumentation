@@ -65,6 +65,6 @@ func TestDetailedProfileIsPerWorkload(t *testing.T) {
 		assert.Subset(t, attrSel.For(histogram), []attr.Name{attr.K8sNamespaceName, attr.K8sOwnerName}, histogram.OTEL)
 	}
 	assert.Equal(t, []attr.Name{
-		attr.ErrorType, attr.K8sClusterName, attr.K8sNamespaceName, attr.K8sOwnerName, attr.FsSyncType,
+		attr.ErrorType, attr.K8sClusterName, attr.K8sKind, attr.K8sNamespaceName, attr.K8sOwnerName, attr.FsSyncType,
 	}, attrSel.For(attributes.StatFsSyncOperations), "the counters keep their defaults")
 }

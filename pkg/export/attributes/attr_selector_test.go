@@ -231,10 +231,11 @@ func TestDefault_StatDiskOperationDuration(t *testing.T) {
 	assert.Equal(t, []attr.Name{
 		attr.DiskIODirection,
 		attr.ErrorType,
+		attr.K8sClusterName,
 		attr.DiskStacked,
 		attr.DiskVolumeName,
 		attr.SystemDevice,
-	}, p.For(StatDiskOperationDuration))
+	}, p.For(StatDiskOperationDuration), "the workload is opt-in on the histogram, not the cluster")
 }
 
 func TestStatDiskMetricsNameTheDeviceMapperDevices(t *testing.T) {
@@ -254,6 +255,7 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 	assert.Equal(t, []attr.Name{
 		attr.DiskIODirection,
 		attr.K8sClusterName,
+		attr.K8sKind,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.DiskStacked,
@@ -266,6 +268,7 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 		attr.DiskIODirection,
 		attr.ErrorType,
 		attr.K8sClusterName,
+		attr.K8sKind,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.DiskStacked,
@@ -312,16 +315,30 @@ func TestStatDiskOperationInflightSelection(t *testing.T) {
 	}
 }
 
+func TestDefault_StatDiskOperationInflight(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.DiskIODirection,
+		attr.K8sClusterName,
+		attr.DiskStacked,
+		attr.DiskVolumeName,
+		attr.SystemDevice,
+	}, p.For(StatDiskOperationInflight), "the requests in flight of a device are charged to no workload")
+}
+
 func TestDefault_StatFsSyncDuration(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, []attr.Name{
 		attr.ErrorType,
+		attr.K8sClusterName,
 		attr.FsSyncType,
 	}, p.For(StatFsSyncDuration), "the workload is opt-in on the histogram")
 	counters := []attr.Name{
 		attr.ErrorType,
 		attr.K8sClusterName,
+		attr.K8sKind,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.FsSyncType,
@@ -354,6 +371,7 @@ func TestDefault_StatNFSClient(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []attr.Name{
 		attr.ErrorType,
+		attr.K8sClusterName,
 		attr.OncRPCProcedureName,
 		attr.OncRPCVersion,
 		attr.ServerAddr,
@@ -361,6 +379,7 @@ func TestDefault_StatNFSClient(t *testing.T) {
 	counters := []attr.Name{
 		attr.ErrorType,
 		attr.K8sClusterName,
+		attr.K8sKind,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.OncRPCProcedureName,
@@ -371,6 +390,7 @@ func TestDefault_StatNFSClient(t *testing.T) {
 	assert.Equal(t, counters, p.For(StatNFSClientProcedureTime))
 	assert.Equal(t, []attr.Name{
 		attr.K8sClusterName,
+		attr.K8sKind,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.NetworkIoDirection,
@@ -383,6 +403,7 @@ func TestDefault_StatK8sPodVolumeInfo(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []attr.Name{
 		attr.K8sClusterName,
+		attr.K8sKind,
 		attr.K8sNamespaceName,
 		attr.K8sOwnerName,
 		attr.K8sPersistentVolumeName,
@@ -398,10 +419,11 @@ func TestDefault_StatDiskVolumeInfo(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, []attr.Name{
+		attr.K8sClusterName,
 		attr.DiskVolumeDevice,
 		attr.DiskVolumeName,
 		attr.SystemDevice,
-	}, p.For(StatDiskVolumeInfo), "the volumes are not charged to workloads")
+	}, p.For(StatDiskVolumeInfo), "the volumes are charged to no workload")
 }
 
 func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {

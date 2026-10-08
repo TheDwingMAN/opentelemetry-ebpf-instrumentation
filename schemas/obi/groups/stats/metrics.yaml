@@ -411,7 +411,8 @@ groups:
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
       - ref: k8s.namespace.name
         requirement_level: opt_in
       - ref: k8s.owner.name
@@ -458,7 +459,8 @@ groups:
         requirement_level:
           recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
       - ref: k8s.kind
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
       - ref: k8s.pod.name
         requirement_level: opt_in
       - ref: k8s.container.name
@@ -499,7 +501,8 @@ groups:
         requirement_level:
           recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
       - ref: k8s.kind
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
       - ref: k8s.pod.name
         requirement_level: opt_in
       - ref: k8s.container.name
@@ -552,7 +555,8 @@ groups:
         requirement_level:
           recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
       - ref: k8s.kind
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
       - ref: k8s.pod.name
         requirement_level: opt_in
       - ref: k8s.container.name
@@ -585,7 +589,8 @@ groups:
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
       - ref: k8s.namespace.name
         requirement_level: opt_in
       - ref: k8s.owner.name
@@ -630,7 +635,8 @@ groups:
         requirement_level:
           recommended: if Kubernetes decoration is enabled and the thread that synced runs in a pod
       - ref: k8s.kind
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that synced runs in a pod
       - ref: k8s.pod.name
         requirement_level: opt_in
       - ref: k8s.container.name
@@ -669,7 +675,8 @@ groups:
         requirement_level:
           recommended: if Kubernetes decoration is enabled and the thread that synced runs in a pod
       - ref: k8s.kind
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that synced runs in a pod
       - ref: k8s.pod.name
         requirement_level: opt_in
       - ref: k8s.container.name
@@ -730,7 +737,8 @@ groups:
         requirement_level:
           recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
       - ref: k8s.kind
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
       - ref: k8s.pod.name
         requirement_level: opt_in
       - ref: k8s.container.name
@@ -768,7 +776,8 @@ groups:
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
       - ref: k8s.namespace.name
         requirement_level: opt_in
       - ref: k8s.owner.name
@@ -810,7 +819,8 @@ groups:
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
       - ref: k8s.namespace.name
         requirement_level: opt_in
       - ref: k8s.owner.name
@@ -856,7 +866,8 @@ groups:
         requirement_level:
           recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
       - ref: k8s.kind
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
       - ref: k8s.pod.name
         requirement_level: opt_in
       - ref: k8s.container.name
@@ -892,6 +903,9 @@ groups:
         requirement_level: recommended
       - ref: disk.io.direction
         requirement_level: recommended
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
 
   - id: metric.obi.obi.stat.nfs.client.procedure.duration
     type: metric
@@ -921,7 +935,8 @@ groups:
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
       - ref: k8s.namespace.name
         requirement_level: opt_in
       - ref: k8s.owner.name
@@ -970,7 +985,8 @@ groups:
         requirement_level:
           recommended: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod
       - ref: k8s.kind
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod
       - ref: k8s.pod.name
         requirement_level: opt_in
       - ref: k8s.container.name
@@ -1010,7 +1026,8 @@ groups:
         requirement_level:
           recommended: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod
       - ref: k8s.kind
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod
       - ref: k8s.pod.name
         requirement_level: opt_in
       - ref: k8s.container.name
@@ -1044,7 +1061,8 @@ groups:
         requirement_level:
           recommended: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod
       - ref: k8s.kind
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod
       - ref: k8s.pod.name
         requirement_level: opt_in
       - ref: k8s.container.name
@@ -1077,6 +1095,9 @@ groups:
           conditionally_required: if the volume is a device mapper volume
       - ref: system.device
         requirement_level: recommended
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
 
   - id: metric.obi.obi.stat.k8s.pod.volume.info
     type: metric
@@ -1119,4 +1140,4 @@ groups:
       - ref: k8s.owner.name
         requirement_level: recommended
       - ref: k8s.kind
-        requirement_level: opt_in
+        requirement_level: recommended

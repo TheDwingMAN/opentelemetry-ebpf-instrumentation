@@ -211,6 +211,7 @@ func testDiskInflightOfWorkloadDevices(ctx context.Context, t *testing.T, _ *env
 				require.NoError(ct, err)
 				require.Len(ct, pending, 1, "one series per device and direction")
 				assertDiskStatLabels(ct, pending[0].Metric, map[string]*regexp.Regexp{
+					"k8s_cluster_name":     regexp.MustCompile(`^my-kube$`),
 					"system_device":        blockDevicePattern,
 					"obi_disk_stacked":     stackedPattern,
 					"obi_disk_volume_name": optionalVolumeNamePattern,
@@ -244,6 +245,7 @@ func testPodVolumeDevices(ctx context.Context, t *testing.T, _ *envconf.Config) 
 			"k8s_namespace_name":             regexp.MustCompile(`^default$`),
 			"k8s_pod_name":                   regexp.MustCompile(`^disk-io-pvc-`),
 			"k8s_owner_name":                 regexp.MustCompile(`^disk-io-pvc$`),
+			"k8s_kind":                       regexp.MustCompile(`^Deployment$`),
 			"k8s_volume_name":                regexp.MustCompile(`^data$`),
 			"k8s_persistentvolumeclaim_name": regexp.MustCompile(`^disk-io-data$`),
 			"k8s_persistentvolume_name":      regexp.MustCompile(`^pvc-`),

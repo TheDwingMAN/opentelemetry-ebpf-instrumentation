@@ -829,8 +829,12 @@ func fsSyncAttributeReads(features *export.Features, attrSel *attributes.AttrSel
 }
 
 // reportsWorkload tells whether an attribute describes the workload that the kernel charges an
-// operation to, which the probes find from its cgroup
+// operation to, which the probes find from its cgroup. The cluster name is the same for every
+// workload.
 func reportsWorkload(name attr.Name) bool {
+	if sameAttribute(name, attr.K8sClusterName) {
+		return false
+	}
 	return sameAttribute(name, attr.ContainerID) || strings.HasPrefix(name.Prom(), "k8s_")
 }
 
