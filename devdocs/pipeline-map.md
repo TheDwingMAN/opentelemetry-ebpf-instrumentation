@@ -114,7 +114,7 @@ flowchart TD
     DPD(Dynamic PID<br/>decorator):::optional --> DPF
     DPF(Dynamic PID<br/>filter):::optional --> FLTR
     FLTR(Attributes<br/>filter):::optional --> MRG
-    DMT(eBPF Disk and<br/>File Sync Map Tracer):::optional --> DCF
+    DMT(eBPF Storage<br/>Map Tracer):::optional --> DCF
     VT(Stacked and pod<br/>volume tracers):::optional --> DCF
     DCF(Dynamic container<br/>filter):::optional --> DK8S
     KSTORE --> DK8S
