@@ -5,6 +5,7 @@ package attributes // import "go.opentelemetry.io/obi/pkg/export/attributes"
 
 import (
 	"maps"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -1259,6 +1260,18 @@ func SectionAttributeNames(
 		}
 	}
 	return names
+}
+
+// StatSections returns the sections of the stat metrics, whose names start with obi.stat.
+func StatSections() []Section {
+	var sections []Section
+	// -1 to enable all the metric group flags
+	for section := range getDefinitions(-1, NewGroupAttributes(nil)) {
+		if strings.HasPrefix(string(section), "obi.stat.") {
+			sections = append(sections, section)
+		}
+	}
+	return sections
 }
 
 // DBResponseErrorAttr returns a database response error attribute if the attribute is selected, nil otherwise.

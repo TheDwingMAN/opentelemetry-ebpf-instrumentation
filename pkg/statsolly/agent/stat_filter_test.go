@@ -4,11 +4,13 @@
 package agent
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	"go.opentelemetry.io/obi/pkg/filter"
 	"go.opentelemetry.io/obi/pkg/internal/pipe"
@@ -131,12 +133,20 @@ func TestStatFilterOfAnUnknownAttribute(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Every storage stat type is matched against the filters of its own attributes
-func TestEveryStorageStatTypeHasItsMetrics(t *testing.T) {
-	for _, statType := range []ebpf.StatType{
-		ebpf.StatTypeDiskIO, ebpf.StatTypeFsSync, ebpf.StatTypeDiskPending, ebpf.StatTypeNFSProcedure,
-		ebpf.StatTypeNFSIO, ebpf.StatTypePodVolume, ebpf.StatTypeDiskVolume,
-	} {
-		assert.NotEmpty(t, storageStatMetrics[statType], "stat type %d", statType)
+// Every stat metric but the TCP ones is listed with the type of the storage stats that it reports,
+// so that the filters on its attributes apply to these stats
+func TestEveryStorageStatMetricHasItsType(t *testing.T) {
+	listed := map[attributes.Section]bool{}
+	for _, metrics := range storageStatMetrics {
+		for _, metric := range metrics {
+			listed[metric.Section] = true
+		}
+	}
+	sections := attributes.StatSections()
+	require.Subset(t, sections, tcpStatSections)
+	for _, section := range sections {
+		if !slices.Contains(tcpStatSections, section) {
+			assert.True(t, listed[section], "%s is not in storageStatMetrics", section)
+		}
 	}
 }

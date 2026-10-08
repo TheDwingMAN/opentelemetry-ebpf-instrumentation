@@ -51,22 +51,12 @@ func tcpStatFilters(config filter.AttributeFamilyConfig, extraGroupAttributesCfg
 	}
 	names := attributes.AllAttributeNames(nil, extraGroupAttributesCfg)
 	tcpNames := attributes.SectionAttributeNames(extraGroupAttributesCfg, tcpStatSections...)
-	for name := range attributes.SectionAttributeNames(extraGroupAttributesCfg, storageStatSections()...) {
+	for name := range attributes.SectionAttributeNames(extraGroupAttributesCfg, attributes.StatSections()...) {
 		if _, ok := tcpNames[name]; !ok {
 			delete(names, name)
 		}
 	}
 	return configOfAttributes(config, names), nil
-}
-
-func storageStatSections() []attributes.Section {
-	var sections []attributes.Section
-	for _, metrics := range storageStatMetrics {
-		for _, metric := range metrics {
-			sections = append(sections, metric.Section)
-		}
-	}
-	return sections
 }
 
 // filterStorageStatsByAttribute drops the storage stats that don't match the stats attribute
