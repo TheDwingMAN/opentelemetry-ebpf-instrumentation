@@ -4,8 +4,10 @@
 package promtest
 
 import (
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -58,4 +60,42 @@ promhttp_metric_handler_errors_total{cause="gathering"} 3
 		{Name: "promhttp_metric_handler_errors_total", Value: 2, Labels: map[string]string{"cause": "encoding"}},
 		{Name: "promhttp_metric_handler_errors_total", Value: 3, Labels: map[string]string{"cause": "gathering"}},
 	}, scrapedMetrics)
+}
+
+func TestBucketBounds(t *testing.T) {
+	bucket := func(device, le string) Result {
+		return Result{Metric: map[string]string{"system_device": device, "le": le}}
+	}
+	bounds, err := BucketBounds([]Result{
+		bucket("sda", "+Inf"), bucket("sda", "0.5"), bucket("sda", "5e-05"),
+		bucket("vda", "1.0"), bucket("vda", "+Inf"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string][]float64{
+		"map[system_device:sda]": {0.00005, 0.5, math.Inf(1)},
+		"map[system_device:vda]": {1, math.Inf(1)},
+	}, bounds)
+
+	_, err = BucketBounds([]Result{bucket("sda", "")})
+	require.Error(t, err)
+}
+
+func TestLabelMismatches(t *testing.T) {
+	labels := []string{"system_device", "container_id", "error_type"}
+	series := map[string]string{"system_device": "sda", "container_id": "abc", "job": "otel"}
+
+	assert.Empty(t, LabelMismatches(series, labels, map[string]*regexp.Regexp{
+		"system_device": regexp.MustCompile(`^sd[a-z]$`),
+		"container_id":  regexp.MustCompile(`^abc$`),
+	}))
+	assert.Equal(t, []string{
+		`label container_id="abc" doesn't match ^def$`,
+		`label error_type="" doesn't match .+`,
+	}, LabelMismatches(series, labels, map[string]*regexp.Regexp{
+		"system_device": regexp.MustCompile(`^sd[a-z]$`),
+		"container_id":  regexp.MustCompile(`^def$`),
+		"error_type":    regexp.MustCompile(`.+`),
+	}))
+	assert.Equal(t, []string{`unexpected label system_device="sda"`}, LabelMismatches(series, labels,
+		map[string]*regexp.Regexp{"container_id": regexp.MustCompile(`^abc$`)}))
 }
