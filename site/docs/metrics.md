@@ -1451,7 +1451,7 @@ Device service time of the block reads and writes: from the issue of each reques
 
 ## `obi.stat.disk.operation.inflight`
 
-Block reads and writes that each device is serving when sampled, every `ebpf.batch_timeout`: issued to the device and not yet completed, as `/sys/block/<device>/inflight` counts them, per block device and direction. Discards count as writes. Requests waiting in the I/O scheduler are not counted: from Linux 6.10 and on RHEL 9.6, /proc/diskstats field 9 (node_exporter's node_disk_io_now, the hostmetrics receiver's system.disk.pending_operations) counts them too, so it can be higher. For a bio-based volume (LVM, md RAID), it counts the bios submitted to the volume and not yet completed.
+Block reads and writes that each device is serving when sampled, every `ebpf.batch_timeout`: issued to the device and not yet completed, as `/sys/block/<device>/inflight` counts them, per block device and direction. Discards count as writes. Requests waiting in the I/O scheduler are not counted: from Linux 6.10 and on RHEL 9.6, /proc/diskstats field 9 (node_exporter's node_disk_io_now, the hostmetrics receiver's system.disk.pending_operations) counts them too, so it can be higher. For a bio-based volume (LVM, md RAID), it counts the bios submitted to the volume and not yet completed, and for the head of NVMe native multipath, from Linux 6.2 and on RHEL 9.6, the requests in flight on its paths, whose path devices report none.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |

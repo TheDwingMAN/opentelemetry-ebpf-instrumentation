@@ -937,7 +937,9 @@ groups:
       /proc/diskstats field 9 (node_exporter's node_disk_io_now, the
       hostmetrics receiver's system.disk.pending_operations) counts them too,
       so it can be higher. For a bio-based volume (LVM, md RAID), it counts the
-      bios submitted to the volume and not yet completed.
+      bios submitted to the volume and not yet completed, and for the head of
+      NVMe native multipath, from Linux 6.2 and on RHEL 9.6, the requests in
+      flight on its paths, whose path devices report none.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
