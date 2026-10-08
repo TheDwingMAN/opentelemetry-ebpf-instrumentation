@@ -29,6 +29,7 @@ func TestKernelBlockTracepointLayoutZoneAppendOp(t *testing.T) {
 
 // mapSizes returns the size of each loaded map, as the kernel reports it
 func mapSizes(t *testing.T, maps *StatsMaps) map[string]uint32 {
+	t.Helper()
 	sizes := map[string]uint32{}
 	fields := reflect.ValueOf(*maps)
 	for i := range fields.NumField() {
@@ -58,7 +59,15 @@ func TestStorageMapsOfDisabledFeatures(t *testing.T) {
 		if features.StatsDisk() {
 			require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
 		}
-		return mapSizes(t, &fetcher.objects.StatsMaps)
+		sizes := mapSizes(t, &fetcher.objects.StatsMaps)
+		for name, m := range spec.Maps {
+			// the loader aligns the size of a ring buffer to the page size, 64 KiB on some arm64
+			// kernels, and no ring buffer is a storage map
+			if m.Type == ebpf.RingBuf {
+				delete(sizes, name)
+			}
+		}
+		return sizes
 	}
 
 	for name, entries := range load(export.FeatureStatsTCPRetransmits) {
