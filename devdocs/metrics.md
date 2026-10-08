@@ -315,6 +315,7 @@ With the default 16 bounds, each attribute set of a latency histogram is 19 seri
 | Path of a dm-multipath device, which reports no latency histogram | 10 |
 | Path of an NVMe native multipath head, which reports no latency histogram but that of the flushes, and no requests in flight | 8 |
 | Device that receives cache flushes, like a local disk with a volatile write cache | 19 more |
+| Device that receives discards, like an SSD under a filesystem mounted with `discard` | 20 more: the latency histogram (19) and the bytes of the discards charged to no workload (1), and 1 more per workload that discards on it |
 | Workload that reads and writes on a device | 8 more on that device |
 | `error.type` of a device and direction | 19 more on a device with latency histograms, and 3 per workload |
 | Sync type (`fsync`, `fdatasync`, …) | 21, and 2 per workload that syncs |
@@ -322,7 +323,7 @@ With the default 16 bounds, each attribute set of a latency histogram is 19 seri
 | NFS server | 2, and 2 per workload that reads or writes |
 | Stacked volume and disk below it, pod volume and disk below it | 1 |
 
-For example, a SAN LUN without a volatile write cache, with 4 active paths and an LVM volume on its dm-multipath device, read and written by one workload, costs 184 block I/O series: 56 for the volume, 56 for the multipath device and 18 for each path. Without LVM, it costs 128: 40 such LUNs make 5,120. The minimal profile reports 6 series for each device that reads and writes and for each workload on it, the flush histograms, and 2 per sync type and per workload that syncs. The detailed profile adds 19 series per workload to the latency histograms: 38 for each device that the workload reads and writes on, and 19 for each sync type and for each NFS server and procedure that it uses.
+For example, a SAN LUN without a volatile write cache, with 4 active paths and an LVM volume on its dm-multipath device, read and written by one workload, costs 184 block I/O series: 56 for the volume, 56 for the multipath device and 18 for each path. Without LVM, it costs 128: 40 such LUNs make 5,120. The minimal profile reports 6 series for each device that reads and writes and for each workload on it, the flush histograms, and 2 per sync type and per workload that syncs. The detailed profile adds 19 series per workload to the latency histograms: 38 for each device that the workload reads and writes on, 19 for each device that it discards on, 19 for each sync type that it uses on each filesystem type, as the selection includes `system.filesystem.type`, 19 for each NFS server and procedure that it uses, and 19 for each bio-based device, like an LVM volume or an NVMe native multipath head, that it sends cache flushes to: their flushes carry the cgroup of the thread that submits them, like the empty flush of a file sync.
 
 Minimal:
 
