@@ -552,7 +552,8 @@ func TestSizeInFlightMaps(t *testing.T) {
 func TestShrinkUnusedStorageMaps(t *testing.T) {
 	// sizes returns the size of each map for the programs of the given storage probes, before and
 	// after the shrink
-	sizes := func(storage storageProbes) (before, after map[string]uint32) {
+	sizes := func(t *testing.T, storage storageProbes) (before, after map[string]uint32) {
+		t.Helper()
 		spec, err := LoadStats()
 		require.NoError(t, err)
 		require.NoError(t, fixupSpec(spec, storage.programsToDisable()))
@@ -570,31 +571,41 @@ func TestShrinkUnusedStorageMaps(t *testing.T) {
 		return before, maxEntries()
 	}
 
-	// TCP only: every storage map takes one entry, and the TCP maps keep their sizes
-	before, after := sizes(storageProbes{})
-	for name, entries := range after {
-		want := before[name]
-		if isStorageMap(name) {
-			want = 1
-		}
-		assert.Equal(t, want, entries, name)
-	}
-
-	// the block request probes keep the sizes of their maps, and only of theirs
-	diskMaps := []string{
-		"disk_io_accum", "disk_io_accum_init_storage", "disk_rq_start", "disk_timed_queues", "disk_cgroup_names",
-		"disk_cgroup_name_init_storage",
-	}
-	before, after = sizes(storageProbes{disk: true})
-	for name, entries := range after {
-		want := before[name]
-		if isStorageMap(name) && !slices.Contains(diskMaps, name) {
-			want = 1
-		}
-		assert.Equal(t, want, entries, name)
+	// the probes of each storage feature keep the sizes of their maps, and only of theirs: every
+	// other storage map takes one entry, and the TCP maps keep their sizes. The file sync and NFS
+	// probes write the cgroup names of the disk maps.
+	for _, tc := range []struct {
+		name    string
+		storage storageProbes
+		used    []string
+	}{
+		{name: "TCP only"},
+		{"block requests", storageProbes{disk: true}, []string{
+			"disk_io_accum", "disk_io_accum_init_storage", "disk_rq_start", "disk_timed_queues", "disk_cgroup_names",
+			"disk_cgroup_name_init_storage",
+		}},
+		{"file syncs", storageProbes{fsSync: true}, []string{
+			"fs_sync_accum", "fs_sync_accum_init_storage", "fs_sync_start", "disk_cgroup_names",
+			"disk_cgroup_name_init_storage",
+		}},
+		{"NFS procedures of the workloads", storageProbes{nfs: nfsLoad{taskBegin: true, statsLatency: true}}, []string{
+			"nfs_procedure_accum", "nfs_procedure_accum_init_storage", "nfs_task_cgroup", "disk_cgroup_names",
+			"disk_cgroup_name_init_storage",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before, after := sizes(t, tc.storage)
+			for name, entries := range after {
+				want := before[name]
+				if isStorageMap(name) && !slices.Contains(tc.used, name) {
+					want = 1
+				}
+				assert.Equal(t, want, entries, name)
+			}
+		})
 	}
 
 	// with every storage feature, no map is shrunk
-	before, after = sizes(storageProbes{disk: true, bio: true, fsSync: true, nfs: nfsLoad{taskBegin: true, statsLatency: true, pgio: true}})
+	before, after := sizes(t, storageProbes{disk: true, bio: true, fsSync: true, nfs: nfsLoad{taskBegin: true, statsLatency: true, pgio: true}})
 	assert.Equal(t, before, after)
 }
