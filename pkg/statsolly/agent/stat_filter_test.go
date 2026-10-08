@@ -74,6 +74,7 @@ func TestTCPStatFiltersKeepTheirSemantics(t *testing.T) {
 		// have and the TCP stat metrics don't: the TCP stats lack these attributes, so a match would
 		// drop them all, also on those that other metrics have, like k8s.namespace.name or container.id
 		{"system.device", filter.AttributeFamilyConfig{"system.device": {Match: "sda"}}, all, false},
+		{"error.type", filter.AttributeFamilyConfig{"error.type": {Match: "EIO"}}, all, false},
 		{"k8s.namespace.name", filter.AttributeFamilyConfig{"k8s.namespace.name": {Match: "prod"}}, all, false},
 		{"container.id", filter.AttributeFamilyConfig{"container.id": {Match: "abc*"}}, all, false},
 		{"dst.port and system.device", filter.AttributeFamilyConfig{"dst.port": {Equals: new(443)}, "system.device": {Match: "sda"}}, internalOnes, false},
