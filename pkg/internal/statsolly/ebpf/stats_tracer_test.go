@@ -7,6 +7,7 @@ package ebpf
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,6 +19,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
+	ebpfconvenience "go.opentelemetry.io/obi/pkg/internal/ebpf/convenience"
 )
 
 func TestFixupSpec(t *testing.T) {
@@ -544,4 +546,55 @@ func TestSizeInFlightMaps(t *testing.T) {
 	spec.Maps["disk_rq_start"].MaxEntries = 1 << 17
 	sizeInFlightMaps(spec, 192)
 	assert.Equal(t, uint32(1<<17), spec.Maps["disk_rq_start"].MaxEntries)
+}
+
+// The storage maps that no loaded program uses take a single entry, whatever the scale and the CPUs
+func TestShrinkUnusedStorageMaps(t *testing.T) {
+	// sizes returns the size of each map for the programs of the given storage probes, before and
+	// after the shrink
+	sizes := func(storage storageProbes) (before, after map[string]uint32) {
+		spec, err := LoadStats()
+		require.NoError(t, err)
+		require.NoError(t, fixupSpec(spec, storage.programsToDisable()))
+		ebpfconvenience.SetupMapSizes(spec, 2)
+		sizeInFlightMaps(spec, 192)
+		maxEntries := func() map[string]uint32 {
+			entries := map[string]uint32{}
+			for name, m := range spec.Maps {
+				entries[name] = m.MaxEntries
+			}
+			return entries
+		}
+		before = maxEntries()
+		shrinkUnusedStorageMaps(spec)
+		return before, maxEntries()
+	}
+
+	// TCP only: every storage map takes one entry, and the TCP maps keep their sizes
+	before, after := sizes(storageProbes{})
+	for name, entries := range after {
+		want := before[name]
+		if isStorageMap(name) {
+			want = 1
+		}
+		assert.Equal(t, want, entries, name)
+	}
+
+	// the block request probes keep the sizes of their maps, and only of theirs
+	diskMaps := []string{
+		"disk_io_accum", "disk_io_accum_init_storage", "disk_rq_start", "disk_timed_queues", "disk_cgroup_names",
+		"disk_cgroup_name_init_storage",
+	}
+	before, after = sizes(storageProbes{disk: true})
+	for name, entries := range after {
+		want := before[name]
+		if isStorageMap(name) && !slices.Contains(diskMaps, name) {
+			want = 1
+		}
+		assert.Equal(t, want, entries, name)
+	}
+
+	// with every storage feature, no map is shrunk
+	before, after = sizes(storageProbes{disk: true, bio: true, fsSync: true, nfs: nfsLoad{taskBegin: true, statsLatency: true, pgio: true}})
+	assert.Equal(t, before, after)
 }
