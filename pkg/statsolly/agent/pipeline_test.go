@@ -261,8 +261,8 @@ func TestDiskStats(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// The disk probes couldn't be loaded: the agent has no disk tracer, and the TCP stats go on
 func TestDiskStatsWithoutDiskProbes(t *testing.T) {
-	// the disk probes couldn't be loaded: the agent has no disk tracer, and the TCP stats go on
 	registry := prometheus.NewRegistry()
 	promServer := httptest.NewServer(promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
 	t.Cleanup(promServer.Close)
