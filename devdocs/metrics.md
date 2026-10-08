@@ -140,6 +140,112 @@ The storage stats (disk, file sync and NFS client) are optional, as OBI's option
 
 The `filter.stats` attribute filters apply to the TCP and the storage stats separately. The TCP stats are matched against every filter but those on the attributes that the storage stat metrics have and the TCP stat metrics don't, such as `system_device`, `container_id` or `k8s_namespace_name`. A storage stat is matched only against the filters on the attributes of its own metrics: a filter on a TCP attribute, such as `dst_port`, doesn't drop the storage stats, and a filter on a disk attribute doesn't drop the file sync or NFS stats. The metrics of each type of storage stat are listed in `storageStatMetrics` in [stat_filter.go](../pkg/statsolly/agent/stat_filter.go).
 
+#### Storage error types
+
+The disk, file sync and NFS client metrics carry an `error.type` on the operations that failed, and none on those that succeeded. It is the name of the errno, or of the NFSv4 status, that the kernel failed the operation with, or `_OTHER` when the failure has no name.
+
+The disk metrics name the status of each failed block request or bio after its errno in the kernel's table of block statuses (`blk_errors`), whose description is also what the kernel logs, e.g. `critical medium error, dev sda, sector …` for `ENODATA`:
+
+| `error.type` | Kernel log | Meaning |
+| --- | --- | --- |
+| `EIO` | `I/O error` | The generic failure. |
+| `ETIMEDOUT` | `timeout error` | The request timed out. |
+| `ENOLINK` | `recoverable transport error` | The path to the device failed: another path may succeed. |
+| `EREMOTEIO` | `critical target error` | The device rejected or failed the command. |
+| `ENODATA` | `critical medium error` | The device couldn't read or write its media. |
+| `EBADE` | `reservation conflict error` (`critical nexus error` before Linux 6.5) | Another host holds a persistent reservation of the device. |
+| `EILSEQ` | `protection error` | The protection information of the data, its integrity check, failed. |
+| `ENOSPC` | `critical space allocation error` | The device has no space left, like a thin-provisioned device that is full. |
+| `EOPNOTSUPP` | `operation not supported error` | The device doesn't support the operation. |
+| `ENOMEM`, `EBUSY` | `kernel resource error`, `device resource error` | The kernel or the device lacked resources. |
+| `EAGAIN` | `nonblocking retry error` | A request that must not wait would have had to. |
+| `EREMCHG` | `dm internal retry error` | Device mapper retries the request. |
+| `_OTHER` | | A block status whose number changed between kernel versions, such as those of zoned devices and of offline devices. Before Linux 5.16 (and on RHEL 8), requests report it by its errno instead, and every failure of the bios of an NVMe native multipath head that OBI completes from their request is `_OTHER`. |
+
+The paths of a dm-multipath device report all the failures of their requests, but the multipath device retries on another path those that another path may not have, all but `EOPNOTSUPP`, `ENOSPC`, `EREMOTEIO`, `EBADE`, `ENODATA` and `EILSEQ`: it reports them only when no path is left and it doesn't queue the I/O until a path comes back (`queue_if_no_path`).
+
+The file sync metrics report the errno that the sync returned, and the NFS metrics the errno or the NFSv4 status that the RPC completed with. Some of those are answers that the applications expect rather than failures:
+
+| `error.type` | Metrics | Meaning |
+| --- | --- | --- |
+| `EIO` | file sync, NFS | The data couldn't be written back, or the RPC failed, e.g. when it timed out on a `soft` mount (`ETIMEDOUT` with `softerr`). |
+| `ENOSPC` | file sync | No space was left to write the data back. |
+| `EINVAL` | file sync | The file can't be synced, like a pipe or a socket: e.g. Go's `os.Stdout.Sync()` when the output is a pipe. |
+| `ENOENT` | NFS | No such file: the server's answer to a lookup of a name that doesn't exist, which the applications and the kernel's lookups make as a matter of course. |
+| `EEXIST` | NFS | The file already exists, e.g. for an exclusive create. |
+| `EACCES` | NFS | The server denied the access. |
+| `ESTALE` | NFS | The server no longer knows the file handle, e.g. because the file was deleted. |
+| `EJUKEBOX`, `NFS4ERR_DELAY` | NFS | The server asks the client to retry later. |
+| `_OTHER` | file sync, NFS | An errno or a status without a name. OBI logs the number of those of the NFS RPCs at debug level. |
+
+#### Storage stats profiles
+
+The storage stats are opt-in, and their cost in series depends on the features and attributes you choose, and on the block devices of the node: each stacked volume, each multipath device and each of its paths is a device of its own. Three starting points:
+
+| Profile | What it reports |
+|---|---|
+| Minimal | Block I/O bytes, requests and time per device and workload, flush latency per device, file syncs and their time per workload. No probe on NFS, no request latency distribution. |
+| Standard | Everything, with the latency histograms per device, call or procedure and the counters per workload: the defaults. |
+| Detailed | The standard profile, with the latency histograms per workload too. |
+
+With the default 16 bounds, each attribute set of a latency histogram is 19 series in Prometheus: its buckets, `+Inf`, `_sum` and `_count`. The standard profile costs:
+
+| For each | Series |
+|---|---|
+| Block device that reads and writes: a disk, a dm-multipath device, an LVM volume, an NVMe native multipath head | 48: the latency histograms of the reads and of the writes (38), the bytes, operations, service time and queue time of the I/O charged to no workload, like that of the filesystem journal (8), and the requests in flight (2) |
+| Path of a dm-multipath device, which reports no latency histogram | 10 |
+| Path of an NVMe native multipath head, which reports no latency histogram but that of the flushes, and no requests in flight | 8 |
+| Device that receives cache flushes, like a local disk with a volatile write cache | 19 more |
+| Device that receives discards, like an SSD under a filesystem mounted with `discard` | 20 more: the latency histogram (19) and the bytes of the discards charged to no workload (1), and 1 more per workload that discards on it |
+| Workload that reads and writes on a device | 8 more on that device |
+| `error.type` of a device and direction | 19 more on a device with latency histograms, and 3 per workload |
+| Sync type (`fsync`, `fdatasync`, …) | 21, and 2 per workload that syncs |
+| NFS server and procedure in use | 21, and 2 per workload that calls it |
+| NFS server | 2, and 2 per workload that reads or writes |
+| Stacked volume and disk below it, pod volume and disk below it | 1 |
+
+For example, a SAN LUN without a volatile write cache, with 4 active paths and an LVM volume on its dm-multipath device, read and written by one workload, costs 184 block I/O series: 56 for the volume, 56 for the multipath device and 18 for each path. Without LVM, it costs 128: 40 such LUNs make 5,120. The minimal profile reports 6 series for each device that reads and writes and for each workload on it, the flush histograms, and 2 per sync type and per workload that syncs. The detailed profile adds 19 series per workload to the latency histograms: 38 for each device that the workload reads and writes on, 19 for each device that it discards on, 19 for each sync type that it uses on each filesystem type, as the selection includes `system.filesystem.type`, 19 for each NFS server and procedure that it uses, and 19 for each bio-based device, like an LVM volume or an NVMe native multipath head, that it sends cache flushes to: their flushes carry the cgroup of the thread that submits them, like the empty flush of a file sync.
+
+Minimal:
+
+```yaml
+metrics:
+  features: [stats_disk_io, stats_disk_operations, stats_disk_service_time, stats_disk_flush,
+             stats_fs_sync_operations, stats_fs_sync_operation_time]
+```
+
+Standard (add `stats_disk_pod_volumes` in Kubernetes to link the pods to their disks):
+
+```yaml
+metrics:
+  features: [stats_disk, stats_fs_sync, stats_nfs]
+```
+
+Detailed:
+
+```yaml
+metrics:
+  features: [stats_disk, stats_fs_sync, stats_nfs]
+attributes:
+  select:
+    # every storage latency histogram, per workload but not per pod or volume
+    obi.stat.*.duration:
+      include: ["*"]
+      exclude: [obi.ip, obi.disk.partition, container.id, k8s.pod.name, k8s.container.name,
+                system.filesystem.mountpoint]
+```
+
+The mean latency per workload doesn't need the detailed profile: it is the ratio of the sums of a time counter and of its count counter by the workload, failed operations included, e.g. `sum by (k8s_namespace_name, k8s_owner_name) (rate(obi_stat_disk_service_time_seconds_total{obi_disk_stacked="false"}[5m])) / sum by (k8s_namespace_name, k8s_owner_name) (rate(obi_stat_disk_operations_total{obi_disk_stacked="false"}[5m]))`. Selecting `k8s.pod.name`, `k8s.container.name` or `container.id` on a latency histogram makes a series per bucket for each pod, and selecting `system.filesystem.mountpoint` on `obi.stat.fs.sync.duration` for each volume: OBI warns about them at startup. With config v2, list the families in `capture.network.stats.features` without the `stats_` prefix, and the selection in `extensions.obi.enrich.attributes.select`. Config v2 has no group names: in place of `stats_disk`, `stats_fs_sync` and `stats_nfs`, list each of their families (`disk_io`, `disk_operations` and so on, as [config v2](config/version-2.0/config-v2.md) lists them). Unknown names, like `disk`, are ignored.
+
+#### Storage stats under dynamic application selection
+
+When OBI is embedded with a dynamic selector (`instrumenter.WithDynamicSelector`), the block I/O, file sync and NFS metrics keep only what the kernel charges to the containers of the selected processes, and to the containers of the pods of the selected Kubernetes workloads. `obi.stat.k8s.pod.volume.info` keeps only the volumes of those pods. Limitations:
+
+- The selection works through containers: a selected process outside a container, and the operations charged to no container (like those of kernel threads), are not reported.
+- The requests in flight of the devices (`obi.stat.disk.operation.inflight`) and the disks of the stacked volumes (`obi.stat.disk.volume.info`) belong to no application, so they are not reported.
+- Selecting Kubernetes workloads needs the Kubernetes metadata.
+- While nothing is selected, no storage stat is reported.
+
 ### Known limitations
 
 #### `src.port` may be reported as `0`
@@ -264,112 +370,6 @@ sum by (system_device) (rate(obi_stat_disk_io_bytes_total{disk_io_direction="wri
 - In `attributes.select`, name `obi.stat.nfs.client.procedure.count` by its Prometheus name, `obi_stat_nfs_client_procedure_count_total`, or with a glob, like `obi.stat.nfs.*`: OBI drops a `.count` suffix from the metric names of a selection, so `obi.stat.nfs.client.procedure.count` selects no metric.
 - `server.address` is the server as its first mount on the node names it, without any DNS lookup: the host of `server:/export`, e.g. `fs-0123456789abcdef0.efs.us-east-1.amazonaws.com`, or its IP address when the mount names it by address, e.g. `10.0.0.5:/export`. The mounts of a server (the same address, protocol and NFS version) share one NFS client and its transport, which keep the name of the first mount: a later mount that names the server otherwise, by an alias or by its address, is reported with that name, until the server has no mount left on the node. The data servers of pNFS layouts are named by their address. Names longer than 95 characters are truncated.
 - `error.type` is the errno of failed RPCs, e.g. `EIO`. The kernel-internal errnos of the client and the NFSv4 errors that it doesn't translate into errnos have the names that the kernel and the RFCs give them, e.g. `EJUKEBOX` and `NFS4ERR_DELAY` when the server asks the client to retry later. A status without a name is reported as `_OTHER`, like the unknown statuses of the disk and file sync metrics, and OBI logs its number at debug level.
-
-#### Storage error types
-
-The disk, file sync and NFS client metrics carry an `error.type` on the operations that failed, and none on those that succeeded. It is the name of the errno, or of the NFSv4 status, that the kernel failed the operation with, or `_OTHER` when the failure has no name.
-
-The disk metrics name the status of each failed block request or bio after its errno in the kernel's table of block statuses (`blk_errors`), whose description is also what the kernel logs, e.g. `critical medium error, dev sda, sector …` for `ENODATA`:
-
-| `error.type` | Kernel log | Meaning |
-| --- | --- | --- |
-| `EIO` | `I/O error` | The generic failure. |
-| `ETIMEDOUT` | `timeout error` | The request timed out. |
-| `ENOLINK` | `recoverable transport error` | The path to the device failed: another path may succeed. |
-| `EREMOTEIO` | `critical target error` | The device rejected or failed the command. |
-| `ENODATA` | `critical medium error` | The device couldn't read or write its media. |
-| `EBADE` | `reservation conflict error` (`critical nexus error` before Linux 6.5) | Another host holds a persistent reservation of the device. |
-| `EILSEQ` | `protection error` | The protection information of the data, its integrity check, failed. |
-| `ENOSPC` | `critical space allocation error` | The device has no space left, like a thin-provisioned device that is full. |
-| `EOPNOTSUPP` | `operation not supported error` | The device doesn't support the operation. |
-| `ENOMEM`, `EBUSY` | `kernel resource error`, `device resource error` | The kernel or the device lacked resources. |
-| `EAGAIN` | `nonblocking retry error` | A request that must not wait would have had to. |
-| `EREMCHG` | `dm internal retry error` | Device mapper retries the request. |
-| `_OTHER` | | A block status whose number changed between kernel versions, such as those of zoned devices and of offline devices. Before Linux 5.16 (and on RHEL 8), requests report it by its errno instead, and every failure of the bios of an NVMe native multipath head that OBI completes from their request is `_OTHER`. |
-
-The paths of a dm-multipath device report all the failures of their requests, but the multipath device retries on another path those that another path may not have, all but `EOPNOTSUPP`, `ENOSPC`, `EREMOTEIO`, `EBADE`, `ENODATA` and `EILSEQ`: it reports them only when no path is left and it doesn't queue the I/O until a path comes back (`queue_if_no_path`).
-
-The file sync metrics report the errno that the sync returned, and the NFS metrics the errno or the NFSv4 status that the RPC completed with. Some of those are answers that the applications expect rather than failures:
-
-| `error.type` | Metrics | Meaning |
-| --- | --- | --- |
-| `EIO` | file sync, NFS | The data couldn't be written back, or the RPC failed, e.g. when it timed out on a `soft` mount (`ETIMEDOUT` with `softerr`). |
-| `ENOSPC` | file sync | No space was left to write the data back. |
-| `EINVAL` | file sync | The file can't be synced, like a pipe or a socket: e.g. Go's `os.Stdout.Sync()` when the output is a pipe. |
-| `ENOENT` | NFS | No such file: the server's answer to a lookup of a name that doesn't exist, which the applications and the kernel's lookups make as a matter of course. |
-| `EEXIST` | NFS | The file already exists, e.g. for an exclusive create. |
-| `EACCES` | NFS | The server denied the access. |
-| `ESTALE` | NFS | The server no longer knows the file handle, e.g. because the file was deleted. |
-| `EJUKEBOX`, `NFS4ERR_DELAY` | NFS | The server asks the client to retry later. |
-| `_OTHER` | file sync, NFS | An errno or a status without a name. OBI logs the number of those of the NFS RPCs at debug level. |
-
-#### Storage stats profiles
-
-The storage stats are opt-in, and their cost in series depends on the features and attributes you choose, and on the block devices of the node: each stacked volume, each multipath device and each of its paths is a device of its own. Three starting points:
-
-| Profile | What it reports |
-|---|---|
-| Minimal | Block I/O bytes, requests and time per device and workload, flush latency per device, file syncs and their time per workload. No probe on NFS, no request latency distribution. |
-| Standard | Everything, with the latency histograms per device, call or procedure and the counters per workload: the defaults. |
-| Detailed | The standard profile, with the latency histograms per workload too. |
-
-With the default 16 bounds, each attribute set of a latency histogram is 19 series in Prometheus: its buckets, `+Inf`, `_sum` and `_count`. The standard profile costs:
-
-| For each | Series |
-|---|---|
-| Block device that reads and writes: a disk, a dm-multipath device, an LVM volume, an NVMe native multipath head | 48: the latency histograms of the reads and of the writes (38), the bytes, operations, service time and queue time of the I/O charged to no workload, like that of the filesystem journal (8), and the requests in flight (2) |
-| Path of a dm-multipath device, which reports no latency histogram | 10 |
-| Path of an NVMe native multipath head, which reports no latency histogram but that of the flushes, and no requests in flight | 8 |
-| Device that receives cache flushes, like a local disk with a volatile write cache | 19 more |
-| Device that receives discards, like an SSD under a filesystem mounted with `discard` | 20 more: the latency histogram (19) and the bytes of the discards charged to no workload (1), and 1 more per workload that discards on it |
-| Workload that reads and writes on a device | 8 more on that device |
-| `error.type` of a device and direction | 19 more on a device with latency histograms, and 3 per workload |
-| Sync type (`fsync`, `fdatasync`, …) | 21, and 2 per workload that syncs |
-| NFS server and procedure in use | 21, and 2 per workload that calls it |
-| NFS server | 2, and 2 per workload that reads or writes |
-| Stacked volume and disk below it, pod volume and disk below it | 1 |
-
-For example, a SAN LUN without a volatile write cache, with 4 active paths and an LVM volume on its dm-multipath device, read and written by one workload, costs 184 block I/O series: 56 for the volume, 56 for the multipath device and 18 for each path. Without LVM, it costs 128: 40 such LUNs make 5,120. The minimal profile reports 6 series for each device that reads and writes and for each workload on it, the flush histograms, and 2 per sync type and per workload that syncs. The detailed profile adds 19 series per workload to the latency histograms: 38 for each device that the workload reads and writes on, 19 for each device that it discards on, 19 for each sync type that it uses on each filesystem type, as the selection includes `system.filesystem.type`, 19 for each NFS server and procedure that it uses, and 19 for each bio-based device, like an LVM volume or an NVMe native multipath head, that it sends cache flushes to: their flushes carry the cgroup of the thread that submits them, like the empty flush of a file sync.
-
-Minimal:
-
-```yaml
-metrics:
-  features: [stats_disk_io, stats_disk_operations, stats_disk_service_time, stats_disk_flush,
-             stats_fs_sync_operations, stats_fs_sync_operation_time]
-```
-
-Standard (add `stats_disk_pod_volumes` in Kubernetes to link the pods to their disks):
-
-```yaml
-metrics:
-  features: [stats_disk, stats_fs_sync, stats_nfs]
-```
-
-Detailed:
-
-```yaml
-metrics:
-  features: [stats_disk, stats_fs_sync, stats_nfs]
-attributes:
-  select:
-    # every storage latency histogram, per workload but not per pod or volume
-    obi.stat.*.duration:
-      include: ["*"]
-      exclude: [obi.ip, obi.disk.partition, container.id, k8s.pod.name, k8s.container.name,
-                system.filesystem.mountpoint]
-```
-
-The mean latency per workload doesn't need the detailed profile: it is the ratio of the sums of a time counter and of its count counter by the workload, failed operations included, e.g. `sum by (k8s_namespace_name, k8s_owner_name) (rate(obi_stat_disk_service_time_seconds_total{obi_disk_stacked="false"}[5m])) / sum by (k8s_namespace_name, k8s_owner_name) (rate(obi_stat_disk_operations_total{obi_disk_stacked="false"}[5m]))`. Selecting `k8s.pod.name`, `k8s.container.name` or `container.id` on a latency histogram makes a series per bucket for each pod, and selecting `system.filesystem.mountpoint` on `obi.stat.fs.sync.duration` for each volume: OBI warns about them at startup. With config v2, list the families in `capture.network.stats.features` without the `stats_` prefix, and the selection in `extensions.obi.enrich.attributes.select`. Config v2 has no group names: in place of `stats_disk`, `stats_fs_sync` and `stats_nfs`, list each of their families (`disk_io`, `disk_operations` and so on, as [config v2](config/version-2.0/config-v2.md) lists them). Unknown names, like `disk`, are ignored.
-
-#### Storage stats under dynamic application selection
-
-When OBI is embedded with a dynamic selector (`instrumenter.WithDynamicSelector`), the block I/O, file sync and NFS metrics keep only what the kernel charges to the containers of the selected processes, and to the containers of the pods of the selected Kubernetes workloads. `obi.stat.k8s.pod.volume.info` keeps only the volumes of those pods. Limitations:
-
-- The selection works through containers: a selected process outside a container, and the operations charged to no container (like those of kernel threads), are not reported.
-- The requests in flight of the devices (`obi.stat.disk.operation.inflight`) and the disks of the stacked volumes (`obi.stat.disk.volume.info`) belong to no application, so they are not reported.
-- Selecting Kubernetes workloads needs the Kubernetes metadata.
-- While nothing is selected, no storage stat is reported.
 
 ### Performance considerations
 
