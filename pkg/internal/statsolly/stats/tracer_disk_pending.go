@@ -162,14 +162,6 @@ func (p *pendingReader) diskOf(numbers string) (disk string, partition bool) {
 	return strings.TrimSpace(string(content)), true
 }
 
-func procDiskstats(procRoot, sysRoot string) ([]blockdevice.Diskstats, error) {
-	fs, err := blockdevice.NewFS(procRoot, sysRoot)
-	if err != nil {
-		return nil, err
-	}
-	return fs.ProcDiskstats()
-}
-
 // observeCompleted keeps reporting the disks that completed reads or writes since the previous
 // read, even if none is in flight at the time of the reads
 func (p *pendingReader) observeCompleted(diskstats []blockdevice.Diskstats) {

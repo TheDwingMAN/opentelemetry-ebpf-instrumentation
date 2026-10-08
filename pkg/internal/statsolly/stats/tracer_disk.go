@@ -21,6 +21,7 @@ import (
 
 	ciliumebpf "github.com/cilium/ebpf"
 	"github.com/hashicorp/golang-lru/v2/simplelru"
+	"github.com/prometheus/procfs/blockdevice"
 	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/obi/pkg/internal/helpers/container"
@@ -751,6 +752,14 @@ func (d *deviceNames) diskstatsName(major, minor uint32) string {
 		}
 	}
 	return d.diskstats[[2]uint32{major, minor}]
+}
+
+func procDiskstats(procRoot, sysRoot string) ([]blockdevice.Diskstats, error) {
+	fs, err := blockdevice.NewFS(procRoot, sysRoot)
+	if err != nil {
+		return nil, err
+	}
+	return fs.ProcDiskstats()
 }
 
 func devNameFromUevent(path string) string {
