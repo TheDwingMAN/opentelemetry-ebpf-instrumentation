@@ -168,7 +168,7 @@ The storage stats (disk, file sync and NFS client) are optional, as OBI's option
 - The exporters add up the requests of each kernel bucket into their own buckets, once per read of the kernel maps, so these histograms are exported with explicit buckets: the exponential histograms of the OTLP exporter (`histogram_aggregation`) and the native histograms of the Prometheus exporter don't apply to them, as their resolution is the kernel's.
 - The tracepoint arguments changed across kernel versions (and some of those changes were backported to older kernels), so OBI reads them from the kernel BTF instead of guessing from the kernel version. If the kernel BTF lacks the tracepoint prototypes, the disk probes are not loaded and a warning is logged; the other stat metrics keep working.
 
-The latency histograms of the storage stats (disk, file sync and NFS client) multiply their series by the number of buckets, so their workload attributes (`container.id`, and the `k8s.*` attributes but `k8s.cluster.name`, which is the same on every series) are opt-in: select them in `attributes.select` to get a latency distribution per workload. The counters carry the workload by default, and each time counter has the attributes of its count counter, `error.type` included (e.g. `obi.stat.disk.service_time` and `obi.stat.disk.operations`): the ratio of their sums by the workload attributes is the mean latency of each workload, failed operations included, and adding `error_type` to the sums gives the mean latency of each outcome.
+The latency histograms of the storage stats (disk, file sync and NFS client) multiply their series by the number of buckets, so their workload attributes (`container.id`, and the `k8s.*` attributes but `k8s.cluster.name`, which is the same on every series) are opt-in: select them in `attributes.select` to get a latency distribution per workload. The counters carry the workload by default, and each time counter has the attributes of its count counter, `error.type` included (e.g. `obi.stat.disk.service_time` and `obi.stat.disk.operations`): the ratio of their sums by the workload attributes is the mean latency of each workload, failed operations included, and adding `error_type` to the sums gives the mean latency of each outcome. For the disk metrics, add up the devices where `obi.disk.stacked` is `false`, as for the bytes: a stacked device reports the I/O of the devices below it again, and the bios of a bio-based volume are timed from their submission, so they also hold the time of the requests below.
 
 The disk metrics are charged to the workload that owns the I/O: the cgroup that the request's first bio is charged to, which is the cgroup the kernel also uses for `io.stat` and `io.max`. OBI reads the cgroup name in the kernel, takes the container ID from it, and decorates the metrics with the pod and container of that ID. Limitations:
 
@@ -180,7 +180,7 @@ The disk metrics are charged to the workload that owns the I/O: the cgroup that 
 
 Over OTLP, the storage stats (disk, file sync, NFS client and pod volume) omit the workload attributes of the I/O that is reported without a workload, and `k8s.cluster.name` when the cluster name is unknown. OBI's Prometheus endpoint exposes them as empty labels, which Prometheus treats as missing.
 
-`obi.stat.disk.queue_time` is the sum of the time that the completed reads and writes waited between their allocation and their issue to the device, in the I/O scheduler or in the dispatch queues, per device, direction, outcome and workload, like `obi.stat.disk.service_time`. Together, the two counters split the time that `/proc/diskstats` counts for each read and write, like iostat does: iostat's `await` of each workload is their sum divided by the operations, and the average number of reads and writes waiting or in service (iostat's `aqu-sz`) is the rate of their sum. iostat's `aqu-sz` also counts the flushes and discards: add the rates of the sums of `obi.stat.disk.flush.duration` and `obi.stat.disk.discard.duration`. For example, the `await` of the reads and writes of each workload:
+`obi.stat.disk.queue_time` is the sum of the time that the completed reads and writes waited between their allocation and their issue to the device, in the I/O scheduler or in the dispatch queues, per device, direction, outcome and workload, like `obi.stat.disk.service_time`. Together, the two counters split the time that `/proc/diskstats` counts for each read and write: their sum divided by the operations is iostat's `r_await` and `w_await`, here of each workload, and the rate of their sum is the average number of reads and writes waiting or in service, iostat's `aqu-sz` for the reads and writes. iostat's `await` also counts the discards (sysstat 12.2 and later), and its `aqu-sz` the discards and the cache flushes, which the kernel times from their allocation too: the rates of the sums of `obi.stat.disk.discard.duration` and `obi.stat.disk.flush.duration`, which start at the issue, approach what they add to `aqu-sz`. OBI has no `%util`: iostat computes it from the time during which a device has requests in flight (`io_ticks`, the hostmetrics receiver's `system.disk.io_time`), which no sum of request times gives, and the rate of `obi.stat.disk.service_time`, the average number of requests in service, can exceed 1 on the devices that serve requests in parallel. For example, the `r_await` and `w_await` of each workload:
 
 ```promql
   sum by (k8s_namespace_name, k8s_owner_name, disk_io_direction) (
@@ -192,8 +192,8 @@ Over OTLP, the storage stats (disk, file sync, NFS client and pod volume) omit t
 
 For a write that must follow a cache flush (a journal commit), the queue time includes that flush. Limitations:
 
-- OBI measures the wait of the requests that the kernel accounts in `/proc/diskstats`, those of devices that keep I/O statistics (`/sys/block/<device>/queue/iostats`). On the kernels that number their request flags with macros (Linux 6.10 and earlier, and RHEL 8, but not RHEL 9.6), it also measures those of devices that use an I/O scheduler, which the kernel doesn't account. The other requests add nothing to the queue time, so the `await` above is their service time: `/proc/diskstats` doesn't count them at all.
-- The bios of the bio-based volumes and the empty flush requests of the file syncs, which are never issued, add nothing to the queue time either: they are timed from their submission or allocation, so their service time already holds their wait, and the `await` above is right for them.
+- OBI measures the wait of the requests that the kernel accounts in `/proc/diskstats`, those of devices that keep I/O statistics (`/sys/block/<device>/queue/iostats`). On the kernels that number their request flags with macros (Linux 6.10 and earlier, and RHEL 8, but not RHEL 9.6), it also measures those of devices that use an I/O scheduler, which the kernel doesn't account. The other requests add nothing to the queue time, so the ratio above is their service time: `/proc/diskstats` doesn't count them at all.
+- The bios of the bio-based volumes and the empty flush requests of the file syncs, which are never issued, add nothing to the queue time either: they are timed from their submission or allocation, so their service time already holds their wait, and the ratio above is their `r_await` or `w_await`.
 - Waits before the allocation, such as those of blk-throttle (`io.max`) and of writeback throttling, are not included.
 
 `obi.stat.disk.operation.inflight` is the number of reads and writes that each device is serving, sampled every `ebpf.batch_timeout`: issued to the device and not yet completed, as `/sys/block/<device>/inflight` counts them. Requests waiting in the I/O scheduler are not counted: from Linux 6.10, `/proc/diskstats` field 9 counts them too. The kernel counts discards as writes. Before Linux 5.11 (including RHEL 8), it doesn't count the requests of a partition on its disk: the disk then reports the larger of its own requests and the sum of those of its partitions. It is reported for every device that has requests in flight or completed reads or writes recently, except the path devices of NVMe native multipath (e.g. `nvme1c0n1`): they have no `/sys/dev/block` entry to read their requests in flight from.
@@ -297,13 +297,30 @@ The file sync metrics report the errno that the sync returned, and the NFS metri
 
 #### Storage stats profiles
 
-The storage stats are opt-in, and their cost in series depends on the features and attributes you choose. Three starting points, with the series of a typical node (4 devices with I/O, 40 workloads doing I/O, 10 of them syncing files, 1 NFS server) and of a busy one (40 devices, 250 workloads, all of them syncing, 50 on NFS across 4 servers), with the default 16 bounds of the latency histograms:
+The storage stats are opt-in, and their cost in series depends on the features and attributes you choose, and on the block devices of the node: each stacked volume, each multipath device and each of its paths is a device of its own. Three starting points:
 
-| Profile | What it reports | Typical node | Busy node |
-|---|---|---|---|
-| Minimal | Block I/O bytes, requests and time per device and workload, flush latency per device, file syncs and their time per workload. No probe on NFS, no request latency distribution. | ~500 | ~6,600 |
-| Standard | Everything, with the latency histograms per device, call or procedure and the counters per workload: the defaults. | ~1,100 | ~16,000 |
-| Detailed | The standard profile, with the latency histograms per workload too. | ~4,600 | ~100,000 |
+| Profile | What it reports |
+|---|---|
+| Minimal | Block I/O bytes, requests and time per device and workload, flush latency per device, file syncs and their time per workload. No probe on NFS, no request latency distribution. |
+| Standard | Everything, with the latency histograms per device, call or procedure and the counters per workload: the defaults. |
+| Detailed | The standard profile, with the latency histograms per workload too. |
+
+With the default 16 bounds, each attribute set of a latency histogram is 19 series in Prometheus: its buckets, `+Inf`, `_sum` and `_count`. The standard profile costs:
+
+| For each | Series |
+|---|---|
+| Block device that reads and writes: a disk, a dm-multipath device, an LVM volume, an NVMe native multipath head | 48: the latency histograms of the reads and of the writes (38), the bytes, operations, service time and queue time of the I/O charged to no workload, like that of the filesystem journal (8), and the requests in flight (2) |
+| Path of a dm-multipath device, which reports no latency histogram | 10 |
+| Path of an NVMe native multipath head, which reports no latency histogram but that of the flushes, and no requests in flight | 8 |
+| Device that receives cache flushes, like a local disk with a volatile write cache | 19 more |
+| Workload that reads and writes on a device | 8 more on that device |
+| `error.type` of a device and direction | 19 more on a device with latency histograms, and 3 per workload |
+| Sync type (`fsync`, `fdatasync`, …) | 21, and 2 per workload that syncs |
+| NFS server and procedure in use | 21, and 2 per workload that calls it |
+| NFS server | 2, and 2 per workload that reads or writes |
+| Stacked volume and disk below it, pod volume and disk below it | 1 |
+
+For example, a SAN LUN without a volatile write cache, with 4 active paths and an LVM volume on its dm-multipath device, read and written by one workload, costs 184 block I/O series: 56 for the volume, 56 for the multipath device and 18 for each path. Without LVM, it costs 128: 40 such LUNs make 5,120. The minimal profile reports 6 series for each device that reads and writes and for each workload on it, the flush histograms, and 2 per sync type and per workload that syncs. The detailed profile adds 19 series per workload to the latency histograms: 38 for each device that the workload reads and writes on, and 19 for each sync type and for each NFS server and procedure that it uses.
 
 Minimal:
 
@@ -330,11 +347,11 @@ attributes:
     # every storage latency histogram, per workload but not per pod or volume
     obi.stat.*.duration:
       include: ["*"]
-      exclude: [obi.ip, obi.disk.partition, container.id, k8s.pod.name, k8s.container.name, k8s.kind,
+      exclude: [obi.ip, obi.disk.partition, container.id, k8s.pod.name, k8s.container.name,
                 system.filesystem.mountpoint]
 ```
 
-The mean latency per workload doesn't need the detailed profile: it is the ratio of the sums of a time counter and of its count counter by the workload, failed operations included, e.g. `sum by (k8s_namespace_name, k8s_owner_name) (rate(obi_stat_disk_service_time_seconds_total[5m])) / sum by (k8s_namespace_name, k8s_owner_name) (rate(obi_stat_disk_operations_total[5m]))`. Selecting `k8s.pod.name`, `k8s.container.name` or `container.id` on a latency histogram makes a series per bucket for each pod, and selecting `system.filesystem.mountpoint` on `obi.stat.fs.sync.duration` for each volume: OBI warns about them at startup. With config v2, list the families in `capture.network.stats.features` without the `stats_` prefix, and the selection in `extensions.obi.enrich.attributes.select`. Config v2 has no group names: in place of `stats_disk`, `stats_fs_sync` and `stats_nfs`, list each of their families (`disk_io`, `disk_operations` and so on, as [config v2](config/version-2.0/config-v2.md) lists them). Unknown names, like `disk`, are ignored.
+The mean latency per workload doesn't need the detailed profile: it is the ratio of the sums of a time counter and of its count counter by the workload, failed operations included, e.g. `sum by (k8s_namespace_name, k8s_owner_name) (rate(obi_stat_disk_service_time_seconds_total{obi_disk_stacked="false"}[5m])) / sum by (k8s_namespace_name, k8s_owner_name) (rate(obi_stat_disk_operations_total{obi_disk_stacked="false"}[5m]))`. Selecting `k8s.pod.name`, `k8s.container.name` or `container.id` on a latency histogram makes a series per bucket for each pod, and selecting `system.filesystem.mountpoint` on `obi.stat.fs.sync.duration` for each volume: OBI warns about them at startup. With config v2, list the families in `capture.network.stats.features` without the `stats_` prefix, and the selection in `extensions.obi.enrich.attributes.select`. Config v2 has no group names: in place of `stats_disk`, `stats_fs_sync` and `stats_nfs`, list each of their families (`disk_io`, `disk_operations` and so on, as [config v2](config/version-2.0/config-v2.md) lists them). Unknown names, like `disk`, are ignored.
 
 #### Storage stats under dynamic application selection
 

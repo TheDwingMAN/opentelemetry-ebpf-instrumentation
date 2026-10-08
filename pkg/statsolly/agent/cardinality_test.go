@@ -56,7 +56,7 @@ func TestDetailedProfileIsPerWorkload(t *testing.T) {
 	selection := attributes.Selection{"obi.stat.*.duration": {
 		Include: []string{"*"},
 		Exclude: []string{
-			"obi.ip", "obi.disk.partition", "container.id", "k8s.pod.name", "k8s.container.name", "k8s.kind",
+			"obi.ip", "obi.disk.partition", "container.id", "k8s.pod.name", "k8s.container.name",
 			"system.filesystem.mountpoint",
 		},
 	}}
@@ -71,7 +71,8 @@ func TestDetailedProfileIsPerWorkload(t *testing.T) {
 		attributes.StatDiskOperationDuration, attributes.StatDiskFlushDuration,
 		attributes.StatDiskDiscardDuration, attributes.StatFsSyncDuration, attributes.StatNFSClientProcedureDuration,
 	} {
-		assert.Subset(t, attrSel.For(histogram), []attr.Name{attr.K8sNamespaceName, attr.K8sOwnerName}, histogram.OTEL)
+		assert.Subset(t, attrSel.For(histogram),
+			[]attr.Name{attr.K8sNamespaceName, attr.K8sOwnerName, attr.K8sKind}, histogram.OTEL)
 	}
 	assert.Equal(t, []attr.Name{
 		attr.ErrorType, attr.K8sClusterName, attr.K8sKind, attr.K8sNamespaceName, attr.K8sOwnerName, attr.FsSyncType,
