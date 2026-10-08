@@ -371,7 +371,7 @@ func TestDefault_StatNFSClient(t *testing.T) {
 	}, p.For(StatNFSClientIO))
 }
 
-func TestDefault_StatK8sPodVolumeDevice(t *testing.T) {
+func TestDefault_StatK8sPodVolumeInfo(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, []attr.Name{
@@ -385,17 +385,17 @@ func TestDefault_StatK8sPodVolumeDevice(t *testing.T) {
 		attr.K8sVolumeType,
 		attr.DiskVolumeDevice,
 		attr.SystemDevice,
-	}, p.For(StatK8sPodVolumeDevice))
+	}, p.For(StatK8sPodVolumeInfo))
 }
 
-func TestDefault_StatDiskVolumeDevice(t *testing.T) {
+func TestDefault_StatDiskVolumeInfo(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, []attr.Name{
 		attr.DiskVolumeDevice,
 		attr.DiskVolumeName,
 		attr.SystemDevice,
-	}, p.For(StatDiskVolumeDevice), "the volumes are not charged to workloads")
+	}, p.For(StatDiskVolumeInfo), "the volumes are not charged to workloads")
 }
 
 func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {

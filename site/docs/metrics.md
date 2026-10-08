@@ -1529,13 +1529,13 @@ Sum of the device service times of the completed block reads and writes (the sum
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
-## `obi.stat.disk.volume.device`
+## `obi.stat.disk.volume.info`
 
-1 for each disk that a stacked volume of the node, such as an LVM, md RAID or loop device, is on, and 0 once it no longer is.
+Info metric that links each stacked volume of the node (device mapper, md RAID or loop device) to the disks it is on: one series per volume and disk, of value 1, reported once more with 0 when the volume is gone. Join it on `system.device` with the block I/O metrics.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
-| updowncounter | {volume} | development |
+| updowncounter | 1 | development |
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
@@ -1612,13 +1612,13 @@ Completed file syncs (fsync, fdatasync, sync, syncfs and sync_file_range), per c
 | `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
 | `system.filesystem.type` | string | `opt_in` | development | The filesystem type | ext4; xfs; tmpfs; overlay; nfs4; fuse.sshfs |
 
-## `obi.stat.k8s.pod.volume.device`
+## `obi.stat.k8s.pod.volume.info`
 
-1 for each disk that a volume that a pod mounts from a PersistentVolumeClaim is on, and 0 once the pod no longer mounts it.
+Info metric that links each volume that a pod of the node mounts from a PersistentVolumeClaim to the device it is mounted from (`obi.disk.volume.device`) and to the disks of that device (`system.device`): one series per pod, volume and disk, of value 1, reported once more with 0 when the pod no longer mounts it. Join it on `system.device` with the block I/O metrics.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
-| updowncounter | {volume} | development |
+| updowncounter | 1 | development |
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |

@@ -113,8 +113,8 @@ type statMetricsExporter struct {
 	nfsProcedureCount        *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	nfsProcedureTime         *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
 	nfsIO                    *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
-	k8sPodVolumeDevice       *currentUpDownCounter[*ebpf.Stat]
-	diskVolumeDevice         *currentUpDownCounter[*ebpf.Stat]
+	k8sPodVolumeInfo         *currentUpDownCounter[*ebpf.Stat]
+	diskVolumeInfo           *currentUpDownCounter[*ebpf.Stat]
 	kernelHistograms         *kernelHistogramProducer
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
@@ -315,25 +315,25 @@ func newStatMetricsExporter(
 	}
 
 	if cfg.CommonCfg.Features.StatsDiskPodVolumes() {
-		volumes, err := ebpfEvents.Int64UpDownCounter(attributes.StatK8sPodVolumeDevice.OTEL,
-			metric2.WithUnit(attributes.StatK8sPodVolumeDevice.Unit))
+		volumes, err := ebpfEvents.Int64UpDownCounter(attributes.StatK8sPodVolumeInfo.OTEL,
+			metric2.WithUnit(attributes.StatK8sPodVolumeInfo.Unit))
 		if err != nil {
 			log.Error("creating stats k8s pod volume device counter", "error", err)
 			return nil, err
 		}
-		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatK8sPodVolumeDevice))
-		nme.k8sPodVolumeDevice = newCurrentUpDownCounter(ctx, volumes, attrs, timeNow, cfg.Metrics.TTL)
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatK8sPodVolumeInfo))
+		nme.k8sPodVolumeInfo = newCurrentUpDownCounter(ctx, volumes, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	if cfg.CommonCfg.Features.StatsDiskVolumeDevices() {
-		volumes, err := ebpfEvents.Int64UpDownCounter(attributes.StatDiskVolumeDevice.OTEL,
-			metric2.WithUnit(attributes.StatDiskVolumeDevice.Unit))
+		volumes, err := ebpfEvents.Int64UpDownCounter(attributes.StatDiskVolumeInfo.OTEL,
+			metric2.WithUnit(attributes.StatDiskVolumeInfo.Unit))
 		if err != nil {
 			log.Error("creating stats disk volume device counter", "error", err)
 			return nil, err
 		}
-		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskVolumeDevice))
-		nme.diskVolumeDevice = newCurrentUpDownCounter(ctx, volumes, attrs, timeNow, cfg.Metrics.TTL)
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskVolumeInfo))
+		nme.diskVolumeInfo = newCurrentUpDownCounter(ctx, volumes, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
@@ -383,13 +383,13 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			}
 			return stat.DiskPending.Requests, true
 		})
-		recordCurrentSums(me.k8sPodVolumeDevice, i, func(stat *ebpf.Stat) (int64, bool) {
+		recordCurrentSums(me.k8sPodVolumeInfo, i, func(stat *ebpf.Stat) (int64, bool) {
 			if stat.PodVolume == nil {
 				return 0, false
 			}
 			return stat.PodVolume.Value, true
 		})
-		recordCurrentSums(me.diskVolumeDevice, i, func(stat *ebpf.Stat) (int64, bool) {
+		recordCurrentSums(me.diskVolumeInfo, i, func(stat *ebpf.Stat) (int64, bool) {
 			if stat.DiskVolume == nil {
 				return 0, false
 			}

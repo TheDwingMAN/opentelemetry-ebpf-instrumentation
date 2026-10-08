@@ -777,16 +777,16 @@ var (
 		Unit:    "By",
 		Type:    InstrumentCounter,
 	})
-	StatK8sPodVolumeDevice = metric(Name{
-		Section: "obi.stat.k8s.pod.volume.device",
-		OTEL:    "obi.stat.k8s.pod.volume.device",
-		Unit:    "{volume}",
+	StatK8sPodVolumeInfo = metric(Name{
+		Section: "obi.stat.k8s.pod.volume.info",
+		OTEL:    "obi.stat.k8s.pod.volume.info",
+		Unit:    "",
 		Type:    InstrumentUpDownCounter,
 	})
-	StatDiskVolumeDevice = metric(Name{
-		Section: "obi.stat.disk.volume.device",
-		OTEL:    "obi.stat.disk.volume.device",
-		Unit:    "{volume}",
+	StatDiskVolumeInfo = metric(Name{
+		Section: "obi.stat.disk.volume.info",
+		OTEL:    "obi.stat.disk.volume.info",
+		Unit:    "",
 		Type:    InstrumentUpDownCounter,
 	})
 )

@@ -475,7 +475,7 @@ func TestPodVolumeStats(t *testing.T) {
 
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_k8s_pod_volume_device", Value: 1, Labels: map[string]string{
+			{Name: "obi_stat_k8s_pod_volume_info", Value: 1, Labels: map[string]string{
 				"k8s_volume_name":                "data",
 				"k8s_volume_type":                "persistentVolumeClaim",
 				"k8s_persistentvolumeclaim_name": "data-db-0",
@@ -483,7 +483,7 @@ func TestPodVolumeStats(t *testing.T) {
 				"obi_disk_volume_device":         "dm-0",
 				"system_device":                  "sda",
 			}},
-		}, scrapeDiskMetrics(ct, promURL, "obi_stat_k8s_pod_volume_device"))
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_k8s_pod_volume_info"))
 	}, timeout, 100*time.Millisecond)
 }
 
@@ -522,9 +522,9 @@ func TestDiskVolumeStats(t *testing.T) {
 	raidLabels := map[string]string{"obi_disk_volume_device": "md0", "obi_disk_volume_name": "", "system_device": "sdb"}
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_disk_volume_device", Value: 1, Labels: lvmLabels},
-			{Name: "obi_stat_disk_volume_device", Value: 1, Labels: raidLabels},
-		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_volume_device"))
+			{Name: "obi_stat_disk_volume_info", Value: 1, Labels: lvmLabels},
+			{Name: "obi_stat_disk_volume_info", Value: 1, Labels: raidLabels},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_volume_info"))
 	}, timeout, 100*time.Millisecond)
 
 	// the LVM volume is gone: the tracer reports it once more, with 0
@@ -536,9 +536,9 @@ func TestDiskVolumeStats(t *testing.T) {
 	}
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_disk_volume_device", Value: 0, Labels: lvmLabels},
-			{Name: "obi_stat_disk_volume_device", Value: 1, Labels: raidLabels},
-		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_volume_device"))
+			{Name: "obi_stat_disk_volume_info", Value: 0, Labels: lvmLabels},
+			{Name: "obi_stat_disk_volume_info", Value: 1, Labels: raidLabels},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_volume_info"))
 	}, timeout, 100*time.Millisecond)
 }
 

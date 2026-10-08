@@ -51,8 +51,8 @@ var statTypeMetrics = map[StatType][]attributes.Name{
 		attributes.StatNFSClientProcedureTime,
 	},
 	StatTypeNFSIO:      {attributes.StatNFSClientIO},
-	StatTypePodVolume:  {attributes.StatK8sPodVolumeDevice},
-	StatTypeDiskVolume: {attributes.StatDiskVolumeDevice},
+	StatTypePodVolume:  {attributes.StatK8sPodVolumeInfo},
+	StatTypeDiskVolume: {attributes.StatDiskVolumeInfo},
 }
 
 // StatTypeMetrics returns the metrics that report the stats of each type

@@ -1003,20 +1003,21 @@ groups:
       - ref: k8s.container.name
         requirement_level: opt_in
 
-  - id: metric.obi.obi.stat.disk.volume.device
+  - id: metric.obi.obi.stat.disk.volume.info
     type: metric
-    metric_name: obi.stat.disk.volume.device
+    metric_name: obi.stat.disk.volume.info
     instrument: updowncounter
-    unit: "{volume}"
+    unit: ""
     stability: development
     brief: >
-      1 for each disk that a stacked volume of the node, such as an LVM, md
-      RAID or loop device, is on, and 0 once it no longer is.
+      Info metric that links each stacked volume of the node (device mapper,
+      md RAID or loop device) to the disks it is on: one series per volume and
+      disk, of value 1, reported once more with 0 when the volume is gone.
+      Join it on `system.device` with the block I/O metrics.
     note: >
-      It links the stacked volumes to the block I/O metrics of the disks below
-      them (`system.device`). A volume over several disks, such as an md RAID1
-      volume, has one series per disk, and a volume over another stacked
-      volume has the disks of the bottom one.
+      A volume over several disks (md RAID1) has a series per disk, a volume
+      over another stacked volume has the disks of the bottom one, and a loop
+      device has the disks of the filesystem that holds its file.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -1028,20 +1029,22 @@ groups:
       - ref: system.device
         requirement_level: recommended
 
-  - id: metric.obi.obi.stat.k8s.pod.volume.device
+  - id: metric.obi.obi.stat.k8s.pod.volume.info
     type: metric
-    metric_name: obi.stat.k8s.pod.volume.device
+    metric_name: obi.stat.k8s.pod.volume.info
     instrument: updowncounter
-    unit: "{volume}"
+    unit: ""
     stability: development
     brief: >
-      1 for each disk that a volume that a pod mounts from a
-      PersistentVolumeClaim is on, and 0 once the pod no longer mounts it.
+      Info metric that links each volume that a pod of the node mounts from a
+      PersistentVolumeClaim to the device it is mounted from
+      (`obi.disk.volume.device`) and to the disks of that device
+      (`system.device`): one series per pod, volume and disk, of value 1,
+      reported once more with 0 when the pod no longer mounts it. Join it on
+      `system.device` with the block I/O metrics.
     note: >
-      It links the pods to the block I/O metrics of the disks their volumes are
-      on (`system.device`), through their PersistentVolumeClaims and
-      PersistentVolumes. A volume on a stacked device, such as an LVM volume
-      over several disks, has one series per disk.
+      A volume on a stacked device, such as an LVM volume over several disks,
+      has one series per disk.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in

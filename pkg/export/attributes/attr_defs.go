@@ -1134,11 +1134,11 @@ func getDefinitions(
 			SubGroups:  []*AttrReportGroup{&statsNFSIOAttributes, &statsDiskKubeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
-		StatK8sPodVolumeDevice.Section: {
+		StatK8sPodVolumeInfo.Section: {
 			SubGroups:  []*AttrReportGroup{&statsPodVolumeAttributes, &statsPodVolumeKubeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
-		StatDiskVolumeDevice.Section: {
+		StatDiskVolumeInfo.Section: {
 			SubGroups:  []*AttrReportGroup{&statsDiskVolumeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},

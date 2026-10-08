@@ -216,7 +216,7 @@ func testDiskInflightOfWorkloadDevices(ctx context.Context, t *testing.T, _ *env
 	return ctx
 }
 
-// podVolumeLabels are the Prometheus labels of obi.stat.k8s.pod.volume.device
+// podVolumeLabels are the Prometheus labels of obi.stat.k8s.pod.volume.info
 var podVolumeLabels = []string{
 	"k8s_cluster_name", "k8s_namespace_name", "k8s_pod_name", "k8s_owner_name", "k8s_kind",
 	"k8s_volume_name", "k8s_volume_type", "k8s_persistentvolumeclaim_name", "k8s_persistentvolume_name",
@@ -229,7 +229,7 @@ func testPodVolumeDevices(ctx context.Context, t *testing.T, _ *envconf.Config) 
 	pq := promtest.Client{HostPort: prometheusHostPort}
 	var disk string
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		volumes, err := pq.Query(`obi_stat_k8s_pod_volume_device{k8s_owner_name="disk-io-pvc"} == 1`)
+		volumes, err := pq.Query(`obi_stat_k8s_pod_volume_info{k8s_owner_name="disk-io-pvc"} == 1`)
 		require.NoError(ct, err)
 		require.Len(ct, volumes, 1, "the volume is on one disk")
 		assert.Empty(ct, promtest.LabelMismatches(volumes[0].Metric, podVolumeLabels, map[string]*regexp.Regexp{

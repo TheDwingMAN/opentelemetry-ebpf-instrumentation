@@ -557,7 +557,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (obi_ip, obi_disk_volume_device, obi_disk_volume_name, system_device) (obi_stat_disk_volume_device{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\"} == 1)",
+          "expr": "max by (obi_ip, obi_disk_volume_device, obi_disk_volume_name, system_device) (obi_stat_disk_volume_info{instance=~\"$instance\", obi_ip=~\"$node\", system_device=~\"$device\"} == 1)",
           "legendFormat": "",
           "refId": "A",
           "format": "table",
@@ -1088,7 +1088,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\", obi_ip=~\"$node\"} == 1, \"source\", \"/\", \"k8s_namespace_name\", \"k8s_pod_name\"), \"source\", \"pod $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"k8s_namespace_name\", \"k8s_persistentvolumeclaim_name\"), \"target\", \"pvc $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
+          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_info{instance=~\"$instance\", obi_ip=~\"$node\"} == 1, \"source\", \"/\", \"k8s_namespace_name\", \"k8s_pod_name\"), \"source\", \"pod $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"k8s_namespace_name\", \"k8s_persistentvolumeclaim_name\"), \"target\", \"pvc $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
           "legendFormat": "",
           "refId": "A",
           "format": "table",
@@ -1100,7 +1100,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\", obi_ip=~\"$node\"} == 1, \"source\", \"/\", \"k8s_namespace_name\", \"k8s_persistentvolumeclaim_name\"), \"source\", \"pvc $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"k8s_persistentvolume_name\"), \"target\", \"pv $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
+          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_info{instance=~\"$instance\", obi_ip=~\"$node\"} == 1, \"source\", \"/\", \"k8s_namespace_name\", \"k8s_persistentvolumeclaim_name\"), \"source\", \"pvc $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"k8s_persistentvolume_name\"), \"target\", \"pv $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
           "legendFormat": "",
           "refId": "B",
           "format": "table",
@@ -1112,7 +1112,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\", obi_ip=~\"$node\"} == 1, \"source\", \"/\", \"k8s_persistentvolume_name\"), \"source\", \"pv $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"obi_ip\", \"obi_disk_volume_device\"), \"target\", \"device $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
+          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_info{instance=~\"$instance\", obi_ip=~\"$node\"} == 1, \"source\", \"/\", \"k8s_persistentvolume_name\"), \"source\", \"pv $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"obi_ip\", \"obi_disk_volume_device\"), \"target\", \"device $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
           "legendFormat": "",
           "refId": "C",
           "format": "table",
@@ -1124,7 +1124,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_device{instance=~\"$instance\", obi_ip=~\"$node\"} == 1, \"source\", \"/\", \"obi_ip\", \"obi_disk_volume_device\"), \"source\", \"device $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"obi_ip\", \"system_device\"), \"target\", \"disk $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
+          "expr": "group by (id, source, target) (label_join(label_replace(label_join(label_replace(label_join(obi_stat_k8s_pod_volume_info{instance=~\"$instance\", obi_ip=~\"$node\"} == 1, \"source\", \"/\", \"obi_ip\", \"obi_disk_volume_device\"), \"source\", \"device $1\", \"source\", \"(.*)\"), \"target\", \"/\", \"obi_ip\", \"system_device\"), \"target\", \"disk $1\", \"target\", \"(.*)\"), \"id\", \" -> \", \"source\", \"target\"))",
           "legendFormat": "",
           "refId": "D",
           "format": "table",
@@ -1174,7 +1174,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (k8s_namespace_name, k8s_pod_name, k8s_persistentvolumeclaim_name, k8s_persistentvolume_name, obi_disk_volume_device, obi_ip, system_device) (obi_stat_k8s_pod_volume_device{instance=~\"$instance\", obi_ip=~\"$node\"} == 1) * on (obi_ip, system_device) group_left sum by (obi_ip, system_device) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", obi_ip=~\"$node\"}[5m]))",
+          "expr": "max by (k8s_namespace_name, k8s_pod_name, k8s_persistentvolumeclaim_name, k8s_persistentvolume_name, obi_disk_volume_device, obi_ip, system_device) (obi_stat_k8s_pod_volume_info{instance=~\"$instance\", obi_ip=~\"$node\"} == 1) * on (obi_ip, system_device) group_left sum by (obi_ip, system_device) (rate(obi_stat_disk_io_bytes_total{instance=~\"$instance\", obi_ip=~\"$node\"}[5m]))",
           "legendFormat": "",
           "refId": "A",
           "format": "table",

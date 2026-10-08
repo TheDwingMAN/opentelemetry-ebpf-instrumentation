@@ -58,8 +58,8 @@ type statMetricsReporter struct {
 	nfsProcedureCount        *Expirer[prometheus.Counter]
 	nfsProcedureTime         *Expirer[prometheus.Counter]
 	nfsIO                    *Expirer[prometheus.Counter]
-	k8sPodVolumeDevice       *Expirer[prometheus.Gauge]
-	diskVolumeDevice         *Expirer[prometheus.Gauge]
+	k8sPodVolumeInfo         *Expirer[prometheus.Gauge]
+	diskVolumeInfo           *Expirer[prometheus.Gauge]
 
 	promConnect *connector.PrometheusManager
 
@@ -84,8 +84,8 @@ type statMetricsReporter struct {
 	nfsProcedureCountAttrs        []attributes.Field[*ebpf.Stat, string]
 	nfsProcedureTimeAttrs         []attributes.Field[*ebpf.Stat, string]
 	nfsIOAttrs                    []attributes.Field[*ebpf.Stat, string]
-	k8sPodVolumeDeviceAttrs       []attributes.Field[*ebpf.Stat, string]
-	diskVolumeDeviceAttrs         []attributes.Field[*ebpf.Stat, string]
+	k8sPodVolumeInfoAttrs         []attributes.Field[*ebpf.Stat, string]
+	diskVolumeInfoAttrs           []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -376,12 +376,12 @@ func (r *statMetricsReporter) registerPodVolumeMetrics(cfg *StatsPrometheusConfi
 	if !cfg.CommonCfg.Features.StatsDiskPodVolumes() {
 		return nil
 	}
-	r.k8sPodVolumeDeviceAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatK8sPodVolumeDevice))
-	r.k8sPodVolumeDevice = NewExpirer[prometheus.Gauge](prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: attributes.StatK8sPodVolumeDevice.Prom,
-		Help: "1 for each disk that a volume that a pod mounts from a PersistentVolumeClaim is on",
-	}, labelNames(r.k8sPodVolumeDeviceAttrs)).MetricVec, timeNow, cfg.Config.TTL)
-	return []prometheus.Collector{r.k8sPodVolumeDevice}
+	r.k8sPodVolumeInfoAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatK8sPodVolumeInfo))
+	r.k8sPodVolumeInfo = NewExpirer[prometheus.Gauge](prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: attributes.StatK8sPodVolumeInfo.Prom,
+		Help: "1 for each disk under a volume that a pod mounts from a PersistentVolumeClaim: join on system_device",
+	}, labelNames(r.k8sPodVolumeInfoAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+	return []prometheus.Collector{r.k8sPodVolumeInfo}
 }
 
 // registerDiskVolumeMetrics creates the metric of the disks of the stacked volumes
@@ -389,12 +389,12 @@ func (r *statMetricsReporter) registerDiskVolumeMetrics(cfg *StatsPrometheusConf
 	if !cfg.CommonCfg.Features.StatsDiskVolumeDevices() {
 		return nil
 	}
-	r.diskVolumeDeviceAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskVolumeDevice))
-	r.diskVolumeDevice = NewExpirer[prometheus.Gauge](prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: attributes.StatDiskVolumeDevice.Prom,
-		Help: "1 for each disk that a stacked volume, such as an LVM, md RAID or loop device, is on",
-	}, labelNames(r.diskVolumeDeviceAttrs)).MetricVec, timeNow, cfg.Config.TTL)
-	return []prometheus.Collector{r.diskVolumeDevice}
+	r.diskVolumeInfoAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskVolumeInfo))
+	r.diskVolumeInfo = NewExpirer[prometheus.Gauge](prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: attributes.StatDiskVolumeInfo.Prom,
+		Help: "1 for each disk that a stacked volume (LVM, md RAID, loop device) is on: join on system_device",
+	}, labelNames(r.diskVolumeInfoAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+	return []prometheus.Collector{r.diskVolumeInfo}
 }
 
 // registerDiskOperationMetrics creates the metrics of the block requests beyond reads and
@@ -580,10 +580,10 @@ func (r *statMetricsReporter) observeNFSProcedure(stat *ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observePodVolumes(stats []*ebpf.Stat) {
-	if r.k8sPodVolumeDevice == nil {
+	if r.k8sPodVolumeInfo == nil {
 		return
 	}
-	setGaugeSums(r.k8sPodVolumeDevice, r.k8sPodVolumeDeviceAttrs, stats, func(stat *ebpf.Stat) (float64, bool) {
+	setGaugeSums(r.k8sPodVolumeInfo, r.k8sPodVolumeInfoAttrs, stats, func(stat *ebpf.Stat) (float64, bool) {
 		if stat.PodVolume == nil {
 			return 0, false
 		}
@@ -592,10 +592,10 @@ func (r *statMetricsReporter) observePodVolumes(stats []*ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observeDiskVolumes(stats []*ebpf.Stat) {
-	if r.diskVolumeDevice == nil {
+	if r.diskVolumeInfo == nil {
 		return
 	}
-	setGaugeSums(r.diskVolumeDevice, r.diskVolumeDeviceAttrs, stats, func(stat *ebpf.Stat) (float64, bool) {
+	setGaugeSums(r.diskVolumeInfo, r.diskVolumeInfoAttrs, stats, func(stat *ebpf.Stat) (float64, bool) {
 		if stat.DiskVolume == nil {
 			return 0, false
 		}

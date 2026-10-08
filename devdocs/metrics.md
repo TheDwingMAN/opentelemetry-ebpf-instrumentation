@@ -216,10 +216,10 @@ The `obi.fs.sync.type` attribute tells the system call apart: syncs outside of t
 
 #### Pod volume devices
 
-`obi.stat.k8s.pod.volume.device` links the pods to the disks of the block I/O metrics: it is 1 for each disk that a volume that a pod of the node mounts from a PersistentVolumeClaim is on, with the pod, the volume, the claim, the PersistentVolume, the device the volume is mounted from (`obi.disk.volume.device`) and the disk (`system.device`). A volume on a stacked device, like an LVM volume over two disks, has a series for each disk, and a volume on a loop device has the disks of the filesystem that holds the file of the loop device. When a pod no longer mounts a volume, its series are reported once more with 0. For example, the bytes read from the disks of each PersistentVolumeClaim, by any workload:
+`obi.stat.k8s.pod.volume.info` links the pods to the disks of the block I/O metrics: it is 1 for each disk that a volume that a pod of the node mounts from a PersistentVolumeClaim is on, with the pod, the volume, the claim, the PersistentVolume, the device the volume is mounted from (`obi.disk.volume.device`) and the disk (`system.device`). A volume on a stacked device, like an LVM volume over two disks, has a series for each disk, and a volume on a loop device has the disks of the filesystem that holds the file of the loop device. When a pod no longer mounts a volume, its series are reported once more with 0. For example, the bytes read from the disks of each PersistentVolumeClaim, by any workload:
 
 ```promql
-max by (k8s_persistentvolumeclaim_name, system_device) (obi_stat_k8s_pod_volume_device == 1)
+max by (k8s_persistentvolumeclaim_name, system_device) (obi_stat_k8s_pod_volume_info == 1)
   * on (system_device) group_left
 sum by (system_device) (rate(obi_stat_disk_io_bytes_total{disk_io_direction="read"}[5m]))
 ```
@@ -235,10 +235,10 @@ OBI resolves the volumes every 30 seconds, from the Kubernetes metadata and the 
 
 #### Stacked volume disks
 
-`obi.stat.disk.volume.device` (`stats_disk_volume_devices`, part of `stats_disk`) links the stacked volumes of the node to the disks of the block I/O metrics, whether pods mount them or not: it is 1 for each disk that a device mapper (LVM, dm-crypt, multipath), md RAID or loop device of the node is on, with the volume (`obi.disk.volume.device`, e.g. `dm-0`), its device mapper name (`obi.disk.volume.name`, e.g. `rhel-root`, as `/dev/mapper` names it, omitted for md RAID and loop devices) and the disk (`system.device`). OBI walks sysfs every 30 seconds, without any probe, from the volumes down to the disks like for the pod volume devices: a volume on partitions is on their disks, a volume over another stacked volume is on the disks of the bottom one, and a loop device is on the disks of the filesystem that holds its file. A loop device whose file is on no block device, like on tmpfs, has no series, and neither has a loop device that is not bound to a file. When a volume is removed, its series are reported once more with 0. For example, the bytes written to the disks of each device mapper volume, by any workload:
+`obi.stat.disk.volume.info` (`stats_disk_volume_devices`, part of `stats_disk`) links the stacked volumes of the node to the disks of the block I/O metrics, whether pods mount them or not: it is 1 for each disk that a device mapper (LVM, dm-crypt, multipath), md RAID or loop device of the node is on, with the volume (`obi.disk.volume.device`, e.g. `dm-0`), its device mapper name (`obi.disk.volume.name`, e.g. `rhel-root`, as `/dev/mapper` names it, omitted for md RAID and loop devices) and the disk (`system.device`). OBI walks sysfs every 30 seconds, without any probe, from the volumes down to the disks like for the pod volume devices: a volume on partitions is on their disks, a volume over another stacked volume is on the disks of the bottom one, and a loop device is on the disks of the filesystem that holds its file. A loop device whose file is on no block device, like on tmpfs, has no series, and neither has a loop device that is not bound to a file. When a volume is removed, its series are reported once more with 0. For example, the bytes written to the disks of each device mapper volume, by any workload:
 
 ```promql
-max by (obi_disk_volume_name, system_device) (obi_stat_disk_volume_device{obi_disk_volume_name!=""} == 1)
+max by (obi_disk_volume_name, system_device) (obi_stat_disk_volume_info{obi_disk_volume_name!=""} == 1)
   * on (system_device) group_left
 sum by (system_device) (rate(obi_stat_disk_io_bytes_total{disk_io_direction="write"}[5m]))
 ```
@@ -295,10 +295,10 @@ The mean latency per workload doesn't need the detailed profile: it is the ratio
 
 #### Storage stats under dynamic application selection
 
-When OBI is embedded with a dynamic selector (`instrumenter.WithDynamicSelector`), the block I/O, file sync and NFS metrics keep only what the kernel charges to the containers of the selected processes, and to the containers of the pods of the selected Kubernetes workloads. `obi.stat.k8s.pod.volume.device` keeps only the volumes of those pods. Limitations:
+When OBI is embedded with a dynamic selector (`instrumenter.WithDynamicSelector`), the block I/O, file sync and NFS metrics keep only what the kernel charges to the containers of the selected processes, and to the containers of the pods of the selected Kubernetes workloads. `obi.stat.k8s.pod.volume.info` keeps only the volumes of those pods. Limitations:
 
 - The selection works through containers: a selected process outside a container, and the operations charged to no container (like those of kernel threads), are not reported.
-- The requests in flight of the devices (`obi.stat.disk.operation.inflight`) and the disks of the stacked volumes (`obi.stat.disk.volume.device`) belong to no application, so they are not reported.
+- The requests in flight of the devices (`obi.stat.disk.operation.inflight`) and the disks of the stacked volumes (`obi.stat.disk.volume.info`) belong to no application, so they are not reported.
 - Selecting Kubernetes workloads needs the Kubernetes metadata.
 - While nothing is selected, no storage stat is reported.
 
