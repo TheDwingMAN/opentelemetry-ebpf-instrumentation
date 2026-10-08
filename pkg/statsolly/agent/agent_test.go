@@ -17,7 +17,7 @@ import (
 )
 
 func TestLatencyHistogramsOfTheEnabledExportersAndFeatures(t *testing.T) {
-	custom := []float64{0.0003, 0.003, 0.03, 0.3, 0.7}
+	custom := []float64{0.0003, 0.003, 0.03, 0.3, 0.7, 2, 3, 7}
 	cfg := &obi.Config{
 		// the Prometheus exporter is disabled: its default buckets don't count
 		Prometheus: prom.PrometheusConfig{Buckets: export.DefaultBuckets},

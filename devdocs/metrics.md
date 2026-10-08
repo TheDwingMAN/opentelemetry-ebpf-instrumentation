@@ -255,13 +255,13 @@ sum by (system_device) (rate(obi_stat_disk_io_bytes_total{disk_io_direction="wri
 
 #### Storage stats profiles
 
-The storage stats are opt-in, and their cost in series depends on the features and attributes you choose. Three starting points, with the series of a typical node (4 devices with I/O, 40 workloads doing I/O, 10 of them syncing files, 1 NFS server) and of a busy one (40 devices, 250 workloads, all of them syncing, 50 on NFS across 4 servers), with the default 19 histogram buckets (18 for NFS):
+The storage stats are opt-in, and their cost in series depends on the features and attributes you choose. Three starting points, with the series of a typical node (4 devices with I/O, 40 workloads doing I/O, 10 of them syncing files, 1 NFS server) and of a busy one (40 devices, 250 workloads, all of them syncing, 50 on NFS across 4 servers), with the default 16 bounds of the latency histograms:
 
 | Profile | What it reports | Typical node | Busy node |
 |---|---|---|---|
-| Minimal | Block I/O bytes, requests and time per device and workload, flush latency per device, file syncs and their time per workload. No probe on NFS, no request latency distribution. | ~500 | ~6,800 |
-| Standard | Everything, with the latency histograms per device, call or procedure and the counters per workload: the defaults. | ~1,200 | ~17,000 |
-| Detailed | The standard profile, with the latency histograms per workload too. | ~5,200 | ~120,000 |
+| Minimal | Block I/O bytes, requests and time per device and workload, flush latency per device, file syncs and their time per workload. No probe on NFS, no request latency distribution. | ~500 | ~6,600 |
+| Standard | Everything, with the latency histograms per device, call or procedure and the counters per workload: the defaults. | ~1,100 | ~16,000 |
+| Detailed | The standard profile, with the latency histograms per workload too. | ~4,600 | ~100,000 |
 
 Minimal:
 
