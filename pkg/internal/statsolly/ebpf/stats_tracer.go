@@ -454,11 +454,12 @@ func fsSyncMaxActive() int {
 }
 
 // sizeInFlightMaps gives the in-flight maps room for twice the free entries that the CPUs can keep
-// for themselves. Before Linux 6.16 (and 6.12.39, 6.6.99, RHEL 9.8), once those hold most of an LRU
-// map, a CPU that needs an entry evicts a live one instead of taking a free one from another CPU:
-// an evicted request is never counted, and an evicted timed queue leaves the records of its next
-// requests in disk_rq_start (see disk_timed_queues). It grows the maps of 16384 entries on hosts
-// with more than 64 CPUs, and disk_timed_queues on hosts with more than 4.
+// for themselves. Before Linux 6.16, except from 6.12.39, 6.6.99, RHEL 9.8 and RHEL 10.2, which
+// have the fix, once those hold most of an LRU map, a CPU that needs an entry evicts a live one
+// instead of taking a free one from another CPU: an evicted request is never counted, and an
+// evicted timed queue leaves the records of its next requests in disk_rq_start (see
+// disk_timed_queues). It grows the maps of 16384 entries on hosts with more than 64 CPUs, and
+// disk_timed_queues on hosts with more than 4.
 func sizeInFlightMaps(spec *ebpf.CollectionSpec, cpus int) {
 	minEntries := uint32(2 * lruLocalFreeTarget * cpus)
 	for _, name := range inFlightMaps {

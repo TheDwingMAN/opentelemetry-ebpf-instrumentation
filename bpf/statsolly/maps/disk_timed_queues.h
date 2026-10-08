@@ -13,10 +13,11 @@
 // completion reads what the kernel recorded instead. A queue is added when a completion finds the
 // kernel's timestamp, and removed when a measured request (read, write, flush or discard) of the
 // queue completes with neither. LRU so that removed queues are forgotten. Userspace grows it to at
-// least 256 entries per CPU (sizeInFlightMaps): before Linux 6.16 (and 6.12.39, 6.6.99, RHEL 9.8),
-// a small LRU map evicts live queues once the CPUs keep most of it as free entries for themselves,
-// and the next requests of an evicted queue are recorded at their issue but complete with the
-// kernel's timestamp, which leaves their records in disk_rq_start.
+// least 256 entries per CPU (sizeInFlightMaps): before Linux 6.16, except from 6.12.39, 6.6.99,
+// RHEL 9.8 and RHEL 10.2, which have the fix, a small LRU map evicts live queues once the CPUs keep
+// most of it as free entries for themselves, and the next requests of an evicted queue are recorded
+// at their issue but complete with the kernel's timestamp, which leaves their records in
+// disk_rq_start.
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1 << 10);
