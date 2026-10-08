@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"time"
 	"unsafe"
 
+	ciliumebpf "github.com/cilium/ebpf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
@@ -53,10 +55,12 @@ var allAttributes = &attributes.SelectorConfig{
 }
 
 // TestDiskLatencyIsAccumulatedPerDevice drives a known I/O pattern on a loop device and checks
-// that the kernel accumulates exactly one latency sample per completed request. The I/O is
-// O_DIRECT and sequential at queue depth 1, so the block layer neither caches nor merges it.
+// that the kernel accumulates exactly one latency sample per completed request, in the bucket of
+// the boundaries that userspace gives it. The I/O is O_DIRECT and sequential at queue depth 1, so
+// the block layer neither caches nor merges it.
 func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
-	bounds := []float64{0.001, 0.01, 0.1}
+	// no loop device request completes within the first boundary
+	bounds := []float64{0.000001, 0.01, 0.1}
 	features := export.FeatureStatsDiskOperationDuration
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes,
 		ebpf.LatencyHistograms{Disk: bounds}, ebpf.ProbeReads{})
@@ -117,6 +121,45 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	// Some kernels give a request the same start and issue time, which a block plug caches, so the
 	// wait alone may add up to 0.
 	assert.LessOrEqual(t, queuedAndServed, elapsed.Seconds(), "the wait before issue and the service time of the requests")
+
+	assertKernelBuckets(t, fetcher.DiskIOAccumMap(), loopDev, bounds)
+}
+
+// assertKernelBuckets checks that the kernel accumulated the requests of a device in the buckets of
+// the given boundaries: each latency lies in its bucket, so the mean of a bucket does too.
+func assertKernelBuckets(t *testing.T, accumMap *ciliumebpf.Map, devPath string, bounds []float64) {
+	t.Helper()
+	var dev unix.Stat_t
+	require.NoError(t, unix.Stat(devPath, &dev))
+	entries, err := ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: accumMap}.read()
+	require.NoError(t, err)
+
+	boundsNs := make([]uint64, len(bounds))
+	for i, bound := range bounds {
+		boundsNs[i] = uint64(math.Round(bound * float64(time.Second)))
+	}
+	var accumulated bool
+	for key, accum := range entries {
+		if key.Major != unix.Major(dev.Rdev) || key.Minor != unix.Minor(dev.Rdev) {
+			continue
+		}
+		accumulated = true
+		assert.Zero(t, accum.LatencyCount[0], "no request completes within %v s", bounds[0])
+		for bucket, count := range accum.LatencyCount {
+			if count == 0 {
+				continue
+			}
+			require.LessOrEqual(t, bucket, len(bounds), "the kernel only has a bucket per boundary and one above them")
+			mean := accum.LatencySumNs[bucket] / count
+			if bucket > 0 {
+				assert.Greater(t, mean, boundsNs[bucket-1], "the mean of bucket %d is above its lower boundary", bucket)
+			}
+			if bucket < len(bounds) {
+				assert.LessOrEqual(t, mean, boundsNs[bucket], "the mean of bucket %d is within its upper boundary", bucket)
+			}
+		}
+	}
+	assert.True(t, accumulated, "the kernel accumulated the requests of %s", devPath)
 }
 
 // TestDiskPartitions checks that I/O on a partition is reported with its partition

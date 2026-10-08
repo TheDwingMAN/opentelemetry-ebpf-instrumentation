@@ -81,6 +81,7 @@ func TestDiskReaderReadsFullMaps(t *testing.T) {
 	stats := r.readStats()
 	require.Len(t, stats, 1)
 	assert.Equal(t, uint64(2), stats[0].DiskIO.Operations)
+	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.0005, Count: 2}}, stats[0].DiskIO.Latency)
 	assert.True(t, r.full)
 	assert.NotContains(t, r.previous, writeKey(259, 1))
 }
