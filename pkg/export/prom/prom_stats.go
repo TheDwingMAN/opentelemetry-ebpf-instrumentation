@@ -392,7 +392,7 @@ func (r *statMetricsReporter) registerDiskVolumeMetrics(cfg *StatsPrometheusConf
 	r.diskVolumeInfoAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskVolumeInfo))
 	r.diskVolumeInfo = NewExpirer[prometheus.Gauge](prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: attributes.StatDiskVolumeInfo.Prom,
-		Help: "1 for each disk that a stacked volume (LVM, md RAID, loop device) is on: join on system_device",
+		Help: "1 for each disk that a stacked volume (device mapper, md RAID or loop device) is on: join on system_device",
 	}, labelNames(r.diskVolumeInfoAttrs)).MetricVec, timeNow, cfg.Config.TTL)
 	return []prometheus.Collector{r.diskVolumeInfo}
 }

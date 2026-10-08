@@ -318,7 +318,7 @@ func newStatMetricsExporter(
 		volumes, err := ebpfEvents.Int64UpDownCounter(attributes.StatK8sPodVolumeInfo.OTEL,
 			metric2.WithUnit(attributes.StatK8sPodVolumeInfo.Unit))
 		if err != nil {
-			log.Error("creating stats k8s pod volume device counter", "error", err)
+			log.Error("creating stats k8s pod volume info counter", "error", err)
 			return nil, err
 		}
 		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatK8sPodVolumeInfo))
@@ -329,7 +329,7 @@ func newStatMetricsExporter(
 		volumes, err := ebpfEvents.Int64UpDownCounter(attributes.StatDiskVolumeInfo.OTEL,
 			metric2.WithUnit(attributes.StatDiskVolumeInfo.Unit))
 		if err != nil {
-			log.Error("creating stats disk volume device counter", "error", err)
+			log.Error("creating stats disk volume info counter", "error", err)
 			return nil, err
 		}
 		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskVolumeInfo))

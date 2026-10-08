@@ -468,7 +468,7 @@ func (f Features) StatsTCPIo() bool {
 
 // StatsDisk reports whether any block I/O stat metric that the block probes measure is enabled. The
 // operations in flight and the disks of the stacked volumes are read from the kernel counters and
-// sysfs, and the stacked volumes are measured only along with one of these metrics.
+// sysfs, and the bio-based devices are measured only along with one of these metrics.
 func (f Features) StatsDisk() bool {
 	return f.any(featureStatsDiskRequests)
 }

@@ -16,7 +16,7 @@ enum stat_type : u8 {
     k_stat_type_tcp_successful_connection = 5,
     k_stat_type_disk_io = 6,
     k_stat_type_fs_sync = 7,
-    // produced in userspace, from the requests in flight in disk_rq_start
+    // produced in userspace, from the requests in flight that /sys/block/<device>/inflight counts
     k_stat_type_disk_pending = 8,
     // produced in userspace, from the NFS client accumulation maps
     k_stat_type_nfs_procedure = 9,

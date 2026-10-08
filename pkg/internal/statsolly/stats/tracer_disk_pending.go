@@ -22,10 +22,11 @@ type pendingKey struct {
 	op      ebpf.DiskOpCode
 }
 
-// pendingReader counts the reads and writes that each device is serving, as the kernel counts
-// them for iostat. It reports every device that did I/O recently and whose requests in flight it
-// can read, including those that have no request in flight at the time of the read. It only reads
-// the counters of the kernel, so it doesn't need the block probes.
+// pendingReader counts the reads and writes that each device is serving: issued to the device and
+// not yet completed, as /sys/block/<device>/inflight counts them. It reports every device that did
+// I/O recently and whose requests in flight it can read, including those that have no request in
+// flight at the time of the read. It only reads the counters of the kernel, so it doesn't need the
+// block probes.
 type pendingReader struct {
 	log       *slog.Logger
 	procRoot  string

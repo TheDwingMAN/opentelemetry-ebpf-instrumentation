@@ -16,7 +16,7 @@ import (
 )
 
 // bioDevicesRefreshReads is how many reads of the accumulation maps pass between two updates of
-// the list of stacked volumes that the kernel measures
+// the list of bio-based devices that the kernel measures
 const bioDevicesRefreshReads = 30
 
 // deviceSet abstracts the disk_bio_devices eBPF map, for testing
@@ -83,7 +83,7 @@ func (b *bioDevices) refresh() {
 
 	current, err := b.set.devices()
 	if err != nil {
-		b.log.Debug("can't read the stacked volumes", "error", err)
+		b.log.Debug("can't read the bio-based devices", "error", err)
 		return
 	}
 	for _, dev := range current {
@@ -92,12 +92,12 @@ func (b *bioDevices) refresh() {
 			continue
 		}
 		if err := b.set.remove(dev); err != nil && !errors.Is(err, ciliumebpf.ErrKeyNotExist) {
-			b.log.Debug("can't forget a stacked volume", "dev", dev, "error", err)
+			b.log.Debug("can't forget a bio-based device", "dev", dev, "error", err)
 		}
 	}
 	for dev := range want {
 		if err := b.set.add(dev); err != nil {
-			b.log.Warn("can't measure a stacked volume", "dev", dev, "error", err)
+			b.log.Warn("can't measure a bio-based device", "dev", dev, "error", err)
 		}
 	}
 }

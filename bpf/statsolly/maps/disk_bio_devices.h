@@ -8,8 +8,9 @@
 
 #include <common/pin_internal.h>
 
-// The bio-based stacked devices (device mapper, md RAID) whose bios are measured, keyed by their
-// kernel dev_t. Userspace keeps it up to date, so that bios of other devices are skipped at once.
+// The bio-based devices (device mapper and md RAID volumes, NVMe multipath heads, zram, ...) whose
+// bios are measured, keyed by their kernel dev_t. Userspace keeps it up to date, so that bios of
+// other devices are skipped at once.
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1 << 12);
