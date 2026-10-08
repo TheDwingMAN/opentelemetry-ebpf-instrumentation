@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/prometheus/procfs"
@@ -123,17 +124,35 @@ func TestTraceFSEventCommand(t *testing.T) {
 	for _, tc := range []struct {
 		name, target, want string
 		ret                bool
+		maxActive          int
 	}{
 		{name: "uprobe", target: "/proc/123/exe:0x42", want: "p:obi_abcd/probe_0 /proc/123/exe:0x42"},
 		{name: "uretprobe", target: "/proc/123/exe:0x42", ret: true, want: "r:obi_abcd/probe_0 /proc/123/exe:0x42"},
 		{name: "USDT", target: "/proc/123/exe:0xc0b0(0x18)", want: "p:obi_abcd/probe_0 /proc/123/exe:0xc0b0(0x18)"},
 		{name: "kprobe", target: "tcp_sendmsg", want: "p:obi_abcd/probe_0 tcp_sendmsg"},
 		{name: "kretprobe default maxactive", target: "tcp_sendmsg", ret: true, want: "r:obi_abcd/probe_0 tcp_sendmsg"},
+		{name: "kretprobe maxactive", target: "vfs_fsync_range", ret: true, maxActive: 256, want: "r256:obi_abcd/probe_0 vfs_fsync_range"},
+		{name: "kprobe ignores maxactive", target: "vfs_fsync_range", maxActive: 256, want: "p:obi_abcd/probe_0 vfs_fsync_range"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, traceFSEventCommand(tc.target, tc.ret, "obi_abcd", "probe_0"))
+			assert.Equal(t, tc.want, traceFSEventCommand(tc.target, tc.ret, tc.maxActive, "obi_abcd", "probe_0"))
 		})
 	}
+}
+
+func TestAttachExtendsShutdownTimeout(t *testing.T) {
+	fallbackUsed.Store(false)
+	t.Cleanup(func() { fallbackUsed.Store(false) })
+	eventsFile := filepath.Join(t.TempDir(), "kprobe_events")
+	require.NoError(t, os.WriteFile(eventsFile, nil, 0o600))
+
+	got, err := attach(nil, Options{Type: Kprobe, Targets: []string{"vfs_fsync_range"}, Return: true, MaxActive: 256},
+		func(_ *ebpf.Program, _ Options, _ string, group, name string) (*traceFSLink, error) {
+			return newTestTraceFSLink(t, &traceFSEvent{eventsFile: eventsFile, group: group, name: name}), nil
+		})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, got.Close()) })
+	assert.Equal(t, 30*time.Second, EffectiveShutdownTimeout(10*time.Second))
 }
 
 func TestAttachCleansUpPartialBatch(t *testing.T) {
