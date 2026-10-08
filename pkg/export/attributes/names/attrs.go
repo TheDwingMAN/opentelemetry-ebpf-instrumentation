@@ -398,6 +398,8 @@ const (
 	// DiskStacked tells whether system.device is built on other block devices, which report the
 	// same I/O too
 	DiskStacked = Name("obi.disk.stacked")
+	// DiskVolumeName is the device mapper name of a block device, as /dev/mapper lists it
+	DiskVolumeName = Name("obi.disk.volume.name")
 	// FsSyncType is the call that synced files: fsync, fdatasync, sync, syncfs or sync_file_range
 	FsSyncType           = Name("obi.fs.sync.type")
 	FilesystemMountpoint = Name(semconv.SystemFilesystemMountpointKey)
@@ -411,6 +413,4 @@ const (
 	// DiskVolumeDevice is the block device that a volume is mounted from, e.g. a partition or an
 	// LVM volume on the disk that system.device names
 	DiskVolumeDevice = Name("obi.disk.volume.device")
-	// DiskVolumeName is the device mapper name of the volume of DiskVolumeDevice, e.g. rhel-root
-	DiskVolumeName = Name("obi.disk.volume.name")
 )
