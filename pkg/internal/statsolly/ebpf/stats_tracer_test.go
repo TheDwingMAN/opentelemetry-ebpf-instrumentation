@@ -363,7 +363,10 @@ func TestRequestIOStatFlag(t *testing.T) {
 }
 
 func TestBioProgramsToDisable(t *testing.T) {
-	all := []string{progObiStatsRawTpBlockBioQueue, progObiStatsRawTpBlockBioQueueLegacy, progObiStatsRawTpBlockBioComplete}
+	all := []string{
+		progObiStatsRawTpBlockBioQueue, progObiStatsRawTpBlockBioQueueLegacy, progObiStatsRawTpBlockBioComplete,
+		progObiStatsRawTpBlockRqCompleteBios,
+	}
 	assert.Equal(t, all, bioProgramsToDisable(false, blockTracepointLayout{}))
 	assert.Equal(t, []string{progObiStatsRawTpBlockBioQueueLegacy}, bioProgramsToDisable(true, blockTracepointLayout{}))
 	assert.Equal(t, []string{progObiStatsRawTpBlockBioQueue},

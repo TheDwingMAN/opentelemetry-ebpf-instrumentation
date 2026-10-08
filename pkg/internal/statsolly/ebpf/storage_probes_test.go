@@ -36,6 +36,7 @@ func TestStorageProbesDisableAll(t *testing.T) {
 	for _, program := range []string{
 		progObiStatsRawTpBlockRqIssue, progObiStatsRawTpBlockRqIssueLegacy, progObiStatsRawTpBlockRqComplete,
 		progObiStatsRawTpBlockBioQueue, progObiStatsRawTpBlockBioQueueLegacy, progObiStatsRawTpBlockBioComplete,
+		progObiStatsRawTpBlockRqCompleteBios,
 		progObiStatsRawTpRPCTaskBegin, progObiStatsRawTpRPCStatsLatency,
 		progObiStatsRawTpNFSReadpageDone, progObiStatsRawTpNFSWritebackDone,
 	} {

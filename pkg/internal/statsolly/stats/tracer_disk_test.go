@@ -377,7 +377,7 @@ func TestDiskReaderReportsNoLatencyOfMultipathPaths(t *testing.T) {
 	assert.Empty(t, stats[deviceOp{"sdb", ebpf.CodeDiskOpFlush}].Latency)
 	assert.Empty(t, stats[deviceOp{"nvme1c0n1", ebpf.CodeDiskOpWrite}].Latency, "the bios of the head are measured")
 	assert.NotEmpty(t, stats[deviceOp{"nvme1c0n1", ebpf.CodeDiskOpFlush}].Latency,
-		"the head doesn't measure its flushes, whose completion the kernel doesn't trace")
+		"the path measures the cache flushes that it sends to the device, the head those submitted to it")
 
 	stats = read(false)
 	assert.Empty(t, stats[deviceOp{"sdb", ebpf.CodeDiskOpWrite}].Latency)

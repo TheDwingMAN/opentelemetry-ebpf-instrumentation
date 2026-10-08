@@ -70,6 +70,7 @@ const (
 	progObiStatsRawTpBlockBioQueue                        = "obi_stats_raw_tp_block_bio_queue"
 	progObiStatsRawTpBlockBioQueueLegacy                  = "obi_stats_raw_tp_block_bio_queue_legacy"
 	progObiStatsRawTpBlockBioComplete                     = "obi_stats_raw_tp_block_bio_complete"
+	progObiStatsRawTpBlockRqCompleteBios                  = "obi_stats_raw_tp_block_rq_complete_bios"
 	progObiStatsKprobeVfsFsyncRange                       = "obi_stats_kprobe_vfs_fsync_range"
 	progObiStatsKretprobeVfsFsyncRange                    = "obi_stats_kretprobe_vfs_fsync_range"
 	progObiStatsKprobeDoFsync                             = "obi_stats_kprobe_do_fsync"
@@ -853,7 +854,10 @@ func diskProgramsToDisable(enabled bool, layout blockTracepointLayout) []string 
 func bioProgramsToDisable(enabled bool, layout blockTracepointLayout) []string {
 	switch {
 	case !enabled:
-		return []string{progObiStatsRawTpBlockBioQueue, progObiStatsRawTpBlockBioQueueLegacy, progObiStatsRawTpBlockBioComplete}
+		return []string{
+			progObiStatsRawTpBlockBioQueue, progObiStatsRawTpBlockBioQueueLegacy, progObiStatsRawTpBlockBioComplete,
+			progObiStatsRawTpBlockRqCompleteBios,
+		}
 	case layout.bioQueueHasQueueArg:
 		return []string{progObiStatsRawTpBlockBioQueue}
 	default:

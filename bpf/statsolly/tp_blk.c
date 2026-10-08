@@ -15,8 +15,6 @@
 #include <statsolly/maps/disk_rq_start.h>
 #include <statsolly/maps/disk_timed_queues.h>
 
-// Set when block_rq_complete reports a blk_status_t (Linux 5.16+) instead of a negative errno.
-volatile const bool disk_status_is_blk_status;
 // The RQF_FLUSH_SEQ flag of struct request, which userspace finds in the kernel BTF: its bit
 // depends on the kernel version, and some kernels number it in an anonymous enum.
 volatile const u32 disk_rqf_flush_seq;

@@ -25,6 +25,9 @@ enum { k_op_mask = (1U << __REQ_FAILFAST_DEV) - 1 };
 // version. 0 when the kernel has none.
 volatile const u32 disk_req_op_zone_append;
 
+// Set when block_rq_complete reports a blk_status_t (Linux 5.16+) instead of a negative errno.
+volatile const bool disk_status_is_blk_status;
+
 SCRATCH_MEM_TYPED(disk_io_accum_init, disk_io_accum_t)
 
 // The accumulation entry of a key in one of the disk accumulation maps, created zeroed if missing

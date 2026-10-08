@@ -355,9 +355,10 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 
 // latency returns the latencies that the latency histograms report for the requests of a key.
 // The paths of a multipath device report none: the multipath device reports the latency of the
-// same I/O, and the histograms of its paths would multiply its series by their number. The heads of
-// NVMe native multipath don't measure their flushes, whose completion the kernel doesn't trace
-// there, so their paths keep reporting them.
+// same I/O, and the histograms of its paths would multiply its series by their number. The paths
+// of NVMe native multipath keep reporting their flushes: their head measures the flushes that are
+// submitted to it, until the end of their flush sequence, and a path the cache flushes that it
+// sends to the device, each of which can serve several of them.
 func (d *diskStats) latency(key ebpf.StatsDiskIoKeyT, latency []ebpf.LatencySample) []ebpf.LatencySample {
 	switch d.devices.multipathPathOf(key.Major, key.Minor) {
 	case dmMultipathPath:

@@ -150,6 +150,27 @@ static __always_inline u8 disk_status_code(const u64 raw_error, const bool is_bl
     return errno_status((u32)(-(s32)raw_error));
 }
 
+// disk_bio_status is the status that a block_rq_complete reports for the bios of its request, as
+// the blk_status_t that the kernel sets in their bi_status after the tracepoint. Before Linux
+// 5.16, the tracepoint reports the errno of the status instead, which is not mapped back: a
+// failure is k_status_other then.
+static __always_inline u8 disk_bio_status(const u64 raw_error, const bool is_blk_status) {
+    const u8 status = disk_status_code(raw_error, is_blk_status);
+    if (is_blk_status || status == 0) {
+        return status;
+    }
+    return k_status_other;
+}
+
+// A block_rq_complete reports the bytes that the completion completes, and the kernel completes
+// the bios of the request in order while they fit in the bytes left (blk_update_request): a bio
+// larger than them is only advanced, for a later completion. disk_rq_completes_bio tells whether
+// the next bio, of bio_bytes, is completed. A completion without bytes completes an empty bio,
+// like the flush of a file sync.
+static __always_inline bool disk_rq_completes_bio(const u32 bio_bytes, const u32 bytes_left) {
+    return bio_bytes <= bytes_left;
+}
+
 enum { k_errno_ebadf = 9 };
 
 // do_fsync fails with EBADF, before syncing anything, when the file descriptor is invalid

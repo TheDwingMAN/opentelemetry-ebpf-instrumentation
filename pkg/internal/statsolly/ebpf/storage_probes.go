@@ -171,13 +171,15 @@ func (s *storageProbes) attach(log *slog.Logger, objects *StatsObjects) []io.Clo
 	if s.bio {
 		// the completions are attached before the starts, so that no start is recorded without
 		// its completion being measured: a stale start of a bio would be matched by another bio
-		// that reuses its memory
+		// that reuses its memory. The bios of the NVMe multipath heads that a path merges are
+		// completed from the completion of their request.
 		queue := objects.ObiStatsRawTpBlockBioQueue
 		if s.layout.bioQueueHasQueueArg {
 			queue = objects.ObiStatsRawTpBlockBioQueueLegacy
 		}
 		links, err := attachRawTracepoints([]probe{
 			{name: RawTracepointBlockBioComplete, program: objects.ObiStatsRawTpBlockBioComplete},
+			{name: RawTracepointBlockRqComplete, program: objects.ObiStatsRawTpBlockRqCompleteBios},
 			{name: RawTracepointBlockBioQueue, program: queue},
 		})
 		if err != nil {

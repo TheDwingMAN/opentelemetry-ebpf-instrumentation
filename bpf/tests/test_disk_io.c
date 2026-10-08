@@ -92,6 +92,27 @@ static void test_status_code(void) {
                 "an errno that doesn't fit in a status is not reported as a success");
 }
 
+static void test_bio_status(void) {
+    // blk_status_t since Linux 5.16: BLK_STS_MEDIUM is 7
+    assert_true(disk_bio_status(7, true) == 7, "a blk_status_t is the status of the bios");
+    assert_true(disk_bio_status(0, true) == 0, "BLK_STS_OK is success");
+    // negative errno before Linux 5.16
+    assert_true(disk_bio_status(0, false) == 0, "errno 0 is success");
+    assert_true(disk_bio_status((u64)(s64)-5, false) == k_status_other,
+                "an errno is no blk_status_t: -EIO is a failure without a known status");
+}
+
+static void test_rq_completes_bio(void) {
+    assert_true(disk_rq_completes_bio(4096, 8192),
+                "a bio that fits in the bytes left is completed");
+    assert_true(disk_rq_completes_bio(4096, 4096), "a bio of all the bytes left is completed");
+    assert_true(!disk_rq_completes_bio(8192, 4096),
+                "a bio larger than the bytes left is only advanced, by a partial completion");
+    assert_true(disk_rq_completes_bio(0, 0),
+                "a completion without bytes completes an empty bio, the flush of a file sync");
+    assert_true(!disk_rq_completes_bio(4096, 0), "a completion without bytes completes no data");
+}
+
 static void test_op_from_req_op(void) {
     assert_true(disk_op_from_req_op(0, 0) == disk_op_read, "REQ_OP_READ is a read");
     assert_true(disk_op_from_req_op(1, 0) == disk_op_write, "REQ_OP_WRITE is a write");
@@ -226,6 +247,8 @@ int main(void) {
     test_final_completion();
     test_completed_before();
     test_status_code();
+    test_bio_status();
+    test_rq_completes_bio();
     test_op_from_req_op();
     test_zone_append();
     test_bio_op();
