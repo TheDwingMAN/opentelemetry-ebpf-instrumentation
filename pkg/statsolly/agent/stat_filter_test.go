@@ -15,8 +15,8 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 )
 
-// The TCP stats are filtered as before the storage stats: upstream's filter.ByAttribute matches
-// every TCP stat against every filter, but those on the attributes that only storage metrics have
+// filter.ByAttribute matches every TCP stat against every filter but those on the attributes that
+// the storage stat metrics have and the TCP stat metrics don't
 func TestTCPStatFiltersKeepTheirSemantics(t *testing.T) {
 	common := func(port uint16, cidr, country string) pipe.CommonAttrs {
 		return pipe.CommonAttrs{OBIIP: "1.2.3.4", DstPort: port, Metadata: map[attr.Name]string{
@@ -51,10 +51,11 @@ func TestTCPStatFiltersKeepTheirSemantics(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		config filter.AttributeFamilyConfig
-		// what upstream's filter.ByAttribute keeps
+		// the stats that the TCP filters keep
 		kept []string
-		// the filters only have attributes that upstream has, so its matcher must keep the same stats
-		upstream bool
+		// no filter is on an attribute that the storage stat metrics have and the TCP stat metrics
+		// don't, so the TCP filters keep what the matchers of the whole config keep
+		sameAsUnsplitConfig bool
 	}{
 		{"reason: only the failed connections have it", filter.AttributeFamilyConfig{"reason": {NotMatch: "unknown"}}, []string{"refused", "timed out"}, true},
 		{"reason", filter.AttributeFamilyConfig{"reason": {Match: "refused"}}, []string{"refused"}, true},
@@ -69,8 +70,9 @@ func TestTCPStatFiltersKeepTheirSemantics(t *testing.T) {
 		{"k8s.cluster.name, which storage metrics have too", filter.AttributeFamilyConfig{"k8s.cluster.name": {NotMatch: "c1"}}, nil, true},
 		{"http.route, which no stat metric has", filter.AttributeFamilyConfig{"http.route": {Match: "/foo"}}, nil, true},
 		{"reason and dst.cidr", filter.AttributeFamilyConfig{"reason": {Match: "refused"}, "dst.cidr": {Match: "10.*"}}, []string{"refused"}, true},
-		// filters on the attributes that only storage metrics have don't apply to the TCP stats. Upstream
-		// rejected the new ones, and dropped every TCP stat for those it knew from other metrics
+		// no TCP stat is matched against the filters on the attributes that the storage stat metrics
+		// have and the TCP stat metrics don't: the TCP stats lack these attributes, so a match would
+		// drop them all, also on those that other metrics have, like k8s.namespace.name or container.id
 		{"system.device", filter.AttributeFamilyConfig{"system.device": {Match: "sda"}}, all, false},
 		{"k8s.namespace.name", filter.AttributeFamilyConfig{"k8s.namespace.name": {Match: "prod"}}, all, false},
 		{"container.id", filter.AttributeFamilyConfig{"container.id": {Match: "abc*"}}, all, false},
@@ -83,10 +85,10 @@ func TestTCPStatFiltersKeepTheirSemantics(t *testing.T) {
 			require.NoError(t, err)
 			assert.ElementsMatch(t, tc.kept, kept(matchers))
 
-			if tc.upstream {
-				upstream, err := filter.NewMatcherSet(tc.config, nil, nil, ebpf.StatStringGetters)
+			if tc.sameAsUnsplitConfig {
+				unsplit, err := filter.NewMatcherSet(tc.config, nil, nil, ebpf.StatStringGetters)
 				require.NoError(t, err)
-				assert.ElementsMatch(t, kept(upstream), kept(matchers))
+				assert.ElementsMatch(t, kept(unsplit), kept(matchers))
 			}
 		})
 	}

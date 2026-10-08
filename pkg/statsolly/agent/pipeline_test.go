@@ -748,8 +748,9 @@ func fakeDiskRecord(device string, op ebpf.DiskOpCode, errorType string, latency
 	}
 }
 
-// The TCP stats keep the filter semantics they had before the storage stats, and the filters of
-// each family don't drop the stats of the other
+// The TCP stats are matched against every filter but those on the attributes that the storage stat
+// metrics have and the TCP stat metrics don't, and the filters of each family don't drop the stats
+// of the other
 func TestStatFiltersOfBothFamilies(t *testing.T) {
 	ringBuf, diskEvents, promURL := startStatsPipeline(t,
 		export.FeatureStatsTCPRtt|export.FeatureStatsTCPFailedConnections|export.FeatureStatsDiskOperations,
@@ -771,7 +772,7 @@ func TestStatFiltersOfBothFamilies(t *testing.T) {
 	diskEvents <- []*ebpf.Stat{sda, vda}
 
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		// as before: the RTT stats have no reason, so a filter on it drops them
+		// the RTT stats have no reason, so a filter on it drops them
 		assert.Empty(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_tcp_rtt"))
 		assert.Len(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_tcp_failed_connections_total"), 1)
 		operations := scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operations_total")

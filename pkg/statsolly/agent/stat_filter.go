@@ -42,8 +42,8 @@ var storageStatMetrics = map[ebpf.StatType][]attributes.Name{
 	ebpf.StatTypeDiskVolume: {attributes.StatDiskVolumeInfo},
 }
 
-// tcpStatFilters returns the stats attribute filters that apply to the TCP stats: all of them, as
-// before the storage stats, but those on the attributes that only the storage metrics have. A
+// tcpStatFilters returns the stats attribute filters that apply to the TCP stats: all of them but
+// those on the attributes that the storage stat metrics have and the TCP stat metrics don't. A
 // filter on an attribute that no metric has is an error.
 func tcpStatFilters(config filter.AttributeFamilyConfig, extraGroupAttributesCfg map[string][]attr.Name) (filter.AttributeFamilyConfig, error) {
 	if _, err := filter.NewMatcherSet(config, nil, extraGroupAttributesCfg, ebpf.StatStringGetters); err != nil {
