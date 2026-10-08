@@ -411,6 +411,20 @@ func queueSchedulers(t *testing.T, device string) (current string, available []s
 	return current, available
 }
 
+// makeKernelTimeRequests makes the kernel time the requests of a device: it times those of the
+// queues that collect I/O statistics, as writeback throttling makes them do. It skips the test if the
+// kernel has no writeback throttling.
+func makeKernelTimeRequests(t *testing.T, device string) {
+	t.Helper()
+	wbtLatency, err := os.ReadFile(filepath.Join("/sys/block", device, "queue", "wbt_lat_usec"))
+	if err != nil {
+		t.Skipf("no writeback throttling to make the kernel time the requests: %v", err)
+	}
+	if strings.TrimSpace(string(wbtLatency)) == "0" {
+		writeQueueAttribute(t, device, "wbt_lat_usec", "75000")
+	}
+}
+
 func writeQueueAttribute(t *testing.T, device, name, value string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(filepath.Join("/sys/block", device, "queue", name), []byte(value), 0o644))
@@ -466,15 +480,7 @@ func TestDiskPassthroughCommands(t *testing.T) {
 		blocks   = 64
 	)
 	device := scsiDebugDisk(t)
-	// the kernel times the requests of the queues that collect I/O statistics, as writeback
-	// throttling makes them do
-	wbtLatency, err := os.ReadFile(filepath.Join("/sys/block", device, "queue", "wbt_lat_usec"))
-	if err != nil {
-		t.Skipf("no writeback throttling to make the kernel time the requests: %v", err)
-	}
-	if strings.TrimSpace(string(wbtLatency)) == "0" {
-		writeQueueAttribute(t, device, "wbt_lat_usec", "75000")
-	}
+	makeKernelTimeRequests(t, device)
 	node := deviceNode(t, device)
 	reader := attachDiskReader(t, export.FeatureStatsDisk)
 
@@ -531,15 +537,20 @@ func scsiDebugDisk(t *testing.T) string {
 	if disk == "" {
 		t.Skip("scsi_debug created no disk: the sd driver isn't loaded")
 	}
-	// udev reads a new disk to probe it, and again whenever it changes unless the disk is locked
-	// (https://systemd.io/BLOCK_DEVICE_LOCKING/): wait for the probe and keep the disk locked so
-	// that only the test does I/O
+	lockDisk(t, disk)
+	return disk
+}
+
+// lockDisk keeps a new disk from udev: udev reads a new disk to probe it, and again whenever it
+// changes unless the disk is locked (https://systemd.io/BLOCK_DEVICE_LOCKING/). It waits for the
+// probe and keeps the disk locked so that only the test does I/O.
+func lockDisk(t *testing.T, disk string) {
+	t.Helper()
 	_ = exec.Command("udevadm", "settle", "--timeout=10").Run()
 	if node, err := os.Open(filepath.Join("/dev", disk)); err == nil {
 		t.Cleanup(func() { node.Close() })
 		require.NoError(t, unix.Flock(int(node.Fd()), unix.LOCK_EX))
 	}
-	return disk
 }
 
 // writeAndReadConcurrently writes then reads the given number of different blocks of a device from
@@ -721,6 +732,61 @@ func TestDiskStackedVolumes(t *testing.T) {
 	assert.Equal(t, uint64(volumeWrites*directIOBlockSize), written)
 }
 
+// TestDiskMultipathRequestsAreCountedLikeTheKernel writes to and reads from a dm-multipath volume,
+// which is request-based: device mapper completes the bytes of each of its requests when the clone
+// of the request completes on the path, and ends the request again afterwards, without bytes. Each
+// read and write must be counted once, as in /proc/diskstats.
+func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
+	const blocks = 32
+	dmName := multipathVolume(t, attachLoopDevice(t))
+	if _, err := os.Stat(filepath.Join("/sys/block", dmName, "mq")); err != nil {
+		t.Skipf("the multipath volume %s is not request-based on this kernel", dmName)
+	}
+	lockDisk(t, dmName)
+	// a request that ends twice only looks like two requests when the kernel times them
+	makeKernelTimeRequests(t, dmName)
+	reader := attachDiskReader(t, export.FeatureStatsDisk)
+
+	f, err := os.OpenFile(deviceNode(t, dmName), os.O_RDWR|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	block := alignedBuffer(t, directIOBlockSize)
+	before := readKernelDiskStats(t, dmName)
+	for i := range blocks {
+		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+	}
+	for i := range blocks {
+		_, err := f.ReadAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+	}
+	// device mapper ends a request after its bytes completed, so the kernel can count the last read
+	// after it returned
+	after := readKernelDiskStats(t, dmName)
+	for deadline := time.Now().Add(5 * time.Second); after.reads-before.reads < blocks && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+		after = readKernelDiskStats(t, dmName)
+	}
+
+	var reads, writes, written uint64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != dmName {
+			continue
+		}
+		switch stat.DiskIO.Op {
+		case ebpf.CodeDiskOpRead:
+			reads += stat.DiskIO.Operations
+		case ebpf.CodeDiskOpWrite:
+			writes += stat.DiskIO.Operations
+			written += stat.DiskIO.Bytes
+		}
+	}
+	require.Equal(t, uint64(blocks), after.writes-before.writes, "the kernel completes one request per write")
+	assert.Equal(t, after.reads-before.reads, reads)
+	assert.Equal(t, after.writes-before.writes, writes)
+	assert.Equal(t, (after.sectorsWritten-before.sectorsWritten)*kernelSectorSize, written)
+}
+
 // TestDiskBioBasedDisks writes to and zeroes a range of a zram disk, whose driver handles bios
 // itself like the PowerFlex SDC or DRBD do, and checks that its I/O is measured from its bios, as
 // not stacked
@@ -889,6 +955,23 @@ func readConcurrently(t *testing.T, device string, readers int) <-chan error {
 // name. It skips the test if dmsetup is not installed.
 func linearVolume(t *testing.T, device string) string {
 	t.Helper()
+	return deviceMapperVolume(t, device, fmt.Sprintf("linear %s 0", device))
+}
+
+// multipathVolume creates a dm-multipath volume with a single path, the device, as multipathd does
+// for a SAN LUN, and returns its name. It skips the test if dm-multipath can't be loaded.
+func multipathVolume(t *testing.T, device string) string {
+	t.Helper()
+	if out, err := exec.Command("modprobe", "-a", "dm_multipath", "dm_round_robin").CombinedOutput(); err != nil {
+		t.Skipf("dm-multipath can't be loaded: %v: %s", err, out)
+	}
+	return deviceMapperVolume(t, device, fmt.Sprintf("multipath 0 0 1 1 round-robin 0 1 1 %s 1", device))
+}
+
+// deviceMapperVolume creates a device mapper volume over a whole device, with the given target and
+// its arguments, and returns its name. It skips the test if dmsetup is not installed.
+func deviceMapperVolume(t *testing.T, device, target string) string {
+	t.Helper()
 	dmsetup, err := exec.LookPath("dmsetup")
 	if err != nil {
 		t.Skip("dmsetup is not installed")
@@ -899,7 +982,7 @@ func linearVolume(t *testing.T, device string) string {
 
 	volume := fmt.Sprintf("obi-test-%d-%d", os.Getpid(), time.Now().UnixNano())
 	create := exec.Command(dmsetup, "create", volume, "--table",
-		fmt.Sprintf("0 %s linear %s 0", strings.TrimSpace(string(sectors)), device))
+		fmt.Sprintf("0 %s %s", strings.TrimSpace(string(sectors)), target))
 	// without udev, dmsetup creates the device nodes itself
 	create.Env = append(os.Environ(), "DM_DISABLE_UDEV=1")
 	out, err := create.CombinedOutput()

@@ -262,6 +262,12 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         return 0;
     }
 
+    // it was counted when its bytes completed
+    if (disk_rq_completed_before(
+            nr_bytes, op, BPF_CORE_READ(rq, bio) != 0, BPF_CORE_READ(rq, biotail) != 0)) {
+        return 0;
+    }
+
     disk_rq_start_t start = {};
     if (never_issued(rq)) {
         if (!never_issued_start(rq, nr_bytes, &start)) {

@@ -109,6 +109,18 @@ disk_rq_final_completion(const u32 nr_bytes, const u32 remaining_bytes, const u8
     return status != 0 || nr_bytes >= remaining_bytes;
 }
 
+// disk_rq_completed_before tells whether a request ends after an earlier completion completed all
+// its bytes, as device mapper ends a request of a request-based volume (dm-multipath) once its clone
+// completed on a path. The kernel leaves rq->biotail set when it completes the last bio, but clears
+// it with rq->bio when NVMe multipath takes the bios of a request to retry them on another path:
+// that ending is the only completion of the request. Flushes have no bio.
+static __always_inline bool disk_rq_completed_before(const u32 nr_bytes,
+                                                     const enum disk_op op,
+                                                     const bool has_bio,
+                                                     const bool has_biotail) {
+    return nr_bytes == 0 && op != disk_op_flush && !has_bio && has_biotail;
+}
+
 enum { k_sector_shift = 9 };
 
 // disk_rq_bytes is the size of a request that the kernel timed, at its final completion. The

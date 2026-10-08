@@ -64,6 +64,23 @@ static void test_final_completion(void) {
     assert_true(disk_rq_final_completion(4096, 8192, 10), "a failed completion is final");
 }
 
+static void test_completed_before(void) {
+    assert_true(disk_rq_completed_before(0, disk_op_read, false, true),
+                "device mapper ends a read after its bytes completed, with no bio left");
+    assert_true(disk_rq_completed_before(0, disk_op_write, false, true),
+                "device mapper ends a write after its bytes completed, with no bio left");
+    assert_true(!disk_rq_completed_before(4096, disk_op_read, true, true),
+                "the completion of the bytes is counted");
+    assert_true(
+        !disk_rq_completed_before(0, disk_op_read, false, false),
+        "a request whose bios NVMe multipath took to retry them on another path is counted");
+    assert_true(!disk_rq_completed_before(0, disk_op_flush, false, false),
+                "a flush has no bio and no bytes, and is counted");
+    assert_true(!disk_rq_completed_before(0, disk_op_write, true, true),
+                "an empty write keeps its bio: the empty flush of an fsync, or the end of a flush "
+                "sequence, is counted");
+}
+
 static void test_status_code(void) {
     // blk_status_t since Linux 5.16: BLK_STS_IOERR is 10
     assert_true(disk_status_code(10, true) == 10, "a blk_status_t is kept as is");
@@ -207,6 +224,7 @@ int main(void) {
     test_latency_bucket_without_bounds();
     test_latency_bucket_never_exceeds_the_bucket_array();
     test_final_completion();
+    test_completed_before();
     test_status_code();
     test_op_from_req_op();
     test_zone_append();
