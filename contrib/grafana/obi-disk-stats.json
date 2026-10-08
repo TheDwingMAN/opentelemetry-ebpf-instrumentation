@@ -799,8 +799,8 @@
     {
       "id": 21,
       "type": "timeseries",
-      "title": "File sync time p99 by filesystem",
-      "description": "Needs the opt-in system.filesystem.mountpoint attribute.",
+      "title": "Average file sync time by filesystem",
+      "description": "Average time of the file syncs on each filesystem, from the file sync counters. Needs the opt-in system.filesystem.mountpoint attribute on obi.stat.fs.sync.operations and obi.stat.fs.sync.operation_time.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -817,7 +817,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le, obi_ip, system_filesystem_mountpoint) (rate(obi_stat_fs_sync_duration_seconds_bucket{instance=~\"$instance\", obi_ip=~\"$node\", system_filesystem_mountpoint!=\"\"}[$__rate_interval])))",
+          "expr": "sum by (obi_ip, system_filesystem_mountpoint) (rate(obi_stat_fs_sync_operation_time_seconds_total{instance=~\"$instance\", obi_ip=~\"$node\", system_filesystem_mountpoint!=\"\"}[$__rate_interval])) / sum by (obi_ip, system_filesystem_mountpoint) (rate(obi_stat_fs_sync_operations_total{instance=~\"$instance\", obi_ip=~\"$node\", system_filesystem_mountpoint!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{obi_ip}} {{system_filesystem_mountpoint}}",
           "refId": "A",
           "format": "time_series"

@@ -10,16 +10,32 @@ source:
 - **Workloads**: the workloads that read and write the most, and their service
   time.
 - **File syncs** and **NFS client**: rates and 99th percentiles, per call, per
-  filesystem, per server and procedure, and the average sync and RPC time of
-  each workload.
+  server and procedure, the average sync time of each filesystem, and the
+  average sync and RPC time of each workload.
 - **Pod volumes**: a node graph from the pods to their PersistentVolumeClaims,
   PersistentVolumes, the devices they are mounted from and the disks those are
   on, and the throughput of those disks.
 
 Enable the metrics with the `stats_disk`, `stats_fs_sync`,
-`stats_nfs` and `stats_disk_pod_volumes` features, and select the Kubernetes
-attributes to see the workloads. The partition and file system panels need the
-opt-in `obi.disk.partition` and `system.filesystem.mountpoint` attributes. See
+`stats_nfs` and `stats_disk_pod_volumes` features. In Kubernetes, the counters
+carry the namespace and the owner of each workload by default. The partition
+panel needs the opt-in `obi.disk.partition` attribute, and the file system
+panel the opt-in `system.filesystem.mountpoint` attribute on the file sync
+counters, `obi.stat.fs.sync.operations` and `obi.stat.fs.sync.operation_time`:
+
+```yaml
+attributes:
+  select:
+    obi.stat.fs.sync.operation*:
+      include: ["*"]
+      exclude: [container.id, k8s.pod.name, k8s.container.name]
+```
+
+Select it on the `obi.stat.fs.sync.duration` histogram only if you need the
+latency distribution of each filesystem: the mountpoints include the staging
+directory of each CSI volume, one per PersistentVolume that the pods of the node
+mount, and each of them adds a series per bucket. OBI warns about it at
+startup. See
 [`devdocs/metrics.md`](../../devdocs/metrics.md) for the metrics and their
 limitations.
 
