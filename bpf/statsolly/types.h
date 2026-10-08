@@ -72,11 +72,11 @@ enum fs_sync_type : u8 {
     fs_sync_type_sync_file_range = 5,
 };
 
-// Sizes of the NFS client names: the server names of the mounts, such as the 48-character names of
-// Amazon EFS (longer names are truncated), and the longest NFSv4 procedure names, e.g.
-// DESTROY_CLIENTID, with room to spare
+// Sizes of the NFS client names: the server names of the mounts, such as the names of about 70
+// characters of the Amazon FSx for NetApp ONTAP SVMs (longer names are truncated), and the longest
+// NFSv4 procedure names, e.g. DESTROY_CLIENTID, with room to spare
 enum {
-    k_nfs_server_max_len = 64,
+    k_nfs_server_max_len = 96,
     k_nfs_procedure_max_len = 24,
 };
 

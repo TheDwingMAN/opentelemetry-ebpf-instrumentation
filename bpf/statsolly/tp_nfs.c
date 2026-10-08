@@ -52,8 +52,10 @@ static __always_inline u64 nfs_task_cgroup_id(const struct rpc_task *task) {
     return cgroup_id ? *cgroup_id : 0;
 }
 
-// The server as the mount names it: the NFS client names its transport after the host of
-// server:/export, which is an address when the mount names the server by its address
+// The server as its first mount on the node names it: the NFS client names its transport after the
+// host of server:/export, which is an address when the mount names the server by its address. The
+// mounts of a server (address, protocol and version) share one nfs_client and its transport
+// (nfs_match_client), so a later mount that names the server otherwise gets the first name.
 static __always_inline void read_server(unsigned char *server, const struct rpc_task *task) {
     bpf_probe_read_kernel_str(
         server, k_nfs_server_max_len, BPF_CORE_READ(task, tk_xprt, servername));

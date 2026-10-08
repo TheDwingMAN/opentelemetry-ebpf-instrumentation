@@ -274,7 +274,7 @@ type FsSync struct {
 // NFSProcedure is the NFS client RPCs of a procedure that completed with an outcome and were
 // charged to a cgroup, since the previous read of the kernel accumulation map.
 type NFSProcedure struct {
-	// Server is the address of the NFS server
+	// Server is the server as its first mount on the node names it: a name or an address
 	Server string
 	// Procedure is the name of the procedure, as the NFS client names it
 	Procedure string
