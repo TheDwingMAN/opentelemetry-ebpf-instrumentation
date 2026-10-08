@@ -77,7 +77,7 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	f, err := os.OpenFile(loopDev, os.O_RDWR|unix.O_DIRECT, 0)
 	require.NoError(t, err)
 	defer f.Close()
-	block := alignedBuffer(t, directIOBlockSize)
+	block := alignedBuffer(t)
 	start := time.Now()
 	for i := range directIOBlocks {
 		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
@@ -171,7 +171,7 @@ func TestDiskPartitions(t *testing.T) {
 	partition, err := os.OpenFile(partitionDev, os.O_RDWR|unix.O_DIRECT, 0)
 	require.NoError(t, err)
 	defer partition.Close()
-	block := alignedBuffer(t, directIOBlockSize)
+	block := alignedBuffer(t)
 	for i := range partitionWrites {
 		_, err := partition.WriteAt(block, int64(i*directIOBlockSize))
 		require.NoError(t, err)
@@ -203,7 +203,7 @@ func TestDiskFlushesAndDiscards(t *testing.T) {
 		require.NoError(t, discardErr)
 	}
 	// the page cache of the device is written back, then its write back cache flushed
-	_, err = disk.WriteAt(alignedBuffer(t, directIOBlockSize), discarded)
+	_, err = disk.WriteAt(alignedBuffer(t), discarded)
 	require.NoError(t, err)
 	require.NoError(t, disk.Sync())
 
@@ -365,7 +365,7 @@ func TestDiskStartsOfRequestsWithoutIOStatistics(t *testing.T) {
 			f, err := os.OpenFile(loopDev, os.O_RDWR|unix.O_DIRECT, 0)
 			require.NoError(t, err)
 			defer f.Close()
-			block := alignedBuffer(t, directIOBlockSize)
+			block := alignedBuffer(t)
 			readBlocks := func(count int) {
 				t.Helper()
 				for i := range count {
@@ -658,7 +658,7 @@ func writeAndReadConcurrently(t *testing.T, device string, workers, blocks int) 
 	t.Helper()
 	done := make(chan error, workers)
 	for i := range workers {
-		block := alignedBuffer(t, directIOBlockSize)
+		block := alignedBuffer(t)
 		// a block apart, so that the scheduler can't merge the requests of two goroutines
 		offset := int64(i * (blocks + 1) * directIOBlockSize)
 		go func() {
@@ -812,7 +812,7 @@ func TestDiskStackedVolumes(t *testing.T) {
 	f, err := os.OpenFile(deviceNode(t, dmName), os.O_RDWR|unix.O_DIRECT, 0)
 	require.NoError(t, err)
 	defer f.Close()
-	block := alignedBuffer(t, directIOBlockSize)
+	block := alignedBuffer(t)
 	for i := range volumeWrites {
 		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
 		require.NoError(t, err)
@@ -849,7 +849,7 @@ func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 	f, err := os.OpenFile(deviceNode(t, dmName), os.O_RDWR|unix.O_DIRECT, 0)
 	require.NoError(t, err)
 	defer f.Close()
-	block := alignedBuffer(t, directIOBlockSize)
+	block := alignedBuffer(t)
 	before := readKernelDiskStats(t, dmName)
 	for i := range blocks {
 		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
@@ -911,7 +911,7 @@ func TestDiskBioBasedDisks(t *testing.T) {
 	f, err := os.OpenFile(deviceNode(t, disk), os.O_RDWR|unix.O_DIRECT, 0)
 	require.NoError(t, err)
 	defer f.Close()
-	block := alignedBuffer(t, directIOBlockSize)
+	block := alignedBuffer(t)
 	for i := range diskWrites {
 		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
 		require.NoError(t, err)
@@ -1036,6 +1036,7 @@ func readConcurrently(t *testing.T, device string, readers int) <-chan error {
 	t.Helper()
 	done := make(chan error, readers)
 	for i := range readers {
+		block := alignedBuffer(t)
 		go func() {
 			f, err := os.OpenFile(device, os.O_RDONLY|unix.O_DIRECT, 0)
 			if err != nil {
@@ -1043,7 +1044,7 @@ func readConcurrently(t *testing.T, device string, readers int) <-chan error {
 				return
 			}
 			defer f.Close()
-			_, err = f.ReadAt(alignedBuffer(t, directIOBlockSize), int64(i*directIOBlockSize))
+			_, err = f.ReadAt(block, int64(i*directIOBlockSize))
 			done <- err
 		}()
 	}
@@ -1145,7 +1146,7 @@ func TestDiskIOWriterProcess(t *testing.T) {
 	f, err := os.OpenFile(device, os.O_WRONLY|unix.O_DIRECT, 0)
 	require.NoError(t, err)
 	defer f.Close()
-	block := alignedBuffer(t, directIOBlockSize)
+	block := alignedBuffer(t)
 	for i := range blocks {
 		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
 		require.NoError(t, err)
@@ -1487,10 +1488,10 @@ func deviceNode(t *testing.T, name string) string {
 	return node
 }
 
-// alignedBuffer returns a page-aligned buffer, as O_DIRECT requires
-func alignedBuffer(t *testing.T, size int) []byte {
+// alignedBuffer returns a page-aligned buffer of a direct I/O block, as O_DIRECT requires
+func alignedBuffer(t *testing.T) []byte {
 	t.Helper()
-	buf, err := unix.Mmap(-1, 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+	buf, err := unix.Mmap(-1, 0, directIOBlockSize, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = unix.Munmap(buf) })
 	return buf
