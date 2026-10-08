@@ -27,6 +27,11 @@ func (f *fakeAccum[K, V]) delete(key K) error {
 	return nil
 }
 
+func (f *fakeAccum[K, V]) lookupAndDelete(key K) (V, error) {
+	last := f.entries[key]
+	return last, f.delete(key)
+}
+
 func nfsProcedureKey(server, procedure string, version uint32, status uint16) ebpf.StatsNfsProcedureKeyT {
 	key := ebpf.StatsNfsProcedureKeyT{CgroupId: 100, Version: version, Status: status}
 	copy(key.Server[:], server)

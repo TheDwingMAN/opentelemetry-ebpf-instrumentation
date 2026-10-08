@@ -162,6 +162,30 @@ func assertKernelBuckets(t *testing.T, accumMap *ciliumebpf.Map, devPath string,
 	assert.True(t, accumulated, "the kernel accumulated the requests of %s", devPath)
 }
 
+// TestAccumLookupAndDelete checks that the kernel returns the last value of the accumulation map
+// entries that the reader deletes, or that the reader is told that it can't: hash maps support it
+// from Linux 5.14
+func TestAccumLookupAndDelete(t *testing.T) {
+	accumMap, err := ciliumebpf.NewMap(&ciliumebpf.MapSpec{
+		Type: ciliumebpf.Hash, KeySize: 4, ValueSize: 8, MaxEntries: 1,
+	})
+	require.NoError(t, err)
+	defer accumMap.Close()
+	accum := ebpfAccum[uint32, uint64]{accum: accumMap}
+	require.NoError(t, accumMap.Put(uint32(1), uint64(42)))
+
+	last, err := accum.lookupAndDelete(1)
+	if errors.Is(err, ciliumebpf.ErrNotSupported) {
+		var value uint64
+		require.NoError(t, accumMap.Lookup(uint32(1), &value), "the entry is not deleted")
+		t.Skipf("the kernel can't look up and delete hash map entries: %v", err)
+	}
+	require.NoError(t, err)
+	assert.Equal(t, uint64(42), last)
+	_, err = accum.lookupAndDelete(1)
+	assert.ErrorIs(t, err, ciliumebpf.ErrKeyNotExist, "the entry is deleted")
+}
+
 // TestDiskPartitions checks that I/O on a partition is reported with its partition
 func TestDiskPartitions(t *testing.T) {
 	loopDev, partitionDev := attachPartitionedLoopDevice(t)
