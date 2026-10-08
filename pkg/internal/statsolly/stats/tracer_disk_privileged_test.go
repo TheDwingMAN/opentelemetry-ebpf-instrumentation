@@ -887,8 +887,8 @@ func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 }
 
 // TestDiskBioBasedDisks writes to and zeroes a range of a zram disk, whose driver handles bios
-// itself like the PowerFlex SDC or DRBD do, and checks that its I/O is measured from its bios, as
-// not stacked
+// itself like the PowerFlex SDC does, and checks that its I/O is measured from its bios, as not
+// stacked
 func TestDiskBioBasedDisks(t *testing.T) {
 	features := export.FeatureStatsDiskOperations | export.FeatureStatsDiskIO | export.FeatureStatsDiskBioDevices
 	bounds := []float64{0.001}

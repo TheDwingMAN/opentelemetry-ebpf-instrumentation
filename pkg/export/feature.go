@@ -524,8 +524,8 @@ func (f Features) StatsDiskOperationInflight() bool {
 
 // StatsDiskBioDevices reports whether the I/O of the bio-based devices is measured too: the
 // stacked volumes, such as LVM, md RAID and dm-crypt volumes, the head devices of NVMe native
-// multipath, and the disks of drivers that handle bios themselves, such as the PowerFlex SDC,
-// DRBD, zram, pmem or brd
+// multipath and DRBD devices, and the disks of drivers that handle bios themselves, such as the
+// PowerFlex SDC, zram, pmem or brd
 func (f Features) StatsDiskBioDevices() bool {
 	return f.any(FeatureStatsDiskBioDevices)
 }

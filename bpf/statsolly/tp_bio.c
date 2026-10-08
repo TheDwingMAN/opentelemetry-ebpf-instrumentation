@@ -16,9 +16,9 @@
 #include <statsolly/maps/disk_bio_start.h>
 
 // Bio-based devices, such as device mapper (LVM, dm-crypt) and md RAID volumes, the heads of NVMe
-// native multipath and the disks of drivers that handle bios themselves (PowerFlex SDC, DRBD,
-// zram), never issue requests of their own. Their I/O is measured from the bio that is submitted
-// to them until its completion.
+// native multipath, DRBD devices and the disks of drivers that handle bios themselves (PowerFlex
+// SDC, zram), never issue requests of their own. Their I/O is measured from the bio that is
+// submitted to them until its completion.
 
 // bio fields of kernels before Linux 5.12 (including RHEL 8), which had no bi_bdev
 struct bio___old {

@@ -50,10 +50,10 @@ func (e ebpfDeviceSet) remove(dev uint32) error {
 }
 
 // bioDevices keeps the set of devices whose bios the kernel measures in sync with the bio-based
-// devices of the host: the device mapper (LVM, dm-crypt) and md RAID volumes, and the disks of
-// drivers that handle bios themselves, like the PowerFlex SDC (scini), DRBD, zram or pmem.
-// Request-based devices, like multipath device mapper volumes, are left out: the kernel measures
-// their requests.
+// devices of the host: the device mapper (LVM, dm-crypt) and md RAID volumes, the head devices of
+// NVMe native multipath and DRBD devices, and the disks of drivers that handle bios themselves,
+// like the PowerFlex SDC (scini), zram or pmem. Request-based devices, like multipath device
+// mapper volumes, are left out: the kernel measures their requests.
 type bioDevices struct {
 	log     *slog.Logger
 	sysRoot string
