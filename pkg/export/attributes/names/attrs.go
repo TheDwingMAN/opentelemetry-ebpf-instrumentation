@@ -391,4 +391,11 @@ const (
 	TCPFailedConnectionReason = Name("reason")
 	NetworkTCPHandshakeRole   = Name("network.tcp.handshake.role")
 	NetworkIoDirection        = Name(semconv.NetworkIODirectionKey)
+	SystemDevice              = Name(semconv.SystemDeviceKey)
+	DiskIODirection           = Name(semconv.DiskIODirectionKey)
+	// DiskStacked tells whether system.device is built on other block devices, which report the
+	// same I/O too
+	DiskStacked = Name("obi.disk.stacked")
+	// DiskVolumeName is the device mapper name of system.device, e.g. mpatha
+	DiskVolumeName = Name("obi.disk.volume.name")
 )

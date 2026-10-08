@@ -378,3 +378,39 @@ groups:
         requirement_level: opt_in
       - ref: service.peer.namespace
         requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.disk.operation.duration
+    type: metric
+    metric_name: obi.stat.disk.operation.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Device service time of the block reads and writes: from the issue of each
+      request to the device until its completion, per block device, direction
+      and outcome. It excludes the wait in the I/O scheduler. Two cases are
+      timed otherwise: a write with a cache flush (a journal commit) until the
+      end of its flush sequence, and the empty flush write of a file sync, which
+      is never issued, from its allocation. Cache flushes, discards and the I/O
+      of bio-based devices (LVM, md RAID, NVMe native multipath heads) are not
+      measured. It is not reported on the paths of dm-multipath devices: the
+      multipath device reports the same I/O.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.volume.name
+        requirement_level:
+          conditionally_required: if the block device is a device mapper device
+      - ref: obi.disk.stacked
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: error.type
+        requirement_level:
+          conditionally_required: >
+            if the block I/O request failed: the errno name of its status, e.g.
+            `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target),
+            `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ`
+            (protection), or `_OTHER`

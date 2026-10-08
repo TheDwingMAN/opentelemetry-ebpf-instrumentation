@@ -1329,6 +1329,23 @@ Ratio [0-1] between the unread messages of an internal Go channel and its total 
 | --- | --- | --- | --- | --- | --- |
 | `subscriber` | string | `required` | development | Name of the pipeline stage consuming the internal queue, as given to msg.SubscriberName when the stage subscribed. Subscribers that do not provide a name fall back to the name of the queue they subscribed to. | discover.CriteriaMatcher; traceAttacher |
 
+## `obi.stat.disk.operation.duration`
+
+Device service time of the block reads and writes: from the issue of each request to the device until its completion, per block device, direction and outcome. It excludes the wait in the I/O scheduler. Two cases are timed otherwise: a write with a cache flush (a journal commit) until the end of its flush sequence, and the empty flush write of a file sync, which is never issued, from its allocation. Cache flushes, discards and the I/O of bio-based devices (LVM, md RAID, NVMe native multipath heads) are not measured. It is not reported on the paths of dm-multipath devices: the multipath device reports the same I/O.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `error.type` | string | `conditionally_required`: if the block I/O request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`, and the dm-multipath devices, whose paths don't report their I/O. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it, of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
 ## `obi.stat.tcp.failed.connections`
 
 Count of TCP connections that failed to establish, broken down by `reason`.
