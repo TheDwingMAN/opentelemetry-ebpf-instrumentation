@@ -193,7 +193,7 @@ func (s *storageProbes) attach(log *slog.Logger, objects *StatsObjects) []io.Clo
 // attachFsSync attaches the file sync probes. Those of vfs_fsync_range are needed, the others are
 // attached when the kernel has their function.
 func attachFsSync(log *slog.Logger, objects *StatsObjects) ([]io.Closer, error) {
-	links, err := attachFsSyncPair(log, KprobeVfsFsyncRange, objects.ObiStatsKprobeVfsFsyncRange,
+	links, err := attachFsSyncPair(KprobeVfsFsyncRange, objects.ObiStatsKprobeVfsFsyncRange,
 		objects.ObiStatsKretprobeVfsFsyncRange)
 	if err != nil {
 		return nil, fmt.Errorf("can't attach the %s probes: %w", KprobeVfsFsyncRange, err)

@@ -37,11 +37,12 @@ type probe struct {
 	enabled bool
 }
 
-// fsSyncRetprobeMaxActive is how many calls of a sync function the kernel tracks at once for their
-// return probe, its maximum. The default, about twice the number of CPUs, is exceeded when many
-// threads sync at once, e.g. when the storage stalls, and the returns of the other calls are
-// missed.
-const fsSyncRetprobeMaxActive = 4096
+// fsSyncMinMaxActive is the least number of concurrent calls of each sync function that the kernel
+// tracks for its return probe. Its default, the number of possible CPUs (twice that, and at least
+// 10, on preemptible kernels and from Linux 6.2), is exceeded when many threads sync at once, as
+// during a storage stall, and the syncs whose returns are missed are never counted. From Linux 6.7,
+// 256 costs no more memory than the default on hosts with 8 or more possible CPUs.
+const fsSyncMinMaxActive = 256
 
 // lruLocalFreeTarget is how many free entries each CPU keeps for itself in an LRU map
 // (LOCAL_FREE_TARGET in kernel/bpf/bpf_lru_list.c)
@@ -404,7 +405,7 @@ func attachSyncSyscalls(log *slog.Logger, objects *StatsObjects) []io.Closer {
 		{KprobeSysSyncFileRange, objects.ObiStatsKprobeSysSyncFileRange},
 		{KprobeSysSync, objects.ObiStatsKprobeSysSync},
 	} {
-		links, err := attachFsSyncPair(log, syscall.name, syscall.entry, objects.ObiStatsKretprobeSysSync)
+		links, err := attachFsSyncPair(syscall.name, syscall.entry, objects.ObiStatsKretprobeSysSync)
 		if err != nil {
 			log.Debug("skipping sync system call", "syscall", syscall.name, "error", err)
 			continue
@@ -416,7 +417,7 @@ func attachSyncSyscalls(log *slog.Logger, objects *StatsObjects) []io.Closer {
 
 // attachDoFsync attaches the probes of do_fsync, when the kernel has it as a function of its own
 func attachDoFsync(log *slog.Logger, objects *StatsObjects) []io.Closer {
-	links, err := attachFsSyncPair(log, KprobeDoFsync, objects.ObiStatsKprobeDoFsync, objects.ObiStatsKretprobeDoFsync)
+	links, err := attachFsSyncPair(KprobeDoFsync, objects.ObiStatsKprobeDoFsync, objects.ObiStatsKretprobeDoFsync)
 	if err != nil {
 		log.Debug("skipping optional file sync function", "function", KprobeDoFsync, "error", err)
 		return nil
@@ -426,8 +427,8 @@ func attachDoFsync(log *slog.Logger, objects *StatsObjects) []io.Closer {
 
 // attachFsSyncPair attaches the return probe of a file sync function, then its entry probe, or
 // neither: a sync started without its return probe would never be completed
-func attachFsSyncPair(log *slog.Logger, symbol string, entry, ret *ebpf.Program) ([]io.Closer, error) {
-	retLink, err := attachKretprobe(log, symbol, ret, fsSyncRetprobeMaxActive)
+func attachFsSyncPair(symbol string, entry, ret *ebpf.Program) ([]io.Closer, error) {
+	retLink, err := kprobe.AttachRetprobe(symbol, ret, fsSyncMaxActive())
 	if err != nil {
 		return nil, err
 	}
@@ -439,17 +440,14 @@ func attachFsSyncPair(log *slog.Logger, symbol string, entry, ret *ebpf.Program)
 	return []io.Closer{retLink, entryLink}, nil
 }
 
-// attachKretprobe attaches a return probe that tracks up to maxActive calls at once. That needs
-// tracefs: without it, the kernel default is used.
-func attachKretprobe(log *slog.Logger, symbol string, program *ebpf.Program, maxActive int) (io.Closer, error) {
-	if maxActive > 0 {
-		l, err := link.Kretprobe(symbol, program, &link.KprobeOptions{RetprobeMaxActive: maxActive})
-		if err == nil {
-			return l, nil
-		}
-		log.Debug("attaching the kretprobe with the default number of instances", "function", symbol, "error", err)
+// fsSyncMaxActive is the maxactive of the sync return probes: fsSyncMinMaxActive, or twice the
+// number of possible CPUs when that is larger, so that it is never below the kernel's default
+func fsSyncMaxActive() int {
+	cpus, err := ebpf.PossibleCPU()
+	if err != nil {
+		return fsSyncMinMaxActive
 	}
-	return kprobe.Attach(symbol, program, true)
+	return max(fsSyncMinMaxActive, 2*cpus)
 }
 
 // sizeInFlightMaps gives the in-flight maps room for twice the free entries that the CPUs can keep
