@@ -203,10 +203,6 @@ func (p *pendingReader) inflightPath(numbers string) string {
 	return filepath.Join(p.devices.sysRoot, "dev", "block", numbers, "inflight")
 }
 
-func devNumbers(major, minor uint32) string {
-	return strconv.FormatUint(uint64(major), 10) + ":" + strconv.FormatUint(uint64(minor), 10)
-}
-
 // readInflight reads the reads and writes in flight of a block device from its sysfs inflight
 // file. The kernel counts flushes and discards as writes.
 func readInflight(path string) (reads, writes int64, err error) {

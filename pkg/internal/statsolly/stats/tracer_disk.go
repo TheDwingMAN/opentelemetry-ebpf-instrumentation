@@ -762,6 +762,10 @@ func procDiskstats(procRoot, sysRoot string) ([]blockdevice.Diskstats, error) {
 	return fs.ProcDiskstats()
 }
 
+func devNumbers(major, minor uint32) string {
+	return strconv.FormatUint(uint64(major), 10) + ":" + strconv.FormatUint(uint64(minor), 10)
+}
+
 func devNameFromUevent(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
