@@ -411,6 +411,19 @@ func TestDeviceMapperNames(t *testing.T) {
 	assert.Equal(t, "data", names.dmName(253, 1))
 }
 
+func TestDeviceMapperNameOfANewDevice(t *testing.T) {
+	devices := newFakeBlockDevices(t)
+	now := time.Now()
+	names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot, now: func() time.Time { return now }}
+	assert.Empty(t, names.dmName(253, 3), "no device has these numbers yet")
+
+	// a volume is created with the numbers: they were not cached, so it is named within the cache
+	// period
+	devices.disk("253:3", "dm-3", 0, 0)
+	devices.sysFile("dm-3", "dm/name", "vg0-new")
+	assert.Equal(t, "vg0-new", names.dmName(253, 3))
+}
+
 // fakeSysBlock creates the sysfs entries of a disk and its partitions: /dev/block/<maj:min>/uevent
 // for each device, and /block/<disk>/<partition>/partition with the partition numbers
 func fakeSysBlock(t *testing.T, root string, disk string, major, minor uint32, partitions map[string][2]uint32) {
