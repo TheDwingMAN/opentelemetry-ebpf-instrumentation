@@ -62,6 +62,10 @@ func (s Status) String() string {
 
 var errShutdownTimeout = errors.New("graceful shutdown has timed out while waiting for eBPF statsolly to finish")
 
+// defaultDiskReadInterval is how often the disk accumulation map is read when ebpf.batch_timeout
+// doesn't set a period
+const defaultDiskReadInterval = time.Second
+
 // Stats reporting agent
 type Stats struct {
 	cfg     *obi.Config
@@ -73,6 +77,8 @@ type Stats struct {
 
 	// stat metrics
 	rbTracer *stats.RingBufTracer
+	// nil unless storage stat metrics that are read periodically are enabled
+	diskTracer *stats.DiskMapTracer
 
 	// focuses on TCP/UDP stack internals (kprobes/tracepoints)
 	fetcher ebpFetcher
@@ -84,6 +90,8 @@ type ebpFetcher interface {
 	io.Closer
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
+	DiskIOAccumMap() *ciliumebpf.Map
+	DiskStatusIsBlkStatus() bool
 	DisabledStorageFeatures() []ebpf.DisabledFeature
 }
 
@@ -191,12 +199,28 @@ func statsAgent(
 ) (*Stats, error) {
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
+	var diskTracer *stats.DiskMapTracer
+	if statsFetcher.DiskIOAccumMap() != nil {
+		interval := cfg.EBPF.BatchTimeout
+		if interval <= 0 {
+			interval = defaultDiskReadInterval
+		}
+		histograms, _ := latencyHistograms(cfg)
+		diskTracer = stats.NewDiskMapTracer(&stats.DiskMapTracerConfig{
+			DiskIOAccum:           statsFetcher.DiskIOAccumMap(),
+			DiskLatencyBounds:     histograms.Disk,
+			DiskStatusIsBlkStatus: statsFetcher.DiskStatusIsBlkStatus(),
+			Interval:              interval,
+		})
+	}
+
 	return &Stats{
-		ctxInfo:  ctxInfo,
-		cfg:      cfg,
-		rbTracer: rbTracer,
-		agentIP:  agentIP,
-		fetcher:  statsFetcher,
+		ctxInfo:    ctxInfo,
+		cfg:        cfg,
+		rbTracer:   rbTracer,
+		diskTracer: diskTracer,
+		agentIP:    agentIP,
+		fetcher:    statsFetcher,
 	}, nil
 }
 

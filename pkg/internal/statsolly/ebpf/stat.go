@@ -4,8 +4,10 @@
 package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
+	"maps"
 	"structs"
 
+	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/internal/pipe"
 )
 
@@ -21,6 +23,23 @@ const (
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
 	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
 )
+
+// statTypeMetrics are the metrics that report the stats of each type
+var statTypeMetrics = map[StatType][]attributes.Name{
+	StatTypeTCPRtt:                  {attributes.StatTCPRtt},
+	StatTypeTCPFailedConnection:     {attributes.StatTCPFailedConnections},
+	StatTypeTCPRetransmit:           {attributes.StatTCPRetransmits},
+	StatTypeTCPIo:                   {attributes.StatTCPIo},
+	StatTypeTCPSuccessfulConnection: {attributes.StatTCPSuccessfulConnections},
+	StatTypeDiskIO: {
+		attributes.StatDiskOperationDuration,
+	},
+}
+
+// StatTypeMetrics returns the metrics that report the stats of each type
+func StatTypeMetrics() map[StatType][]attributes.Name {
+	return maps.Clone(statTypeMetrics)
+}
 
 type TCPFailReasonType string
 
