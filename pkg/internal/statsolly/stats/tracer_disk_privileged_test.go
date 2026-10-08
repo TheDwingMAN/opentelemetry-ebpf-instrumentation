@@ -186,6 +186,25 @@ func TestAccumLookupAndDelete(t *testing.T) {
 	assert.ErrorIs(t, err, ciliumebpf.ErrKeyNotExist, "the entry is deleted")
 }
 
+// TestAccumLookupAndDeleteUnsupported checks that the reader is told when the kernel can't look up
+// and delete an entry at once, and that the entry is kept. Array maps never support it, so this
+// runs the error path that hash maps take before Linux 5.14 on any kernel.
+func TestAccumLookupAndDeleteUnsupported(t *testing.T) {
+	accumMap, err := ciliumebpf.NewMap(&ciliumebpf.MapSpec{
+		Type: ciliumebpf.Array, KeySize: 4, ValueSize: 8, MaxEntries: 1,
+	})
+	require.NoError(t, err)
+	defer accumMap.Close()
+	accum := ebpfAccum[uint32, uint64]{accum: accumMap}
+	require.NoError(t, accumMap.Put(uint32(0), uint64(42)))
+
+	_, err = accum.lookupAndDelete(0)
+	require.ErrorIs(t, err, ciliumebpf.ErrNotSupported)
+	var value uint64
+	require.NoError(t, accumMap.Lookup(uint32(0), &value))
+	assert.Equal(t, uint64(42), value, "the entry is kept")
+}
+
 // TestDiskPartitions checks that I/O on a partition is reported with its partition
 func TestDiskPartitions(t *testing.T) {
 	loopDev, partitionDev := attachPartitionedLoopDevice(t)
