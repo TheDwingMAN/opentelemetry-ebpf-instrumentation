@@ -49,7 +49,7 @@ type statMetricsReporter struct {
 	fsSyncDuration           *kernelHistogramVec
 	fsSyncOperations         *Expirer[prometheus.Counter]
 	fsSyncOperationTime      *Expirer[prometheus.Counter]
-	diskQueueDuration        *kernelHistogramVec
+	diskQueueTime            *Expirer[prometheus.Counter]
 	diskFlushDuration        *kernelHistogramVec
 	diskDiscardDuration      *kernelHistogramVec
 	diskDiscardIO            *Expirer[prometheus.Counter]
@@ -75,7 +75,7 @@ type statMetricsReporter struct {
 	fsSyncDurationAttrs           []attributes.Field[*ebpf.Stat, string]
 	fsSyncOperationsAttrs         []attributes.Field[*ebpf.Stat, string]
 	fsSyncOperationTimeAttrs      []attributes.Field[*ebpf.Stat, string]
-	diskQueueDurationAttrs        []attributes.Field[*ebpf.Stat, string]
+	diskQueueTimeAttrs            []attributes.Field[*ebpf.Stat, string]
 	diskFlushDurationAttrs        []attributes.Field[*ebpf.Stat, string]
 	diskDiscardDurationAttrs      []attributes.Field[*ebpf.Stat, string]
 	diskDiscardIOAttrs            []attributes.Field[*ebpf.Stat, string]
@@ -253,6 +253,15 @@ func newStatsReporter(
 		register = append(register, mr.diskServiceTime)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskQueueTime() {
+		mr.diskQueueTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskQueueTime))
+		mr.diskQueueTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskQueueTime.Prom,
+			Help: "sum of the time that the completed block reads and writes waited in the I/O scheduler before their issue to the device, in seconds",
+		}, labelNames(mr.diskQueueTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskQueueTime)
+	}
+
 	register = append(register, mr.registerFsSyncMetrics(cfg, provider)...)
 	register = append(register, mr.registerDiskOperationMetrics(cfg, provider)...)
 	register = append(register, mr.registerNFSMetrics(cfg, provider)...)
@@ -389,7 +398,7 @@ func (r *statMetricsReporter) registerDiskVolumeMetrics(cfg *StatsPrometheusConf
 }
 
 // registerDiskOperationMetrics creates the metrics of the block requests beyond reads and
-// writes: their wait before issue, flushes, discards and the requests in flight
+// writes: flushes, discards and the requests in flight
 func (r *statMetricsReporter) registerDiskOperationMetrics(cfg *StatsPrometheusConfig, provider *attributes.AttrSelector) []prometheus.Collector {
 	features := cfg.CommonCfg.Features
 	var register []prometheus.Collector
@@ -401,11 +410,6 @@ func (r *statMetricsReporter) registerDiskOperationMetrics(cfg *StatsPrometheusC
 		dst     **kernelHistogramVec
 		attrs   *[]attributes.Field[*ebpf.Stat, string]
 	}{
-		{
-			features.StatsDiskQueueDuration(), attributes.StatDiskQueueDuration,
-			"measures the time block I/O requests wait between their allocation and their issue to the device, in seconds",
-			cfg.Config.Buckets.StatDiskQueueDurationHistogram, &r.diskQueueDuration, &r.diskQueueDurationAttrs,
-		},
 		{
 			features.StatsDiskFlush(), attributes.StatDiskFlushDuration,
 			"measures the duration of the cache flushes of block devices, in seconds",
@@ -524,17 +528,18 @@ func (r *statMetricsReporter) observeDiskCounters(stat *ebpf.Stat) {
 		r.diskServiceTime.WithLabelValues(labelValues(stat, r.diskServiceTimeAttrs)...).
 			Metric.Add(stat.DiskIO.Time)
 	}
+	if r.diskQueueTime != nil {
+		r.diskQueueTime.WithLabelValues(labelValues(stat, r.diskQueueTimeAttrs)...).
+			Metric.Add(stat.DiskIO.QueueTime)
+	}
 }
 
-// observeDiskOperations observes the wait before issue of reads and writes, and the flushes and
-// discards
+// observeDiskOperations observes the flushes and discards
 func (r *statMetricsReporter) observeDiskOperations(stat *ebpf.Stat) {
 	if stat.DiskIO == nil {
 		return
 	}
 	switch stat.DiskIO.Op {
-	case ebpf.CodeDiskOpRead, ebpf.CodeDiskOpWrite:
-		observeLatencyIn(r.diskQueueDuration, r.diskQueueDurationAttrs, stat, stat.DiskIO.Queue)
 	case ebpf.CodeDiskOpFlush:
 		observeLatencyIn(r.diskFlushDuration, r.diskFlushDurationAttrs, stat, stat.DiskIO.Latency)
 	case ebpf.CodeDiskOpDiscard:

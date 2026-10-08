@@ -117,6 +117,60 @@ func TestStatMetricsExporter_StorageOmitsUnknownKubernetesMetadata(t *testing.T)
 	}, timeout, 100*time.Millisecond)
 }
 
+func TestStatMetricsExporter_DiskQueueTime(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	exporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: cfg}},
+		&StatMetricsConfig{
+			Metrics:     cfg,
+			SelectorCfg: &attributes.SelectorConfig{SelectionCfg: attributes.Selection{}},
+			CommonCfg:   &perapp.GlobalMetricsConfig{Features: export.FeatureStatsDiskQueueTime},
+		}, stats)(ctx)
+	require.NoError(t, err)
+
+	go exporter(ctx)
+
+	request := func(op ebpf.DiskOpCode, queueTime float64) *ebpf.Stat {
+		return &ebpf.Stat{
+			Type:   ebpf.StatTypeDiskIO,
+			DiskIO: &ebpf.DiskIO{Device: "vda", Op: op, Operations: 1, QueueTime: queueTime},
+		}
+	}
+	// the kernel also adds up the wait of the flushes, which are neither reads nor writes
+	stats.Send([]*ebpf.Stat{
+		request(ebpf.CodeDiskOpWrite, 0.25), request(ebpf.CodeDiskOpWrite, 0.5), request(ebpf.CodeDiskOpFlush, 1),
+	})
+
+	// the last exported value of each direction
+	queueTime := map[string]float64{}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case record := <-otlp.Records():
+				if record.Name == attributes.StatDiskQueueTime.OTEL {
+					assert.Equal(ct, attributes.StatDiskQueueTime.Unit, record.Unit)
+					queueTime[record.Attributes["disk.io.direction"]] = record.FloatVal
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.Equal(ct, map[string]float64{"write": 0.75}, queueTime)
+	}, timeout, 100*time.Millisecond)
+}
+
 // appendNewSeries appends the attributes of the series of the named metric that the
 // records received so far add to series. Each export repeats the series it holds.
 func appendNewSeries(series []map[string]string, inCh <-chan collector.MetricRecord, name string) []map[string]string {

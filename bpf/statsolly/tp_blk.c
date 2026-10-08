@@ -305,11 +305,6 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     if (queued_ns == k_disk_queue_unknown) {
         return 0;
     }
-    const u32 queue_bucket =
-        disk_latency_bucket(disk_latency_bounds_ns, disk_latency_bounds_len, queued_ns);
-    if (queue_bucket < k_disk_latency_max_buckets) {
-        __sync_fetch_and_add(&accum->queue_count[queue_bucket], 1);
-        __sync_fetch_and_add(&accum->queue_sum_ns[queue_bucket], queued_ns);
-    }
+    __sync_fetch_and_add(&accum->queue_ns, queued_ns);
     return 0;
 }

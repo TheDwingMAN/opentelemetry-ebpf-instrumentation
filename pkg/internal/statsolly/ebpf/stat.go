@@ -39,7 +39,7 @@ var statTypeMetrics = map[StatType][]attributes.Name{
 	StatTypeTCPSuccessfulConnection: {attributes.StatTCPSuccessfulConnections},
 	StatTypeDiskIO: {
 		attributes.StatDiskOperationDuration, attributes.StatDiskIO, attributes.StatDiskOperations,
-		attributes.StatDiskServiceTime, attributes.StatDiskQueueDuration, attributes.StatDiskFlushDuration,
+		attributes.StatDiskServiceTime, attributes.StatDiskQueueTime, attributes.StatDiskFlushDuration,
 		attributes.StatDiskDiscardDuration, attributes.StatDiskDiscardIO,
 	},
 	StatTypeFsSync: {
@@ -208,9 +208,9 @@ type DiskIO struct {
 	Bytes uint64
 	// Latency of the completed requests, as one representative value per kernel histogram bucket
 	Latency []LatencySample
-	// Queue is the time that the requests waited before their issue to the device, for the
-	// requests whose wait the kernel knows
-	Queue []LatencySample
+	// QueueTime is the sum of the time that the requests waited before their issue to the device,
+	// in seconds, for the requests whose wait the kernel knows
+	QueueTime float64
 }
 
 // DiskPending is the number of block requests of an operation that a device is serving

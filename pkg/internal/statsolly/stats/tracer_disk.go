@@ -322,11 +322,9 @@ type diskStats struct {
 // stat returns the block requests that completed since the previous read of the key, or nil
 func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsDiskIoAccumT) *ebpf.Stat {
 	// kernel counters only grow; a decrease means the entry was deleted and re-created
-	if current.Bytes < previous.Bytes ||
+	if current.Bytes < previous.Bytes || current.QueueNs < previous.QueueNs ||
 		anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) ||
-		anyDecreased(current.LatencySumNs[:], previous.LatencySumNs[:]) ||
-		anyDecreased(current.QueueCount[:], previous.QueueCount[:]) ||
-		anyDecreased(current.QueueSumNs[:], previous.QueueSumNs[:]) {
+		anyDecreased(current.LatencySumNs[:], previous.LatencySumNs[:]) {
 		previous = ebpf.StatsDiskIoAccumT{}
 	}
 	delta := latencyDelta(d.latencyBounds, current.LatencyCount[:], current.LatencySumNs[:],
@@ -334,8 +332,6 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 	if delta.operations == 0 {
 		return nil
 	}
-	queue := latencyDelta(d.latencyBounds, current.QueueCount[:], current.QueueSumNs[:],
-		previous.QueueCount[:], previous.QueueSumNs[:])
 	return &ebpf.Stat{
 		Type: ebpf.StatTypeDiskIO,
 		DiskIO: &ebpf.DiskIO{
@@ -349,7 +345,7 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 			Time:        delta.seconds(),
 			Bytes:       current.Bytes - previous.Bytes,
 			Latency:     delta.latency,
-			Queue:       queue.latency,
+			QueueTime:   float64(current.QueueNs-previous.QueueNs) / float64(time.Second),
 		},
 	}
 }

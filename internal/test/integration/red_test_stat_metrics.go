@@ -206,13 +206,16 @@ func testStatMetricsDiskOperationDuration(t *testing.T, containerID string) {
 	}
 }
 
-// testStatMetricsDiskCounters checks that the I/O of the disk-io container is charged to it
+// testStatMetricsDiskCounters checks that the I/O of the disk-io container is charged to it, with
+// the wait of its requests before their issue: the kernel knows it for the requests of the host
+// disks, which keep I/O statistics
 func testStatMetricsDiskCounters(t *testing.T, containerID string) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
 	for _, metric := range []string{
 		"obi_stat_disk_io_bytes_total",
 		"obi_stat_disk_operations_total",
 		"obi_stat_disk_service_time_seconds_total",
+		"obi_stat_disk_queue_time_seconds_total",
 	} {
 		for _, direction := range []string{"read", "write"} {
 			require.EventuallyWithT(t, func(ct *assert.CollectT) {
@@ -276,34 +279,6 @@ func testStatMetricsFsSyncCounters(t *testing.T, containerID string) {
 		require.NoError(ct, err)
 		assert.Empty(ct, mismatches, "the histogram must count the same syncs as the operations counter")
 	}, testTimeout, 100*time.Millisecond)
-}
-
-// testStatMetricsDiskQueueDuration checks the histogram of the time the requests of the disk-io
-// container wait before their issue: the kernel knows it for every request of the host disks,
-// which keep I/O statistics
-func testStatMetricsDiskQueueDuration(t *testing.T, containerID string) {
-	pq := promtest.Client{HostPort: prometheusHostPort}
-	for _, direction := range []string{"read", "write"} {
-		selector := `{container_id="` + containerID + `",disk_io_direction="` + direction + `"}`
-		require.EventuallyWithT(t, func(ct *assert.CollectT) {
-			counts, err := pq.Query(`obi_stat_disk_queue_duration_seconds_count` + selector + ` > 0`)
-			require.NoError(ct, err)
-			enoughPromResults(ct, counts)
-			for _, res := range counts {
-				assertDiskStatLabels(ct, res.Metric, diskIOLabels(containerID, direction))
-			}
-
-			buckets, err := pq.Query(`obi_stat_disk_queue_duration_seconds_bucket` + selector)
-			require.NoError(ct, err)
-			assertHistogramBounds(ct, buckets, export.DefaultBuckets.StatDiskQueueDurationHistogram)
-
-			// the wait is measured for some or all of the requests, never more
-			excess, err := pq.Query(`obi_stat_disk_queue_duration_seconds_count` + selector +
-				` > obi_stat_disk_operation_duration_seconds_count` + selector)
-			require.NoError(ct, err)
-			assert.Empty(ct, excess, "the wait can't be measured for more requests than completed")
-		}, testTimeout, 100*time.Millisecond)
-	}
 }
 
 // testStatMetricsDiskOperationInflight checks that the devices that the disk-io container reads

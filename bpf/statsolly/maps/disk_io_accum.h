@@ -31,9 +31,8 @@ typedef struct disk_io_key {
 typedef struct disk_io_accum {
     u64 latency_count[k_disk_latency_max_buckets];
     u64 latency_sum_ns[k_disk_latency_max_buckets];
-    // time the requests waited before their issue, for those whose wait is known
-    u64 queue_count[k_disk_latency_max_buckets];
-    u64 queue_sum_ns[k_disk_latency_max_buckets];
+    // sum of the time the requests waited before their issue, for those whose wait is known
+    u64 queue_ns;
     // bytes of the requests that completed successfully
     u64 bytes;
 } disk_io_accum_t;

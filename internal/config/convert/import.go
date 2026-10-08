@@ -2529,8 +2529,8 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsFsSyncOperations
 		case statsFeatureFsSyncOperationTime:
 			out |= export.FeatureStatsFsSyncOperationTime
-		case statsFeatureDiskQueueDuration:
-			out |= export.FeatureStatsDiskQueueDuration
+		case statsFeatureDiskQueueTime:
+			out |= export.FeatureStatsDiskQueueTime
 		case statsFeatureDiskFlush:
 			out |= export.FeatureStatsDiskFlush
 		case statsFeatureDiskDiscard:

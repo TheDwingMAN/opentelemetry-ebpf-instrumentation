@@ -1142,8 +1142,8 @@ func getDefinitions(
 			SubGroups:  []*AttrReportGroup{&statsDiskVolumeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
-		StatDiskQueueDuration.Section: {
-			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeOptInAttributes},
+		StatDiskQueueTime.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
 		StatDiskFlushDuration.Section: {

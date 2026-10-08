@@ -249,6 +249,7 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 	}
 	assert.Equal(t, workload, p.For(StatDiskIO))
 	assert.Equal(t, workload, p.For(StatDiskServiceTime))
+	assert.Equal(t, workload, p.For(StatDiskQueueTime))
 	assert.Equal(t, []attr.Name{
 		attr.DiskIODirection,
 		attr.ErrorType,

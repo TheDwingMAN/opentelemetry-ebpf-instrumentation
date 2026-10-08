@@ -512,8 +512,8 @@ groups:
       Divided by `obi.stat.disk.operations`, it is the mean service time per
       workload. Its rate is the average number of requests that the device
       serves at once (above 1 on devices that serve requests in parallel). Plus
-      the sum of `obi.stat.disk.queue.duration`, it is the time that
-      /proc/diskstats counts and iostat's await averages.
+      `obi.stat.disk.queue_time`, it is the time that /proc/diskstats counts
+      and iostat's await averages.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -654,22 +654,35 @@ groups:
       - ref: k8s.container.name
         requirement_level: opt_in
 
-  - id: metric.obi.obi.stat.disk.queue.duration
+  - id: metric.obi.obi.stat.disk.queue_time
     type: metric
-    metric_name: obi.stat.disk.queue.duration
-    instrument: histogram
+    metric_name: obi.stat.disk.queue_time
+    instrument: counter
     unit: "s"
     stability: development
     brief: >
-      Time block I/O requests wait between their allocation and their issue to
-      the device, in the I/O scheduler or in the dispatch queues, per block
-      device and direction.
+      Sum of the time that the completed block reads and writes waited in the
+      I/O scheduler before their issue to the device, per block device,
+      direction and workload the I/O is charged to. Plus
+      `obi.stat.disk.service_time`, divided by `obi.stat.disk.operations`, it
+      is iostat's await per workload.
     note: >
-      Only the requests that the kernel accounts in /proc/diskstats are
-      measured, those of devices that keep I/O statistics, and, on Linux 6.10
-      and earlier and RHEL 8 (but not RHEL 9.6), those of devices that use an
-      I/O scheduler. Waits before the allocation, such as those of
-      blk-throttle (io.max) and of writeback throttling, are not included.
+      The wait runs from the allocation of the request (from Linux 6.13, from
+      the start of its accounting) to its issue, in the I/O scheduler or in the
+      dispatch queues. For a write that must follow a cache flush (a journal
+      commit), it includes that flush. Waits before the allocation, such as
+      those of blk-throttle (io.max) and of writeback throttling, are not
+      included. The rate of the sum of both time counters is iostat's aqu-sz
+      for the reads and writes. The wait is measured for the requests that the
+      kernel accounts in /proc/diskstats, those of devices that keep I/O
+      statistics, and, on Linux 6.10 and earlier and RHEL 8 (but not RHEL
+      9.6), for those of devices that use an I/O scheduler. Nothing is added
+      for the other requests, nor for the bios of bio-based volumes (LVM, md
+      RAID, zram) and the empty flush requests of fsyncs, which are never
+      issued: these two are timed from their submission or allocation, so
+      their service time already holds their wait. For the requests of devices
+      without I/O statistics, which /proc/diskstats doesn't count either, the
+      ratio is their service time.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -684,11 +697,14 @@ groups:
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
       - ref: k8s.namespace.name
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
       - ref: k8s.owner.name
-        requirement_level: opt_in
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
       - ref: k8s.kind
         requirement_level: opt_in
       - ref: k8s.pod.name

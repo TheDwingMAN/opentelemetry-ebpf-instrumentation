@@ -1483,23 +1483,23 @@ Completed block I/O requests, per block device, direction, outcome and workload 
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
-## `obi.stat.disk.queue.duration`
+## `obi.stat.disk.queue_time`
 
-Time block I/O requests wait between their allocation and their issue to the device, in the I/O scheduler or in the dispatch queues, per block device and direction.
+Sum of the time that the completed block reads and writes waited in the I/O scheduler before their issue to the device, per block device, direction and workload the I/O is charged to. Plus `obi.stat.disk.service_time`, divided by `obi.stat.disk.operations`, it is iostat's await per workload.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
-| histogram | s | development |
+| counter | s | development |
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
-| `k8s.cluster.name` | string | `opt_in` | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
 | `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
 | `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
-| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
-| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. | nvme0n1p1; sda2 |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices. |  |

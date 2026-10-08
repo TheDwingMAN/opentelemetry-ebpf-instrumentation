@@ -74,6 +74,7 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	require.NoError(t, err)
 	defer f.Close()
 	block := alignedBuffer(t, directIOBlockSize)
+	start := time.Now()
 	for i := range directIOBlocks {
 		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
 		require.NoError(t, err)
@@ -82,12 +83,13 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 		_, err := f.ReadAt(block, int64(i*directIOBlockSize))
 		require.NoError(t, err)
 	}
+	elapsed := time.Since(start)
 
 	deviceName := filepath.Base(loopDev)
 	completed := map[ebpf.DiskOpCode]uint64{}
-	queued := map[ebpf.DiskOpCode]uint64{}
 	operations := map[ebpf.DiskOpCode]uint64{}
 	transferred := map[ebpf.DiskOpCode]uint64{}
+	var queuedAndServed float64
 	for _, stat := range reader.readStats() {
 		if stat.DiskIO.Device != deviceName || !stat.DiskIO.Op.IsTransfer() {
 			continue
@@ -98,9 +100,7 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 			assert.Positive(t, latency.Seconds)
 			completed[stat.DiskIO.Op] += latency.Count
 		}
-		for _, wait := range stat.DiskIO.Queue {
-			queued[stat.DiskIO.Op] += wait.Count
-		}
+		queuedAndServed += stat.DiskIO.QueueTime + stat.DiskIO.Time
 		operations[stat.DiskIO.Op] += stat.DiskIO.Operations
 		transferred[stat.DiskIO.Op] += stat.DiskIO.Bytes
 	}
@@ -113,9 +113,10 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	assert.Equal(t, perDirection(directIOBlocks), completed)
 	assert.Equal(t, perDirection(directIOBlocks), operations)
 	assert.Equal(t, perDirection(directIOBlocks*directIOBlockSize), transferred)
-	// the kernel records the start of every request of a device that keeps I/O statistics, as loop
-	// devices do
-	assert.Equal(t, perDirection(directIOBlocks), queued, "the wait before issue of every request is known")
+	// one request at a time, so from their start to their completion the requests never overlap.
+	// Some kernels give a request the same start and issue time, which a block plug caches, so the
+	// wait alone may add up to 0.
+	assert.LessOrEqual(t, queuedAndServed, elapsed.Seconds(), "the wait before issue and the service time of the requests")
 }
 
 // TestDiskPartitions checks that I/O on a partition is reported with its partition
@@ -358,15 +359,15 @@ func TestDiskStartsOfRequestsWithoutIOStatistics(t *testing.T) {
 			readBlocks(reads)
 			accounted := readDiskTimings(reader, device)
 			assert.GreaterOrEqual(t, accounted.reads, uint64(reads))
-			assert.Equal(t, accounted.reads, accounted.queuedReads, "the wait before issue of every read is known")
 			assert.Less(t, accounted.longest, staleAge.Seconds())
 		})
 	}
 }
 
 type diskTimings struct {
-	reads, queuedReads uint64
-	// the longest mean of the queue times and of the write latencies
+	reads uint64
+	// the longest of the queue time sums and of the mean write latencies: a request timed from an
+	// earlier use would make it at least as old as that use
 	longest float64
 }
 
@@ -376,15 +377,10 @@ func readDiskTimings(reader *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoA
 		if stat.DiskIO.Device != device {
 			continue
 		}
-		for _, wait := range stat.DiskIO.Queue {
-			timings.longest = max(timings.longest, wait.Seconds)
-		}
+		timings.longest = max(timings.longest, stat.DiskIO.QueueTime)
 		switch stat.DiskIO.Op {
 		case ebpf.CodeDiskOpRead:
 			timings.reads += stat.DiskIO.Operations
-			for _, wait := range stat.DiskIO.Queue {
-				timings.queuedReads += wait.Count
-			}
 		case ebpf.CodeDiskOpWrite:
 			for _, latency := range stat.DiskIO.Latency {
 				timings.longest = max(timings.longest, latency.Seconds)

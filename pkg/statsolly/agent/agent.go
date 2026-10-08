@@ -218,9 +218,6 @@ func latencyHistograms(cfg *obi.Config) (ebpf.LatencyHistograms, []string) {
 		if features.StatsDiskOperationDuration() {
 			histograms.Disk = append(histograms.Disk, buckets.StatDiskOperationDurationHistogram...)
 		}
-		if features.StatsDiskQueueDuration() {
-			histograms.Disk = append(histograms.Disk, buckets.StatDiskQueueDurationHistogram...)
-		}
 		if features.StatsDiskFlush() {
 			histograms.Disk = append(histograms.Disk, buckets.StatDiskFlushDurationHistogram...)
 		}
@@ -239,8 +236,8 @@ func latencyHistograms(cfg *obi.Config) (ebpf.LatencyHistograms, []string) {
 		bounds *[]float64
 		names  string
 	}{
-		{&histograms.Disk, "stat_disk_operation_duration_histogram, stat_disk_queue_duration_histogram, " +
-			"stat_disk_flush_duration_histogram and stat_disk_discard_duration_histogram"},
+		{&histograms.Disk, "stat_disk_operation_duration_histogram, stat_disk_flush_duration_histogram and " +
+			"stat_disk_discard_duration_histogram"},
 		{&histograms.FsSyncDuration, "stat_fs_sync_duration_histogram"},
 		{&histograms.NFS, "stat_nfs_client_procedure_duration_histogram"},
 	} {

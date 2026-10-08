@@ -387,7 +387,7 @@ const (
 	statsFeatureFsSyncDuration             = "fs_sync_duration"
 	statsFeatureFsSyncOperations           = "fs_sync_operations"
 	statsFeatureFsSyncOperationTime        = "fs_sync_operation_time"
-	statsFeatureDiskQueueDuration          = "disk_queue_duration"
+	statsFeatureDiskQueueTime              = "disk_queue_time"
 	statsFeatureDiskFlush                  = "disk_flush"
 	statsFeatureDiskDiscard                = "disk_discard"
 	statsFeatureDiskOperationInflight      = "disk_operation_inflight"
@@ -438,8 +438,8 @@ func statsFeatures(features featureexport.Features) []string {
 	if features.StatsFsSyncOperationTime() {
 		out = append(out, statsFeatureFsSyncOperationTime)
 	}
-	if features.StatsDiskQueueDuration() {
-		out = append(out, statsFeatureDiskQueueDuration)
+	if features.StatsDiskQueueTime() {
+		out = append(out, statsFeatureDiskQueueTime)
 	}
 	if features.StatsDiskFlush() {
 		out = append(out, statsFeatureDiskFlush)

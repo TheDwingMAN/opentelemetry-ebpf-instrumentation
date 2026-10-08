@@ -130,7 +130,7 @@ type StatsFetcher struct {
 // LatencyHistograms are the boundaries, in seconds, of the latency histograms that the kernel
 // accumulates
 type LatencyHistograms struct {
-	// Disk buckets the durations of the block requests and their wait before issue
+	// Disk buckets the durations of the block requests
 	Disk           []float64
 	FsSyncDuration []float64
 	NFS            []float64
@@ -153,8 +153,8 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 	// enabled exporters
 	diskLatencyBoundsNs, err := diskLatencyBoundsToNs(histograms.Disk)
 	if err != nil {
-		return nil, fmt.Errorf("the buckets of stat_disk_operation_duration_histogram, stat_disk_queue_duration_histogram, "+
-			"stat_disk_flush_duration_histogram and stat_disk_discard_duration_histogram: %w", err)
+		return nil, fmt.Errorf("the buckets of stat_disk_operation_duration_histogram, stat_disk_flush_duration_histogram "+
+			"and stat_disk_discard_duration_histogram: %w", err)
 	}
 	fsSyncLatencyBoundsNs, err := diskLatencyBoundsToNs(histograms.FsSyncDuration)
 	if err != nil {
@@ -769,7 +769,7 @@ func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelec
 		{enabled: features.StatsDiskIO(), name: attributes.StatDiskIO},
 		{enabled: features.StatsDiskOperations(), name: attributes.StatDiskOperations},
 		{enabled: features.StatsDiskServiceTime(), name: attributes.StatDiskServiceTime},
-		{enabled: features.StatsDiskQueueDuration(), name: attributes.StatDiskQueueDuration},
+		{enabled: features.StatsDiskQueueTime(), name: attributes.StatDiskQueueTime},
 		{enabled: features.StatsDiskFlush(), name: attributes.StatDiskFlushDuration},
 		{enabled: features.StatsDiskDiscard(), name: attributes.StatDiskDiscardDuration},
 		{enabled: features.StatsDiskDiscard(), name: attributes.StatDiskDiscardIO},

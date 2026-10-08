@@ -59,7 +59,7 @@ func TestDetailedProfileIsPerWorkload(t *testing.T) {
 	features := export.FeatureStatsDisk | export.FeatureStatsFsSync | export.FeatureStatsNFS
 	assert.Empty(t, perPodHistograms(&features, attrSel))
 	for _, histogram := range []attributes.Name{
-		attributes.StatDiskOperationDuration, attributes.StatDiskQueueDuration, attributes.StatDiskFlushDuration,
+		attributes.StatDiskOperationDuration, attributes.StatDiskFlushDuration,
 		attributes.StatDiskDiscardDuration, attributes.StatFsSyncDuration, attributes.StatNFSClientProcedureDuration,
 	} {
 		assert.Subset(t, attrSel.For(histogram), []attr.Name{attr.K8sNamespaceName, attr.K8sOwnerName}, histogram.OTEL)

@@ -722,11 +722,12 @@ var (
 		Unit:    "s",
 		Type:    InstrumentCounter,
 	})
-	StatDiskQueueDuration = metric(Name{
-		Section: "obi.stat.disk.queue.duration",
-		OTEL:    "obi.stat.disk.queue.duration",
+	StatDiskQueueTime = metric(Name{
+		// normalized like the attributes.select keys, which have their underscores replaced by dots
+		Section: "obi.stat.disk.queue.time",
+		OTEL:    "obi.stat.disk.queue_time",
 		Unit:    "s",
-		Type:    InstrumentHistogram,
+		Type:    InstrumentCounter,
 	})
 	StatDiskFlushDuration = metric(Name{
 		Section: "obi.stat.disk.flush.duration",

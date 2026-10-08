@@ -38,10 +38,7 @@ static __always_inline disk_io_accum_t *lookup_or_init_accum(void *accum_map,
     if (!init) {
         return 0;
     }
-    // in two halves: bpf_memset only unrolls up to a limited size
-    enum { k_queue_offset = __builtin_offsetof(disk_io_accum_t, queue_count) };
-    bpf_memset(init, 0, k_queue_offset);
-    bpf_memset((unsigned char *)init + k_queue_offset, 0, sizeof(*init) - k_queue_offset);
+    bpf_memset(init, 0, sizeof(*init));
     // BPF_NOEXIST: another CPU may have created the entry since the lookup above
     bpf_map_update_elem(accum_map, key, init, BPF_NOEXIST);
     return bpf_map_lookup_elem(accum_map, key);

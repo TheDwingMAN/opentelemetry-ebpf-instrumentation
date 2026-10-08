@@ -43,7 +43,6 @@ func FeatureDiskStats() features.Feature {
 		Assess("reports the disk latency of the workload", testDiskLatencyPerWorkload).
 		Assess("reports the file syncs of the workload", testFsSyncPerWorkload).
 		Assess("counts the file syncs of the workload", testFsSyncCountersPerWorkload).
-		Assess("reports how long the I/O of the workload waits before its issue", testDiskQueuePerWorkload).
 		Assess("reports the requests in flight of the disks of the workload", testDiskInflightOfWorkloadDevices).
 		Assess("links the pods to the disks of their PersistentVolumeClaims", testPodVolumeDevices).
 		Feature()
@@ -113,6 +112,7 @@ func testDiskIOChargedToWorkload(ctx context.Context, t *testing.T, _ *envconf.C
 		"obi_stat_disk_io_bytes_total",
 		"obi_stat_disk_operations_total",
 		"obi_stat_disk_service_time_seconds_total",
+		"obi_stat_disk_queue_time_seconds_total",
 	} {
 		for _, direction := range []string{"read", "write"} {
 			require.EventuallyWithT(t, func(ct *assert.CollectT) {
@@ -186,26 +186,6 @@ func testFsSyncCountersPerWorkload(ctx context.Context, t *testing.T, _ *envconf
 			for _, res := range results {
 				assertDiskStatLabels(ct, res.Metric, fsSyncLabels())
 			}
-		}, testTimeout, pollInterval)
-	}
-	return ctx
-}
-
-func testDiskQueuePerWorkload(ctx context.Context, t *testing.T, _ *envconf.Config) context.Context {
-	pq := promtest.Client{HostPort: prometheusHostPort}
-	for _, direction := range []string{"read", "write"} {
-		selector := `{` + workload + `,disk_io_direction="` + direction + `"}`
-		require.EventuallyWithT(t, func(ct *assert.CollectT) {
-			counts, err := pq.Query(`obi_stat_disk_queue_duration_seconds_count` + selector + ` > 0`)
-			require.NoError(ct, err)
-			require.NotEmpty(ct, counts)
-			for _, res := range counts {
-				assertDiskStatLabels(ct, res.Metric, diskIOLabels(direction))
-			}
-
-			buckets, err := pq.Query(`obi_stat_disk_queue_duration_seconds_bucket` + selector)
-			require.NoError(ct, err)
-			assertHistogramBounds(ct, buckets, export.DefaultBuckets.StatDiskQueueDurationHistogram)
 		}, testTimeout, pollInterval)
 	}
 	return ctx

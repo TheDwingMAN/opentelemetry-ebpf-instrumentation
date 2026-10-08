@@ -286,8 +286,7 @@ func TestDiskReaderForwardsPartitionAndQueue(t *testing.T) {
 	key.PartDev = kernelDev(8, 1)
 	current := accum([]uint64{2, 0, 0}, []uint64{500_000, 0, 0})
 	// one of the two requests waited 2 ms before its issue, the wait of the other one is unknown
-	current.QueueCount[1] = 1
-	current.QueueSumNs[1] = 2_000_000
+	current.QueueNs = 2_000_000
 	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{key: current}}
 	r := newDiskReader(src, testBounds, false, &deviceNames{sysRoot: root, procRoot: root}, newCgroupContainers(fakeCgroupNames{}))
 
@@ -296,7 +295,7 @@ func TestDiskReaderForwardsPartitionAndQueue(t *testing.T) {
 	assert.Equal(t, "sda", stats[0].DiskIO.Device)
 	assert.Equal(t, "sda1", stats[0].DiskIO.Partition)
 	assert.Equal(t, uint64(2), stats[0].DiskIO.Operations)
-	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 1}}, stats[0].DiskIO.Queue)
+	assert.InDelta(t, 0.002, stats[0].DiskIO.QueueTime, 1e-12)
 }
 
 func TestDiskReaderForwardsFlushesAndDiscards(t *testing.T) {
@@ -335,6 +334,7 @@ func TestDiskReaderForwardsCounters(t *testing.T) {
 	key := writeKey(259, 0)
 	current := accum([]uint64{0, 3, 1}, []uint64{0, 2_000_000, 50_000_000})
 	current.Bytes = 3 * 4096
+	current.QueueNs = 1_000_000
 	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{key: current}}
 	r := newTestDiskReader(src)
 
@@ -343,15 +343,18 @@ func TestDiskReaderForwardsCounters(t *testing.T) {
 	assert.Equal(t, uint64(4), stats[0].DiskIO.Operations)
 	assert.InDelta(t, 0.056, stats[0].DiskIO.Time, 1e-12)
 	assert.Equal(t, uint64(3*4096), stats[0].DiskIO.Bytes)
+	assert.InDelta(t, 0.001, stats[0].DiskIO.QueueTime, 1e-12)
 
 	next := accum([]uint64{0, 5, 1}, []uint64{0, 2_000_000, 50_000_000})
 	next.Bytes = 5 * 4096
+	next.QueueNs = 1_500_000
 	src.entries[key] = next
 	stats = r.readStats()
 	require.Len(t, stats, 1)
 	assert.Equal(t, uint64(2), stats[0].DiskIO.Operations)
 	assert.InDelta(t, 0.004, stats[0].DiskIO.Time, 1e-12)
 	assert.Equal(t, uint64(2*4096), stats[0].DiskIO.Bytes)
+	assert.InDelta(t, 0.0005, stats[0].DiskIO.QueueTime, 1e-12)
 }
 
 func TestDiskReaderResolvesContainers(t *testing.T) {

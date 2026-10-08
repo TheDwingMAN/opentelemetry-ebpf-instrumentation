@@ -24,7 +24,6 @@ func perPodHistograms(features *export.Features, attrSel *attributes.AttrSelecto
 		name    attributes.Name
 	}{
 		{features.StatsDiskOperationDuration(), attributes.StatDiskOperationDuration},
-		{features.StatsDiskQueueDuration(), attributes.StatDiskQueueDuration},
 		{features.StatsDiskFlush(), attributes.StatDiskFlushDuration},
 		{features.StatsDiskDiscard(), attributes.StatDiskDiscardDuration},
 		{features.StatsFsSyncDuration(), attributes.StatFsSyncDuration},
