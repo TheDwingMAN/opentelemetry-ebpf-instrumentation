@@ -176,7 +176,7 @@ The disk metrics are charged to the workload that owns the I/O: the cgroup that 
 - Some I/O is never charged to a workload, and is reported without workload attributes: filesystem journal and metadata I/O issued by kernel threads (e.g. `jbd2`), RAID resync and device-mapper internal I/O, and flush requests.
 - Buffered writes are written back later by kernel threads. They are charged to the workload that dirtied the pages only on cgroup v2, and only on filesystems with cgroup writeback support (ext2, ext4, btrfs, f2fs, xfs). Otherwise they are reported without workload attributes.
 - Before Linux 5.18 (and on RHEL 8), the block layer can merge the I/O of different cgroups into the same request. OBI charges a merged request to the cgroup of its first bio.
-- `obi.stat.disk.io` counts the bytes of the requests that completed successfully, as issued to the device. The histogram, `obi.stat.disk.operations`, `obi.stat.disk.service_time` and `obi.stat.disk.queue_time` count failed requests too, with an `error.type`.
+- `obi.stat.disk.io` counts the bytes of the requests that completed successfully, as issued to the device. The histogram, `obi.stat.disk.operations`, `obi.stat.disk.service_time` and `obi.stat.disk.queue_time` count failed requests too, with an `error.type` (see [Storage error types](#storage-error-types)).
 
 Over OTLP, the storage stats (disk, file sync, NFS client and pod volume) omit the workload attributes of the I/O that is reported without a workload, and `k8s.cluster.name` when the cluster name is unknown. OBI's Prometheus endpoint exposes them as empty labels, which Prometheus treats as missing.
 
@@ -256,6 +256,44 @@ sum by (system_device) (rate(obi_stat_disk_io_bytes_total{disk_io_direction="wri
 - An RPC is charged to the workload of the thread that started it, through the cgroup of its `io` controller. The kernel writes cached data back from its own threads, unless the application syncs it, so those write RPCs are charged to no workload, like block I/O writeback on cgroup v1.
 - `server.address` is the server as its first mount on the node names it, without any DNS lookup: the host of `server:/export`, e.g. `fs-0123456789abcdef0.efs.us-east-1.amazonaws.com`, or its IP address when the mount names it by address, e.g. `10.0.0.5:/export`. The mounts of a server (the same address, protocol and NFS version) share one NFS client and its transport, which keep the name of the first mount: a later mount that names the server otherwise, by an alias or by its address, is reported with that name, until the server has no mount left on the node. The data servers of pNFS layouts are named by their address. Names longer than 95 characters are truncated.
 - `error.type` is the errno of failed RPCs, e.g. `EIO`. The kernel-internal errnos of the client and the NFSv4 errors that it doesn't translate into errnos have the names that the kernel and the RFCs give them, e.g. `EJUKEBOX` and `NFS4ERR_DELAY` when the server asks the client to retry later. A status without a name is reported as `_OTHER`, like the unknown statuses of the disk and file sync metrics, and OBI logs its number at debug level.
+
+#### Storage error types
+
+The disk, file sync and NFS client metrics carry an `error.type` on the operations that failed, and none on those that succeeded. It is the name of the errno, or of the NFSv4 status, that the kernel failed the operation with, or `_OTHER` when the failure has no name.
+
+The disk metrics name the status of each failed block request or bio after its errno in the kernel's table of block statuses (`blk_errors`), whose description is also what the kernel logs, e.g. `critical medium error, dev sda, sector …` for `ENODATA`:
+
+| `error.type` | Kernel log | Meaning |
+| --- | --- | --- |
+| `EIO` | `I/O error` | The generic failure. |
+| `ETIMEDOUT` | `timeout error` | The request timed out. |
+| `ENOLINK` | `recoverable transport error` | The path to the device failed: another path may succeed. |
+| `EREMOTEIO` | `critical target error` | The device rejected or failed the command. |
+| `ENODATA` | `critical medium error` | The device couldn't read or write its media. |
+| `EBADE` | `reservation conflict error` (`critical nexus error` before Linux 6.5) | Another host holds a persistent reservation of the device. |
+| `EILSEQ` | `protection error` | The protection information of the data, its integrity check, failed. |
+| `ENOSPC` | `critical space allocation error` | The device has no space left, like a thin-provisioned device that is full. |
+| `EOPNOTSUPP` | `operation not supported error` | The device doesn't support the operation. |
+| `ENOMEM`, `EBUSY` | `kernel resource error`, `device resource error` | The kernel or the device lacked resources. |
+| `EAGAIN` | `nonblocking retry error` | A request that must not wait would have had to. |
+| `EREMCHG` | `dm internal retry error` | Device mapper retries the request. |
+| `_OTHER` | | A status whose number changed between kernel versions, such as those of zoned devices and of offline devices: from Linux 5.16 (and on RHEL 9.6), and on every kernel for the bios of bio-based devices. Older kernels report its errno instead. |
+
+The paths of a dm-multipath device report all the failures of their requests, but the multipath device retries on another path those that another path may not have, all but `EOPNOTSUPP`, `ENOSPC`, `EREMOTEIO`, `EBADE`, `ENODATA` and `EILSEQ`: it reports them only when no path is left.
+
+The file sync metrics report the errno that the sync returned, and the NFS metrics the errno or the NFSv4 status that the RPC completed with. Some of those are answers that the applications expect rather than failures:
+
+| `error.type` | Metrics | Meaning |
+| --- | --- | --- |
+| `EIO` | file sync, NFS | The data couldn't be written back, or the RPC failed, e.g. when it timed out on a `soft` mount (`ETIMEDOUT` with `softerr`). |
+| `ENOSPC` | file sync | No space was left to write the data back. |
+| `EINVAL` | file sync | The file can't be synced, like a pipe or a socket: e.g. Go's `os.Stdout.Sync()` when the output is a pipe. |
+| `ENOENT` | NFS | No such file: the server's answer to a lookup of a name that doesn't exist, which the applications and the kernel's lookups make as a matter of course. |
+| `EEXIST` | NFS | The file already exists, e.g. for an exclusive create. |
+| `EACCES` | NFS | The server denied the access. |
+| `ESTALE` | NFS | The server no longer knows the file handle, e.g. because the file was deleted. |
+| `EJUKEBOX`, `NFS4ERR_DELAY` | NFS | The server asks the client to retry later. |
+| `_OTHER` | file sync, NFS | An errno or a status without a name. OBI logs the number of those of the NFS RPCs at debug level. |
 
 #### Storage stats profiles
 

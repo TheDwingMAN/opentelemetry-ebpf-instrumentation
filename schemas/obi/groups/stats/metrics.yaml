@@ -416,7 +416,11 @@ groups:
         requirement_level: recommended
       - ref: error.type
         requirement_level:
-          conditionally_required: if the block I/O request failed
+          conditionally_required: >
+            if the block I/O request failed: the errno name of its status, e.g.
+            `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target),
+            `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ`
+            (protection), or `_OTHER`
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
@@ -518,7 +522,11 @@ groups:
         requirement_level: opt_in
       - ref: error.type
         requirement_level:
-          conditionally_required: if the block I/O request failed
+          conditionally_required: >
+            if the block I/O request failed: the errno name of its status, e.g.
+            `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target),
+            `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ`
+            (protection), or `_OTHER`
 
   - id: metric.obi.obi.stat.disk.service_time
     type: metric
@@ -572,7 +580,11 @@ groups:
         requirement_level: opt_in
       - ref: error.type
         requirement_level:
-          conditionally_required: if the block I/O request failed
+          conditionally_required: >
+            if the block I/O request failed: the errno name of its status, e.g.
+            `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target),
+            `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ`
+            (protection), or `_OTHER`
 
   - id: metric.obi.obi.stat.fs.sync.duration
     type: metric
@@ -596,7 +608,9 @@ groups:
         requirement_level: opt_in
       - ref: error.type
         requirement_level:
-          conditionally_required: if the file sync failed
+          conditionally_required: >
+            if the file sync failed: its errno name, e.g. `EIO`, `ENOSPC` or
+            `EINVAL` (a file that can't be synced, such as a pipe), or `_OTHER`
       - ref: obi.fs.sync.type
         requirement_level: recommended
       - ref: system.filesystem.mountpoint
@@ -639,7 +653,9 @@ groups:
         requirement_level: opt_in
       - ref: error.type
         requirement_level:
-          conditionally_required: if the file sync failed
+          conditionally_required: >
+            if the file sync failed: its errno name, e.g. `EIO`, `ENOSPC` or
+            `EINVAL` (a file that can't be synced, such as a pipe), or `_OTHER`
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
@@ -682,7 +698,9 @@ groups:
         requirement_level: opt_in
       - ref: error.type
         requirement_level:
-          conditionally_required: if the file sync failed
+          conditionally_required: >
+            if the file sync failed: its errno name, e.g. `EIO`, `ENOSPC` or
+            `EINVAL` (a file that can't be synced, such as a pipe), or `_OTHER`
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
@@ -761,7 +779,11 @@ groups:
         requirement_level: opt_in
       - ref: error.type
         requirement_level:
-          conditionally_required: if the block I/O request failed
+          conditionally_required: >
+            if the block I/O request failed: the errno name of its status, e.g.
+            `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target),
+            `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ`
+            (protection), or `_OTHER`
 
   - id: metric.obi.obi.stat.disk.flush.duration
     type: metric
@@ -790,7 +812,11 @@ groups:
         requirement_level: opt_in
       - ref: error.type
         requirement_level:
-          conditionally_required: if the request failed
+          conditionally_required: >
+            if the request failed: the errno name of its status, e.g.
+            `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target),
+            `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ`
+            (protection), or `_OTHER`
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
@@ -834,7 +860,11 @@ groups:
         requirement_level: opt_in
       - ref: error.type
         requirement_level:
-          conditionally_required: if the request failed
+          conditionally_required: >
+            if the request failed: the errno name of its status, e.g.
+            `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target),
+            `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ`
+            (protection), or `_OTHER`
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
@@ -953,7 +983,10 @@ groups:
         requirement_level: recommended
       - ref: error.type
         requirement_level:
-          conditionally_required: if the RPC failed
+          conditionally_required: >
+            if the RPC failed: its errno name, e.g. `EIO`, `ENOENT` (no such
+            file) or `EJUKEBOX`, the name of its NFSv4 status, e.g.
+            `NFS4ERR_DELAY`, or `_OTHER`
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
@@ -997,7 +1030,10 @@ groups:
         requirement_level: recommended
       - ref: error.type
         requirement_level:
-          conditionally_required: if the RPC failed
+          conditionally_required: >
+            if the RPC failed: its errno name, e.g. `EIO`, `ENOENT` (no such
+            file) or `EJUKEBOX`, the name of its NFSv4 status, e.g.
+            `NFS4ERR_DELAY`, or `_OTHER`
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
@@ -1040,7 +1076,10 @@ groups:
         requirement_level: recommended
       - ref: error.type
         requirement_level:
-          conditionally_required: if the RPC failed
+          conditionally_required: >
+            if the RPC failed: its errno name, e.g. `EIO`, `ENOENT` (no such
+            file) or `EJUKEBOX`, the name of its NFSv4 status, e.g.
+            `NFS4ERR_DELAY`, or `_OTHER`
       - ref: container.id
         requirement_level: opt_in
       - ref: k8s.cluster.name
