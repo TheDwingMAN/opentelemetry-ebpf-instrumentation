@@ -26,14 +26,20 @@ echo "$STAGED" | grep -E '^bpf/bpfcore/' && die "bpf/bpfcore files are staged: t
 
 disk_guard
 step "testing the staged content alone (the rest is stashed meanwhile)"
-git stash push --keep-index --include-untracked -q || die "can't stash"
+# refs/stash is shared by all the worktrees of the repository: name our entry and pop that one,
+# so that a commit.sh running in another worktree at the same time never pops it, nor we theirs
+tag="commit.sh $$ $(date +%s%N)"
+git stash push --keep-index --include-untracked -q -m "$tag" || die "can't stash"
 ok=1
 go build ./pkg/... ./cmd/... ./internal/... || ok=0
 # shellcheck disable=SC2086
 [ $ok = 1 ] && { go vet $PKGS || ok=0; }
 # shellcheck disable=SC2086
 [ $ok = 1 ] && { root_tests_note; go test -count=1 $PKGS 2>&1 | grep -v 'no test files' | tail -20; [ "${PIPESTATUS[0]}" = 0 ] || ok=0; }
-git stash pop -q || die "STASH POP FAILED: the unstaged changes are in 'git stash list'"
+entry=$(git stash list --format='%gd %gs' | awk -v t="$tag" 'index($0, t) {print $1; exit}')
+if [ -n "$entry" ]; then
+    git stash pop -q "$entry" || die "STASH POP FAILED: the unstaged changes are in $entry ($tag)"
+fi
 [ $ok = 1 ] || die "the staged content fails: not committing"
 
 git -c user.name="$GIT_AUTHOR_NAME_LOOP" -c user.email="$GIT_AUTHOR_EMAIL_LOOP" commit -q -F "$MSG" || die "commit failed"

@@ -8,7 +8,8 @@
 # and a Prometheus on the node scrapes OBI's port 9400. Both go to $LAB_RESULTS for the dashboards.
 # k3s runs in a mount namespace of its own pinned at /run/kubens/mnt (OpenShift's kubens), the NFS
 # mount comes after OBI starts (late attach), and the checks cover the stall buckets, the kernel
-# filesystem type names and the omitted empty k8s attributes.
+# filesystem type names, the omitted empty k8s attributes, and the labels that the bundle's include
+# lists must keep: error.type on the time counters, obi.disk.volume.name and k8s.kind.
 set -u
 echo "uname -r: $(uname -r)"
 DURATION=${DURATION:-960}
@@ -177,12 +178,15 @@ spec:
             - mountPath: /data
               name: data
 EOF
-# k3s (kubelet and containerd) in a mount namespace of its own, a slave of the host's, pinned at /run/kubens/mnt
+# k3s (kubelet and containerd) in a mount namespace of its own, a slave of the host's, pinned at /run/kubens/mnt.
+# The kubelet gives its runtime calls 15 min instead of 2: under emulation on a busy host, creating a container
+# (and unpacking its image) took longer than 2 min, and the kubelet restarted every creation from scratch
 KUBENS_LOOP=$kubens_loop unshare --mount=/run/kubens/mnt --propagation slave sh -c '
   mount --make-rshared /
   mount -t tmpfs tmpfs /mnt/kubens-only && mkdir /mnt/kubens-only/pv && mount "$KUBENS_LOOP" /mnt/kubens-only/pv
   exec k3s server --disable traefik,servicelb,metrics-server,local-storage,coredns --disable-helm-controller \
-    --disable-network-policy --flannel-backend=host-gw --node-ip 10.0.2.15 --write-kubeconfig-mode 644' \
+    --disable-network-policy --flannel-backend=host-gw --node-ip 10.0.2.15 --write-kubeconfig-mode 644 \
+    --kubelet-arg=runtime-request-timeout=15m' \
   > "$LAB_RESULTS/k3s.log" 2>&1 &
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
@@ -242,16 +246,29 @@ grep -q 'starting OBI in Stat metrics mode' "$LAB_RESULTS/obi.log"; result obi-s
 m="$LAB_RESULTS/metrics.txt"
 grep '^obi_stat_disk_io_bytes_total{' $m | grep -q 'k8s_pod_name="report-writer-'; result pod-names $?
 grep '^obi_stat_disk_io_bytes_total{' $m | grep -q 'obi_disk_partition="'"$(basename $p1)"'"'; result partition $?
-grep '^obi_stat_k8s_pod_volume_device{' $m | grep 'k8s_persistentvolume_name="lab-local"' | grep -q ' 1$'; result pod-volumes $?
-grep '^obi_stat_k8s_pod_volume_device{' $m | grep 'k8s_persistentvolume_name="lab-kubens"' \
+grep '^obi_stat_k8s_pod_volume_info{' $m | grep 'k8s_persistentvolume_name="lab-local"' | grep -q ' 1$'; result pod-volumes $?
+grep '^obi_stat_k8s_pod_volume_info{' $m | grep 'k8s_persistentvolume_name="lab-kubens"' \
   | grep "obi_disk_volume_device=\"$(basename $kubens_loop)\"" | grep 'system_device="vda"' | grep -q ' 1$'
 result pod-volumes-in-kubens-namespace $?
 ! grep -q 'no volume mount of the kubelet is visible' "$LAB_RESULTS/obi.log"; result no-mounts-warning-when-visible $?
 grep -q '^obi_stat_disk_discard_io_bytes_total{' $m; result discards $?
-grep '^obi_stat_disk_volume_device{' $m
-grep '^obi_stat_disk_volume_device{' $m | grep "obi_disk_volume_device=\"$lv_dev\"" | grep 'obi_disk_volume_name="labvg-pv"' | grep -q 'system_device="vda"'; result volume-device-lvm-to-vda $?
-grep '^obi_stat_disk_operation_time_seconds_total{' $m | grep -q 'k8s_pod_name="report-writer-'; result operation-time-select-new-key $?
-grep -qF '"obi.stat.disk.operation_time"' /work/collector-out/metrics.json; result otlp-operation-time-new-name $?
+grep '^obi_stat_disk_volume_info{' $m
+grep '^obi_stat_disk_volume_info{' $m | grep "obi_disk_volume_device=\"$lv_dev\"" | grep 'obi_disk_volume_name="labvg-pv"' | grep -q 'system_device="vda"'; result volume-info-lvm-to-vda $?
+grep '^obi_stat_disk_service_time_seconds_total{' $m | grep -q 'k8s_pod_name="report-writer-'; result service-time-select-new-key $?
+grep -qF '"obi.stat.disk.service_time"' /work/collector-out/metrics.json; result otlp-service-time-new-name $?
+# the four block counters keep the default labels in the bundle's include lists. Every one of them has
+# series of the LVM volume, all named as /dev/mapper names it (obi.disk.volume.name)
+lv_io=$(grep -E '^obi_stat_disk_(io_bytes|operations|service_time_seconds|queue_time_seconds)_total\{' $m | grep "system_device=\"$lv_dev\"")
+echo "$lv_io" | head -4
+[ "$(echo "$lv_io" | grep 'obi_disk_volume_name="labvg-pv"' | sed 's/{.*//' | sort -u | wc -l)" = 4 ] &&
+  ! echo "$lv_io" | grep -vq 'obi_disk_volume_name="labvg-pv"'
+result volume-name-on-lvm-io $?
+# the kind of the pods' owner (k8s.kind), on the four block counters
+[ "$(grep -E '^obi_stat_disk_(io_bytes|operations|service_time_seconds|queue_time_seconds)_total\{' $m |
+  grep 'k8s_pod_name="report-writer-' | grep 'k8s_kind="Deployment"' | sed 's/{.*//' | sort -u | wc -l)" = 4 ]
+result k8s-kind-on-pod-counters $?
+# error.type on the time counters, as on the operations: OBI's endpoint shows it empty for the successful I/O
+grep '^obi_stat_disk_service_time_seconds_total{' $m | grep -q 'error_type="'; result error-type-on-service-time $?
 ! grep -qF '{"value":{}}' /work/collector-out/metrics.json; result otlp-no-empty-attribute-key $?
 # no storage data point carries an empty k8s.* attribute over OTLP
 ! grep -qE '"key":"k8s\.(namespace|owner|pod|container)\.name","value":\{"stringValue":""\}|"key":"k8s\.(kind|cluster\.name)","value":\{"stringValue":""\}' /work/collector-out/metrics.json; result otlp-no-empty-k8s-attribute $?
@@ -267,14 +284,18 @@ grep -q '^obi_stat_disk_flush_duration_seconds_count{' $m; result flushes $?
 grep '^obi_stat_fs_sync_duration_seconds_count{' $m | grep -q 'obi_fs_sync_type="syncfs"'; result fs-sync-types $?
 [ $nfs_ok = 0 ] || { grep -q '^obi_stat_nfs_client_procedure_duration_seconds_count{' $m; result nfs $?; }
 # stall buckets at the defaults: OBI runs both exporters, so these cover the OTel and Prometheus union
-for h in disk_operation disk_queue disk_flush fs_sync; do
+for h in disk_operation disk_flush fs_sync; do
   grep -q "^obi_stat_${h}_duration_seconds_bucket{.*le=\"60\"" $m; result stall-bounds-$h $?
 done
+# the queue time has no histogram: it is a counter, which carries the pod like the other block counters
+grep '^obi_stat_disk_queue_time_seconds_total{' $m | grep -q 'k8s_pod_name="report-writer-'; result queue-time-counter $?
 [ $nfs_ok = 0 ] || { grep -q '^obi_stat_nfs_client_procedure_duration_seconds_bucket{.*le="60"' $m; result stall-bounds-nfs $?; }
-grep -q '"explicitBounds":\[[^]]*,2.5,5,10,30,60\]' /work/collector-out/metrics.json; result otlp-stall-bounds $?
+# the 16 default bounds of the storage histograms end with 0.5, 1, 5, 30 and 60 s
+grep -q '"explicitBounds":\[[^]]*,0\.5,1,5,30,60\]' /work/collector-out/metrics.json; result otlp-stall-bounds $?
 ! grep -q 'more histogram buckets than the kernel can keep' "$LAB_RESULTS/obi.log"; result no-approximated-buckets $?
-# the kernel names of the filesystem types
-fs_sync_series=$(grep '^obi_stat_fs_sync_duration_seconds_count{' $m)
+# the kernel names of the filesystem types, on the file sync counter: the bundle keeps the mountpoint off
+# the histogram, and the manifest selects it with the type on the counters, as the bundle's guide says
+fs_sync_series=$(grep '^obi_stat_fs_sync_operations_total{' $m)
 echo "$fs_sync_series" | grep 'system_filesystem_mountpoint="/mnt/part"' | grep -q 'system_filesystem_type="ext4"'; result fs-type-ext4 $?
 echo "$fs_sync_series" | grep 'system_filesystem_mountpoint="/dev/shm"' | grep -q 'system_filesystem_type="tmpfs"'; result fs-type-tmpfs $?
 [ $nfs_ok = 0 ] || { echo "$fs_sync_series" | grep 'system_filesystem_mountpoint="/mnt/nfs"' | grep -q 'system_filesystem_type="nfs4"'; result fs-type-nfs4 $?; }
@@ -286,8 +307,8 @@ grep '^obi_stat_fs_sync_operations_total{' $m | grep -q 'k8s_owner_name="disk-io
 grep '^obi_stat_fs_sync_operation_time_seconds_total{' $m | grep -q 'k8s_owner_name="disk-io"'; result fs-sync-operation-time-per-workload $?
 [ $nfs_ok = 0 ] || { grep -q '^obi_stat_nfs_client_procedure_count_total{' $m && grep -q '^obi_stat_nfs_client_procedure_time_seconds_total{' $m; result nfs-counters $?; }
 grep -qF '"obi.stat.fs.sync.operations"' /work/collector-out/metrics.json && grep -qF '"obi.stat.nfs.client.procedure.count"' /work/collector-out/metrics.json; result otlp-new-counters $?
-# G2: no storage histogram is configured per pod, so no warning about it
-! grep -q 'reported per pod or container' "$LAB_RESULTS/obi.log"; result no-per-pod-histogram-warning $?
+# no storage histogram is configured per pod, container or volume, so no cardinality warning at startup
+! grep -q 'storage latency histogram is reported per pod' "$LAB_RESULTS/obi.log"; result no-cardinality-warning $?
 # G4: the bio-based zram disk of the node
 if [ $zram_ok = 1 ]; then
   grep '^obi_stat_disk_operations_total{' $m | grep "system_device=\"$zdev\"" | grep -q 'obi_disk_stacked="false"'; result bio-based-disk $?

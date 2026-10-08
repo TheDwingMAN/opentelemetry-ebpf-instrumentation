@@ -1,13 +1,14 @@
 # OBI with the storage metrics on OpenShift: oc apply -f obi-openshift.yaml
 #
 # Before applying, replace:
-#   <REGISTRY>               the registry you pushed the image to (obi:disk-v2-3d1a67934)
+#   <REGISTRY>               the registry you pushed the image to (obi:disk-v2-23410d280)
 #   10.0.2.15              the OTLP/HTTP address of your OpenTelemetry Collector, e.g.
 #                            otel-collector.observability.svc.cluster.local
-#   lab-k3s           reported as k8s.cluster.name
+#   lab-k3s                reported as k8s.cluster.name
 #
-# OBI needs no disk and no host directory: it reads the host's files through /proc/1/root and
-# /proc (it shares the host's PID namespace) and the block devices through /sys.
+# OBI needs no disk, and one host directory: tracefs, writable, for the file sync probes. It reads
+# the host's files through /proc/1/root and /proc (it shares the host's PID namespace) and the
+# block devices through /sys.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -98,26 +99,54 @@ data:
         enable: true
         cluster_name: lab-k3s
       select:
-        # include replaces the default attributes of a metric: list them all. k8s.pod.name only on
-        # these counters, not on the latency histograms, to keep the number of series down.
+        # include replaces the default attributes of a metric: list them all. k8s.pod.name and
+        # obi.disk.partition only on these counters, not on the latency histograms, to keep the
+        # number of series down.
+        #
+        # The four block counters, obi.stat.disk.io, .operations, .service_time and .queue_time,
+        # have the same labels, but error.type, which io doesn't have: it counts the successful
+        # requests only. The iostat await of each pod, summed by the same labels on both sides:
+        #   sum by (k8s_namespace_name, k8s_pod_name, disk_io_direction) (
+        #       rate(obi_stat_disk_service_time_seconds_total{obi_disk_stacked="false"}[5m])
+        #     + rate(obi_stat_disk_queue_time_seconds_total{obi_disk_stacked="false"}[5m]))
+        #   / sum by (k8s_namespace_name, k8s_pod_name, disk_io_direction) (
+        #       rate(obi_stat_disk_operations_total{obi_disk_stacked="false"}[5m]))
         obi.stat.disk.io:
-          include: [system.device, obi.disk.stacked, obi.disk.partition, disk.io.direction,
-                    k8s.namespace.name, k8s.owner.name, k8s.pod.name, k8s.cluster.name]
+          include: [system.device, obi.disk.volume.name, obi.disk.stacked, obi.disk.partition,
+                    disk.io.direction, k8s.namespace.name, k8s.owner.name, k8s.kind, k8s.pod.name,
+                    k8s.cluster.name]
         obi.stat.disk.operations:
-          include: [system.device, obi.disk.stacked, obi.disk.partition, disk.io.direction, error.type,
-                    k8s.namespace.name, k8s.owner.name, k8s.pod.name, k8s.cluster.name]
-        obi.stat.disk.operation_time:
-          include: [system.device, obi.disk.stacked, obi.disk.partition, disk.io.direction,
-                    k8s.namespace.name, k8s.owner.name, k8s.pod.name, k8s.cluster.name]
+          include: [system.device, obi.disk.volume.name, obi.disk.stacked, obi.disk.partition,
+                    disk.io.direction, error.type, k8s.namespace.name, k8s.owner.name, k8s.kind,
+                    k8s.pod.name, k8s.cluster.name]
+        obi.stat.disk.service_time:
+          include: [system.device, obi.disk.volume.name, obi.disk.stacked, obi.disk.partition,
+                    disk.io.direction, error.type, k8s.namespace.name, k8s.owner.name, k8s.kind,
+                    k8s.pod.name, k8s.cluster.name]
+        obi.stat.disk.queue_time:
+          include: [system.device, obi.disk.volume.name, obi.disk.stacked, obi.disk.partition,
+                    disk.io.direction, error.type, k8s.namespace.name, k8s.owner.name, k8s.kind,
+                    k8s.pod.name, k8s.cluster.name]
+        # a histogram: no mountpoint or workload here, which would multiply its buckets per
+        # volume and per pod (OBI warns at startup if they are selected). The file sync counters
+        # (obi.stat.fs.sync.operations and .operation_time) carry the namespace, owner and kind by
+        # default; select the mountpoint on both of them to find a slow volume.
         obi.stat.fs.sync.duration:
           include:
             - obi.fs.sync.type
             - error.type
-            - system.filesystem.mountpoint
+            # the kernel's name of the filesystem: xfs, overlay, ext4, nfs4, ...
             - system.filesystem.type
-            - k8s.namespace.name
-            - k8s.owner.name
             - k8s.cluster.name
+        # lab only, as OBI-on-OpenShift.md tells users to find a slow volume: the mountpoint and
+        # filesystem type on both file sync counters, with their defaults (run.sh checks the types
+        # on obi_stat_fs_sync_operations_total)
+        obi.stat.fs.sync.operations:
+          include: [obi.fs.sync.type, error.type, system.filesystem.mountpoint, system.filesystem.type,
+                    k8s.namespace.name, k8s.owner.name, k8s.kind, k8s.cluster.name]
+        obi.stat.fs.sync.operation_time:
+          include: [obi.fs.sync.type, error.type, system.filesystem.mountpoint, system.filesystem.type,
+                    k8s.namespace.name, k8s.owner.name, k8s.kind, k8s.cluster.name]
 
     discovery:
       exclude_instrument:
@@ -149,7 +178,7 @@ data:
 
     metrics:
       # replaces OBI's default list: everything to export goes here, and only here (a
-      # `features` list under prometheus_export or otel_metrics_export adds to it)
+      # `features` list under prometheus_export or otel_metrics_export would replace it)
       features:
         - application
         - network
@@ -234,7 +263,15 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /config
+            # tracefs, writable: the file sync return probes are created there, to track up to 256
+            # concurrent calls of each sync function (or twice the CPUs, if more) instead of the
+            # kernel's default (about twice the CPUs), which loses the syncs of a storage stall
+            - name: tracefs
+              mountPath: /sys/kernel/tracing
       volumes:
         - name: config
           configMap:
             name: obi-config
+        - name: tracefs
+          hostPath:
+            path: /sys/kernel/tracing

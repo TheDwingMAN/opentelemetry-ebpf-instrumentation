@@ -1,7 +1,10 @@
 #!/bin/bash
 # final payload (G1-G4): privileged tests, obi end to end (queue, flush, discard,
-# pending, partitions) on null_blk and loop devices. Also: NFS error names, zone append op, NFS late
+# in flight, partitions) on null_blk and loop devices. Also: NFS error names, zone append op, NFS late
 # attach, 12 s stalls, kernel filesystem type names, sync_file_range waits only, write-zeroes.
+# Checks the storage metrics as renamed on feat/statso11y-disk-metrics-v2: service_time, queue_time
+# (a counter), operation.inflight, the volume info metrics, 16 histogram bounds, error.type on the
+# time counters and the device mapper name on the block I/O series.
 set -u
 echo "uname -r: $(uname -r)"
 fail=0
@@ -62,7 +65,8 @@ else
 fi
 
 step "nfs late attach"
-modprobe -r nfs 2>/dev/null   # the privileged test loaded it and left it unused
+# the privileged test loaded nfs and left it unused; modprobe -r nfs leaves sunrpc loaded, unused
+modprobe -r nfs 2>/dev/null; modprobe -r sunrpc 2>/dev/null
 [ ! -e /sys/module/sunrpc/initstate ]; rc=$?
 [ $rc = 0 ] || echo "sunrpc still loaded, holders: $(ls /sys/module/sunrpc/holders)"
 result nfs-late-setup $rc
@@ -198,8 +202,10 @@ if [ "$slow_dio" = 1 ]; then slow_target=$slow_loop; else slow_target=/dev/$slow
 dd if=/dev/zero of=$slow_target bs=4k count=1 oflag=direct status=none &
 slow_pid=$!
 
+dd_start=$(date +%s%N)
 dd if=/dev/zero of=/dev/$ok_dev bs=4k count=200 oflag=direct status=none
 dd if=/dev/$ok_dev of=/dev/null bs=4k count=300 iflag=direct status=none
+dd_s=$(awk -v a="$dd_start" -v b="$(date +%s%N)" 'BEGIN {printf "%.6f", (b - a) / 1e9}')
 dd if=/dev/zero of=$part_node bs=64k count=16 oflag=direct status=none
 blkdiscard -f -o 0 -l 1048576 $loop 2>&1 && discard_ok=1 || discard_ok=0
 # write-zeroes: fio's falloc engine punches a hole in the device (one fallocate, no fsync)
@@ -238,10 +244,13 @@ sleep 3
 curl -sf localhost:9400/metrics > "$LAB_RESULTS/metrics.txt"
 kill $obi_pid; wait $obi_pid 2>/dev/null
 
-qw=$(sum obi_stat_disk_queue_duration_seconds_count "system_device=\"$ok_dev\"" 'disk_io_direction="write"')
-qr=$(sum obi_stat_disk_queue_duration_seconds_count "system_device=\"$ok_dev\"" 'disk_io_direction="read"')
-echo "queue: writes=$qw (want 200) reads=$qr (want 300)"
-[ "$qw" = 200 ] && [ "$qr" = 300 ]; result e2e-queue $?
+# the reads and writes of the null_blk device ran one at a time: their queue and service time add up
+# to at most the time that the dd runs took
+qs=$(grep -c "^obi_stat_disk_queue_time_seconds_total{.*system_device=\"$ok_dev\"" "$LAB_RESULTS/metrics.txt")
+ss=$(grep -c "^obi_stat_disk_service_time_seconds_total{.*system_device=\"$ok_dev\"" "$LAB_RESULTS/metrics.txt")
+timed=$(grep -E "^obi_stat_disk_(queue|service)_time_seconds_total\{.*system_device=\"$ok_dev\"" "$LAB_RESULTS/metrics.txt" | awk '{s+=$2} END {printf "%.6f", s}')
+echo "queue time: series=$qs service time: series=$ss (want 2 each: read and write), queue + service time=${timed}s (want <= ${dd_s}s, the time the dd runs took)"
+[ "$qs" = 2 ] && [ "$ss" = 2 ] && awk -v a="$timed" -v b="$dd_s" 'BEGIN {exit !(a <= b)}'; result e2e-queue $?
 
 if [ -b $part_node ]; then
   part=$(sum obi_stat_disk_operations_total "system_device=\"$loop_dev\"" "obi_disk_partition=\"${loop_dev}p1\"" 'disk_io_direction="write"')
@@ -291,26 +300,44 @@ else
   echo "SKIP e2e-write-zeroes-lvm lvcreate of obivg/lv2 failed"
 fi
 
-pending=$(grep -c "^obi_stat_disk_pending_operations{.*system_device=\"$ok_dev\"" "$LAB_RESULTS/metrics.txt")
-echo "pending: series of $ok_dev=$pending (want 2: read and write, now 0)"
-[ "$pending" = 2 ] && [ "$(sum obi_stat_disk_pending_operations "system_device=\"$ok_dev\"")" = 0 ]; result e2e-pending $?
+inflight=$(grep -c "^obi_stat_disk_operation_inflight{.*system_device=\"$ok_dev\"" "$LAB_RESULTS/metrics.txt")
+echo "in flight: series of $ok_dev=$inflight (want 2: read and write, now 0)"
+[ "$inflight" = 2 ] && [ "$(sum obi_stat_disk_operation_inflight "system_device=\"$ok_dev\"")" = 0 ]; result e2e-inflight $?
 
-lvw=$(sum obi_stat_disk_operations_total "system_device=\"$lv_dev\"" 'obi_disk_stacked="true"' 'disk_io_direction="write"')
-lvb=$(sum obi_stat_disk_io_bytes_total "system_device=\"$lv_dev\"" 'obi_disk_stacked="true"' 'disk_io_direction="write"')
-echo "LVM volume: writes=$lvw (want 32) bytes=$lvb (want 2097152)"
+# the default bounds of the storage latency histograms: 16, plus +Inf
+disk_les=$(grep "^obi_stat_disk_operation_duration_seconds_bucket{" "$LAB_RESULTS/metrics.txt" | grep -F "system_device=\"$ok_dev\"" | grep -cF 'disk_io_direction="write"')
+fs_les=$(grep "^obi_stat_fs_sync_duration_seconds_bucket{" "$LAB_RESULTS/metrics.txt" | grep -F 'obi_fs_sync_type="fsync"' | grep -cF 'system_filesystem_mountpoint="/mnt/obifs"')
+echo "histogram buckets: disk writes of $ok_dev=$disk_les fsync on /mnt/obifs=$fs_les (want 17 each)"
+[ "$disk_les" = 17 ] && [ "$fs_les" = 17 ]; result e2e-buckets $?
+
+old=$(grep -cE '^obi_stat_(disk_(operation_time_seconds|queue_duration_seconds|pending_operations|volume_device)|k8s_pod_volume_device)' "$LAB_RESULTS/metrics.txt")
+echo "series under the old names (operation_time, queue.duration, pending_operations, volume.device): $old (want 0)"
+[ "$old" = 0 ]; result e2e-old-names $?
+
+lvw=$(sum obi_stat_disk_operations_total "system_device=\"$lv_dev\"" 'obi_disk_stacked="true"' 'obi_disk_volume_name="obivg-lv"' 'disk_io_direction="write"')
+lvb=$(sum obi_stat_disk_io_bytes_total "system_device=\"$lv_dev\"" 'obi_disk_stacked="true"' 'obi_disk_volume_name="obivg-lv"' 'disk_io_direction="write"')
+echo "LVM volume obivg-lv: writes=$lvw (want 32) bytes=$lvb (want 2097152)"
 [ "$lvw" = 32 ] && [ "$lvb" = 2097152 ]; result e2e-lvm $?
 mdw=$(sum obi_stat_disk_operations_total 'system_device="md0"' 'obi_disk_stacked="true"' 'disk_io_direction="write"')
+# md accounts its bios from Linux 5.14 (checked from 5.15), and on the RHEL 8.9+ and RHEL 9 kernels
 kmaj=$(uname -r | cut -d. -f1); kmin=$(uname -r | cut -d. -f2)
-if [ "$kmaj" -gt 5 ] || { [ "$kmaj" = 5 ] && [ "$kmin" -ge 15 ]; }; then
+md_measured=0
+if [ "$kmaj" -gt 5 ] || { [ "$kmaj" = 5 ] && [ "$kmin" -ge 15 ]; }; then md_measured=1; fi
+case "$(uname -r)" in *.el9*|*.el8_9*|*.el8_10*) md_measured=1 ;; esac
+if [ $md_measured = 1 ]; then
   echo "md volume: writes=$mdw (want >=16)"
   [ "$mdw" -ge 16 ]; result e2e-md $?
 else
-  echo "md volume: writes=$mdw (md needs Linux 5.15+)"
+  echo "md volume: writes=$mdw (md is measured from Linux 5.14, and on RHEL 8.9+ and 9)"
 fi
 stacked_loop=$(grep -c "^obi_stat_disk_operations_total{.*obi_disk_stacked=\"true\".*system_device=\"$loop_dev\"" "$LAB_RESULTS/metrics.txt")
 plain_null=$(grep -c "^obi_stat_disk_operations_total{.*obi_disk_stacked=\"false\".*system_device=\"$ok_dev\"" "$LAB_RESULTS/metrics.txt")
 echo "stacked label: loop series stacked=$stacked_loop (want >=1), null_blk series not stacked=$plain_null (want >=1)"
 [ "$stacked_loop" -ge 1 ] && [ "$plain_null" -ge 1 ]; result e2e-stacked-label $?
+vl=$(sum obi_stat_disk_volume_info "obi_disk_volume_device=\"$lv_dev\"" 'obi_disk_volume_name="obivg-lv"')
+vm=$(sum obi_stat_disk_volume_info 'obi_disk_volume_device="md0"')
+echo "volume info: LVM $lv_dev series=$vl md0 series=$vm (want >=1 each)"
+[ "$vl" -ge 1 ] && [ "$vm" -ge 1 ]; result e2e-volume-info $?
 for t in fsync fdatasync syncfs; do
   n=$(sum obi_stat_fs_sync_duration_seconds_count "obi_fs_sync_type=\"$t\"" 'system_filesystem_mountpoint="/mnt/obifs"' 'system_filesystem_type="ext4"')
   echo "file sync: $t on /mnt/obifs=$n (want 1)"
@@ -378,34 +405,35 @@ if [ $nfs_ok = 1 ] && [ $nfs_btf = 1 ]; then
   nfs_count=$(sum obi_stat_nfs_client_procedure_count_total)
   nfs_count_writes=$(sum obi_stat_nfs_client_procedure_count_total 'onc_rpc_procedure_name="WRITE"' 'server_address="127.0.0.1"')
   echo "NFS counters: count=$nfs_count (histogram $nfs_hist), WRITE=$nfs_count_writes (histogram $nfs_writes)"
-  [ "$nfs_count" = "$nfs_hist" ] && [ "$nfs_count_writes" = "$nfs_writes" ] && grep -q '^obi_stat_nfs_client_procedure_time_seconds_total{' "$LAB_RESULTS/metrics.txt"; result e2e-nfs-counters $?
+  [ "$nfs_count" = "$nfs_hist" ] && [ "$nfs_count_writes" = "$nfs_writes" ] && grep '^obi_stat_nfs_client_procedure_time_seconds_total{' "$LAB_RESULTS/metrics.txt" | grep -q 'error_type="ENOENT"'; result e2e-nfs-counters $?
 fi
 bk() { sum obi_stat_disk_operation_duration_seconds_bucket "system_device=\"$1\"" 'disk_io_direction="write"' "le=\"$2\""; }
-stall() { # device: one successful write between 10 s and 30 s
+stall() { # device: one successful write between 5 s and 30 s, the default bounds around 12 s
   # error_type="" is on every successful series: only a non-empty value is an error
-  [ "$(bk $1 10)" = 0 ] && [ "$(bk $1 30)" = 1 ] && [ "$(bk $1 60)" = 1 ] && [ "$(bk $1 +Inf)" = 1 ] &&
+  [ "$(bk $1 5)" = 0 ] && [ "$(bk $1 30)" = 1 ] && [ "$(bk $1 60)" = 1 ] && [ "$(bk $1 +Inf)" = 1 ] &&
     ! grep "^obi_stat_disk_operation_duration_seconds_count{.*system_device=\"$1\"" "$LAB_RESULTS/metrics.txt" | grep -q 'error_type="[^"]'
 }
 echo "stall: dd exit=$slow_rc (want 0) on $slow_target"
 [ "$slow_rc" = 0 ]; result e2e-stall-write $?
-grep "^obi_stat_disk_operation_duration_seconds_bucket{.*system_device=\"$slowdm\"" "$LAB_RESULTS/metrics.txt" | grep -E 'le="(5|10|30|60|\+Inf)"'
+grep "^obi_stat_disk_operation_duration_seconds_bucket{.*system_device=\"$slowdm\"" "$LAB_RESULTS/metrics.txt" | grep -E 'le="(1|5|30|60|\+Inf)"'
 slow_sum=$(sum obi_stat_disk_operation_duration_seconds_sum "system_device=\"$slowdm\"" 'disk_io_direction="write"')
 echo "stall: $slowdm write time sum=${slow_sum}s (want 12..29)"
 stall $slowdm && [ "$slow_sum" -ge 12 ] && [ "$slow_sum" -lt 30 ]; result e2e-stall-bucket-bio $?
 if [ "$slow_dio" = 1 ]; then
-  grep "^obi_stat_disk_operation_duration_seconds_bucket{.*system_device=\"$slow_dev\"" "$LAB_RESULTS/metrics.txt" | grep -E 'le="(5|10|30|60|\+Inf)"'
+  grep "^obi_stat_disk_operation_duration_seconds_bucket{.*system_device=\"$slow_dev\"" "$LAB_RESULTS/metrics.txt" | grep -E 'le="(1|5|30|60|\+Inf)"'
   stall $slow_dev; result e2e-stall-bucket $?
 else
   echo "SKIP e2e-stall-bucket losetup --direct-io over the dm device didn't take, only the bio path is checked"
 fi
 stall_bounds=0
-for h in disk_operation disk_queue disk_flush fs_sync $([ $discard_ok = 1 ] && echo disk_discard); do
+# the queue time is a counter, without buckets
+for h in disk_operation disk_flush fs_sync $([ $discard_ok = 1 ] && echo disk_discard); do
   grep -q "^obi_stat_${h}_duration_seconds_bucket{.*le=\"60\"" "$LAB_RESULTS/metrics.txt" || { echo "stall: no le=\"60\" on $h"; stall_bounds=1; }
 done
 [ $stall_bounds = 0 ]; result e2e-stall-bounds $?
 if [ $nfs_ok = 1 ] && [ $nfs_btf = 1 ]; then
   nfs_stall_bounds=0
-  for le in 10 30 60; do
+  for le in 5 30 60; do
     grep -q "^obi_stat_nfs_client_procedure_duration_seconds_bucket{.*le=\"$le\"" "$LAB_RESULTS/metrics.txt" || { echo "stall: no NFS le=\"$le\""; nfs_stall_bounds=1; }
   done
   [ $nfs_stall_bounds = 0 ]; result e2e-stall-bounds-nfs $?

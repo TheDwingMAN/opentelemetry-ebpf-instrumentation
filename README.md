@@ -86,11 +86,27 @@ One kernel:
 
 ```sh
 cd ~/obi-work/lab-kit/lab
-./build-payload.sh final       && ./run-vm.sh v6.12.111 payloads/final 1200
-./build-payload.sh nvme-mpath  && LAB_NVME_MPATH=256M ./run-vm.sh v6.12.111 payloads/nvme-mpath 900
-./build-payload.sh k3s-final   && ./run-vm.sh v6.12.111 payloads/k3s-final 3000
-./build-payload.sh iostats     && LAB_EXTRA_DISKS=1G ./run-vm.sh v6.18.54 payloads/iostats 1800
+./build-payload.sh final          && ./run-vm.sh v6.12.111 payloads/final 1200
+./build-payload.sh nvme-mpath     && LAB_NVME_MPATH=256M ./run-vm.sh v6.12.111 payloads/nvme-mpath 900
+./build-payload.sh nvme-bio-merge && LAB_NVME_MPATH=256M ./run-vm.sh v6.12.111 payloads/nvme-bio-merge 1200
+./build-payload.sh dm-mpath       && ./run-vm.sh v6.12.111 payloads/dm-mpath 900
+./build-payload.sh k3s-final      && ./run-vm.sh v6.12.111 payloads/k3s-final 3000
+./build-payload.sh iostats        && LAB_EXTRA_DISKS=1G ./run-vm.sh v6.18.54 payloads/iostats 1800
 ```
+
+What the newer payloads check:
+
+| Payload | Checks |
+|---|---|
+| `final` | the privileged tests, then OBI end to end on null_blk, loop, LVM, md, zram, dm-delay (12 s stalls), ext4, tmpfs, overlay and loopback NFS, with the metric names of `feat/statso11y-disk-metrics-v2` (`service_time`, the `queue_time` counter, `operation.inflight`, the volume info metrics, 16 histogram bounds) |
+| `nvme-mpath`, `-bio`, `-nobio` | an NVMe native multipath head over two hidden paths: the head's bios, the path names, the paths' writes against their own `/proc/diskstats` lines |
+| `nvme-bio-merge` | the head's bios that its paths merge (mkfs, buffered writes, 1000 small files): the head's bytes match `/proc/diskstats` in every phase, and `disk_bio_start` keeps no entry |
+| `dm-mpath` | a dm-multipath volume over two scsi_debug paths: the volume's and the paths' reads, writes, bytes and flushes against `/proc/diskstats` (device mapper ends each request twice); the flush checks skip on kernels whose `/proc/diskstats` has no flush fields (before 5.5, RHEL 8) |
+| `k3s-final` | the OpenShift bundle's configuration in k3s with two workload namespaces, an LVM local PV, a partitioned disk, zram and loopback NFS, sending OTLP to a collector and scraped by a Prometheus: the pod, volume and workload labels, the new names and labels (`obi.disk.volume.name`, `k8s.kind`, `error.type` on the time counters), the 16 bounds, the sync counters per mountpoint and filesystem type, and no cardinality warning |
+
+`iostats` still checks the metric names from before the renames of `05fbe708c`
+(`operation_time`, the queue histogram, `pending_operations`, `volume.device`): run it
+on a commit before it.
 
 The matrix (one VM at a time):
 

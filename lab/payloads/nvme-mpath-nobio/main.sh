@@ -84,7 +84,10 @@ sum() { # file metric filters...
   for f in "$@"; do lines=$(echo "$lines" | grep -F "$f"); done
   echo "$lines" | awk 'NF {s+=$2} END {printf "%d", s}'
 }
-ds_writes() { awk -v d="$head" '$3 == d {print $8}' "$1"; }
+# ds_field <file> <field> [device]: a field of the device's line in /proc/diskstats (default: the
+# head). The hidden paths are matched by name: before Linux 6.1 their line has no numbers (0 0).
+ds_field() { awk -v d="${3:-$head}" -v f="$2" '$3 == d {print $f}' "$1"; }
+ds_writes() { ds_field "$1" 8 "${2:-}"; }
 
 curl -sf localhost:9400/metrics > "$LAB_RESULTS/before.txt"
 ds_guard /tmp/ds-w0.txt "before the I/O with obi" || { result nvme-diskstats-with-obi-idle 1; exit 1; }
@@ -114,12 +117,16 @@ scrape "$LAB_RESULTS/idle.txt" || { fail=1; exit 1; }
 kill $obi_pid; wait $obi_pid 2>/dev/null
 
 echo "devices in the metrics:"; grep -o 'system_device="[^"]*"' "$LAB_RESULTS/after.txt" | sort | uniq -c
-grep -E "^obi_stat_disk_(operations_total|pending_operations)\{" "$LAB_RESULTS/after.txt" | grep -F nvme | head -20
+grep -E "^obi_stat_disk_(operations_total|operation_inflight)\{" "$LAB_RESULTS/after.txt" | grep -F nvme | head -20
 
 hw=$(( $(sum "$LAB_RESULTS/after.txt" obi_stat_disk_operations_total "system_device=\"$head\"" 'disk_io_direction="write"') - $(sum "$LAB_RESULTS/before.txt" obi_stat_disk_operations_total "system_device=\"$head\"" 'disk_io_direction="write"') ))
 echo "head $head: writes measured=$hw diskstats=$((w1 - w0)) (dd issued 1064)"
-[ "$hw" -ge 1064 ]; result nvme-head-bio-writes $?
-[ "$hw" -eq $((w1 - w0)) ]; result nvme-head-diskstats-match $?
+case ",$NVME_OBI_FEATURES," in
+  *,stats_disk,*|*,stats_disk_bio_devices,*)
+    [ "$hw" -ge 1064 ]; result nvme-head-bio-writes $?
+    [ "$hw" -eq $((w1 - w0)) ]; result nvme-head-diskstats-match $? ;;
+  *) echo "SKIP nvme-head-bio-writes nvme-head-diskstats-match the bio probes are off: OBI doesn't measure the head" ;;
+esac
 
 stacked=$(grep -F "system_device=\"$head\"" "$LAB_RESULTS/after.txt" | grep -c 'obi_disk_stacked="true"')
 echo "head series with obi_disk_stacked=true: $stacked"
@@ -137,25 +144,41 @@ echo "request writes on the paths (by name)=$pw, unstacked nvme write series tot
 # hidden path names: from Linux 6.1, /proc/diskstats names the paths, so their request writes are
 # reported on their nvmeXcYnZ names, never on raw "major:minor" numbers. Older kernels list the paths
 # as 0:0 there, so their writes may keep the numbers (e.g. "259:1"): the names and numbers are summed.
-# The reference is the head's writes in diskstats ($hw equals them in nvme-head-diskstats-match),
-# so the check also holds in the nobio variant, where OBI doesn't measure the head.
+# The reference is the paths' own lines in /proc/diskstats, not the head's: the NVMe driver keeps the
+# head's line (Linux 6.2+, RHEL 9) for the requests it starts on a path, so it leaves out the empty
+# write that the block layer completes on the path, without issuing it, for each file sync (here each
+# O_DSYNC write), and it counts the cache flushes as reads.
 hd=$((w1 - w0))
+pd=0
+for p in $(ls -d /sys/block/nvme*c*n* | xargs -n1 basename); do
+  pd=$((pd + $(ds_writes /tmp/ds-w1.txt "$p") - $(ds_writes /tmp/ds-w0.txt "$p")))
+done
 raw_writes() { grep '^obi_stat_disk_operations_total{' "$1" | grep -F 'disk_io_direction="write"' | grep -E 'system_device="[0-9]+:[0-9]+"' | awk '{s+=$2} END {printf "%d", s}'; }
 raw=$(grep '^obi_stat_disk_operations_total{' "$LAB_RESULTS/after.txt" | grep -cE 'system_device="[0-9]+:[0-9]+"')
 rw=$(( $(raw_writes "$LAB_RESULTS/after.txt") - $(raw_writes "$LAB_RESULTS/before.txt") ))
-echo "path request writes by name=$pw, on raw major:minor devices=$rw ($raw series), head $head writes: diskstats=$hd measured=$hw"
+echo "path request writes by name=$pw, on raw major:minor devices=$rw ($raw series), paths' writes in diskstats=$pd, head $head writes: diskstats=$hd measured=$hw"
+echo "head $head in diskstats: reads +$(( $(ds_field /tmp/ds-w1.txt 4) - $(ds_field /tmp/ds-w0.txt 4) )) (500 reads and one per cache flush), flushes +$(( $(ds_field /tmp/ds-w1.txt 19) - $(ds_field /tmp/ds-w0.txt 19) ))"
 kv=$(uname -r | cut -d- -f1)
 if [ "$(printf '%s\n' 6.1 "$kv" | sort -V | head -1)" = 6.1 ]; then
   [ "$raw" -eq 0 ]; result nvme-path-names-no-raw-numbers $?
-  [ "$pw" -eq "$hd" ]; result nvme-path-names-writes-match-head $?
+  [ "$pw" -eq "$pd" ]; result nvme-path-names-writes-match-path-diskstats $?
 else
   echo "SKIP nvme-path-names-no-raw-numbers kernel $kv before 6.1: /proc/diskstats lists the paths as 0:0, they may keep their numbers"
-  [ $((pw + rw)) -eq "$hd" ]; result nvme-path-names-writes-match-head $?
+  [ $((pw + rw)) -eq "$pd" ]; result nvme-path-names-writes-match-path-diskstats $?
+fi
+# the kernel's two counts of the same writes: the paths' are the head's plus one empty write per
+# O_DSYNC write when the path has a volatile write cache (QEMU's NVMe always has one)
+syncs=1000
+[ "$(cat /sys/block/$(ls /sys/block | grep -m1 '^nvme.*c.*n')/queue/write_cache)" = "write back" ] || syncs=0
+if [ "$hd" -gt 0 ]; then
+  [ "$pd" -eq $((hd + syncs)) ]; result nvme-path-writes-are-head-writes-plus-syncs $?
+else
+  echo "SKIP nvme-path-writes-are-head-writes-plus-syncs the head keeps no I/O statistics (before Linux 6.2)"
 fi
 
-pend=$(sum "$LAB_RESULTS/idle.txt" obi_stat_disk_pending_operations "system_device=\"$head\"")
-echo "head pending operations after 10 s idle: $pend"
-[ "$pend" -eq 0 ]; result nvme-no-stuck-pending $?
+pend=$(sum "$LAB_RESULTS/idle.txt" obi_stat_disk_operation_inflight "system_device=\"$head\"")
+echo "head operations in flight after 10 s idle: $pend"
+[ "$pend" -eq 0 ]; result nvme-no-stuck-inflight $?
 
 grep -iE 'level=(WARN|ERROR)' "$LAB_RESULTS/obi.log" | head -10
 kill $watcher 2>/dev/null
