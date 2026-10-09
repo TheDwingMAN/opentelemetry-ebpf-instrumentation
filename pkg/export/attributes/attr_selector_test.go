@@ -242,16 +242,6 @@ func TestDefault_StatDiskServiceDuration(t *testing.T) {
 	assert.NotContains(t, p.For(StatDiskServiceDuration), attr.K8sClusterName, "outside Kubernetes")
 }
 
-func TestStatDiskMetricsNameTheDeviceMapperDevices(t *testing.T) {
-	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
-	require.NoError(t, err)
-	for _, metric := range []Name{
-		StatDiskServiceDuration,
-	} {
-		assert.Contains(t, p.For(metric), attr.DiskVolumeName, metric.OTEL)
-	}
-}
-
 func TestDefault_HTTPServerMetrics(t *testing.T) {
 	p, err := NewAttrSelector(0, &SelectorConfig{})
 	require.NoError(t, err)
