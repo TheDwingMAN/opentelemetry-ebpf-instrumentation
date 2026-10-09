@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/obi/internal/test/integration/components/promtest"
+	"go.opentelemetry.io/obi/pkg/appolly/discover"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/connector"
@@ -30,6 +31,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/pipe/global"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
+	"go.opentelemetry.io/obi/pkg/selection"
 )
 
 const timeout = 5 * time.Second
@@ -307,6 +309,52 @@ func TestDiskStatsWithoutDiskProbes(t *testing.T) {
 		}
 		assert.Len(ct, rtt, 1)
 	}, timeout, 100*time.Millisecond)
+}
+
+// Under dynamic application selection, the storage stats are skipped: their branch of the pipeline is
+// not built
+func TestStorageStatsUnderDynamicSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		selector selection.MultiSignalPIDSelector
+		storage  bool
+	}{
+		{name: "without dynamic selection", storage: true},
+		{name: "with dynamic selection", selector: discover.NewDynamicSelector()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stats := Stats{
+				agentIP: net.ParseIP("1.2.3.4"),
+				ctxInfo: &global.ContextInfo{
+					Prometheus:      &connector.PrometheusManager{},
+					DynamicSelector: tc.selector,
+				},
+				cfg: &obi.Config{
+					Prometheus: prom.PrometheusConfig{Registry: prometheus.NewRegistry(), Path: "/metrics", TTL: time.Hour},
+					Metrics:    perapp.GlobalMetricsConfig{Features: export.FeatureStatsTCPRtt | export.FeatureStatsDiskOperationDuration},
+				},
+			}
+
+			var diskTracerAdded bool
+			defaultDiskTracer := newDiskTracer
+			defaultRingBufTracer := newRingBufTracer
+			t.Cleanup(func() {
+				newDiskTracer = defaultDiskTracer
+				newRingBufTracer = defaultRingBufTracer
+			})
+			newDiskTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+				diskTracerAdded = true
+				return defaultDiskTracer(s, out)
+			}
+			newRingBufTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+				return func(_ context.Context) { out.MarkCloseable() }
+			}
+
+			_, err := stats.buildPipeline(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, tc.storage, diskTracerAdded)
+		})
+	}
 }
 
 // startDiskPipeline runs the stats pipeline with the given disk features, exporting to

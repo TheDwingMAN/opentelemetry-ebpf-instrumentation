@@ -116,7 +116,7 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		SelectionCfg:            cfg.Attributes.Select,
 		ExtraGroupAttributesCfg: cfg.Attributes.ExtraGroupAttributes,
 	}
-	features := cfg.Metrics.Features
+	features := probedFeatures(alog, cfg.Metrics.Features, ctxInfo.DynamicSelector != nil)
 
 	histograms, approximated := latencyHistograms(cfg)
 	if len(approximated) > 0 {
@@ -141,6 +141,17 @@ func newFetcher(cfg *config.EBPFTracer, features *export.Features,
 	selectorCfg *attributes.SelectorConfig, histograms ebpf.LatencyHistograms,
 ) (ebpFetcher, error) {
 	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, histograms)
+}
+
+// probedFeatures returns the stat features whose probes must be loaded. The storage stats can't be
+// matched to dynamically selected applications yet: the dynamic PID filter matches network
+// endpoints, which they don't have. So they are left out under dynamic selection, with a warning.
+func probedFeatures(log *slog.Logger, features export.Features, dynamicSelection bool) export.Features {
+	if !dynamicSelection || !storageProbesEnabled(&features) {
+		return features
+	}
+	log.Warn("the storage stat metrics are disabled: they are not supported with dynamic application selection")
+	return features &^ export.FeatureStatsDisk
 }
 
 // storageProbesEnabled tells whether any enabled storage metric needs probes

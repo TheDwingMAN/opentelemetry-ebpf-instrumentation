@@ -164,6 +164,10 @@ The disk metrics name the status of each failed block request after its errno in
 
 A dm-multipath device retries on another path the failures of its paths that another path may not have, all but `EOPNOTSUPP`, `ENOSPC`, `EREMOTEIO`, `EBADE`, `ENODATA` and `EILSEQ`: it reports them only when no path is left and it doesn't queue the I/O until a path comes back (`queue_if_no_path`).
 
+#### Storage stats under dynamic application selection
+
+When OBI is embedded with a dynamic selector (`instrumenter.WithDynamicSelector`), the storage stats are not reported, and their probes are not loaded: the dynamic selection matches the stats to the selected applications by their network endpoints, which the storage stats don't have. OBI logs a warning at startup when a storage stat metric is enabled under dynamic selection.
+
 ### Known limitations
 
 #### `src.port` may be reported as `0`

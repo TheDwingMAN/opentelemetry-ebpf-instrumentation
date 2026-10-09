@@ -148,9 +148,10 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 }
 
 // storageStatsEnabled tells whether any disk stat is enabled. Their branch of the pipeline is only
-// added then.
+// added then, and not under dynamic application selection, which leaves them out (see
+// probedFeatures).
 func (s *Stats) storageStatsEnabled() bool {
-	return s.cfg.Metrics.Features.StatsDisk()
+	return s.cfg.Metrics.Features.StatsDisk() && s.ctxInfo.DynamicSelector == nil
 }
 
 // mergeStats forwards the stats of all the inputs to the output, and closes the output once all the
