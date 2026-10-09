@@ -508,12 +508,11 @@ func TestStorageAttributeReadsUnderDynamicSelection(t *testing.T) {
 func TestSizeInFlightMaps(t *testing.T) {
 	newSpec := func() *ebpf.CollectionSpec {
 		return &ebpf.CollectionSpec{Maps: map[string]*ebpf.MapSpec{
-			"disk_rq_start":     {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
-			"disk_bio_start":    {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
-			"fs_sync_start":     {Type: ebpf.LRUHash, MaxEntries: 1 << 15},
-			"nfs_task_cgroup":   {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
-			"disk_timed_queues": {Type: ebpf.LRUHash, MaxEntries: 1 << 10},
-			"disk_io_accum":     {Type: ebpf.Hash, MaxEntries: 1 << 12},
+			"disk_rq_start":   {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
+			"disk_bio_start":  {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
+			"fs_sync_start":   {Type: ebpf.LRUHash, MaxEntries: 1 << 15},
+			"nfs_task_cgroup": {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
+			"disk_io_accum":   {Type: ebpf.Hash, MaxEntries: 1 << 12},
 		}}
 	}
 
@@ -529,17 +528,10 @@ func TestSizeInFlightMaps(t *testing.T) {
 	// beyond, they get twice the free entries that the CPUs can keep for themselves
 	spec = newSpec()
 	sizeInFlightMaps(spec, 192)
-	for _, name := range []string{"disk_rq_start", "disk_bio_start", "fs_sync_start", "nfs_task_cgroup", "disk_timed_queues"} {
+	for _, name := range []string{"disk_rq_start", "disk_bio_start", "fs_sync_start", "nfs_task_cgroup"} {
 		assert.Equal(t, uint32(2*128*192), spec.Maps[name].MaxEntries, name)
 	}
 	assert.Equal(t, uint32(1<<12), spec.Maps["disk_io_accum"].MaxEntries, "not an in-flight map")
-
-	// the map of timed queues grows beyond 4 CPUs
-	for cpus, want := range map[int]uint32{1: 1 << 10, 4: 1 << 10, 16: 2 * 128 * 16, 64: 2 * 128 * 64} {
-		spec = newSpec()
-		sizeInFlightMaps(spec, cpus)
-		assert.Equal(t, want, spec.Maps["disk_timed_queues"].MaxEntries, "%d CPUs", cpus)
-	}
 
 	// a map already scaled beyond it is left alone
 	spec = newSpec()
@@ -581,7 +573,7 @@ func TestShrinkUnusedStorageMaps(t *testing.T) {
 	}{
 		{name: "TCP only"},
 		{"block requests", storageProbes{disk: true}, []string{
-			"disk_io_accum", "disk_io_accum_init_storage", "disk_rq_start", "disk_timed_queues", "disk_cgroup_names",
+			"disk_io_accum", "disk_io_accum_init_storage", "disk_rq_start", "disk_cgroup_names",
 			"disk_cgroup_name_init_storage",
 		}},
 		{"file syncs", storageProbes{fsSync: true}, []string{

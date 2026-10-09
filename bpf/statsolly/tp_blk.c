@@ -13,7 +13,6 @@
 #include <statsolly/types.h>
 #include <statsolly/maps/disk_io_accum.h>
 #include <statsolly/maps/disk_rq_start.h>
-#include <statsolly/maps/disk_timed_queues.h>
 
 // The RQF_FLUSH_SEQ flag of struct request, which userspace finds in the kernel BTF: its bit
 // depends on the kernel version, and some kernels number it in an anonymous enum.
@@ -90,11 +89,6 @@ static __always_inline u64 request_start_ns(struct request *rq) {
     return disk_accounted_start_ns(start_ns, BPF_CORE_READ(rq, rq_flags), disk_rqf_io_stat);
 }
 
-// request_queue_key is the key of the queue of a request in disk_timed_queues
-static __always_inline u64 request_queue_key(struct request *rq) {
-    return (u64)(uintptr_t)BPF_CORE_READ(rq, q);
-}
-
 // in_flush_sequence tells whether a request is a step of a flush sequence: the flush that the
 // sequence issues, or a write with a cache flush before or after it, which the kernel completes
 // once for its data and again at the end of the sequence
@@ -112,25 +106,11 @@ static __always_inline bool never_issued(struct request *rq) {
     return BPF_CORE_READ(rq, state) == bpf_core_enum_value(enum mq_rq_state, MQ_RQ_IDLE);
 }
 
-// kernel_times_requests tells whether the kernel records the issue time and the size of the
-// requests (rq->io_start_time_ns and rq->stats_sectors): when the queue has QUEUE_FLAG_STATS, which
-// writeback throttling, on by default, and io.cost set, whatever queue/iostats says. The kernel
-// only decides after block_rq_issue, so this relies on what the completions of the queue found
-// (see disk_timed_queues).
-static __always_inline bool kernel_times_requests(struct request *rq) {
-    // the request holds the size from Linux 5.4. RHEL 8 records it in a struct request_aux, which
-    // this check doesn't find, so its requests are recorded at their issue.
-    if (!bpf_core_field_exists(rq->stats_sectors)) {
-        return false;
-    }
-    const u64 queue = request_queue_key(rq);
-    return bpf_map_lookup_elem(&disk_timed_queues, &queue) != 0;
-}
-
+// record_issue records when a request is issued to the device, on OBI's clock. A request issued
+// again after a requeue keeps its last issue. The kernel's own timestamps are only a fallback (see
+// kernel_issue_start): from Linux 6.9 (and RHEL 9.6), they read the clock cached by the
+// submitter's block plug, which can be hundreds of milliseconds old for writeback.
 static __always_inline void record_issue(struct request *rq) {
-    if (kernel_times_requests(rq)) {
-        return;
-    }
     const enum disk_op op = request_op(rq);
     if (op == disk_op_unknown) {
         return;
@@ -164,58 +144,58 @@ int obi_stats_raw_tp_block_rq_issue_legacy(struct bpf_raw_tracepoint_args *ctx) 
     return 0;
 }
 
-// kernel_timed_start fills start from what the kernel recorded at the issue of a request that it
-// timed, and adds its queue to disk_timed_queues so that the next requests of the queue are not
-// recorded at their issue
-static __always_inline bool
-kernel_timed_start(struct request *rq, const u32 completed_bytes, disk_rq_start_t *start) {
-    if (!bpf_core_field_exists(rq->stats_sectors)) {
-        return false;
-    }
-    // the kernel zeroes it when it allocates or reinitializes a request
-    const u64 issued_ns = BPF_CORE_READ(rq, io_start_time_ns);
-    if (issued_ns == 0) {
-        return false;
-    }
-    const u64 queue = request_queue_key(rq);
-    if (!bpf_map_lookup_elem(&disk_timed_queues, &queue)) {
-        const u8 timed = 1;
-        bpf_map_update_elem(&disk_timed_queues, &queue, &timed, BPF_ANY);
-    }
-    struct gendisk *disk = request_disk(rq);
-    start->issued_ns = issued_ns;
-    start->queued_ns = disk_queue_ns(request_start_ns(rq), issued_ns);
-    start->bytes = disk_rq_bytes(completed_bytes, BPF_CORE_READ(rq, stats_sectors));
-    start->major = BPF_CORE_READ(disk, major);
-    start->minor = BPF_CORE_READ(disk, first_minor);
-    start->op = request_op(rq);
-    return true;
-}
-
-// recorded_start moves what record_issue recorded of a request into start. A request that was
-// not recorded was issued before the probes were attached or, if the kernel timed its queue,
-// after the kernel stopped timing it: the queue is removed from disk_timed_queues so that its
-// next requests are recorded.
+// recorded_start moves what record_issue recorded of a request into start. A request is not
+// recorded when it was issued before the probes were attached, or when the kernel skipped
+// record_issue because another BPF program was running on the CPU (recursion_misses).
 static __always_inline bool recorded_start(struct request *rq, disk_rq_start_t *start) {
     const u64 rq_key = (u64)(uintptr_t)rq;
     const disk_rq_start_t *recorded = bpf_map_lookup_elem(&disk_rq_start, &rq_key);
-    // what was recorded before the request started being timed belongs to an earlier request at
-    // the same address, which the kernel timed. A start left by an earlier use (see
-    // disk_accounted_start_ns) is older than this use, so it can only miss such a record.
-    const u64 started_ns = BPF_CORE_READ(rq, start_time_ns);
-    if (recorded && recorded->issued_ns < started_ns) {
-        bpf_map_delete_elem(&disk_rq_start, &rq_key);
-        recorded = 0;
-    }
     if (!recorded) {
-        if (bpf_core_field_exists(rq->stats_sectors)) {
-            const u64 queue = request_queue_key(rq);
-            bpf_map_delete_elem(&disk_timed_queues, &queue);
-        }
+        return false;
+    }
+    // what was recorded before the request started belongs to an earlier use of the same address,
+    // whose completion was missed. A start left by an earlier use (see disk_accounted_start_ns) is
+    // older than this use, so it can only miss such a record.
+    const u64 started_ns = BPF_CORE_READ(rq, start_time_ns);
+    if (recorded->issued_ns < started_ns) {
+        bpf_map_delete_elem(&disk_rq_start, &rq_key);
         return false;
     }
     *start = *recorded;
     bpf_map_delete_elem(&disk_rq_start, &rq_key);
+    return true;
+}
+
+// kernel_issue_start fills start for an issued request that record_issue didn't record, from the
+// issue time that the kernel recorded, if it times the requests of the queue (QUEUE_FLAG_STATS), or
+// else from its start, so that the request is still counted.
+static __always_inline bool
+kernel_issue_start(struct request *rq, const u32 completed_bytes, disk_rq_start_t *start) {
+    u64 issued_ns = 0;
+    u32 bytes = completed_bytes;
+    if (bpf_core_field_exists(rq->stats_sectors)) {
+        // the kernel zeroes it when it allocates or reinitializes a request
+        issued_ns = BPF_CORE_READ(rq, io_start_time_ns);
+        if (issued_ns != 0) {
+            bytes = disk_rq_bytes(completed_bytes, BPF_CORE_READ(rq, stats_sectors));
+        }
+    }
+    const u64 started_ns = request_start_ns(rq);
+    u64 queued_ns = disk_queue_ns(started_ns, issued_ns);
+    if (issued_ns == 0) {
+        issued_ns = started_ns;
+        queued_ns = k_disk_queue_unknown;
+    }
+    if (issued_ns == 0) {
+        return false;
+    }
+    struct gendisk *disk = request_disk(rq);
+    start->issued_ns = issued_ns;
+    start->queued_ns = queued_ns;
+    start->bytes = bytes;
+    start->major = BPF_CORE_READ(disk, major);
+    start->minor = BPF_CORE_READ(disk, first_minor);
+    start->op = request_op(rq);
     return true;
 }
 
@@ -273,7 +253,7 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         if (!never_issued_start(rq, nr_bytes, &start)) {
             return 0;
         }
-    } else if (!kernel_timed_start(rq, nr_bytes, &start) && !recorded_start(rq, &start)) {
+    } else if (!recorded_start(rq, &start) && !kernel_issue_start(rq, nr_bytes, &start)) {
         return 0;
     }
     const u64 now_ns = bpf_ktime_get_ns();

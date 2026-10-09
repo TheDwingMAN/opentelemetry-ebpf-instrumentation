@@ -23,9 +23,8 @@ typedef struct disk_rq_start {
     u8 _pad[3];
 } disk_rq_start_t;
 
-// Each in-flight block request of the queues whose requests the kernel doesn't time (see
-// disk_timed_queues), keyed by the struct request address. LRU so that requests whose completion
-// is never seen can't leak entries.
+// The issue time of each in-flight block request, keyed by the struct request address. LRU so that
+// requests whose completion is never seen can't leak entries.
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1 << 14);
