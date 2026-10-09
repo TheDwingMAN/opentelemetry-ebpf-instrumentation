@@ -9,8 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 
 	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/internal/procs"
@@ -88,6 +91,41 @@ func idFromCgroupName(name string) (string, bool) {
 		return "", false
 	}
 	return submatches[1], true
+}
+
+// IDFromIOCgroupOfPID returns the ID of the container of the cgroup that the kernel charges the I/O
+// of a process to, as IDFromCgroupNames finds it in the names of that cgroup and of its parent: its
+// cgroup of the blkio hierarchy on cgroup v1, or else its cgroup v2. It returns ErrContainerNotFound
+// if neither is a container cgroup.
+func IDFromIOCgroupOfPID(pid app.PID) (string, error) {
+	cgroupFile := procRoot + strconv.Itoa(int(pid)) + "/cgroup"
+	cgroupBytes, err := os.ReadFile(cgroupFile)
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", cgroupFile, err)
+	}
+	var unifiedPath string
+	for entry := range strings.SplitSeq(string(cgroupBytes), "\n") {
+		// hierarchy-ID:controller-list:cgroup-path
+		fields := strings.SplitN(entry, ":", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		if slices.Contains(strings.Split(fields[1], ","), "blkio") {
+			return idFromCgroupPath(fields[2])
+		}
+		if fields[0] == "0" && fields[1] == "" {
+			unifiedPath = fields[2]
+		}
+	}
+	return idFromCgroupPath(unifiedPath)
+}
+
+func idFromCgroupPath(cgroupPath string) (string, error) {
+	dir, name := path.Split(cgroupPath)
+	if id, ok := IDFromCgroupNames(name, path.Base(dir)); ok {
+		return id, nil
+	}
+	return "", ErrContainerNotFound
 }
 
 // InfoForPID returns the container ID and PID namespace for the given PID.

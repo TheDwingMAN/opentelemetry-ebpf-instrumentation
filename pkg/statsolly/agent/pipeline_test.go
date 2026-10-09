@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/obi/internal/test/integration/components/promtest"
+	"go.opentelemetry.io/obi/pkg/appolly/discover"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/connector"
@@ -364,9 +365,27 @@ func TestDiskStatsWithoutDiskProbes(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// Under dynamic application selection, the storage stats are only exported for the containers of
+// the selected applications: none while nothing is selected, and never those charged to no container
+func TestStorageStatsOfUnselectedApplicationsUnderDynamicSelection(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskOperations,
+		func(s *Stats) { s.ctxInfo.DynamicSelector = discover.NewDynamicSelector() })
+
+	ofContainer := fakeDiskRecord("vda", ebpf.CodeDiskOpWrite, "", fakeLatency(0.001))
+	ofContainer.DiskIO.ContainerID = "0123abcd"
+	ofNoContainer := fakeDiskRecord("vda", ebpf.CodeDiskOpRead, "", fakeLatency(0.001))
+	diskEvents <- []*ebpf.Stat{ofContainer, ofNoContainer}
+
+	exported := func() bool {
+		allMetrics, err := promtest.Scrape(promURL)
+		return err == nil &&
+			slices.ContainsFunc(allMetrics, func(m promtest.ScrapedMetric) bool { return strings.HasPrefix(m.Name, "obi_stat_disk") })
+	}
+	assert.Never(t, exported, time.Second, 100*time.Millisecond, "no application is selected")
+}
+
 // The storage branch of the pipeline is only built when the agent has a disk tracer: the agent has
-// none when the disk feature is disabled, left out under dynamic application selection, or when the
-// disk probes can't be loaded
+// none when the disk features are disabled, or when the disk probes can't be loaded
 func TestStorageBranchNeedsADiskTracer(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

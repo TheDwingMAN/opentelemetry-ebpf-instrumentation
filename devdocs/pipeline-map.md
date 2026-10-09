@@ -114,7 +114,8 @@ flowchart TD
     DPD(Dynamic PID<br/>decorator):::optional --> DPF
     DPF(Dynamic PID<br/>filter):::optional --> FLTR
     FLTR(Attributes<br/>filter):::optional --> MRG
-    DMT(eBPF Storage<br/>Map Tracer):::optional --> DK8S
+    DMT(eBPF Storage<br/>Map Tracer):::optional --> DCF
+    DCF(Dynamic container<br/>filter):::optional --> DK8S
     KSTORE --> DK8S
     DK8S(Kubernetes decorator<br/>by container ID):::optional --> DDEC
     DDEC(Disk stats<br/>decorator):::optional --> SFLTR
