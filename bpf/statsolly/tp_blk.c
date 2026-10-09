@@ -125,8 +125,11 @@ int obi_stats_raw_tp_block_rq_issue_legacy(struct bpf_raw_tracepoint_args *ctx) 
 }
 
 // recorded_start moves what record_issue recorded of a request into start. A request is not
-// recorded when it was issued before the probes were attached, or when the kernel skipped
-// record_issue because another BPF program was running on the CPU (recursion_misses).
+// recorded when it was issued before the probes were attached, when its record was evicted from
+// the LRU map, or when the kernel skipped record_issue because the same issue program was already
+// running on the CPU, as when an interrupt issued a request during it: from Linux 6.2, raw
+// tracepoint programs don't re-enter themselves on a CPU, and the kernel counts the runs it skips
+// in the program's recursion_misses.
 static __always_inline bool recorded_start(struct request *rq, disk_rq_start_t *start) {
     const u64 rq_key = (u64)(uintptr_t)rq;
     const disk_rq_start_t *recorded = bpf_map_lookup_elem(&disk_rq_start, &rq_key);

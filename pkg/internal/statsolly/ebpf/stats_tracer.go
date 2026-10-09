@@ -293,8 +293,9 @@ func attachTCPProbes(objects *StatsObjects, features *export.Features, connRoleU
 // sizeInFlightMap gives the in-flight map room for twice the free entries that the CPUs can keep
 // for themselves. Before Linux 6.16, except from 6.12.39, 6.6.99, RHEL 9.8 and RHEL 10.2, which
 // have the fix, once those hold most of an LRU map, a CPU that needs an entry evicts a live one
-// instead of taking a free one from another CPU: an evicted request is never counted. It grows the
-// map of 16384 entries on hosts with more than 64 CPUs.
+// instead of taking a free one from another CPU: an evicted request is timed on the kernel's clock,
+// or not counted when the kernel didn't time it. It grows the map of 16384 entries on hosts with
+// more than 64 CPUs.
 func sizeInFlightMap(spec *ebpf.CollectionSpec, cpus int) {
 	minEntries := uint32(2 * lruLocalFreeTarget * cpus)
 	if m, ok := spec.Maps[inFlightMap]; ok && m.MaxEntries < minEntries {

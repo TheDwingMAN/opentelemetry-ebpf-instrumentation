@@ -389,12 +389,18 @@ groups:
       Device service time of the block reads and writes: each request is timed
       from its last issue to the device until its final completion, so
       requeues and retries restart it, per block device, direction and
-      outcome. It excludes the wait in the I/O scheduler. Two cases are
-      timed otherwise: a write with a cache flush (a journal commit) until the
-      end of its flush sequence, and the empty flush write of a file sync, which
-      is never issued, from its allocation. Cache flushes, discards and the I/O
-      of bio-based devices (LVM, md RAID, NVMe native multipath heads) are not
-      measured. It is not reported on the paths of dm-multipath devices: the
+      outcome. It excludes the wait in the I/O scheduler. A write with a cache
+      flush (a journal commit) is timed until the end of its flush sequence. So
+      that the counts match /proc/diskstats, two kinds of requests are timed on
+      the kernel's clock instead of OBI's: the empty flush write of a file sync,
+      which is never issued, from the kernel's start of the request; and the
+      requests whose issue OBI didn't record (issued before OBI started,
+      evicted from its map of requests in flight, or issued while the issue
+      probe was already running on the CPU), from the kernel's issue time where
+      the queue records it, or else from the kernel's start of the request. A
+      request that the kernel didn't time either is not counted. Cache flushes,
+      discards and the I/O of bio-based devices (LVM, md RAID, NVMe native
+      multipath heads) are not measured. It is not reported on the paths of dm-multipath devices: the
       multipath device reports the same I/O.
     attributes:
       - ref: obi.ip
