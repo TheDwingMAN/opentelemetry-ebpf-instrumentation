@@ -55,7 +55,7 @@ func TestStorageMapsOfDisabledFeatures(t *testing.T) {
 			fetcher.Close()
 			fetcher.objects.Close()
 		})
-		if features.StatsDisk() {
+		if features.StatsDiskServiceDuration() {
 			require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
 		}
 		sizes := mapSizes(t, &fetcher.objects.StatsMaps)

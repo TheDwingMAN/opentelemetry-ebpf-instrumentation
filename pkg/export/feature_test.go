@@ -73,7 +73,7 @@ func TestFeatureAllDoesntEnableStorageStats(t *testing.T) {
 		all, err := LoadFeatures([]string{name})
 		require.NoError(t, err)
 		assert.True(t, all.StatsTCPIo(), "%s enables the TCP stats", name)
-		assert.False(t, all.StatsDisk(), name)
+		assert.False(t, all.StatsDiskServiceDuration(), name)
 	}
 
 	allAndDisk, err := LoadFeatures([]string{"all", "stats_disk_service_duration"})

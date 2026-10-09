@@ -677,7 +677,7 @@ func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 // forgot the I/O that happened before
 func attachDiskReader(t *testing.T) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
 	t.Helper()
-	features := export.FeatureStatsDisk
+	features := export.FeatureStatsDiskServiceDuration
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, allAttributes)
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })

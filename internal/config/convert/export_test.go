@@ -1052,7 +1052,7 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 		t.Parallel()
 
 		cfg := defaultRuntimeConfig()
-		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsDisk
+		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsDiskServiceDuration
 
 		_, ext := RuntimeToV2(&cfg)
 

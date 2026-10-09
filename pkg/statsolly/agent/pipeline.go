@@ -155,7 +155,7 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 // added then, and not under dynamic application selection, which leaves them out (see
 // probedFeatures).
 func (s *Stats) storageStatsEnabled() bool {
-	return s.cfg.Metrics.Features.StatsDisk() && s.ctxInfo.DynamicSelector == nil
+	return s.cfg.Metrics.Features.StatsDiskServiceDuration() && s.ctxInfo.DynamicSelector == nil
 }
 
 // mergeStats forwards the stats of all the inputs to the output, and closes the output once all the

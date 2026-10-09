@@ -34,7 +34,7 @@ type storageProbes struct {
 // planStorageProbes returns the storage probes of the enabled features that the kernel can load.
 func planStorageProbes(log *slog.Logger, features *export.Features) storageProbes {
 	var s storageProbes
-	if features.StatsDisk() {
+	if features.StatsDiskServiceDuration() {
 		var err error
 		if s.layout, err = kernelBlockTracepointLayout(log); err != nil {
 			s.disable(featureDiskRequests, fmt.Errorf("can't tell the block tracepoint arguments from the kernel BTF: %w", err))
@@ -47,11 +47,6 @@ func planStorageProbes(log *slog.Logger, features *export.Features) storageProbe
 
 func (s *storageProbes) disable(feature string, reason error) {
 	s.disabled = append(s.disabled, DisabledFeature{Feature: feature, Reason: reason.Error()})
-}
-
-// any tells whether any storage program is loaded
-func (s *storageProbes) any() bool {
-	return s.disk
 }
 
 // disableAll disables every storage feature that has programs to load
@@ -72,7 +67,7 @@ func (s *storageProbes) programsToDisable() []string {
 // stats programs without them. If that fails too, it returns both errors.
 func (s *storageProbes) loadOrDisable(load func(toDisable []string) error, tcpToDisable []string) error {
 	err := load(slices.Concat(tcpToDisable, s.programsToDisable()))
-	if err == nil || !s.any() {
+	if err == nil || !s.disk {
 		return err
 	}
 	s.disableAll(fmt.Errorf("can't load their BPF programs: %w", err))

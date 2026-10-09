@@ -16,12 +16,12 @@ import (
 // When the storage programs can't be loaded, the stats go on without any of them
 func TestStorageProbesDisableAll(t *testing.T) {
 	storage := storageProbes{disk: true}
-	assert.True(t, storage.any())
+	assert.True(t, storage.disk)
 	assert.NotContains(t, storage.programsToDisable(), progObiStatsRawTpBlockRqComplete)
 
 	storage.disableAll(errors.New("verifier error"))
 
-	assert.False(t, storage.any())
+	assert.False(t, storage.disk)
 	assert.Equal(t, []DisabledFeature{
 		{Feature: featureDiskRequests, Reason: "verifier error"},
 	}, storage.disabled)

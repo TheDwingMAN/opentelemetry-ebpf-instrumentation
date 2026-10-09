@@ -56,9 +56,10 @@ const (
 	FeatureGraph
 	FeatureApplicationRuntime
 	FeatureEBPF
+	// FeatureStatsDiskServiceDuration is not part of the `stats` aggregate, nor of `all`: the block
+	// probes fire on every block request, so it has to be enabled explicitly.
 	FeatureStatsDiskServiceDuration
-	// FeatureAll enables all the features but the storage stat ones, which must be named
-	FeatureAll = Features(^uint(0)) &^ featureStatsStorage
+	FeatureAll = Features(^uint(0)) &^ FeatureStatsDiskServiceDuration
 )
 
 // FeatureStats enables all TCP stat metrics, including TCP IO.
@@ -66,18 +67,6 @@ const (
 // higher event volume than the other stat metrics (which fire on close, failure, or retransmit).
 // If overhead is a concern, enable the lower-frequency metrics individually and opt into stats_tcp_io explicitly.
 const FeatureStats = FeatureStatsTCPRtt | FeatureStatsTCPFailedConnections | FeatureStatsTCPRetransmits | FeatureStatsTCPIo | FeatureStatsTCPSuccessfulConnections
-
-// FeatureStatsDisk groups the block I/O stat metrics. They are not part of the `stats` aggregate:
-// the block probes fire on every block request, so they have to be enabled explicitly.
-const FeatureStatsDisk = FeatureStatsDiskServiceDuration
-
-// featureStatsDiskRequests are the block I/O stat metrics that the block probes measure, on every
-// block request
-const featureStatsDiskRequests = FeatureStatsDiskServiceDuration
-
-// featureStatsStorage are the storage stat features, which `all` and `*` don't enable: their probes
-// fire on every block request, so they have to be named.
-const featureStatsStorage = FeatureStatsDisk
 
 // FeatureMapper stays public so any extension package can add and remove feature
 // definitions before loading them.
@@ -390,7 +379,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStatsDisk)
+	return f.any(FeatureStats | FeatureStatsDiskServiceDuration)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -411,11 +400,6 @@ func (f Features) StatsTCPRetransmits() bool {
 
 func (f Features) StatsTCPIo() bool {
 	return f.any(FeatureStatsTCPIo)
-}
-
-// StatsDisk reports whether any block I/O stat metric that the block probes measure is enabled.
-func (f Features) StatsDisk() bool {
-	return f.any(featureStatsDiskRequests)
 }
 
 func (f Features) StatsDiskServiceDuration() bool {
