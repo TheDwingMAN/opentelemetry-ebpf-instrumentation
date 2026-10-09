@@ -35,9 +35,6 @@ var newRingBufTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFun
 }
 
 var newDiskTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
-	if s.diskTracer == nil {
-		return func(_ context.Context) { out.MarkCloseable() }
-	}
 	return s.diskTracer.TraceLoop(out)
 }
 
@@ -103,8 +100,11 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		filteredStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredStats")
 	}
 
+	// the storage branch is only built when the disk probes are loaded: not when the feature is
+	// disabled, left out under dynamic application selection (see probedFeatures) or when its probes
+	// can't be loaded on the node
 	filteredTCPStats := filteredStats
-	if s.storageStatsEnabled() {
+	if s.diskTracer != nil {
 		filteredTCPStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredTCPStats")
 
 		// Block I/O stats have no network endpoints, so they skip the IP-based nodes above. They
@@ -149,13 +149,6 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		swarm.WithID("StatPrinter"))
 
 	return swi.Instance(ctx)
-}
-
-// storageStatsEnabled tells whether any disk stat is enabled. Their branch of the pipeline is only
-// added then, and not under dynamic application selection, which leaves them out (see
-// probedFeatures).
-func (s *Stats) storageStatsEnabled() bool {
-	return s.cfg.Metrics.Features.StatsDiskServiceDuration() && s.ctxInfo.DynamicSelector == nil
 }
 
 // mergeStats forwards the stats of all the inputs to the output, and closes the output once all the

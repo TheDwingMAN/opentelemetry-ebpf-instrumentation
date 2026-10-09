@@ -20,7 +20,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/obi/internal/test/integration/components/promtest"
-	"go.opentelemetry.io/obi/pkg/appolly/discover"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/connector"
@@ -29,11 +28,11 @@ import (
 	"go.opentelemetry.io/obi/pkg/filter"
 	"go.opentelemetry.io/obi/pkg/internal/pipe"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
+	statstracers "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 	"go.opentelemetry.io/obi/pkg/obi"
 	"go.opentelemetry.io/obi/pkg/pipe/global"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
-	"go.opentelemetry.io/obi/pkg/selection"
 )
 
 const timeout = 5 * time.Second
@@ -266,7 +265,8 @@ func TestDiskStats(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
-// The disk probes couldn't be loaded: the agent has no disk tracer, and the TCP stats go on
+// The disk probes couldn't be loaded: the agent has no disk tracer, and the TCP stats go on without
+// the storage branch
 func TestDiskStatsWithoutDiskProbes(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	promServer := httptest.NewServer(promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
@@ -317,28 +317,28 @@ func TestDiskStatsWithoutDiskProbes(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
-// Under dynamic application selection, the storage stats are skipped: their branch of the pipeline is
-// not built
-func TestStorageStatsUnderDynamicSelection(t *testing.T) {
+// The storage branch of the pipeline is only built when the agent has a disk tracer: the agent has
+// none when the disk feature is disabled, left out under dynamic application selection, or when the
+// disk probes can't be loaded
+func TestStorageBranchNeedsADiskTracer(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		selector selection.MultiSignalPIDSelector
-		storage  bool
+		name       string
+		diskTracer *statstracers.DiskMapTracer
 	}{
-		{name: "without dynamic selection", storage: true},
-		{name: "with dynamic selection", selector: discover.NewDynamicSelector()},
+		{name: "with a disk tracer", diskTracer: &statstracers.DiskMapTracer{}},
+		{name: "without a disk tracer"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stats := Stats{
 				agentIP: net.ParseIP("1.2.3.4"),
 				ctxInfo: &global.ContextInfo{
-					Prometheus:      &connector.PrometheusManager{},
-					DynamicSelector: tc.selector,
+					Prometheus: &connector.PrometheusManager{},
 				},
 				cfg: &obi.Config{
 					Prometheus: prom.PrometheusConfig{Registry: prometheus.NewRegistry(), Path: "/metrics", TTL: time.Hour},
 					Metrics:    perapp.GlobalMetricsConfig{Features: export.FeatureStatsTCPRtt | export.FeatureStatsDiskServiceDuration},
 				},
+				diskTracer: tc.diskTracer,
 			}
 
 			var diskTracerAdded bool
@@ -348,9 +348,9 @@ func TestStorageStatsUnderDynamicSelection(t *testing.T) {
 				newDiskTracer = defaultDiskTracer
 				newRingBufTracer = defaultRingBufTracer
 			})
-			newDiskTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+			newDiskTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 				diskTracerAdded = true
-				return defaultDiskTracer(s, out)
+				return func(_ context.Context) { out.MarkCloseable() }
 			}
 			newRingBufTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 				return func(_ context.Context) { out.MarkCloseable() }
@@ -358,7 +358,7 @@ func TestStorageStatsUnderDynamicSelection(t *testing.T) {
 
 			_, err := stats.buildPipeline(t.Context())
 			require.NoError(t, err)
-			assert.Equal(t, tc.storage, diskTracerAdded)
+			assert.Equal(t, tc.diskTracer != nil, diskTracerAdded)
 		})
 	}
 }
@@ -390,6 +390,7 @@ func startStatsPipeline(t *testing.T, features export.Features, configure ...fun
 			},
 			Metrics: perapp.GlobalMetricsConfig{Features: features},
 		},
+		diskTracer: &statstracers.DiskMapTracer{},
 	}
 
 	for _, c := range configure {
