@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -85,6 +86,263 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 		}
 	}
 	assert.Equal(t, perDirection(directIOBlocks), completed)
+}
+
+// TestDiskRequestsAreTimedFromTheirIssue holds writes of a loop device in the I/O scheduler before
+// their issue, and checks that OBI records the issue of each write on its own clock, and that the
+// durations leave the wait in the scheduler out, while the kernel's start of a request, which
+// /proc/diskstats times from, includes it. The backing file of the loop device is on a frozen
+// filesystem, so the writes that the loop driver takes block in it, keeping all its tags, and the
+// scheduler holds the other writes until the filesystem is thawed.
+func TestDiskRequestsAreTimedFromTheirIssue(t *testing.T) {
+	const (
+		held = 32
+		hold = time.Second
+		// a write that the scheduler held is served in less time once the filesystem is thawed
+		servedWithin = 0.25
+	)
+	devPath, mountPoint := loopDeviceOnExt4(t)
+	device := filepath.Base(devPath)
+	useScheduler(t, device, "mq-deadline")
+	tags, err := strconv.Atoi(readSysFile(t, filepath.Join("/sys/block", device, "mq", "0", "nr_tags")))
+	require.NoError(t, err)
+	reader := attachDiskReader(t)
+	inFlight := openInFlightMap(t)
+
+	thaw := freeze(t, mountPoint)
+	before := readKernelDiskStats(t, device)
+	submitted := monotonicNow(t)
+	written := writeBlocksConcurrently(t, devPath, tags+held)
+	waitForWritesInFlight(t, device, tags)
+	// the writes past the tags wait in the scheduler, after the kernel started them
+	time.Sleep(hold)
+	assert.Equal(t, tags, issuesRecordedSince(t, inFlight, devPath, submitted),
+		"OBI recorded the issue of each write in flight, on its own clock, and of none of the held ones")
+	thaw()
+	require.NoError(t, written())
+	after := readKernelDiskStats(t, device)
+
+	var writes, servedFast uint64
+	var sumSeconds float64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != device || stat.DiskIO.Op != ebpf.CodeDiskOpWrite {
+			continue
+		}
+		writes += requests(stat.DiskIO.Latency)
+		servedFast += requestsWithin(stat.DiskIO.Latency, servedWithin)
+		sumSeconds += stat.DiskIO.Latency.Sum
+	}
+	require.Equal(t, uint64(tags+held), after.writes-before.writes)
+	require.Equal(t, uint64(tags+held), writes)
+	// the kernel times each write from its start, so its times include the wait in the scheduler
+	leftOut := (after.writeTime - before.writeTime).Seconds() - sumSeconds
+	assert.Greater(t, leftOut, 0.9*held*hold.Seconds(), "OBI leaves the wait of the held writes out")
+	assert.GreaterOrEqual(t, servedFast, uint64(held), "the held writes are timed from their issue")
+}
+
+// TestDiskRequestsIssuedBeforeTheProbesAreCounted issues writes before the disk probes are attached,
+// as when OBI starts while the devices do I/O, and checks that they are counted, timed on the
+// kernel's clock from their issue, which OBI didn't record.
+func TestDiskRequestsIssuedBeforeTheProbesAreCounted(t *testing.T) {
+	const (
+		writes = 8
+		hold   = time.Second
+	)
+	devPath, mountPoint := loopDeviceOnExt4(t)
+	device := filepath.Base(devPath)
+	makeKernelTimeRequests(t, device)
+
+	thaw := freeze(t, mountPoint)
+	before := readKernelDiskStats(t, device)
+	written := writeBlocksConcurrently(t, devPath, writes)
+	waitForWritesInFlight(t, device, writes)
+	reader := attachDiskReader(t)
+	time.Sleep(hold)
+	thaw()
+	require.NoError(t, written())
+	after := readKernelDiskStats(t, device)
+
+	var counted uint64
+	var sumSeconds float64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != device || stat.DiskIO.Op != ebpf.CodeDiskOpWrite {
+			continue
+		}
+		counted += requests(stat.DiskIO.Latency)
+		sumSeconds += stat.DiskIO.Latency.Sum
+	}
+	require.Equal(t, uint64(writes), after.writes-before.writes)
+	assert.Equal(t, uint64(writes), counted)
+	assert.GreaterOrEqual(t, sumSeconds, writes*hold.Seconds(),
+		"timed from their issue, before the probes were attached")
+}
+
+// openInFlightMap opens the map where the disk probes that the test loaded last record the issue
+// of each block request
+func openInFlightMap(t *testing.T) *ciliumebpf.Map {
+	t.Helper()
+	var newest *ciliumebpf.Map
+	// map IDs only grow: the last map with the name is the newest
+	for id, err := ciliumebpf.MapGetNextID(0); err == nil; id, err = ciliumebpf.MapGetNextID(id) {
+		m, err := ciliumebpf.NewMapFromID(id)
+		if err != nil {
+			continue
+		}
+		if info, err := m.Info(); err == nil && info.Name == "disk_rq_start" {
+			if newest != nil {
+				newest.Close()
+			}
+			newest = m
+			continue
+		}
+		m.Close()
+	}
+	require.NotNil(t, newest, "the disk probes record the issue of each request in disk_rq_start")
+	t.Cleanup(func() { newest.Close() })
+	return newest
+}
+
+// monotonicNow returns the time of the clock that the probes read, CLOCK_MONOTONIC
+func monotonicNow(t *testing.T) uint64 {
+	t.Helper()
+	var now unix.Timespec
+	require.NoError(t, unix.ClockGettime(unix.CLOCK_MONOTONIC, &now))
+	return uint64(now.Nano())
+}
+
+// issuesRecordedSince returns how many requests of a device have their issue recorded in the
+// in-flight map at or after the given time of the probes' clock
+func issuesRecordedSince(t *testing.T, inFlight *ciliumebpf.Map, devPath string, sinceNs uint64) int {
+	t.Helper()
+	var dev unix.Stat_t
+	require.NoError(t, unix.Stat(devPath, &dev))
+	var (
+		key      uint64
+		start    ebpf.StatsDiskRqStartT
+		recorded int
+	)
+	entries := inFlight.Iterate()
+	for entries.Next(&key, &start) {
+		if start.Major == unix.Major(dev.Rdev) && start.Minor == unix.Minor(dev.Rdev) && start.IssuedNs >= sinceNs {
+			recorded++
+		}
+	}
+	require.NoError(t, entries.Err())
+	return recorded
+}
+
+// loopDeviceOnExt4 attaches a loop device to a file of an ext4 filesystem, itself on a loop device,
+// and returns the /dev path of the device and the mount point of the filesystem. It skips the test
+// without mkfs.ext4.
+func loopDeviceOnExt4(t *testing.T) (devPath, mountPoint string) {
+	t.Helper()
+	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+		t.Skip("needs mkfs.ext4")
+	}
+	fsDev := attachLoopDevice(t)
+	out, err := exec.Command("mkfs.ext4", "-q", "-F", "-E", "lazy_itable_init=0,lazy_journal_init=0", fsDev).CombinedOutput()
+	require.NoError(t, err, "mkfs.ext4: %s", out)
+	mountPoint = t.TempDir()
+	require.NoError(t, unix.Mount(fsDev, mountPoint, "ext4", 0, ""))
+	t.Cleanup(func() { _ = unix.Unmount(mountPoint, 0) })
+
+	backing, err := os.Create(filepath.Join(mountPoint, "disk.img"))
+	require.NoError(t, err)
+	t.Cleanup(func() { backing.Close() })
+	require.NoError(t, backing.Truncate(loopBackingFileSize/2))
+	devPath, _ = attachLoopDeviceTo(t, backing)
+	return devPath, mountPoint
+}
+
+// from include/uapi/linux/fs.h
+const (
+	fiFreeze = 0xc0045877 // FIFREEZE, _IOWR('X', 119, int)
+	fiThaw   = 0xc0045878 // FITHAW, _IOWR('X', 120, int)
+)
+
+// freeze freezes a filesystem until the returned function is called, or the test ends: the writes
+// to its files block until then
+func freeze(t *testing.T, mountPoint string) (thaw func()) {
+	t.Helper()
+	dir, err := os.Open(mountPoint)
+	require.NoError(t, err)
+	require.NoError(t, unix.IoctlSetInt(int(dir.Fd()), fiFreeze, 0))
+	var once sync.Once
+	thaw = func() {
+		once.Do(func() {
+			require.NoError(t, unix.IoctlSetInt(int(dir.Fd()), fiThaw, 0))
+			dir.Close()
+		})
+	}
+	t.Cleanup(thaw)
+	return thaw
+}
+
+// useScheduler makes a device use an I/O scheduler during the test. It skips the test if the
+// device can't use it.
+func useScheduler(t *testing.T, device, scheduler string) {
+	t.Helper()
+	previous, available := queueSchedulers(t, device)
+	if !slices.Contains(available, scheduler) {
+		t.Skipf("%s is not available", scheduler)
+	}
+	writeQueueAttribute(t, device, "scheduler", scheduler)
+	t.Cleanup(func() { writeQueueAttribute(t, device, "scheduler", previous) })
+}
+
+// writeBlocksConcurrently writes the given number of blocks of a device, a block apart so that the
+// scheduler can't merge them, each from its own goroutine. It returns a function that waits for
+// the writes and returns their errors.
+func writeBlocksConcurrently(t *testing.T, devPath string, blocks int) (wait func() error) {
+	t.Helper()
+	f, err := os.OpenFile(devPath, os.O_WRONLY|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { f.Close() })
+	done := make(chan error, blocks)
+	for i := range blocks {
+		block := alignedBuffer(t)
+		go func() {
+			_, err := f.WriteAt(block, int64(2*i*directIOBlockSize))
+			done <- err
+		}()
+	}
+	return func() error {
+		var errs []error
+		for range blocks {
+			errs = append(errs, <-done)
+		}
+		return errors.Join(errs...)
+	}
+}
+
+// waitForWritesInFlight waits until the given number of writes of a device are issued and not
+// completed
+func waitForWritesInFlight(t *testing.T, device string, writes int) {
+	t.Helper()
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		inflight := strings.Fields(readSysFile(t, filepath.Join("/sys/block", device, "inflight")))
+		require.Len(ct, inflight, 2)
+		assert.Equal(ct, strconv.Itoa(writes), inflight[1])
+	}, 10*time.Second, 10*time.Millisecond)
+}
+
+func readSysFile(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return strings.TrimSpace(string(content))
+}
+
+// requestsWithin returns how many requests a latency histogram counts in the buckets whose upper
+// bound is at most the given seconds
+func requestsWithin(latency *ebpf.LatencyHistogram, seconds float64) uint64 {
+	var count uint64
+	for bucket, bound := range export.DiskLatencyBounds {
+		if bound <= seconds {
+			count += latency.BucketCounts[bucket]
+		}
+	}
+	return count
 }
 
 // requests returns how many requests a latency histogram counts
@@ -376,20 +634,23 @@ func writeQueueAttribute(t *testing.T, device, name, value string) {
 
 type kernelDiskStats struct {
 	reads, writes uint64
+	// writeTime adds up the durations of the writes, from the kernel's start of each
+	writeTime time.Duration
 }
 
 // readKernelDiskStats reads the completed reads and writes of a device in /proc/diskstats
 func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 	t.Helper()
 	const (
-		readsField  = 3
-		writesField = 7
+		readsField     = 3
+		writesField    = 7
+		writeTimeField = 10
 	)
 	content, err := os.ReadFile("/proc/diskstats")
 	require.NoError(t, err)
 	for line := range strings.Lines(string(content)) {
 		fields := strings.Fields(line)
-		if len(fields) <= writesField || fields[2] != device {
+		if len(fields) <= writeTimeField || fields[2] != device {
 			continue
 		}
 		field := func(i int) uint64 {
@@ -397,7 +658,11 @@ func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 			require.NoError(t, err)
 			return value
 		}
-		return kernelDiskStats{reads: field(readsField), writes: field(writesField)}
+		return kernelDiskStats{
+			reads:     field(readsField),
+			writes:    field(writesField),
+			writeTime: time.Duration(field(writeTimeField)) * time.Millisecond,
+		}
 	}
 	require.Failf(t, "device not found", "%s is not in /proc/diskstats", device)
 	return kernelDiskStats{}
