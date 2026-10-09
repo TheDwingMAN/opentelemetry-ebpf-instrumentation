@@ -1006,6 +1006,88 @@ func kernelDiskStatsDelta(before, after kernelDiskStats) kernelDiskStats {
 	}
 }
 
+// TestDiskServiceTimeOfAKnownLatency writes and reads, one request at a time, a null_blk device
+// that completes each request a known delay after the driver receives it, and checks that the
+// service time counts that delay for each request, that the requests never overlap, and that the
+// service time is the sum of the histogram.
+func TestDiskServiceTimeOfAKnownLatency(t *testing.T) {
+	const (
+		delay    = 2 * time.Millisecond
+		requests = 50
+	)
+	device := slowNullBlockDevice(t, delay)
+	reader := attachDiskReader(t)
+
+	f, err := os.OpenFile(device, os.O_RDWR|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	block := alignedBuffer(t)
+	start := time.Now()
+	for i := range requests {
+		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+		_, err = f.ReadAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+	}
+	elapsed := time.Since(start)
+
+	var operations uint64
+	var serviceTime, histogramSum float64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != filepath.Base(device) {
+			continue
+		}
+		operations += stat.DiskIO.Operations
+		serviceTime += stat.DiskIO.Time
+		histogramSum += stat.DiskIO.Latency.Sum
+	}
+	require.Equal(t, uint64(2*requests), operations)
+	assert.InDelta(t, histogramSum, serviceTime, 1e-9, "the service time is the sum of the histogram")
+	assert.GreaterOrEqual(t, serviceTime/float64(operations), delay.Seconds(),
+		"the device completes each request after the delay")
+	assert.LessOrEqual(t, serviceTime, elapsed.Seconds(), "one request at a time: they never overlap")
+}
+
+// slowNullBlockDevice creates a null_blk device that completes each request after the given
+// delay, and returns its /dev path. It skips the test if null_blk can't be configured.
+func slowNullBlockDevice(t *testing.T, delay time.Duration) string {
+	t.Helper()
+	_ = exec.Command("modprobe", "null_blk", "nr_devices=0").Run()
+	dir := filepath.Join("/sys/kernel/config/nullb", fmt.Sprintf("obi-test-%d", os.Getpid()))
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Skipf("null_blk can't be configured through configfs: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.WriteFile(filepath.Join(dir, "power"), []byte("0"), 0o644)
+		_ = os.Remove(dir)
+	})
+	for name, value := range map[string]string{
+		"irqmode":         "2", // complete requests from a timer
+		"completion_nsec": strconv.FormatInt(delay.Nanoseconds(), 10),
+		"hw_queue_depth":  "64",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(value), 0o644), name)
+	}
+	// null_blk names the device nullb<index> on older kernels, and after the configfs directory on
+	// newer ones: take the block device that appears when it's powered on
+	before, err := os.ReadDir("/sys/class/block")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "power"), []byte("1"), 0o644))
+	after, err := os.ReadDir("/sys/class/block")
+	require.NoError(t, err)
+	existed := map[string]bool{}
+	for _, entry := range before {
+		existed[entry.Name()] = true
+	}
+	for _, entry := range after {
+		if !existed[entry.Name()] {
+			return deviceNode(t, entry.Name())
+		}
+	}
+	require.FailNow(t, "no block device appeared when powering on the null_blk device")
+	return ""
+}
+
 // attachDiskReader loads the disk probes and returns a reader of their accumulation map that already
 // forgot the I/O that happened before
 func attachDiskReader(t *testing.T) *diskReader {
