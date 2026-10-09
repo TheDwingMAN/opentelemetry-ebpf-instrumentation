@@ -2099,7 +2099,7 @@
                 ]
               },
               "default": [],
-              "description": "Enabled stats families: the TCP ones and the block I/O (disk) ones.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones and disk_service_duration, the block I/O (disk) one.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",

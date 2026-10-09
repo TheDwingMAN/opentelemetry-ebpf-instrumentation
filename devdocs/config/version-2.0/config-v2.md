@@ -566,7 +566,7 @@ The current shape separates packet/flow capture from TCP stats capture:
 
 `tcp_io` can produce substantially more events than the other stats families, so users should opt into it deliberately when they need per-send/per-receive I/O stats.
 
-The `disk_*` families probe every block I/O request, so they are never enabled by `enabled: true` alone: list them in `features` to opt in.
+The `disk_service_duration` family probes every block I/O request, so it is never enabled by `enabled: true` alone: list it in `features` to opt in. It has no Config v1 equivalent.
 
 ### `capture.engine` Section
 
