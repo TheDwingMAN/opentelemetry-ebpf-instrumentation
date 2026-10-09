@@ -73,8 +73,8 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		}
 	case attr.SystemDevice:
 		getter = func(s *Stat) attribute.KeyValue {
-			if device := diskDevice(s); device != "" {
-				return attribute.String(string(attr.SystemDevice), device)
+			if s.DiskIO != nil && s.DiskIO.Device != "" {
+				return attribute.String(string(attr.SystemDevice), s.DiskIO.Device)
 			}
 			return attribute.KeyValue{}
 		}
@@ -87,14 +87,17 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		}
 	case attr.DiskVolumeName:
 		getter = func(s *Stat) attribute.KeyValue {
-			if name := diskVolumeName(s); name != "" {
-				return attribute.String(string(attr.DiskVolumeName), name)
+			if s.DiskIO != nil && s.DiskIO.VolumeName != "" {
+				return attribute.String(string(attr.DiskVolumeName), s.DiskIO.VolumeName)
 			}
 			return attribute.KeyValue{}
 		}
 	case attr.DiskIODirection:
 		getter = func(s *Stat) attribute.KeyValue {
-			if direction := diskIODirectionStr(diskOp(s)); direction != "" {
+			if s.DiskIO == nil {
+				return attribute.KeyValue{}
+			}
+			if direction := diskIODirectionStr(s.DiskIO.Op); direction != "" {
 				return attribute.String(string(attr.DiskIODirection), direction)
 			}
 			return attribute.KeyValue{}
@@ -103,8 +106,8 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		getter = func(s *Stat) attribute.KeyValue {
 			// error.type only applies to failed operations: return an invalid
 			// KeyValue so the attribute is omitted instead of emitted empty.
-			if errorType := storageErrorType(s); errorType != "" {
-				return attribute.String(string(attr.ErrorType), errorType)
+			if s.DiskIO != nil && s.DiskIO.ErrorType != "" {
+				return attribute.String(string(attr.ErrorType), s.DiskIO.ErrorType)
 			}
 			return attribute.KeyValue{}
 		}
@@ -169,38 +172,6 @@ func diskIODirectionStr(op DiskOpCode) string {
 		return string(DiskDirectionRead)
 	case CodeDiskOpWrite:
 		return string(DiskDirectionWrite)
-	}
-	return ""
-}
-
-// diskDevice is the device of a block I/O stat, empty for any other stat
-func diskDevice(s *Stat) string {
-	if s.DiskIO != nil {
-		return s.DiskIO.Device
-	}
-	return ""
-}
-
-// diskVolumeName is the device mapper name of the device of a block I/O stat, empty for other
-// devices and stats
-func diskVolumeName(s *Stat) string {
-	if s.DiskIO != nil {
-		return s.DiskIO.VolumeName
-	}
-	return ""
-}
-
-func diskOp(s *Stat) DiskOpCode {
-	if s.DiskIO != nil {
-		return s.DiskIO.Op
-	}
-	return 0
-}
-
-// storageErrorType is the error of a block I/O stat, empty on success
-func storageErrorType(s *Stat) string {
-	if s.DiskIO != nil {
-		return s.DiskIO.ErrorType
 	}
 	return ""
 }
