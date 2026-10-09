@@ -107,7 +107,7 @@ func TestDiskRequestsAreTimedFromTheirIssue(t *testing.T) {
 	tags, err := strconv.Atoi(readSysFile(t, filepath.Join("/sys/block", device, "mq", "0", "nr_tags")))
 	require.NoError(t, err)
 	reader := attachDiskReader(t)
-	inFlight := openInFlightMap(t)
+	inFlight := openInFlightMap(t, reader)
 
 	thaw := freeze(t, mountPoint)
 	before := readKernelDiskStats(t, device)
@@ -177,29 +177,44 @@ func TestDiskRequestsIssuedBeforeTheProbesAreCounted(t *testing.T) {
 		"timed from their issue, before the probes were attached")
 }
 
-// openInFlightMap opens the map where the disk probes that the test loaded last record the issue
-// of each block request
-func openInFlightMap(t *testing.T) *ciliumebpf.Map {
+// openInFlightMap opens the map where the disk probes of a reader record the issue of each block
+// request: the in-flight map of the program that fills the accumulation map of the reader. The
+// tests of other packages may load disk probes at the same time.
+func openInFlightMap(t *testing.T, reader *diskReader) *ciliumebpf.Map {
 	t.Helper()
-	var newest *ciliumebpf.Map
-	// map IDs only grow: the last map with the name is the newest
-	for id, err := ciliumebpf.MapGetNextID(0); err == nil; id, err = ciliumebpf.MapGetNextID(id) {
-		m, err := ciliumebpf.NewMapFromID(id)
+	accumInfo, err := reader.accum.(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]).accum.Info()
+	require.NoError(t, err)
+	accumID, ok := accumInfo.ID()
+	require.True(t, ok, "the kernel reports the IDs of the maps")
+
+	for id, err := ciliumebpf.ProgramGetNextID(0); err == nil; id, err = ciliumebpf.ProgramGetNextID(id) {
+		program, err := ciliumebpf.NewProgramFromID(id)
 		if err != nil {
 			continue
 		}
-		if info, err := m.Info(); err == nil && info.Name == "disk_rq_start" {
-			if newest != nil {
-				newest.Close()
-			}
-			newest = m
+		info, err := program.Info()
+		program.Close()
+		if err != nil {
 			continue
 		}
-		m.Close()
+		mapIDs, _ := info.MapIDs()
+		if !slices.Contains(mapIDs, accumID) {
+			continue
+		}
+		for _, mapID := range mapIDs {
+			m, err := ciliumebpf.NewMapFromID(mapID)
+			if err != nil {
+				continue
+			}
+			if info, err := m.Info(); err == nil && info.Name == "disk_rq_start" {
+				t.Cleanup(func() { m.Close() })
+				return m
+			}
+			m.Close()
+		}
 	}
-	require.NotNil(t, newest, "the disk probes record the issue of each request in disk_rq_start")
-	t.Cleanup(func() { newest.Close() })
-	return newest
+	require.Fail(t, "the disk probes record the issue of each request in disk_rq_start")
+	return nil
 }
 
 // monotonicNow returns the time of the clock that the probes read, CLOCK_MONOTONIC
