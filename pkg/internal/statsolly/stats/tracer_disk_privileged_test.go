@@ -135,7 +135,7 @@ func TestDiskRequestsAreTimedFromTheirIssue(t *testing.T) {
 		"OBI recorded the issue of each write in flight, on its own clock, and of none of the held ones")
 	thaw()
 	require.NoError(t, written())
-	after := readKernelDiskStats(t, device)
+	after := readKernelDiskStatsOnceWritten(t, device, before, tags+held)
 
 	var writes, servedFast uint64
 	var sumSeconds float64
@@ -175,7 +175,7 @@ func TestDiskRequestsIssuedBeforeTheProbesAreCounted(t *testing.T) {
 	time.Sleep(hold)
 	thaw()
 	require.NoError(t, written())
-	after := readKernelDiskStats(t, device)
+	after := readKernelDiskStatsOnceWritten(t, device, before, writes)
 
 	var counted uint64
 	var sumSeconds float64
@@ -469,7 +469,6 @@ func TestDiskFileSyncsAreCountedLikeTheKernel(t *testing.T) {
 		syncFile(t, unchanged, nil)
 		syncFile(t, filepath.Join(mountPoint, "changed"), []byte("data"))
 	}
-	after := readKernelDiskStats(t, device)
 
 	var writes, operations, written uint64
 	var writeTime float64
@@ -482,6 +481,8 @@ func TestDiskFileSyncsAreCountedLikeTheKernel(t *testing.T) {
 		written += stat.DiskIO.Bytes
 		writeTime += stat.DiskIO.Time
 	}
+	// OBI counts a write before the kernel accounts it in /proc/diskstats
+	after := readKernelDiskStatsOnceWritten(t, device, before, int(writes))
 	assert.Equal(t, after.writes-before.writes, writes)
 	assert.Equal(t, writes, operations)
 	assert.Equal(t, (after.sectorsWritten-before.sectorsWritten)*kernelSectorSize, written)
@@ -507,7 +508,7 @@ func TestDiskWriteZeroesAreCountedLikeTheKernel(t *testing.T) {
 		t.Skip("the loop device doesn't support write-zeroes on this kernel")
 	}
 	require.NoError(t, err)
-	after := readKernelDiskStats(t, device)
+	after := readKernelDiskStatsOnceWritten(t, device, before, 1)
 
 	var writes, written uint64
 	for _, stat := range reader.readStats() {
@@ -712,6 +713,19 @@ func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 	}
 	require.Failf(t, "device not found", "%s is not in /proc/diskstats", device)
 	return kernelDiskStats{}
+}
+
+// readKernelDiskStatsOnceWritten reads the stats of a device in /proc/diskstats once they count the
+// given number of writes since before, or after a timeout. The kernel ends the bios of a request,
+// which returns a write to its caller, before it accounts the request in /proc/diskstats.
+func readKernelDiskStatsOnceWritten(t *testing.T, device string, before kernelDiskStats, writes int) kernelDiskStats {
+	t.Helper()
+	after := readKernelDiskStats(t, device)
+	for deadline := time.Now().Add(5 * time.Second); after.writes-before.writes < uint64(writes) && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+		after = readKernelDiskStats(t, device)
+	}
+	return after
 }
 
 // TestDiskPassthroughCommands sends SCSI commands through SG_IO to a disk while it reads and
