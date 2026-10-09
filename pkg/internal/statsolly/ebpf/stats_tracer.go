@@ -156,33 +156,16 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features,
 	storage := planStorageProbes(tlog, features)
 
 	objects := StatsObjects{}
-	sharedMaps := map[string]*ebpf.Map{}
-	var mu sync.Mutex
-	load := func(toDisable []string) error {
-		spec, err := LoadStats()
-		if err != nil {
-			return fmt.Errorf("loading BPF data: %w", err)
-		}
-		if err := fixupSpec(spec, toDisable); err != nil {
-			return fmt.Errorf("fixing up BPF spec: %w", err)
-		}
-		ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
-		if cpus, err := ebpf.PossibleCPU(); err == nil {
-			sizeInFlightMaps(spec, cpus)
-		} else {
-			tlog.Debug("can't size the in-flight maps to the CPUs", "error", err)
-		}
-		return ebpfconvenience.LoadSpec(spec, &objects, map[string]any{
-			"g_bpf_debug":               cfg.BpfDebug,
-			"stats_wakeup_data_bytes":   uint32(cfg.StatsWakeupDataBytes),
-			"disk_latency_bounds_ns":    diskLatencyBoundsNs,
-			"disk_latency_bounds_len":   uint32(len(histograms.Disk)),
-			"disk_status_is_blk_status": storage.layout.completeReportsBlkStatus,
-			"disk_rqf_flush_seq":        storage.layout.flushSeqFlag,
-			"disk_req_op_zone_append":   storage.layout.zoneAppendOp,
-			"disk_rqf_io_stat":          storage.layout.ioStatFlag,
-		}, sharedMaps, &mu, "", nil)
-	}
+	load := newStatsLoader(&objects, cfg.MapsConfig.GlobalScaleFactor, map[string]any{
+		"g_bpf_debug":               cfg.BpfDebug,
+		"stats_wakeup_data_bytes":   uint32(cfg.StatsWakeupDataBytes),
+		"disk_latency_bounds_ns":    diskLatencyBoundsNs,
+		"disk_latency_bounds_len":   uint32(len(histograms.Disk)),
+		"disk_status_is_blk_status": storage.layout.completeReportsBlkStatus,
+		"disk_rqf_flush_seq":        storage.layout.flushSeqFlag,
+		"disk_req_op_zone_append":   storage.layout.zoneAppendOp,
+		"disk_rqf_io_stat":          storage.layout.ioStatFlag,
+	})
 	if err := storage.loadOrDisable(load, tcpToDisable); err != nil {
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
@@ -334,6 +317,64 @@ func sizeInFlightMaps(spec *ebpf.CollectionSpec, cpus int) {
 		if m, ok := spec.Maps[name]; ok && m.MaxEntries < minEntries {
 			m.MaxEntries = minEntries
 		}
+	}
+}
+
+// storageMapPrefix starts the names of the maps of the storage features
+const storageMapPrefix = "disk_"
+
+func isStorageMap(name string) bool {
+	return strings.HasPrefix(name, storageMapPrefix)
+}
+
+// shrinkUnusedStorageMaps gives a single entry to the storage maps that no program of the spec uses:
+// those of the disabled storage features, whose programs are stubs. StatsObjects holds every map, so
+// they are created anyway, and would take their full size of kernel memory.
+func shrinkUnusedStorageMaps(spec *ebpf.CollectionSpec) {
+	used := map[string]bool{}
+	for _, program := range spec.Programs {
+		for _, ins := range program.Instructions {
+			if ins.IsLoadFromMap() {
+				used[ins.Reference()] = true
+			}
+		}
+	}
+	for name, m := range spec.Maps {
+		if isStorageMap(name) && !used[name] {
+			m.MaxEntries = 1
+		}
+	}
+}
+
+// newStatsLoader returns the function that loads the stats programs, but those to disable, into
+// objects. Each load creates its own maps, sized for the programs it loads, and closes them if it
+// fails: a load without the storage programs gets their maps with a single entry.
+func newStatsLoader(objects *StatsObjects, globalScaleFactor int, constants map[string]any) func(toDisable []string) error {
+	return func(toDisable []string) error {
+		spec, err := LoadStats()
+		if err != nil {
+			return fmt.Errorf("loading BPF data: %w", err)
+		}
+		if err := fixupSpec(spec, toDisable); err != nil {
+			return fmt.Errorf("fixing up BPF spec: %w", err)
+		}
+		ebpfconvenience.SetupMapSizes(spec, globalScaleFactor)
+		if cpus, err := ebpf.PossibleCPU(); err == nil {
+			sizeInFlightMaps(spec, cpus)
+		} else {
+			tlog().Debug("can't size the in-flight maps to the CPUs", "error", err)
+		}
+		shrinkUnusedStorageMaps(spec)
+
+		sharedMaps := map[string]*ebpf.Map{}
+		var mu sync.Mutex
+		if err := ebpfconvenience.LoadSpec(spec, objects, constants, sharedMaps, &mu, "", nil); err != nil {
+			for _, m := range sharedMaps {
+				m.Close()
+			}
+			return err
+		}
+		return nil
 	}
 }
 

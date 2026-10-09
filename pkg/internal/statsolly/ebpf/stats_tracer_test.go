@@ -7,6 +7,7 @@ package ebpf
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/cilium/ebpf/btf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	ebpfconvenience "go.opentelemetry.io/obi/pkg/internal/ebpf/convenience"
 )
 
 func TestFixupSpec(t *testing.T) {
@@ -365,4 +368,52 @@ func TestSizeInFlightMaps(t *testing.T) {
 	spec.Maps["disk_rq_start"].MaxEntries = 1 << 17
 	sizeInFlightMaps(spec, 192)
 	assert.Equal(t, uint32(1<<17), spec.Maps["disk_rq_start"].MaxEntries)
+}
+
+// The storage maps that no loaded program uses take a single entry, whatever the scale and the CPUs
+func TestShrinkUnusedStorageMaps(t *testing.T) {
+	// sizes returns the size of each map for the programs of the given storage probes, before and
+	// after the shrink
+	sizes := func(t *testing.T, storage storageProbes) (before, after map[string]uint32) {
+		t.Helper()
+		spec, err := LoadStats()
+		require.NoError(t, err)
+		require.NoError(t, fixupSpec(spec, storage.programsToDisable()))
+		ebpfconvenience.SetupMapSizes(spec, 2)
+		sizeInFlightMaps(spec, 192)
+		maxEntries := func() map[string]uint32 {
+			entries := map[string]uint32{}
+			for name, m := range spec.Maps {
+				entries[name] = m.MaxEntries
+			}
+			return entries
+		}
+		before = maxEntries()
+		shrinkUnusedStorageMaps(spec)
+		return before, maxEntries()
+	}
+
+	// the probes of each storage feature keep the sizes of their maps, and only of theirs: every
+	// other storage map takes one entry, and the TCP maps keep their sizes
+	for _, tc := range []struct {
+		name    string
+		storage storageProbes
+		used    []string
+	}{
+		{name: "TCP only"},
+		{"block requests", storageProbes{disk: true}, []string{
+			"disk_io_accum", "disk_io_accum_init_storage", "disk_rq_start",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before, after := sizes(t, tc.storage)
+			for name, entries := range after {
+				want := before[name]
+				if isStorageMap(name) && !slices.Contains(tc.used, name) {
+					want = 1
+				}
+				assert.Equal(t, want, entries, name)
+			}
+		})
+	}
 }
