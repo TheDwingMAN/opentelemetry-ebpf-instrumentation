@@ -357,7 +357,7 @@ func TestSizeInFlightMap(t *testing.T) {
 func TestShrinkUnusedStorageMaps(t *testing.T) {
 	// sizes returns the size of each map for the programs of the given storage probes, before and
 	// after the shrink
-	sizes := func(t *testing.T, storage storageProbes) (before, after map[string]uint32) {
+	sizes := func(t *testing.T, storage storageProbes, unread []string) (before, after map[string]uint32) {
 		t.Helper()
 		spec, err := LoadStats()
 		require.NoError(t, err)
@@ -372,24 +372,30 @@ func TestShrinkUnusedStorageMaps(t *testing.T) {
 			return entries
 		}
 		before = maxEntries()
-		shrinkUnusedStorageMaps(spec)
+		shrinkUnusedStorageMaps(spec, unread)
 		return before, maxEntries()
 	}
 
 	// the probes of each storage feature keep the sizes of their maps, and only of theirs: every
-	// other storage map takes one entry, and the TCP maps keep their sizes
+	// other storage map takes one entry, and the TCP maps keep their sizes. The unread maps take one
+	// entry too.
 	for _, tc := range []struct {
 		name    string
 		storage storageProbes
+		unread  []string
 		used    []string
 	}{
 		{name: "TCP only"},
-		{"block requests", storageProbes{disk: true}, []string{
+		{"block requests", storageProbes{disk: true}, nil, []string{
+			"disk_io_accum", "disk_io_accum_init_storage", "disk_rq_start", "disk_cgroup_names",
+			"disk_cgroup_name_init_storage",
+		}},
+		{"block requests without their cgroups", storageProbes{disk: true}, diskCgroupMaps, []string{
 			"disk_io_accum", "disk_io_accum_init_storage", "disk_rq_start",
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			before, after := sizes(t, tc.storage)
+			before, after := sizes(t, tc.storage, tc.unread)
 			for name, entries := range after {
 				want := before[name]
 				if isStorageMap(name) && !slices.Contains(tc.used, name) {

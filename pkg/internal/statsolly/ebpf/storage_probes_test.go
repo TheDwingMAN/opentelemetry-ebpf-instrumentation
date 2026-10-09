@@ -11,6 +11,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.opentelemetry.io/obi/pkg/export"
+	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 )
 
 // When the storage programs can't be loaded, the stats go on without any of them
@@ -71,4 +75,33 @@ func TestStorageProbesLoadOrDisableReturnsBothErrors(t *testing.T) {
 	require.ErrorIs(t, err, withStorage)
 	require.ErrorIs(t, err, withoutStorage)
 	assert.Equal(t, 2, loads)
+}
+
+func TestDiskAttributeReads(t *testing.T) {
+	selecting := func(metric attributes.Name, include ...string) *attributes.SelectorConfig {
+		return &attributes.SelectorConfig{SelectionCfg: attributes.Selection{
+			metric.Section: attributes.InclusionLists{Include: include},
+		}}
+	}
+	reads := func(features export.Features, selection *attributes.SelectorConfig, filtered ...attr.Name) diskReads {
+		attrSel, err := attributes.NewAttrSelector(attributes.UndefinedGroup, selection)
+		require.NoError(t, err)
+		return diskAttributeReads(&features, attrSel, filtered)
+	}
+
+	assert.Equal(t, diskReads{}, reads(export.FeatureStatsDisk, &attributes.SelectorConfig{}),
+		"no default attribute of the disk metrics needs the cgroup")
+	assert.Equal(t, diskReads{cgroup: true},
+		reads(export.FeatureStatsDiskOperations, selecting(attributes.StatDiskOperations, "container.id")))
+	assert.Equal(t, diskReads{cgroup: true},
+		reads(export.FeatureStatsDiskServiceDuration, selecting(attributes.StatDiskServiceDuration, "container.*")))
+	assert.Equal(t, diskReads{},
+		reads(export.FeatureStatsDiskIO, selecting(attributes.StatDiskOperations, "container.id")),
+		"the attributes of disabled metrics don't count")
+	assert.Equal(t, diskReads{cgroup: true},
+		reads(export.FeatureStatsDiskIO, &attributes.SelectorConfig{}, "container_id"),
+		"the filters need the attributes that they match, with dots or underscores")
+	assert.Equal(t, diskReads{},
+		reads(export.FeatureStatsTCPRtt, &attributes.SelectorConfig{}, "container.id"),
+		"filters don't need reads of the disabled metrics")
 }

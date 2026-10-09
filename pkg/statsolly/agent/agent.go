@@ -17,6 +17,8 @@ import (
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
+	"go.opentelemetry.io/obi/pkg/filter"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/logger"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/tracefs"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
@@ -91,6 +93,7 @@ type ebpFetcher interface {
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
 	DiskIOAccumMap() *ciliumebpf.Map
+	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
 	DisabledStorageFeatures() []ebpf.DisabledFeature
 }
@@ -118,7 +121,11 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	}
 	features := probedFeatures(alog, cfg.Metrics.Features, ctxInfo.DynamicSelector != nil)
 
-	statsFetcher, err = newFetcher(&cfg.EBPF, &features, selectorCfg)
+	// the storage probes also read what the stats filters on the storage stats match
+	reads := ebpf.ProbeReads{
+		Filtered: filteredAttributes(storageStatFilters(cfg.Filters.Stats, cfg.Attributes.ExtraGroupAttributes)),
+	}
+	statsFetcher, err = newFetcher(&cfg.EBPF, &features, selectorCfg, reads)
 	if err != nil {
 		return nil, err
 	}
@@ -131,8 +138,19 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
 }
 
-func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg)
+func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig,
+	reads ebpf.ProbeReads,
+) (ebpFetcher, error) {
+	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, reads)
+}
+
+// filteredAttributes returns the attributes that attribute filters match
+func filteredAttributes(filters filter.AttributeFamilyConfig) []attr.Name {
+	names := make([]attr.Name, 0, len(filters))
+	for name := range filters {
+		names = append(names, attr.Name(name))
+	}
+	return names
 }
 
 // probedFeatures returns the stat features whose probes must be loaded. The storage stats can't be
@@ -171,6 +189,7 @@ func statsAgent(
 		}
 		diskTracer = stats.NewDiskMapTracer(&stats.DiskMapTracerConfig{
 			DiskIOAccum:           statsFetcher.DiskIOAccumMap(),
+			CgroupNames:           statsFetcher.DiskCgroupNamesMap(),
 			DiskStatusIsBlkStatus: statsFetcher.DiskStatusIsBlkStatus(),
 			Interval:              interval,
 		})

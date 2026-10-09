@@ -111,6 +111,13 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.KeyValue{}
 		}
+	case attr.ContainerID:
+		getter = func(s *Stat) attribute.KeyValue {
+			if containerID := s.ContainerID(); containerID != "" {
+				return attribute.String(string(attr.ContainerID), containerID)
+			}
+			return attribute.KeyValue{}
+		}
 
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }

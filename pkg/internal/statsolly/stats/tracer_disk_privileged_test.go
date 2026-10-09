@@ -6,6 +6,7 @@
 package stats
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"math"
@@ -38,9 +39,16 @@ const (
 	directIOBlocks      = 256
 
 	fileSyncs = 20
+
+	// environment of the child processes of TestDiskIOIsChargedPerCgroup and
+	// TestDiskBufferedWritesAreChargedToTheirCgroup
+	envWriterDevice = "OBI_TEST_DISK_WRITER_DEVICE"
+	envWriterBlocks = "OBI_TEST_DISK_WRITER_BLOCKS"
+	envWriterFile   = "OBI_TEST_DISK_WRITER_FILE"
 )
 
-// allAttributes selects every attribute of every metric
+// allAttributes selects every attribute of every metric, so that the disk probes read the cgroup
+// of the I/O
 var allAttributes = &attributes.SelectorConfig{
 	SelectionCfg: attributes.Selection{"*": attributes.InclusionLists{Include: []string{"*"}}},
 }
@@ -1002,14 +1010,21 @@ func kernelDiskStatsDelta(before, after kernelDiskStats) kernelDiskStats {
 // forgot the I/O that happened before
 func attachDiskReader(t *testing.T) *diskReader {
 	t.Helper()
-	features := export.FeatureStatsDisk
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, allAttributes)
+	return attachDiskReaderOf(t, export.FeatureStatsDisk)
+}
+
+// attachDiskReaderOf loads the disk probes of the given features and returns a reader of their
+// accumulation map that already forgot the I/O that happened before
+func attachDiskReaderOf(t *testing.T, features export.Features) *diskReader {
+	t.Helper()
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, allAttributes, ebpf.ProbeReads{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 	require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
 
 	reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: fetcher.DiskIOAccumMap()},
-		fetcher.DiskStatusIsBlkStatus(), &blockDevices{sysRoot: "/sys"}, time.Second)
+		fetcher.DiskStatusIsBlkStatus(), &blockDevices{sysRoot: "/sys"},
+		newCgroupContainers(ebpfCgroupNames{names: fetcher.DiskCgroupNamesMap()}), time.Second)
 	reader.readStats()
 	return reader
 }
@@ -1104,4 +1119,178 @@ func alignedBuffer(t *testing.T) []byte {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = unix.Munmap(buf) })
 	return buf
+}
+
+// TestDiskIOIsChargedPerCgroup writes to the same loop device from processes in container-like
+// cgroups, and checks that each container is charged exactly its own I/O
+func TestDiskIOIsChargedPerCgroup(t *testing.T) {
+	cgroupRoot := ioCgroupRoot(t)
+	// a counter alone must load the disk probes, without the histogram
+	reader := attachDiskReaderOf(t, export.FeatureStatsDiskOperations)
+	loopDev := attachLoopDevice(t)
+
+	writers := map[string]uint64{
+		strings.Repeat("a1", 32): 64,
+		strings.Repeat("b2", 32): 32,
+	}
+	for containerID, blocks := range writers {
+		cgroup := filepath.Join(cgroupRoot, "docker-"+containerID+".scope")
+		runInCgroup(t, cgroup, "TestDiskIOWriterProcess",
+			envWriterDevice+"="+loopDev, envWriterBlocks+"="+strconv.FormatUint(blocks, 10))
+	}
+
+	// crun runs the processes of a container in a child cgroup of its scope, on cgroup v2 with the
+	// systemd driver
+	crunContainerID := strings.Repeat("c3", 32)
+	scope := filepath.Join(cgroupRoot, "libpod-"+crunContainerID+".scope")
+	require.NoError(t, os.Mkdir(scope, 0o755))
+	t.Cleanup(func() { _ = os.Remove(scope) })
+	if subtreeControl := filepath.Join(scope, "cgroup.subtree_control"); exists(subtreeControl) {
+		require.NoError(t, os.WriteFile(subtreeControl, []byte("+io"), 0o644))
+	}
+	writers[crunContainerID] = 16
+	runInCgroup(t, filepath.Join(scope, "container"), "TestDiskIOWriterProcess",
+		envWriterDevice+"="+loopDev, envWriterBlocks+"="+strconv.FormatUint(writers[crunContainerID], 10))
+
+	deviceName := filepath.Base(loopDev)
+	charged := map[string]uint64{}
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device == deviceName && stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
+			charged[stat.DiskIO.ContainerID] += stat.DiskIO.Operations
+		}
+	}
+	assert.Equal(t, writers, charged)
+}
+
+// TestDiskIOWriterProcess is not a test: TestDiskIOIsChargedPerCgroup runs it as a child process
+// that writes blocks to a device once its parent has moved it to a cgroup and tells it to start
+func TestDiskIOWriterProcess(t *testing.T) {
+	device := os.Getenv(envWriterDevice)
+	if device == "" {
+		t.Skip("only runs as a child process of TestDiskIOIsChargedPerCgroup")
+	}
+	blocks, err := strconv.Atoi(os.Getenv(envWriterBlocks))
+	require.NoError(t, err)
+	_, err = bufio.NewReader(os.Stdin).ReadString('\n')
+	require.NoError(t, err)
+
+	f, err := os.OpenFile(device, os.O_WRONLY|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	block := alignedBuffer(t)
+	for i := range blocks {
+		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+	}
+}
+
+// TestDiskBufferedWritesAreChargedToTheirCgroup writes a file through the page cache from a process
+// in a container-like cgroup. The kernel writes the dirty pages back later, from its own threads,
+// but on cgroup v2 it charges that I/O to the cgroup that dirtied the pages: the written bytes of
+// the device must be charged to the container, but for the journal and metadata of the filesystem.
+func TestDiskBufferedWritesAreChargedToTheirCgroup(t *testing.T) {
+	const (
+		writtenBlocks  = 256
+		chargedAtLeast = 0.9
+	)
+	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+		t.Skip("needs mkfs.ext4")
+	}
+	controllers, err := os.ReadFile("/sys/fs/cgroup/cgroup.controllers")
+	if err != nil || !slices.Contains(strings.Fields(string(controllers)), "io") ||
+		!slices.Contains(strings.Fields(string(controllers)), "memory") {
+		t.Skip("the writeback of a cgroup is charged to it with the cgroup v2 io and memory controllers")
+	}
+	require.NoError(t, os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+io +memory"), 0o644))
+
+	loopDev := attachLoopDevice(t)
+	device := filepath.Base(loopDev)
+	out, err := exec.Command("mkfs.ext4", "-q", "-F", "-E", "lazy_itable_init=0,lazy_journal_init=0", loopDev).CombinedOutput()
+	require.NoError(t, err, "mkfs.ext4: %s", out)
+	mountPoint := t.TempDir()
+	require.NoError(t, unix.Mount(loopDev, mountPoint, "ext4", 0, ""))
+	t.Cleanup(func() { _ = unix.Unmount(mountPoint, 0) })
+	reader := attachDiskReaderOf(t, export.FeatureStatsDiskIO)
+
+	containerID := strings.Repeat("d4", 32)
+	runInCgroup(t, filepath.Join("/sys/fs/cgroup", "docker-"+containerID+".scope"), "TestDiskBufferedWriterProcess",
+		envWriterFile+"="+filepath.Join(mountPoint, "written"), envWriterBlocks+"="+strconv.Itoa(writtenBlocks))
+
+	charged := map[string]uint64{}
+	var written uint64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != device || stat.DiskIO.Op != ebpf.CodeDiskOpWrite {
+			continue
+		}
+		charged[stat.DiskIO.ContainerID] += stat.DiskIO.Bytes
+		written += stat.DiskIO.Bytes
+	}
+	assert.GreaterOrEqual(t, charged[containerID], uint64(writtenBlocks*directIOBlockSize), "the file is charged to the container")
+	assert.GreaterOrEqual(t, float64(charged[containerID]), chargedAtLeast*float64(written), "the rest is the filesystem's own I/O")
+	delete(charged, containerID)
+	delete(charged, "")
+	assert.Empty(t, charged, "no other container is charged")
+}
+
+// TestDiskBufferedWriterProcess is not a test: TestDiskBufferedWritesAreChargedToTheirCgroup runs
+// it as a child process that writes a file through the page cache, then syncs it, once its parent
+// has moved it to a cgroup and tells it to start
+func TestDiskBufferedWriterProcess(t *testing.T) {
+	path := os.Getenv(envWriterFile)
+	if path == "" {
+		t.Skip("only runs as a child process of TestDiskBufferedWritesAreChargedToTheirCgroup")
+	}
+	blocks, err := strconv.Atoi(os.Getenv(envWriterBlocks))
+	require.NoError(t, err)
+	_, err = bufio.NewReader(os.Stdin).ReadString('\n')
+	require.NoError(t, err)
+
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	defer f.Close()
+	block := make([]byte, directIOBlockSize)
+	for range blocks {
+		_, err := f.Write(block)
+		require.NoError(t, err)
+	}
+	require.NoError(t, f.Sync())
+}
+
+// ioCgroupRoot returns the root of the cgroup hierarchy of the io (v2) or blkio (v1) controller,
+// where the test can create cgroups
+func ioCgroupRoot(t *testing.T) string {
+	t.Helper()
+	if controllers, err := os.ReadFile("/sys/fs/cgroup/cgroup.controllers"); err == nil {
+		if !slices.Contains(strings.Fields(string(controllers)), "io") {
+			t.Skip("the cgroup v2 io controller is not available")
+		}
+		require.NoError(t, os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+io"), 0o644))
+		return "/sys/fs/cgroup"
+	}
+	if _, err := os.Stat("/sys/fs/cgroup/blkio/cgroup.procs"); err == nil {
+		return "/sys/fs/cgroup/blkio"
+	}
+	t.Skip("no io or blkio cgroup controller")
+	return ""
+}
+
+// runInCgroup runs a test of this binary as a child process in a new cgroup, and waits for it. The
+// child waits for a line on its standard input, which the parent sends once it moved it to the
+// cgroup.
+func runInCgroup(t *testing.T, cgroup, testName string, env ...string) {
+	t.Helper()
+	require.NoError(t, os.Mkdir(cgroup, 0o755))
+	t.Cleanup(func() { _ = os.Remove(cgroup) })
+
+	cmd := exec.Command(os.Args[0], "-test.run=^"+testName+"$")
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	start, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+
+	require.NoError(t, os.WriteFile(filepath.Join(cgroup, "cgroup.procs"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644))
+	_, err = start.Write([]byte("start\n"))
+	require.NoError(t, err)
+	require.NoError(t, cmd.Wait())
 }

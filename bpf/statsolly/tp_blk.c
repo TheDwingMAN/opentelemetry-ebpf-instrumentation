@@ -9,6 +9,7 @@
 
 #include <common/scratch_mem.h>
 
+#include <statsolly/cgroup_names.h>
 #include <statsolly/disk_io.h>
 #include <statsolly/types.h>
 #include <statsolly/maps/disk_io_accum.h>
@@ -32,9 +33,14 @@ volatile const u32 disk_rqf_flush_seq;
 // kernel numbers its request flags with macros.
 volatile const u32 disk_rqf_io_stat;
 
+// Set by userspace when an enabled block I/O metric reports an attribute that needs the cgroup the
+// I/O is charged to (container.id), or a filter matches one. Otherwise the probes don't read it.
+volatile const bool disk_read_cgroup;
+
 // Force structs into the ELF for automatic creation of Golang struct
 const disk_io_key_t *unused_disk_io_key __attribute__((unused));
 const disk_io_accum_t *unused_disk_io_accum __attribute__((unused));
+const disk_cgroup_name_t *unused_disk_cgroup_name __attribute__((unused));
 
 SCRATCH_MEM_TYPED(disk_io_accum_init, disk_io_accum_t)
 
@@ -53,6 +59,13 @@ static __always_inline struct gendisk *request_disk(struct request *rq) {
         return BPF_CORE_READ(rq, rq_disk);
     }
     return BPF_CORE_READ(rq, q, disk);
+}
+
+// request_cgroup is the cgroup a request is charged to: the io controller cgroup of its first bio,
+// which the kernel also charges in io.stat and io.max. Requests that the block layer makes itself,
+// such as the flushes of a flush sequence, have no bio.
+static __always_inline struct cgroup *request_cgroup(struct request *rq) {
+    return bio_cgroup(BPF_CORE_READ(rq, bio));
 }
 
 // request_start_ns is when the kernel started timing a request, or 0 if it didn't. rq_flags is only
@@ -226,7 +239,9 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     }
     const u64 now_ns = bpf_ktime_get_ns();
     const u64 latency_ns = now_ns > start.issued_ns ? now_ns - start.issued_ns : 0;
+    struct cgroup *cgrp = disk_read_cgroup ? request_cgroup(rq) : 0;
     const disk_io_key_t key = {
+        .cgroup_id = cgroup_id_of(cgrp),
         .major = start.major,
         .minor = start.minor,
         .op = start.op,
@@ -236,6 +251,9 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     disk_io_accum_t *accum = lookup_or_init_accum(&key);
     if (!accum) {
         return 0;
+    }
+    if (cgrp) {
+        record_cgroup_name(key.cgroup_id, cgrp);
     }
     const u32 bucket = disk_latency_bucket(disk_latency_bounds_ns, latency_ns);
     if (bucket >= k_disk_latency_buckets) {

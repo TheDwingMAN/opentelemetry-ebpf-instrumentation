@@ -77,8 +77,13 @@ func filterStorageStatsByAttribute(
 // newStorageStatMatchers returns the matchers of the filters on the attributes of the disk stat
 // metrics
 func newStorageStatMatchers(config filter.AttributeFamilyConfig, extraGroupAttributesCfg map[string][]attr.Name) (filter.MatcherSet[*ebpf.Stat], error) {
-	diskConfig := configOfAttributes(config, attributes.SectionAttributeNames(extraGroupAttributesCfg, diskStatSections...))
-	return filter.NewMatcherSet(diskConfig, nil, extraGroupAttributesCfg, ebpf.StatStringGetters)
+	return filter.NewMatcherSet(storageStatFilters(config, extraGroupAttributesCfg), nil, extraGroupAttributesCfg, ebpf.StatStringGetters)
+}
+
+// storageStatFilters returns the stats attribute filters that apply to the storage stats: those on
+// the attributes of the disk stat metrics
+func storageStatFilters(config filter.AttributeFamilyConfig, extraGroupAttributesCfg map[string][]attr.Name) filter.AttributeFamilyConfig {
+	return configOfAttributes(config, attributes.SectionAttributeNames(extraGroupAttributesCfg, diskStatSections...))
 }
 
 // configOfAttributes returns the filters of the given attributes. Filters can name the attributes

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/cilium/ebpf"
@@ -48,8 +49,8 @@ func TestStorageMapsOfDisabledFeatures(t *testing.T) {
 	cpus, err := ebpf.PossibleCPU()
 	require.NoError(t, err)
 	sizeInFlightMap(spec, cpus)
-	load := func(features export.Features) map[string]uint32 {
-		fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{})
+	load := func(features export.Features, selection *attributes.SelectorConfig) map[string]uint32 {
+		fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, selection, ProbeReads{})
 		require.NoError(t, err)
 		t.Cleanup(func() {
 			fetcher.Close()
@@ -69,7 +70,7 @@ func TestStorageMapsOfDisabledFeatures(t *testing.T) {
 		return sizes
 	}
 
-	for name, entries := range load(export.FeatureStatsTCPRetransmits) {
+	for name, entries := range load(export.FeatureStatsTCPRetransmits, &attributes.SelectorConfig{}) {
 		want := spec.Maps[name].MaxEntries
 		if isStorageMap(name) {
 			want = 1
@@ -77,7 +78,18 @@ func TestStorageMapsOfDisabledFeatures(t *testing.T) {
 		assert.Equal(t, want, entries, "TCP only: %s", name)
 	}
 
-	for name, entries := range load(export.FeatureStatsDisk) {
+	for name, entries := range load(export.FeatureStatsDisk, &attributes.SelectorConfig{}) {
+		want := spec.Maps[name].MaxEntries
+		if slices.Contains(diskCgroupMaps, name) {
+			want = 1
+		}
+		assert.Equal(t, want, entries, "disk without the cgroups: %s", name)
+	}
+
+	withContainers := &attributes.SelectorConfig{SelectionCfg: attributes.Selection{
+		attributes.StatDiskOperations.Section: attributes.InclusionLists{Include: []string{"container.id"}},
+	}}
+	for name, entries := range load(export.FeatureStatsDisk, withContainers) {
 		want := spec.Maps[name].MaxEntries
 		assert.Equal(t, want, entries, "disk: %s", name)
 	}
@@ -91,7 +103,7 @@ func TestStatsLoadWithoutStorageAfterAFailedLoad(t *testing.T) {
 	storage := storageProbes{layout: layout, disk: true}
 
 	var objects StatsObjects
-	load := newStatsLoader(&objects, 0, nil)
+	load := newStatsLoader(&objects, 0, nil, nil)
 	loads := 0
 	err = storage.loadOrDisable(func(toDisable []string) error {
 		loads++

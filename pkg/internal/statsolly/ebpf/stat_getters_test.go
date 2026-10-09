@@ -51,3 +51,18 @@ func TestStatGetters_DeviceMapperNameOfBlockIO(t *testing.T) {
 	assert.False(t, volumeName(&Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "sda"}}).Valid(),
 		"omitted for the devices that are not device mapper devices")
 }
+
+func TestStatContainerID(t *testing.T) {
+	assert.Equal(t, "aaaa", (&Stat{DiskIO: &DiskIO{ContainerID: "aaaa"}}).ContainerID())
+	assert.Empty(t, (&Stat{TCPRetransmit: true}).ContainerID())
+}
+
+func TestStatGetters_DiskIOContainer(t *testing.T) {
+	inContainer := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{ContainerID: "0123abcd"}}
+	onHost := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{}}
+
+	containerID, ok := StatGetters(attr.ContainerID)
+	require.True(t, ok)
+	assert.Equal(t, "0123abcd", containerID(inContainer).Value.AsString())
+	assert.False(t, containerID(onHost).Valid(), "omitted for I/O charged to no container")
+}

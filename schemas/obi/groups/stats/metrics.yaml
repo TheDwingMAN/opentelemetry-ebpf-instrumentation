@@ -414,6 +414,8 @@ groups:
         requirement_level: recommended
       - ref: disk.io.direction
         requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
       - ref: error.type
         requirement_level:
           conditionally_required: >
@@ -451,6 +453,8 @@ groups:
         requirement_level: recommended
       - ref: disk.io.direction
         requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
       - ref: k8s.cluster.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
@@ -478,6 +482,8 @@ groups:
         requirement_level: recommended
       - ref: disk.io.direction
         requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
       - ref: error.type
         requirement_level:
           conditionally_required: >
@@ -517,6 +523,8 @@ groups:
         requirement_level: recommended
       - ref: disk.io.direction
         requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
       - ref: error.type
         requirement_level:
           conditionally_required: >
