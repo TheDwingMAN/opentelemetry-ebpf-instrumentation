@@ -147,6 +147,13 @@ type DiskIO struct {
 	// ErrorType is empty for successful requests
 	ErrorType string
 
+	// Operations is the number of completed requests
+	Operations uint64
+	// Time is the sum of the durations of the requests, in seconds, as the sum of their latency
+	// histogram
+	Time float64
+	// Bytes of the requests that completed successfully
+	Bytes uint64
 	// Latency of the completed requests. Nil on the paths of a multipath device, which reports the
 	// latency of the same I/O.
 	Latency *LatencyHistogram

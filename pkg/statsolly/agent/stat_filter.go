@@ -23,7 +23,10 @@ var tcpStatSections = []attributes.Section{
 }
 
 // diskStatSections are the metrics of the disk stats, the storage stats
-var diskStatSections = []attributes.Section{attributes.StatDiskServiceDuration.Section}
+var diskStatSections = []attributes.Section{
+	attributes.StatDiskServiceDuration.Section, attributes.StatDiskIO.Section, attributes.StatDiskOperations.Section,
+	attributes.StatDiskServiceTime.Section,
+}
 
 // tcpStatFilters returns the stats attribute filters that apply to the TCP stats: all of them but
 // those on the attributes that the storage stat metrics have and the TCP stat metrics don't. A

@@ -265,6 +265,53 @@ func TestDiskStats(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// The disk counters give the count and the sum of the histogram, and the bytes of the successful
+// requests. The paths of a multipath device have no histogram, but keep their counters.
+func TestDiskCounters(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDisk)
+
+	written := fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "", fakeLatency(0.0005, 0.004))
+	written.DiskIO.Bytes = 2 * 4096
+	failed := fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "EIO", fakeLatency(0.02))
+	path := fakeDiskRecord("sdb", ebpf.CodeDiskOpRead, "", nil)
+	path.DiskIO.Operations, path.DiskIO.Time, path.DiskIO.Bytes = 3, 0.003, 3*512
+	diskEvents <- []*ebpf.Stat{written, failed, path}
+
+	labels := func(device, direction, errorType string) map[string]string {
+		return map[string]string{
+			"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": device,
+			"disk_io_direction": direction, "error_type": errorType,
+		}
+	}
+	withoutErrorType := func(labels map[string]string) map[string]string {
+		delete(labels, "error_type")
+		return labels
+	}
+	okWrite, failedWrite, pathRead := labels("nvme0n1", "write", ""), labels("nvme0n1", "write", "EIO"), labels("sdb", "read", "")
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_io_bytes_total", Value: 2 * 4096, Labels: withoutErrorType(maps.Clone(okWrite))},
+			{Name: "obi_stat_disk_io_bytes_total", Value: 3 * 512, Labels: withoutErrorType(maps.Clone(pathRead))},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_io"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_operations_total", Value: 2, Labels: okWrite},
+			{Name: "obi_stat_disk_operations_total", Value: 1, Labels: failedWrite},
+			{Name: "obi_stat_disk_operations_total", Value: 3, Labels: pathRead},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operations"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_service_time_seconds_total", Value: written.DiskIO.Time, Labels: okWrite},
+			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.02, Labels: failedWrite},
+			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.003, Labels: pathRead},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_service_time"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_service_duration_seconds_count", Value: 2, Labels: okWrite},
+			{Name: "obi_stat_disk_service_duration_seconds_count", Value: 1, Labels: failedWrite},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_service_duration_seconds_count"),
+			"the paths of a multipath device have no histogram")
+	}, timeout, 100*time.Millisecond)
+}
+
 // The disk probes couldn't be loaded: the agent has no disk tracer, and the TCP stats go on without
 // the storage branch
 func TestDiskStatsWithoutDiskProbes(t *testing.T) {
@@ -455,8 +502,10 @@ func fakeLatency(latencies ...float64) *ebpf.LatencyHistogram {
 	return latency
 }
 
+// fakeDiskRecord is the stat of the requests of a latency histogram, counted and timed by it as the
+// disk tracer does
 func fakeDiskRecord(device string, op ebpf.DiskOpCode, errorType string, latency *ebpf.LatencyHistogram) *ebpf.Stat {
-	return &ebpf.Stat{
+	stat := &ebpf.Stat{
 		Type: ebpf.StatTypeDiskIO,
 		DiskIO: &ebpf.DiskIO{
 			Device:    device,
@@ -465,6 +514,13 @@ func fakeDiskRecord(device string, op ebpf.DiskOpCode, errorType string, latency
 			Latency:   latency,
 		},
 	}
+	if latency != nil {
+		for _, count := range latency.BucketCounts {
+			stat.DiskIO.Operations += count
+		}
+		stat.DiskIO.Time = latency.Sum
+	}
+	return stat
 }
 
 // The TCP stats are matched against every filter but those on the attributes that the storage stat

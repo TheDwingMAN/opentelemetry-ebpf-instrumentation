@@ -191,11 +191,12 @@ func (r *diskReader) readStats() []*ebpf.Stat {
 		if stat := r.stats.stat(key, current, r.previous[key]); stat != nil {
 			stats = append(stats, stat)
 			r.idleReads[key] = 0
-		} else if lastGrowth := r.forgetIfIdle(key, current); lastGrowth != nil {
-			stats = append(stats, lastGrowth)
-		}
-		if _, tracked := r.idleReads[key]; tracked {
+			// only what was forwarded is remembered: the kernel adds the bytes and the latency of a
+			// request before counting it, and what a read finds of them before the count is
+			// forwarded with the request
 			r.previous[key] = current
+		} else if lastGrowth := r.forgetIfIdle(key); lastGrowth != nil {
+			stats = append(stats, lastGrowth)
 		}
 	}
 	if err == nil {
@@ -204,10 +205,10 @@ func (r *diskReader) readStats() []*ebpf.Stat {
 	return stats
 }
 
-// forgetIfIdle deletes the entry of a key once it went diskIdleDeleteAfter without changes.
-// It returns the stat of what the kernel added to the entry between its read, current, and its
-// deletion, or nil.
-func (r *diskReader) forgetIfIdle(key ebpf.StatsDiskIoKeyT, current ebpf.StatsDiskIoAccumT) *ebpf.Stat {
+// forgetIfIdle deletes the entry of a key once it went diskIdleDeleteAfter without a request
+// counted. It returns the stat of what the kernel added to the entry since it was last forwarded,
+// until its deletion, or nil.
+func (r *diskReader) forgetIfIdle(key ebpf.StatsDiskIoKeyT) *ebpf.Stat {
 	r.idleReads[key]++
 	if r.idleReads[key] < r.idleReadsBeforeDelete {
 		return nil
@@ -217,12 +218,13 @@ func (r *diskReader) forgetIfIdle(key ebpf.StatsDiskIoKeyT, current ebpf.StatsDi
 		r.log.Debug("can't delete idle accumulation map entry", "error", err)
 		return nil
 	}
+	previous := r.previous[key]
 	delete(r.idleReads, key)
 	delete(r.previous, key)
 	if err != nil || !known {
 		return nil
 	}
-	return r.stats.stat(key, last, current)
+	return r.stats.stat(key, last, previous)
 }
 
 // deleteEntry deletes the entry of a key, and returns its last value when the kernel can look it
@@ -245,7 +247,7 @@ func (r *diskReader) deleteEntry(key ebpf.StatsDiskIoKeyT) (last ebpf.StatsDiskI
 
 // forgetEvicted drops what is remembered about entries that are no longer in the map
 func (r *diskReader) forgetEvicted(entries map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT) {
-	for key := range r.previous {
+	for key := range r.idleReads {
 		if _, ok := entries[key]; !ok {
 			delete(r.previous, key)
 			delete(r.idleReads, key)
@@ -261,7 +263,8 @@ type diskStats struct {
 // stat returns the block requests that completed since the previous read of the key, or nil
 func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsDiskIoAccumT) *ebpf.Stat {
 	// kernel counters only grow; a decrease means the entry was deleted and re-created
-	if anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) || current.LatencySumNs < previous.LatencySumNs {
+	if anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) || current.LatencySumNs < previous.LatencySumNs ||
+		current.Bytes < previous.Bytes {
 		previous = ebpf.StatsDiskIoAccumT{}
 	}
 	latency, operations := latencyDelta(current, previous)
@@ -269,8 +272,10 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 		return nil
 	}
 	device := d.devices.device(key.Major, key.Minor)
+	serviceTime := latency.Sum
 	// the paths of a multipath device report no latency: the multipath device reports the latency
-	// of the same I/O, and the histograms of its paths would multiply its series by their number
+	// of the same I/O, and the histograms of its paths would multiply its series by their number.
+	// They keep their counters, which show a slow or failing path.
 	if device.dmMultipathPath {
 		latency = nil
 	}
@@ -282,6 +287,9 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 			Stacked:    device.stacked,
 			Op:         ebpf.DiskOpCode(key.Op),
 			ErrorType:  diskErrorType(key.Status, d.statusIsBlkStatus),
+			Operations: operations,
+			Time:       serviceTime,
+			Bytes:      current.Bytes - previous.Bytes,
 			Latency:    latency,
 		},
 	}

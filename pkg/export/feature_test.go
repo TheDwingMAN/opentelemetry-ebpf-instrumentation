@@ -58,11 +58,15 @@ func TestFeatureEnv_NetworkFlowPackets(t *testing.T) {
 func TestFeatureStatsDiskIsOptIn(t *testing.T) {
 	stats, err := LoadFeatures([]string{"stats"})
 	require.NoError(t, err)
-	assert.False(t, stats.StatsDiskServiceDuration(), "the stats aggregate must not enable disk stats")
+	assert.False(t, stats.StatsDisk(), "the stats aggregate must not enable disk stats")
 
-	disk := FeatureStatsDiskServiceDuration
-	assert.False(t, disk.StatsTCPRtt())
-	assert.True(t, disk.StatMetrics(), "a disk-only selection must still enable the stats pipeline")
+	for _, disk := range []Features{
+		FeatureStatsDiskServiceDuration, FeatureStatsDiskIO, FeatureStatsDiskOperations, FeatureStatsDiskServiceTime,
+	} {
+		assert.False(t, disk.StatsTCPRtt())
+		assert.True(t, disk.StatsDisk())
+		assert.True(t, disk.StatMetrics(), "a disk-only selection must still enable the stats pipeline")
+	}
 }
 
 // The storage stats must be named: their probes fire on every block request
@@ -71,23 +75,26 @@ func TestFeatureAllDoesntEnableStorageStats(t *testing.T) {
 		all, err := LoadFeatures([]string{name})
 		require.NoError(t, err)
 		assert.True(t, all.StatsTCPIo(), "%s enables the TCP stats", name)
-		assert.False(t, all.StatsDiskServiceDuration(), name)
+		assert.False(t, all.StatsDisk(), name)
 	}
 }
 
 // Config v1 is frozen: only Config v2 enables the disk stats, and a logged configuration shows
 // them with their Config v2 name
 func TestFeatureStatsDiskHasNoV1Name(t *testing.T) {
-	for _, name := range []string{"stats_disk_service_duration", "disk_service_duration"} {
+	for _, name := range []string{
+		"stats_disk_service_duration", "disk_service_duration", "disk_io", "disk_operations", "disk_service_time",
+	} {
 		_, err := LoadFeatures([]string{name})
 		require.ErrorContains(t, err, "unknown metrics feature", name)
 	}
 
 	out, err := yaml.Marshal(struct {
 		Features Features `yaml:"features"`
-	}{Features: FeatureStats | FeatureStatsDiskServiceDuration})
+	}{Features: FeatureStats | FeatureStatsDisk})
 	require.NoError(t, err)
-	assert.Equal(t, "features:\n    - stats\n    - disk_service_duration\n", string(out))
+	assert.Equal(t, "features:\n    - stats\n    - disk_service_duration\n    - disk_io\n    - disk_operations\n"+
+		"    - disk_service_time\n", string(out))
 }
 
 func TestFeatureEnv_Separator(t *testing.T) {

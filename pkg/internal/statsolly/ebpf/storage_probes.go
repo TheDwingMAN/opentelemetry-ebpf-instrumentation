@@ -17,8 +17,8 @@ import (
 	"go.opentelemetry.io/obi/pkg/export"
 )
 
-// featureDiskServiceDuration names the disk stats feature in a DisabledFeature
-const featureDiskServiceDuration = "the block I/O metrics (disk_service_duration)"
+// featureDisk names the disk stats features in a DisabledFeature
+const featureDisk = "the block I/O metrics (the disk_* stats features)"
 
 // storageProbes tells which storage probes are loaded and attached. The storage features are
 // optional: an enabled one whose probes can't be loaded or attached is disabled, with the reason,
@@ -32,10 +32,10 @@ type storageProbes struct {
 // planStorageProbes returns the storage probes of the enabled features that the kernel can load.
 func planStorageProbes(log *slog.Logger, features *export.Features) storageProbes {
 	var s storageProbes
-	if features.StatsDiskServiceDuration() {
+	if features.StatsDisk() {
 		var err error
 		if s.layout, err = kernelBlockTracepointLayout(log); err != nil {
-			s.disable(featureDiskServiceDuration, fmt.Errorf("can't tell the block tracepoint arguments from the kernel BTF: %w", err))
+			s.disable(featureDisk, fmt.Errorf("can't tell the block tracepoint arguments from the kernel BTF: %w", err))
 		} else {
 			s.disk = true
 		}
@@ -50,7 +50,7 @@ func (s *storageProbes) disable(feature string, reason error) {
 // disableAll disables every storage feature that has programs to load
 func (s *storageProbes) disableAll(reason error) {
 	if s.disk {
-		s.disable(featureDiskServiceDuration, reason)
+		s.disable(featureDisk, reason)
 	}
 	s.disk = false
 }

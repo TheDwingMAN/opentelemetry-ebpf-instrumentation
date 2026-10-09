@@ -43,6 +43,9 @@ type statMetricsReporter struct {
 	tcpIo                    *Expirer[prometheus.Counter]
 	tcpSuccessfulConnections *Expirer[prometheus.Counter]
 	diskServiceDuration      *kernelHistogramVec
+	diskIO                   *Expirer[prometheus.Counter]
+	diskOperations           *Expirer[prometheus.Counter]
+	diskServiceTime          *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -52,6 +55,9 @@ type statMetricsReporter struct {
 	tcpIoAttrs                    []attributes.Field[*ebpf.Stat, string]
 	tcpSuccessfulConnectionsAttrs []attributes.Field[*ebpf.Stat, string]
 	diskServiceDurationAttrs      []attributes.Field[*ebpf.Stat, string]
+	diskIOAttrs                   []attributes.Field[*ebpf.Stat, string]
+	diskOperationsAttrs           []attributes.Field[*ebpf.Stat, string]
+	diskServiceTimeAttrs          []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -192,6 +198,48 @@ func newStatsReporter(
 		register = append(register, mr.diskServiceDuration)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskIO() {
+		log.Debug("registering stat disk io metric")
+
+		mr.diskIOAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskIO))
+
+		mr.diskIO = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskIO.Prom,
+			Help: "bytes of the block I/O requests that completed successfully, as issued to the device",
+		}, labelNames(mr.diskIOAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskIO)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskOperations() {
+		log.Debug("registering stat disk operations metric")
+
+		mr.diskOperationsAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskOperations))
+
+		mr.diskOperations = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskOperations.Prom,
+			Help: "number of completed block I/O requests",
+		}, labelNames(mr.diskOperationsAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskOperations)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskServiceTime() {
+		log.Debug("registering stat disk service time metric")
+
+		mr.diskServiceTimeAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskServiceTime))
+
+		mr.diskServiceTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskServiceTime.Prom,
+			Help: "sum of the service times of the completed block I/O requests, from their last issue to the device until their final completion, in seconds",
+		}, labelNames(mr.diskServiceTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskServiceTime)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -216,6 +264,9 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
 			r.observeDiskServiceDuration(stat)
+			r.observeDiskIO(stat)
+			r.observeDiskOperations(stat)
+			r.observeDiskServiceTime(stat)
 		}
 	}
 }
@@ -265,4 +316,28 @@ func (r *statMetricsReporter) observeDiskServiceDuration(stat *ebpf.Stat) {
 		return
 	}
 	r.diskServiceDuration.observe(labelValues(stat, r.diskServiceDurationAttrs), stat.DiskIO.Latency)
+}
+
+func (r *statMetricsReporter) observeDiskIO(stat *ebpf.Stat) {
+	if r.diskIO == nil || stat.DiskIO == nil || stat.DiskIO.Bytes == 0 {
+		return
+	}
+	r.diskIO.WithLabelValues(labelValues(stat, r.diskIOAttrs)...).
+		Metric.Add(float64(stat.DiskIO.Bytes))
+}
+
+func (r *statMetricsReporter) observeDiskOperations(stat *ebpf.Stat) {
+	if r.diskOperations == nil || stat.DiskIO == nil {
+		return
+	}
+	r.diskOperations.WithLabelValues(labelValues(stat, r.diskOperationsAttrs)...).
+		Metric.Add(float64(stat.DiskIO.Operations))
+}
+
+func (r *statMetricsReporter) observeDiskServiceTime(stat *ebpf.Stat) {
+	if r.diskServiceTime == nil || stat.DiskIO == nil {
+		return
+	}
+	r.diskServiceTime.WithLabelValues(labelValues(stat, r.diskServiceTimeAttrs)...).
+		Metric.Add(stat.DiskIO.Time)
 }

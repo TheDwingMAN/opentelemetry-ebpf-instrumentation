@@ -68,16 +68,21 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 
 	deviceName := filepath.Base(loopDev)
 	completed := map[ebpf.DiskOpCode]uint64{}
+	operations := map[ebpf.DiskOpCode]uint64{}
+	transferred := map[ebpf.DiskOpCode]uint64{}
 	for _, stat := range reader.readStats() {
 		if stat.DiskIO.Device != deviceName {
 			continue
 		}
 		assert.Empty(t, stat.DiskIO.ErrorType)
 		assert.Positive(t, stat.DiskIO.Latency.Sum)
+		assert.InDelta(t, stat.DiskIO.Latency.Sum, stat.DiskIO.Time, 0, "the time is the sum of the histogram")
 		// without the bounds, the kernel would put every request above the last one
 		assert.Zero(t, stat.DiskIO.Latency.BucketCounts[len(export.DiskLatencyBounds)],
 			"no request takes longer than the last bound")
 		completed[stat.DiskIO.Op] += requests(stat.DiskIO.Latency)
+		operations[stat.DiskIO.Op] += stat.DiskIO.Operations
+		transferred[stat.DiskIO.Op] += stat.DiskIO.Bytes
 	}
 	perDirection := func(value uint64) map[ebpf.DiskOpCode]uint64 {
 		return map[ebpf.DiskOpCode]uint64{
@@ -86,6 +91,8 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 		}
 	}
 	assert.Equal(t, perDirection(directIOBlocks), completed)
+	assert.Equal(t, perDirection(directIOBlocks), operations)
+	assert.Equal(t, perDirection(directIOBlocks*directIOBlockSize), transferred)
 }
 
 // TestDiskRequestsAreTimedFromTheirIssue holds writes of a loop device in the I/O scheduler before
@@ -456,16 +463,23 @@ func TestDiskFileSyncsAreCountedLikeTheKernel(t *testing.T) {
 		syncFile(t, filepath.Join(mountPoint, "changed"), []byte("data"))
 	}
 
-	var writes uint64
+	var writes, operations, written uint64
+	var writeTime float64
 	for _, stat := range reader.readStats() {
 		if stat.DiskIO.Device != device || stat.DiskIO.Op != ebpf.CodeDiskOpWrite {
 			continue
 		}
 		writes += requests(stat.DiskIO.Latency)
+		operations += stat.DiskIO.Operations
+		written += stat.DiskIO.Bytes
+		writeTime += stat.DiskIO.Time
 	}
 	// OBI counts a write before the kernel accounts it in /proc/diskstats
 	after := readKernelDiskStatsOnceWritten(t, device, before, int(writes))
 	assert.Equal(t, after.writes-before.writes, writes)
+	assert.Equal(t, writes, operations)
+	assert.Equal(t, (after.sectorsWritten-before.sectorsWritten)*kernelSectorSize, written)
+	assert.Less(t, writeTime, float64(writes), "each write took less than a second on average")
 }
 
 // TestDiskWriteZeroesAreCountedLikeTheKernel zeroes a range of a loop device, which the loop
@@ -489,15 +503,17 @@ func TestDiskWriteZeroesAreCountedLikeTheKernel(t *testing.T) {
 	require.NoError(t, err)
 	after := readKernelDiskStatsOnceWritten(t, device, before, 1)
 
-	var writes uint64
+	var writes, written uint64
 	for _, stat := range reader.readStats() {
 		if stat.DiskIO.Device != device || stat.DiskIO.Op != ebpf.CodeDiskOpWrite {
 			continue
 		}
 		writes += requests(stat.DiskIO.Latency)
+		written += stat.DiskIO.Bytes
 	}
 	require.Equal(t, uint64(1), after.writes-before.writes, "the kernel completes one write-zeroes request")
 	assert.Equal(t, uint64(1), writes)
+	assert.Equal(t, (after.sectorsWritten-before.sectorsWritten)*kernelSectorSize, written)
 }
 
 // TestDiskStartsOfRequestsWithoutIOStatistics checks that OBI doesn't time the requests of a device
@@ -649,8 +665,11 @@ func writeQueueAttribute(t *testing.T, device, name, value string) {
 	require.NoError(t, os.WriteFile(filepath.Join("/sys/block", device, "queue", name), []byte(value), 0o644))
 }
 
+// kernelSectorSize is the unit of the sectors of /proc/diskstats, whatever the device
+const kernelSectorSize = 512
+
 type kernelDiskStats struct {
-	reads, writes uint64
+	reads, writes, sectorsRead, sectorsWritten uint64
 	// writeTime adds up the durations of the writes, from the kernel's start of each
 	writeTime time.Duration
 }
@@ -659,9 +678,11 @@ type kernelDiskStats struct {
 func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 	t.Helper()
 	const (
-		readsField     = 3
-		writesField    = 7
-		writeTimeField = 10
+		readsField          = 3
+		sectorsReadField    = 5
+		writesField         = 7
+		sectorsWrittenField = 9
+		writeTimeField      = 10
 	)
 	content, err := os.ReadFile("/proc/diskstats")
 	require.NoError(t, err)
@@ -676,9 +697,11 @@ func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 			return value
 		}
 		return kernelDiskStats{
-			reads:     field(readsField),
-			writes:    field(writesField),
-			writeTime: time.Duration(field(writeTimeField)) * time.Millisecond,
+			reads:          field(readsField),
+			writes:         field(writesField),
+			sectorsRead:    field(sectorsReadField),
+			sectorsWritten: field(sectorsWrittenField),
+			writeTime:      time.Duration(field(writeTimeField)) * time.Millisecond,
 		}
 	}
 	require.Failf(t, "device not found", "%s is not in /proc/diskstats", device)
@@ -918,10 +941,12 @@ func syncFile(t *testing.T, path string, data []byte) {
 // TestDiskMultipathRequestsAreCountedLikeTheKernel writes to and reads from a dm-multipath volume,
 // which is request-based: device mapper completes the bytes of each of its requests when the clone
 // of the request completes on the path, and ends the request again afterwards, without bytes. Each
-// read and write must be counted once, as in /proc/diskstats.
+// read and write must be counted once, as in /proc/diskstats, on the volume and on its path.
 func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 	const blocks = 32
-	dmName := multipathVolume(t, attachLoopDevice(t))
+	loopDev := attachLoopDevice(t)
+	path := filepath.Base(loopDev)
+	dmName := multipathVolume(t, loopDev)
 	if _, err := os.Stat(filepath.Join("/sys/block", dmName, "mq")); err != nil {
 		t.Skipf("the multipath volume %s is not request-based on this kernel", dmName)
 	}
@@ -935,6 +960,7 @@ func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 	defer f.Close()
 	block := alignedBuffer(t)
 	before := readKernelDiskStats(t, dmName)
+	pathBefore := readKernelDiskStats(t, path)
 	for i := range blocks {
 		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
 		require.NoError(t, err)
@@ -950,29 +976,48 @@ func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 		after = readKernelDiskStats(t, dmName)
 	}
+	pathAfter := readKernelDiskStats(t, path)
 
-	var reads, writes uint64
+	counted := map[string]kernelDiskStats{}
 	for _, stat := range reader.readStats() {
-		if stat.DiskIO.Device != dmName {
+		if stat.DiskIO.Device != dmName && stat.DiskIO.Device != path {
 			continue
 		}
+		device := counted[stat.DiskIO.Device]
 		switch stat.DiskIO.Op {
 		case ebpf.CodeDiskOpRead:
-			reads += requests(stat.DiskIO.Latency)
+			device.reads += stat.DiskIO.Operations
+			device.sectorsRead += stat.DiskIO.Bytes / kernelSectorSize
 		case ebpf.CodeDiskOpWrite:
-			writes += requests(stat.DiskIO.Latency)
+			device.writes += stat.DiskIO.Operations
+			device.sectorsWritten += stat.DiskIO.Bytes / kernelSectorSize
 		}
+		if stat.DiskIO.Device == dmName {
+			assert.Equal(t, requests(stat.DiskIO.Latency), stat.DiskIO.Operations)
+		}
+		counted[stat.DiskIO.Device] = device
 	}
 	require.Equal(t, uint64(blocks), after.writes-before.writes, "the kernel completes one request per write")
-	assert.Equal(t, after.reads-before.reads, reads)
-	assert.Equal(t, after.writes-before.writes, writes)
+	assert.Equal(t, kernelDiskStatsDelta(before, after), counted[dmName], "the volume")
+	assert.Equal(t, kernelDiskStatsDelta(pathBefore, pathAfter), counted[path], "the path keeps its counters")
+}
+
+// kernelDiskStatsDelta returns the reads, writes and sectors that /proc/diskstats counted between
+// two reads
+func kernelDiskStatsDelta(before, after kernelDiskStats) kernelDiskStats {
+	return kernelDiskStats{
+		reads:          after.reads - before.reads,
+		writes:         after.writes - before.writes,
+		sectorsRead:    after.sectorsRead - before.sectorsRead,
+		sectorsWritten: after.sectorsWritten - before.sectorsWritten,
+	}
 }
 
 // attachDiskReader loads the disk probes and returns a reader of their accumulation map that already
 // forgot the I/O that happened before
 func attachDiskReader(t *testing.T) *diskReader {
 	t.Helper()
-	features := export.FeatureStatsDiskServiceDuration
+	features := export.FeatureStatsDisk
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, allAttributes)
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })

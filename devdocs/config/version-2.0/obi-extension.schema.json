@@ -2095,11 +2095,14 @@
                   "tcp_successful_connections",
                   "tcp_retransmits",
                   "tcp_io",
-                  "disk_service_duration"
+                  "disk_service_duration",
+                  "disk_io",
+                  "disk_operations",
+                  "disk_service_time"
                 ]
               },
               "default": [],
-              "description": "Enabled stats families: the TCP ones and disk_service_duration, the block I/O (disk) one.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones and the block I/O (disk) ones, disk_service_duration, disk_io, disk_operations and disk_service_time.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",

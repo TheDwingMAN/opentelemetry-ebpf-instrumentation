@@ -55,7 +55,7 @@ func TestStorageMapsOfDisabledFeatures(t *testing.T) {
 			fetcher.Close()
 			fetcher.objects.Close()
 		})
-		if features.StatsDiskServiceDuration() {
+		if features.StatsDisk() {
 			require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
 		}
 		sizes := mapSizes(t, &fetcher.objects.StatsMaps)
@@ -77,7 +77,7 @@ func TestStorageMapsOfDisabledFeatures(t *testing.T) {
 		assert.Equal(t, want, entries, "TCP only: %s", name)
 	}
 
-	for name, entries := range load(export.FeatureStatsDiskServiceDuration) {
+	for name, entries := range load(export.FeatureStatsDisk) {
 		want := spec.Maps[name].MaxEntries
 		assert.Equal(t, want, entries, "disk: %s", name)
 	}

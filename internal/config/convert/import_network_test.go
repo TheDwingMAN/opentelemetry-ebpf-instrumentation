@@ -24,7 +24,7 @@ func TestV2ToRuntimeNetworkCaptureAndStatsRoundTrip(t *testing.T) {
 		export.FeatureStatsTCPFailedConnections |
 		export.FeatureStatsTCPIo |
 		export.FeatureStatsTCPSuccessfulConnections |
-		export.FeatureStatsDiskServiceDuration
+		export.FeatureStatsDisk
 
 	cfg.NetworkFlows.Enable = true
 	cfg.NetworkFlows.Source = obi.EbpfSourceTC
@@ -103,10 +103,10 @@ func TestV2ToRuntimeNetworkCaptureAndStatsRoundTrip(t *testing.T) {
 	require.Equal(t, 83, got.Stats.ReverseDNS.CacheLen)
 	require.Equal(t, 84*time.Second, got.Stats.ReverseDNS.CacheTTL)
 	require.True(t, got.Stats.Print)
-	require.Equal(t, export.FeatureNetwork|export.FeatureStatsTCPFailedConnections|export.FeatureStatsTCPIo|export.FeatureStatsTCPSuccessfulConnections|export.FeatureStatsDiskServiceDuration, got.Metrics.Features)
+	require.Equal(t, export.FeatureNetwork|export.FeatureStatsTCPFailedConnections|export.FeatureStatsTCPIo|export.FeatureStatsTCPSuccessfulConnections|export.FeatureStatsDisk, got.Metrics.Features)
 }
 
-// The stats features replace every feature that capture.network.stats controls, the disk one too
+// The stats features replace every feature that capture.network.stats controls, the disk ones too
 func TestV2StatsFeaturesReplaceTheDiskFeature(t *testing.T) {
 	t.Parallel()
 
@@ -115,12 +115,12 @@ func TestV2StatsFeaturesReplaceTheDiskFeature(t *testing.T) {
 		{Enabled: false, Features: []string{}},
 	} {
 		cfg := obi.DefaultConfig
-		cfg.Metrics.Features = export.FeatureNetwork | export.FeatureStatsDiskServiceDuration
+		cfg.Metrics.Features = export.FeatureNetwork | export.FeatureStatsDisk
 		applyV2MetricsEnablement(&cfg, &schema.Extension{
 			Capture: schema.Capture{Network: schema.CaptureNetwork{Stats: stats}},
 		}, false)
 
-		require.False(t, cfg.Metrics.Features.StatsDiskServiceDuration(), "features %v", stats.Features)
+		require.False(t, cfg.Metrics.Features.StatsDisk(), "features %v", stats.Features)
 		require.Equal(t, len(stats.Features) > 0, cfg.Metrics.Features.StatsTCPRtt(), "features %v", stats.Features)
 		require.True(t, cfg.Metrics.Features.NetworkBytes(), "the network features are not the stats section's")
 	}

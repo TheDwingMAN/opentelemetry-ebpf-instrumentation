@@ -130,6 +130,74 @@ func TestDiskReaderForwardsDeltas(t *testing.T) {
 	assert.Empty(t, r.readStats(), "nothing changed, nothing forwarded")
 }
 
+// The counters of a stat are the count and the sum of its latency histogram, and the bytes of the
+// successful requests, since the previous read
+func TestDiskReaderForwardsCounters(t *testing.T) {
+	written := accum([]uint64{0, 3, 0}, []uint64{0, 2_000_000, 0})
+	written.Bytes = 3 * 4096
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{writeKey(259, 0): written}}
+	r := newTestDiskReader(src)
+
+	stats := r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, uint64(3), stats[0].DiskIO.Operations)
+	assert.InDelta(t, 3*0.002, stats[0].DiskIO.Time, 1e-12)
+	assert.Equal(t, uint64(3*4096), stats[0].DiskIO.Bytes)
+
+	written = accum([]uint64{0, 4, 1}, []uint64{0, 2_000_000, 50_000_000})
+	written.Bytes = 3*4096 + 2*65536
+	src.entries[writeKey(259, 0)] = written
+	stats = r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, uint64(2), stats[0].DiskIO.Operations)
+	assert.InDelta(t, 0.002+0.05, stats[0].DiskIO.Time, 1e-12)
+	assert.InDelta(t, stats[0].DiskIO.Latency.Sum, stats[0].DiskIO.Time, 0, "the time is the sum of the histogram")
+	assert.Equal(t, uint64(2*65536), stats[0].DiskIO.Bytes)
+}
+
+// Failed requests are counted and timed, but transferred no bytes
+func TestDiskReaderForwardsFailedRequestsWithoutBytes(t *testing.T) {
+	failed := writeKey(8, 0)
+	failed.Status = 10 // BLK_STS_IOERR
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
+		failed: accum([]uint64{0, 0, 2}, []uint64{0, 0, 30_000_000}),
+	}}
+	r := newDiskReader(src, true, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"}, time.Second)
+
+	stats := r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, "EIO", stats[0].DiskIO.ErrorType)
+	assert.Equal(t, uint64(2), stats[0].DiskIO.Operations)
+	assert.InDelta(t, 0.06, stats[0].DiskIO.Time, 1e-12)
+	assert.Zero(t, stats[0].DiskIO.Bytes)
+}
+
+// The kernel adds the bytes and the latency of a request before it counts the request: what a read
+// finds of them before the count is forwarded with the request, once it is counted
+func TestDiskReaderForwardsWhatGrewBeforeTheCount(t *testing.T) {
+	key := writeKey(8, 0)
+	written := accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0})
+	written.Bytes = 4096
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{key: written}}
+	r := newTestDiskReader(src)
+	require.Len(t, r.readStats(), 1)
+
+	uncounted := written
+	uncounted.Bytes += 8192
+	uncounted.LatencySumNs += 200_000
+	src.entries[key] = uncounted
+	assert.Empty(t, r.readStats(), "no request completed yet")
+
+	counted := accum([]uint64{2, 0, 0}, []uint64{150_000, 0, 0})
+	counted.Bytes = 4096 + 8192
+	src.entries[key] = counted
+	stats := r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, uint64(1), stats[0].DiskIO.Operations)
+	assert.Equal(t, uint64(8192), stats[0].DiskIO.Bytes)
+	assert.InDelta(t, 0.0002, stats[0].DiskIO.Time, 1e-12)
+}
+
 func TestDiskReaderRestartsWhenTheEntryIsRecreated(t *testing.T) {
 	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
 		writeKey(8, 0): accum([]uint64{10, 0, 0}, []uint64{500_000, 0, 0}),
@@ -156,6 +224,24 @@ func TestDiskReaderRestartsWhenOnlyTheLatencySumDecreased(t *testing.T) {
 	stats := r.readStats()
 	require.Len(t, stats, 1)
 	assertLatency(t, stats[0].DiskIO.Latency, 3*0.0001, 3)
+}
+
+// A decrease of the bytes alone also means that the entry was re-created
+func TestDiskReaderRestartsWhenOnlyTheBytesDecreased(t *testing.T) {
+	written := accum([]uint64{2, 0, 0}, []uint64{100_000, 0, 0})
+	written.Bytes = 2 * 65536
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{writeKey(8, 0): written}}
+	r := newTestDiskReader(src)
+	require.Len(t, r.readStats(), 1)
+
+	// re-created with more, but smaller, requests: only the bytes went down
+	written = accum([]uint64{3, 0, 0}, []uint64{100_000, 0, 0})
+	written.Bytes = 3 * 4096
+	src.entries[writeKey(8, 0)] = written
+	stats := r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, uint64(3), stats[0].DiskIO.Operations)
+	assert.Equal(t, uint64(3*4096), stats[0].DiskIO.Bytes)
 }
 
 // The idle entries are deleted after a minute without changes, whatever the read period
@@ -205,6 +291,35 @@ func TestDiskReaderReportsWhatGrewBeforeTheDeletion(t *testing.T) {
 	require.Len(t, stats, 1)
 	assertLatency(t, stats[0].DiskIO.Latency, 2*0.0001, 2)
 	assert.Empty(t, r.previous, "forgotten once deleted from the kernel map")
+}
+
+// What the kernel added to an idle entry before counting its request is forwarded with the last
+// value of the entry, at its deletion
+func TestDiskReaderForwardsWhatGrewBeforeTheCountAtTheDeletion(t *testing.T) {
+	key := writeKey(8, 16)
+	written := accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0})
+	written.Bytes = 4096
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{key: written}}
+	r := newTestDiskReader(src)
+	require.Len(t, r.readStats(), 1)
+
+	uncounted := written
+	uncounted.Bytes += 4096
+	uncounted.LatencySumNs += 100_000
+	src.entries[key] = uncounted
+	for range r.idleReadsBeforeDelete - 1 {
+		require.Empty(t, r.readStats())
+	}
+
+	counted := accum([]uint64{2, 0, 0}, []uint64{100_000, 0, 0})
+	counted.Bytes = 2 * 4096
+	src.grownBeforeDelete = map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{key: counted}
+	stats := r.readStats()
+	assert.Equal(t, []ebpf.StatsDiskIoKeyT{key}, src.deleted)
+	require.Len(t, stats, 1)
+	assert.Equal(t, uint64(1), stats[0].DiskIO.Operations)
+	assert.Equal(t, uint64(4096), stats[0].DiskIO.Bytes)
+	assert.InDelta(t, 0.0001, stats[0].DiskIO.Time, 1e-12)
 }
 
 // Before Linux 5.14, the kernel can't look up and delete a hash map entry at once: the idle
@@ -466,6 +581,9 @@ func TestDiskReaderReportsNoLatencyOfMultipathPaths(t *testing.T) {
 	require.Len(t, stats, len(entries))
 	assert.Nil(t, stats[deviceOp{"sdb", ebpf.CodeDiskOpWrite}].Latency,
 		"the multipath device reports the latency of the I/O of its paths")
+	assert.Equal(t, uint64(3), stats[deviceOp{"sdb", ebpf.CodeDiskOpWrite}].Operations,
+		"the paths keep their counters, which show a slow or failing path")
+	assert.InDelta(t, 2*0.0005+0.005, stats[deviceOp{"sdb", ebpf.CodeDiskOpWrite}].Time, 1e-12)
 	assert.NotNil(t, stats[deviceOp{"dm-1", ebpf.CodeDiskOpWrite}].Latency)
 	assert.NotNil(t, stats[deviceOp{"nvme1c0n1", ebpf.CodeDiskOpWrite}].Latency, "the bios of the head are not measured")
 }

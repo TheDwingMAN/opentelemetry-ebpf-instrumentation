@@ -12,11 +12,13 @@
 
 typedef struct disk_rq_start {
     u64 issued_ns;
+    // size of the request when it was issued
+    u32 bytes;
     // whole disk and operation
     u32 major;
     u32 minor;
     enum disk_op op;
-    u8 _pad[7];
+    u8 _pad[3];
 } disk_rq_start_t;
 
 // The issue time of each in-flight block request, keyed by the struct request address. LRU so that
