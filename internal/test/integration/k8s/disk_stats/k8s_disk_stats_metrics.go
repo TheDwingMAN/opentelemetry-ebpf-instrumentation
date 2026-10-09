@@ -53,7 +53,75 @@ func FeatureDiskStats() features.Feature {
 		Assess("reports the workload on the counters by default", testDiskCountersReportTheWorkloadByDefault).
 		Assess("reports only the cluster on the latency histogram by default", testDiskHistogramReportsTheClusterByDefault).
 		Assess("counts the requests of the latency histogram", testDiskCountersAreTheCountAndSumOfTheHistogram).
+		Assess("reports the workload on the file sync counters by default", testFsSyncCountersReportTheWorkloadByDefault).
+		Assess("reports only the cluster on the file sync histogram by default", testFsSyncHistogramReportsTheClusterByDefault).
 		Feature()
+}
+
+// fsSyncStatLabels are the Prometheus labels of all the attributes that the file sync stat metrics
+// can have
+var fsSyncStatLabels = []string{
+	"obi_fs_sync_type", "error_type", "container_id", "obi_ip",
+	"k8s_cluster_name", "k8s_namespace_name", "k8s_owner_name", "k8s_kind", "k8s_pod_name", "k8s_container_name",
+}
+
+// fsyncLabels are the expected attributes of the successful fsyncs on the file sync histogram, which
+// reports only the cluster by default
+func fsyncLabels() map[string]*regexp.Regexp {
+	return map[string]*regexp.Regexp{
+		"obi_fs_sync_type": regexp.MustCompile(`^fsync$`),
+		"error_type":       noErrorPattern,
+		"k8s_cluster_name": clusterPattern,
+	}
+}
+
+// the successful fsyncs of the disk-io workload
+const workloadFsyncs = `{` + workload + `,obi_fs_sync_type="fsync",error_type=""}`
+
+// testFsSyncCountersReportTheWorkloadByDefault checks the default attributes of the file sync
+// counters of the disk-io workload, and that they are the count and the sum of the histogram
+func testFsSyncCountersReportTheWorkloadByDefault(ctx context.Context, t *testing.T, _ *envconf.Config) context.Context {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	labels := fsyncLabels()
+	labels["k8s_namespace_name"] = regexp.MustCompile(`^default$`)
+	labels["k8s_owner_name"] = regexp.MustCompile(`^disk-io$`)
+	labels["k8s_kind"] = regexp.MustCompile(`^Deployment$`)
+	const by = `sum by (obi_fs_sync_type, error_type) `
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for _, counter := range []string{"obi_stat_fs_sync_operations_total", "obi_stat_fs_sync_time_seconds_total"} {
+			results, err := pq.Query(counter + workloadFsyncs + ` > 0`)
+			require.NoError(ct, err)
+			require.Len(ct, results, 1, counter)
+			assert.Empty(ct, promtest.LabelMismatches(results[0].Metric, fsSyncStatLabels, labels), results[0].Metric)
+		}
+
+		mismatches, err := pq.Query(by + `(obi_stat_fs_sync_operations_total) != ` +
+			by + `(obi_stat_fs_sync_duration_seconds_count)`)
+		require.NoError(ct, err)
+		assert.Empty(ct, mismatches, "the operations are the count of the histogram")
+
+		mismatches, err = pq.Query(`abs(` + by + `(obi_stat_fs_sync_time_seconds_total) - ` +
+			by + `(obi_stat_fs_sync_duration_seconds_sum)) > 1e-6`)
+		require.NoError(ct, err)
+		assert.Empty(ct, mismatches, "the time is the sum of the histogram")
+	}, testTimeout, pollInterval)
+	return ctx
+}
+
+func testFsSyncHistogramReportsTheClusterByDefault(ctx context.Context, t *testing.T, _ *envconf.Config) context.Context {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	selector := `{obi_fs_sync_type="fsync",error_type=""}`
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		counts, err := pq.Query(`obi_stat_fs_sync_duration_seconds_count` + selector + ` > 0`)
+		require.NoError(ct, err)
+		require.Len(ct, counts, 1, "one series per sync type and outcome, whatever the workload")
+		assert.Empty(ct, promtest.LabelMismatches(counts[0].Metric, fsSyncStatLabels, fsyncLabels()), counts[0].Metric)
+
+		buckets, err := pq.Query(`obi_stat_fs_sync_duration_seconds_bucket` + selector)
+		require.NoError(ct, err)
+		assertHistogramBounds(ct, buckets, export.FsSyncLatencyBounds)
+	}, testTimeout, pollInterval)
+	return ctx
 }
 
 // deviceLabels are the expected attributes of the device and the direction of the successful I/O

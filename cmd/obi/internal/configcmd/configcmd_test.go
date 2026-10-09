@@ -1116,7 +1116,7 @@ metrics:
 	require.ErrorContains(t, err, `unknown metrics feature "stats_disk_service_duration"`)
 }
 
-// Only Config v2 enables the disk stats, as the disk compose suite does
+// Only Config v2 enables the disk and file sync stats, as the disk compose suite does
 func TestDiskStatsSuiteConfigEnablesOnlyTheDiskStats(t *testing.T) {
 	doc, _, err := schema.ParseStandaloneYAML(integrationConfig(t, "internal/test/integration/configs/obi-config-go-disk-stat-metrics.yml"))
 	require.NoError(t, err)
@@ -1126,6 +1126,7 @@ func TestDiskStatsSuiteConfigEnablesOnlyTheDiskStats(t *testing.T) {
 	require.True(t, cfg.Enabled(obi.FeatureStatsO11y))
 	require.False(t, cfg.Enabled(obi.FeatureAppO11y))
 	require.Equal(t, export.FeatureStatsDisk, cfg.Metrics.Features&export.FeatureStatsDisk, "every disk stat")
+	require.Equal(t, export.FeatureStatsFsSync, cfg.Metrics.Features&export.FeatureStatsFsSync, "every file sync stat")
 	require.Zero(t, cfg.Metrics.Features&export.FeatureStats, "no TCP stats")
 	require.Equal(t, "http://otelcol:4317", cfg.OTELMetrics.MetricsEndpoint)
 }

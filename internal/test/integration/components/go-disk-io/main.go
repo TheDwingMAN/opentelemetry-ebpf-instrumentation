@@ -1,8 +1,9 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// go-disk-io writes a file and reads it back with O_DIRECT, over and over, so that every write
-// and read reaches the block device instead of the page cache.
+// go-disk-io writes a file with O_DIRECT, syncs it, and reads it back, over and over, so that every
+// write and read reaches the block device instead of the page cache, and each round makes a file
+// sync.
 package main
 
 import (
@@ -46,6 +47,9 @@ func writeAndReadBack(path string, buf []byte) error {
 		if _, err := f.WriteAt(buf, int64(i*blockSize)); err != nil {
 			return err
 		}
+	}
+	if err := f.Sync(); err != nil {
+		return err
 	}
 	for i := range blocks {
 		if _, err := f.ReadAt(buf, int64(i*blockSize)); err != nil {
