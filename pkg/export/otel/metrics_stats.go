@@ -272,7 +272,7 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				tcpIo, attrs := me.tcpIo.ForRecord(v)
 				tcpIo.Add(ctx, int64(v.TCPIo.Bytes), metric2.WithAttributeSet(attrs))
 			}
-			if v.DiskIO != nil {
+			if me.diskServiceDuration != nil && v.DiskIO != nil {
 				me.kernelHistograms.record(me.diskServiceDuration, v, v.DiskIO.Latency)
 			}
 		}

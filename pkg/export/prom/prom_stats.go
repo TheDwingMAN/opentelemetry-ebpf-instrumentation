@@ -261,15 +261,8 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observeDiskServiceDuration(stat *ebpf.Stat) {
-	if stat.DiskIO == nil {
+	if r.diskServiceDuration == nil || stat.DiskIO == nil || stat.DiskIO.Latency == nil {
 		return
 	}
-	observeLatencyIn(r.diskServiceDuration, r.diskServiceDurationAttrs, stat, stat.DiskIO.Latency)
-}
-
-func observeLatencyIn(histogram *kernelHistogramVec, attrs []attributes.Field[*ebpf.Stat, string], stat *ebpf.Stat, latency *ebpf.LatencyHistogram) {
-	if histogram == nil || latency == nil {
-		return
-	}
-	histogram.observe(labelValues(stat, attrs), latency)
+	r.diskServiceDuration.observe(labelValues(stat, r.diskServiceDurationAttrs), stat.DiskIO.Latency)
 }
