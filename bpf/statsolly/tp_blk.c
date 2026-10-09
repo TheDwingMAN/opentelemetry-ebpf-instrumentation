@@ -82,13 +82,16 @@ static __always_inline bool never_issued(struct request *rq) {
     return BPF_CORE_READ(rq, state) == bpf_core_enum_value(enum mq_rq_state, MQ_RQ_IDLE);
 }
 
-// fill_start fills start with the whole disk of a request, its operation and when it started
+// fill_start fills start with the whole disk of a request, its operation, its size and when it
+// started
 static __always_inline void fill_start(struct request *rq,
                                        const enum disk_op op,
+                                       const u32 bytes,
                                        const u64 started_ns,
                                        disk_rq_start_t *start) {
     struct gendisk *disk = request_disk(rq);
     start->issued_ns = started_ns;
+    start->bytes = bytes;
     start->major = BPF_CORE_READ(disk, major);
     start->minor = BPF_CORE_READ(disk, first_minor);
     start->op = op;
@@ -105,7 +108,7 @@ static __always_inline void record_issue(struct request *rq) {
     }
     const u64 key = (u64)(uintptr_t)rq;
     disk_rq_start_t start = {};
-    fill_start(rq, op, bpf_ktime_get_ns(), &start);
+    fill_start(rq, op, BPF_CORE_READ(rq, __data_len), bpf_ktime_get_ns(), &start);
     bpf_map_update_elem(&disk_rq_start, &key, &start, BPF_ANY);
 }
 
@@ -218,7 +221,8 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         if (started_ns == 0) {
             return 0;
         }
-        fill_start(rq, op, started_ns, &start);
+        // its size at issue is unknown: it is counted with the bytes of its final completion
+        fill_start(rq, op, nr_bytes, started_ns, &start);
     }
     const u64 now_ns = bpf_ktime_get_ns();
     const u64 latency_ns = now_ns > start.issued_ns ? now_ns - start.issued_ns : 0;
@@ -234,9 +238,15 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         return 0;
     }
     const u32 bucket = disk_latency_bucket(disk_latency_bounds_ns, latency_ns);
-    if (bucket < k_disk_latency_buckets) {
-        __sync_fetch_and_add(&accum->latency_count[bucket], 1);
-        __sync_fetch_and_add(&accum->latency_sum_ns, latency_ns);
+    if (bucket >= k_disk_latency_buckets) {
+        return 0;
     }
+    // the request is counted last, so that a read of the entry that counts it also has its bytes
+    // and its latency: userspace holds what a read finds added before the count until it is counted
+    if (status == 0) {
+        __sync_fetch_and_add(&accum->bytes, start.bytes);
+    }
+    __sync_fetch_and_add(&accum->latency_sum_ns, latency_ns);
+    __sync_fetch_and_add(&accum->latency_count[bucket], 1);
     return 0;
 }

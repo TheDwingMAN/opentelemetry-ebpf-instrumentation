@@ -1329,6 +1329,41 @@ Ratio [0-1] between the unread messages of an internal Go channel and its total 
 | --- | --- | --- | --- | --- | --- |
 | `subscriber` | string | `required` | development | Name of the pipeline stage consuming the internal queue, as given to msg.SubscriberName when the stage subscribed. Subscribers that do not provide a name fall back to the name of the queue they subscribed to. | discover.CriteriaMatcher; traceAttacher |
 
+## `obi.stat.disk.io`
+
+Bytes of the block reads and writes that completed successfully, as they were issued to the device, per block device and direction. The requests whose issue OBI didn't record count the bytes of their final completion. The failed requests are not counted, unlike in /proc/diskstats. The I/O that `obi.stat.disk.service.duration` doesn't measure isn't counted either. The paths of dm-multipath devices report it, as the multipath devices do.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass their I/O down to the devices below them, which report it too. To count the I/O once on the disk counters, add up the devices where it is `false`; on `obi.stat.disk.service.duration`, add those and the dm-multipath devices, whose paths don't report it. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it, of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.operations`
+
+Completed block reads and writes, those of `obi.stat.disk.service.duration`, per block device, direction and outcome. It is the count of the histogram, and is also reported on the paths of dm-multipath devices, where the failures of a path show.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `error.type` | string | `conditionally_required`: if the block I/O request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass their I/O down to the devices below them, which report it too. To count the I/O once on the disk counters, add up the devices where it is `false`; on `obi.stat.disk.service.duration`, add those and the dm-multipath devices, whose paths don't report it. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it, of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
 ## `obi.stat.disk.service.duration`
 
 Device service time of the block reads and writes: each request is timed from its last issue to the device until its final completion, so requeues and retries restart it, per block device, direction and outcome. It excludes the wait in the I/O scheduler. A write with a cache flush (a journal commit) is timed until the end of its flush sequence. So that the counts match /proc/diskstats, two kinds of requests are timed on the kernel's clock instead of OBI's: the empty flush write of a file sync, which is never issued, from the kernel's start of the request; and the requests whose issue OBI didn't record (issued before OBI started, evicted from its map of requests in flight, or issued while the issue probe was already running on the CPU), from the kernel's issue time where the queue records it, or else from the kernel's start of the request. A request that the kernel didn't time either is not counted. Cache flushes, discards and the I/O of bio-based devices (LVM, md RAID, NVMe native multipath heads) are not measured. It is not reported on the paths of dm-multipath devices: the multipath device reports the same I/O.
@@ -1342,7 +1377,25 @@ Device service time of the block reads and writes: each request is timed from it
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
 | `error.type` | string | `conditionally_required`: if the block I/O request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
-| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`, and the dm-multipath devices, whose paths don't report their I/O. |  |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass their I/O down to the devices below them, which report it too. To count the I/O once on the disk counters, add up the devices where it is `false`; on `obi.stat.disk.service.duration`, add those and the dm-multipath devices, whose paths don't report it. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it, of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.service_time`
+
+Sum of the device service times of the completed block reads and writes, as `obi.stat.disk.service.duration` measures them, per block device, direction and outcome. It is the sum of the histogram, and is also reported on the paths of dm-multipath devices. Unlike `system.disk.operation_time` (/proc/diskstats), it excludes the wait in the I/O scheduler. Divided by `obi.stat.disk.operations`, both summed by the same attributes, it is the mean service time. Its rate is the average number of requests that the device serves at once, above 1 on devices that serve requests in parallel.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `error.type` | string | `conditionally_required`: if the block I/O request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass their I/O down to the devices below them, which report it too. To count the I/O once on the disk counters, add up the devices where it is `false`; on `obi.stat.disk.service.duration`, add those and the dm-multipath devices, whose paths don't report it. |  |
 | `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it, of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |

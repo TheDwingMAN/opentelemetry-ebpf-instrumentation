@@ -57,12 +57,18 @@ const (
 	FeatureGraph
 	FeatureApplicationRuntime
 	FeatureEBPF
-	// FeatureStatsDiskServiceDuration is not part of the `stats` aggregate, nor of `all`: the block
-	// probes fire on every block request, so it has to be enabled explicitly. Config v1 is frozen, so
-	// only the Config v2 stats feature `disk_service_duration` enables it.
+	// The disk stat features are not part of the `stats` aggregate, nor of `all`: the block probes
+	// fire on every block request, so they have to be enabled explicitly. Config v1 is frozen, so
+	// only the Config v2 stats features (see v2OnlyFeatures) enable them.
 	FeatureStatsDiskServiceDuration
-	FeatureAll = Features(^uint(0)) &^ FeatureStatsDiskServiceDuration
+	FeatureStatsDiskIO
+	FeatureStatsDiskOperations
+	FeatureStatsDiskServiceTime
+	FeatureAll = Features(^uint(0)) &^ FeatureStatsDisk
 )
+
+// FeatureStatsDisk groups the disk stat features, whose metrics the same block probes measure
+const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskServiceTime
 
 // FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -100,6 +106,9 @@ var FeatureMapper = map[string]Features{
 // in a logged configuration.
 var v2OnlyFeatures = map[string]Features{
 	"disk_service_duration": FeatureStatsDiskServiceDuration,
+	"disk_io":               FeatureStatsDiskIO,
+	"disk_operations":       FeatureStatsDiskOperations,
+	"disk_service_time":     FeatureStatsDiskServiceTime,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -392,7 +401,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStatsDiskServiceDuration)
+	return f.any(FeatureStats | FeatureStatsDisk)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -417,6 +426,23 @@ func (f Features) StatsTCPIo() bool {
 
 func (f Features) StatsDiskServiceDuration() bool {
 	return f.any(FeatureStatsDiskServiceDuration)
+}
+
+func (f Features) StatsDiskIO() bool {
+	return f.any(FeatureStatsDiskIO)
+}
+
+func (f Features) StatsDiskOperations() bool {
+	return f.any(FeatureStatsDiskOperations)
+}
+
+func (f Features) StatsDiskServiceTime() bool {
+	return f.any(FeatureStatsDiskServiceTime)
+}
+
+// StatsDisk tells whether any disk stat feature is enabled
+func (f Features) StatsDisk() bool {
+	return f.any(FeatureStatsDisk)
 }
 
 func (f Features) NetworkInterZone() bool {

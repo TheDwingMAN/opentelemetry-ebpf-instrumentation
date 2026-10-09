@@ -25,6 +25,8 @@ typedef struct disk_io_key {
 typedef struct disk_io_accum {
     u64 latency_count[k_disk_latency_buckets];
     u64 latency_sum_ns;
+    // bytes of the requests that completed successfully
+    u64 bytes;
 } disk_io_accum_t;
 
 // A plain hash map, not an LRU one: LRU maps evict live entries long before they are full on hosts

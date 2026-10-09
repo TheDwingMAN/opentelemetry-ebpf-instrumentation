@@ -169,6 +169,38 @@ func testStatMetricsDiskServiceDuration(t *testing.T) {
 	}
 }
 
+// testStatMetricsDiskCounters checks the counters of the successful block I/O of the node: their
+// attributes, and that the operations and their service time are the count and the sum of the
+// latency histogram
+func testStatMetricsDiskCounters(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		selector := `{disk_io_direction="` + direction + `",error_type=""}`
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			for _, counter := range []string{
+				"obi_stat_disk_operations_total", "obi_stat_disk_service_time_seconds_total", "obi_stat_disk_io_bytes_total",
+			} {
+				results, err := pq.Query(counter + selector + ` > 0`)
+				require.NoError(ct, err)
+				enoughPromResults(ct, results)
+				for _, res := range results {
+					assertDiskStatLabels(ct, res.Metric, diskIOLabels(direction))
+				}
+			}
+
+			mismatches, err := pq.Query(`obi_stat_disk_service_duration_seconds_count` + selector +
+				` != obi_stat_disk_operations_total` + selector)
+			require.NoError(ct, err)
+			assert.Empty(ct, mismatches, "the operations are the count of the histogram")
+
+			mismatches, err = pq.Query(`abs(obi_stat_disk_service_duration_seconds_sum` + selector +
+				` - obi_stat_disk_service_time_seconds_total` + selector + `) > 1e-6`)
+			require.NoError(ct, err)
+			assert.Empty(ct, mismatches, "the service time is the sum of the histogram")
+		}, testTimeout, 100*time.Millisecond)
+	}
+}
+
 // testStatMetricsNoDiskStats checks that the stats aggregate feature doesn't enable the disk stats
 func testStatMetricsNoDiskStats(t *testing.T) {
 	pq := promtest.Client{HostPort: prometheusHostPort}

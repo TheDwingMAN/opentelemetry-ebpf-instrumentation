@@ -949,6 +949,22 @@ func getDefinitions(
 				attr.ErrorType: true,
 			},
 		},
+		StatDiskIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskNodeKubeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskOperations.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskNodeKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskServiceTime.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskNodeKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
 
 		// span and service graph metrics don't yet implement attribute selection,
 		// but their values can still be filtered, so we list them here just to

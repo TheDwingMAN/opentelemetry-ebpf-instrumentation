@@ -1125,7 +1125,7 @@ func TestDiskStatsSuiteConfigEnablesOnlyTheDiskStats(t *testing.T) {
 
 	require.True(t, cfg.Enabled(obi.FeatureStatsO11y))
 	require.False(t, cfg.Enabled(obi.FeatureAppO11y))
-	require.True(t, cfg.Metrics.Features.StatsDiskServiceDuration())
+	require.Equal(t, export.FeatureStatsDisk, cfg.Metrics.Features&export.FeatureStatsDisk, "every disk stat")
 	require.Zero(t, cfg.Metrics.Features&export.FeatureStats, "no TCP stats")
 	require.Equal(t, "http://otelcol:4317", cfg.OTELMetrics.MetricsEndpoint)
 }

@@ -23,7 +23,7 @@ func TestStorageProbesDisableAll(t *testing.T) {
 
 	assert.False(t, storage.disk)
 	assert.Equal(t, []DisabledFeature{
-		{Feature: featureDiskServiceDuration, Reason: "verifier error"},
+		{Feature: featureDisk, Reason: "verifier error"},
 	}, storage.disabled)
 	toDisable := storage.programsToDisable()
 	for _, program := range []string{
@@ -51,7 +51,7 @@ func TestStorageProbesLoadOrDisable(t *testing.T) {
 	assert.Contains(t, loads[1], progObiStatsRawTpBlockRqComplete)
 	assert.Contains(t, loads[1], progObiStatsKprobeTCPCleanupRbuf)
 	assert.Equal(t, []DisabledFeature{
-		{Feature: featureDiskServiceDuration, Reason: "can't load their BPF programs: verifier error"},
+		{Feature: featureDisk, Reason: "can't load their BPF programs: verifier error"},
 	}, storage.disabled)
 }
 

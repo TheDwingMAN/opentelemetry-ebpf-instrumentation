@@ -242,6 +242,28 @@ func TestDefault_StatDiskServiceDuration(t *testing.T) {
 	assert.NotContains(t, p.For(StatDiskServiceDuration), attr.K8sClusterName, "outside Kubernetes")
 }
 
+func TestDefault_StatDiskCounters(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	for _, metric := range []Name{StatDiskOperations, StatDiskServiceTime} {
+		assert.Equal(t, []attr.Name{
+			attr.DiskIODirection,
+			attr.ErrorType,
+			attr.K8sClusterName,
+			attr.DiskStacked,
+			attr.DiskVolumeName,
+			attr.SystemDevice,
+		}, p.For(metric), metric.OTEL)
+	}
+	assert.Equal(t, []attr.Name{
+		attr.DiskIODirection,
+		attr.K8sClusterName,
+		attr.DiskStacked,
+		attr.DiskVolumeName,
+		attr.SystemDevice,
+	}, p.For(StatDiskIO), "the bytes of the successful requests have no error.type")
+}
+
 func TestDefault_HTTPServerMetrics(t *testing.T) {
 	p, err := NewAttrSelector(0, &SelectorConfig{})
 	require.NoError(t, err)
