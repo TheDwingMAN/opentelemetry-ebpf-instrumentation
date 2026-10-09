@@ -67,10 +67,12 @@ static __always_inline u64 disk_accounted_start_ns(const u64 start_ns,
 
 // A request can complete in several block_rq_complete calls (partial completions). Each call
 // reports the bytes completed by that call while remaining_bytes (rq->__data_len) still
-// holds the bytes left before the call, so the call that completes the rest is the last one.
-static __always_inline bool
-disk_rq_final_completion(const u32 nr_bytes, const u32 remaining_bytes, const u8 status) {
-    return status != 0 || nr_bytes >= remaining_bytes;
+// holds the bytes left before the call, so the call that completes the rest is the last one. A
+// failed call that leaves bytes is not: the kernel retries the rest, or fails it in another call,
+// as SCSI does with the part of a mixed merge that failed.
+static __always_inline bool disk_rq_final_completion(const u32 nr_bytes,
+                                                     const u32 remaining_bytes) {
+    return nr_bytes >= remaining_bytes;
 }
 
 // disk_rq_completed_before tells whether a request ends after an earlier completion completed all

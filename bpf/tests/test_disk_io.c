@@ -58,10 +58,11 @@ static void test_latency_bucket_never_exceeds_the_bucket_array(void) {
 }
 
 static void test_final_completion(void) {
-    assert_true(disk_rq_final_completion(4096, 4096, 0), "completing all remaining bytes is final");
-    assert_true(!disk_rq_final_completion(4096, 8192, 0), "a partial completion is not final");
-    assert_true(disk_rq_final_completion(0, 0, 0), "a zero-byte request (flush) is final");
-    assert_true(disk_rq_final_completion(4096, 8192, 10), "a failed completion is final");
+    assert_true(disk_rq_final_completion(4096, 4096), "completing all remaining bytes is final");
+    assert_true(!disk_rq_final_completion(4096, 8192),
+                "a partial completion is not final, even a failed one: the rest is retried or "
+                "failed in another completion");
+    assert_true(disk_rq_final_completion(0, 0), "a zero-byte request (flush) is final");
 }
 
 static void test_completed_before(void) {

@@ -165,7 +165,7 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     const u8 status = disk_status_code(ctx->args[1], disk_status_is_blk_status);
     const u32 nr_bytes = (u32)ctx->args[2];
 
-    if (!disk_rq_final_completion(nr_bytes, BPF_CORE_READ(rq, __data_len), status)) {
+    if (!disk_rq_final_completion(nr_bytes, BPF_CORE_READ(rq, __data_len))) {
         return 0;
     }
 
