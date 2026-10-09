@@ -109,7 +109,7 @@ func attachRawTracepoints(probes []probe) ([]io.Closer, error) {
 }
 
 // diskReads tells which attributes of the block I/O the disk probes read: the cgroup the I/O is
-// charged to, for the container attribute
+// charged to, for the container and Kubernetes attributes
 type diskReads struct {
 	cgroup bool
 }
@@ -135,10 +135,19 @@ func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelec
 	return reads
 }
 
+// workloadAttributes are the attributes of the storage stats that describe the workload that the
+// kernel charges an operation to, which the probes find from its cgroup: the container, and its pod
+// and workload in Kubernetes. The cluster name is the same for every workload.
+var workloadAttributes = []attr.Name{
+	attr.ContainerID, attr.K8sNamespaceName, attr.K8sOwnerName, attr.K8sKind, attr.K8sPodName, attr.K8sContainerName,
+}
+
 // reportsWorkload tells whether an attribute describes the workload that the kernel charges an
-// operation to, which the probes find from its cgroup
+// operation to
 func reportsWorkload(name attr.Name) bool {
-	return sameAttribute(name, attr.ContainerID)
+	return slices.ContainsFunc(workloadAttributes, func(workload attr.Name) bool {
+		return sameAttribute(name, workload)
+	})
 }
 
 // sameAttribute tells whether two attribute names, with dots or underscores, are the same

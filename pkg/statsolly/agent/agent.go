@@ -125,7 +125,8 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	reads := ebpf.ProbeReads{
 		Filtered: filteredAttributes(storageStatFilters(cfg.Filters.Stats, cfg.Attributes.ExtraGroupAttributes)),
 	}
-	statsFetcher, err = newFetcher(&cfg.EBPF, &features, selectorCfg, reads)
+	warnPerPodHistograms(&features, ctxInfo.MetricAttributeGroups, selectorCfg)
+	statsFetcher, err = newFetcher(&cfg.EBPF, &features, ctxInfo.MetricAttributeGroups, selectorCfg, reads)
 	if err != nil {
 		return nil, err
 	}
@@ -138,10 +139,10 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
 }
 
-func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig,
-	reads ebpf.ProbeReads,
+func newFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups attributes.AttrGroups,
+	selectorCfg *attributes.SelectorConfig, reads ebpf.ProbeReads,
 ) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, reads)
+	return ebpf.NewStatsFetcher(cfg, features, attrGroups, selectorCfg, reads)
 }
 
 // filteredAttributes returns the attributes that attribute filters match

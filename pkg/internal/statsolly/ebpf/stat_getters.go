@@ -120,9 +120,22 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		}
 
 	default:
-		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
+		getter = func(s *Stat) attribute.KeyValue {
+			value := s.CommonAttrs.Metadata[name]
+			// the Kubernetes metadata that is unknown for a storage stat (no pod, or no cluster
+			// name) is omitted instead of exported empty
+			if value == "" && isStorageStat(s) {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(name), value)
+		}
 	}
 	return getter, getter != nil
+}
+
+// isStorageStat tells whether a stat is a block I/O stat, not a TCP one
+func isStorageStat(s *Stat) bool {
+	return s.Type == StatTypeDiskIO
 }
 
 func StatStringGetters(name attr.Name) (attributes.Getter[*Stat, string], bool) {

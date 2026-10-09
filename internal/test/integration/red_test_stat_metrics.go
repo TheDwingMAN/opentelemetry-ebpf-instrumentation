@@ -102,6 +102,8 @@ func testStatMetricsTCPIoGo(t *testing.T) {
 var diskStatLabels = []string{
 	"system_device", "obi_disk_stacked", "obi_disk_volume_name", "disk_io_direction", "error_type",
 	"container_id", "obi_ip",
+	// not outside Kubernetes
+	"k8s_cluster_name", "k8s_namespace_name", "k8s_owner_name", "k8s_kind", "k8s_pod_name", "k8s_container_name",
 }
 
 var (

@@ -401,7 +401,8 @@ groups:
       request that the kernel didn't time either is not counted. Cache flushes,
       discards and the I/O of bio-based devices (LVM, md RAID, NVMe native
       multipath heads) are not measured. It is not reported on the paths of dm-multipath devices: the
-      multipath device reports the same I/O.
+      multipath device reports the same I/O. Its workload attributes are opt-in:
+      `obi.stat.disk.service_time` and `obi.stat.disk.operations` give the mean per workload.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -426,6 +427,16 @@ groups:
       - ref: k8s.cluster.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
 
   - id: metric.obi.obi.stat.disk.io
     type: metric
@@ -435,7 +446,8 @@ groups:
     stability: development
     brief: >
       Bytes of the block reads and writes that completed successfully, as they
-      were issued to the device, per block device and direction. The requests
+      were issued to the device, per block device, direction and workload the
+      I/O is charged to. The requests
       whose issue OBI didn't record count the bytes of their final completion.
       The failed requests are not counted, unlike in /proc/diskstats. The I/O
       that `obi.stat.disk.service.duration` doesn't measure isn't counted
@@ -458,6 +470,19 @@ groups:
       - ref: k8s.cluster.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
 
   - id: metric.obi.obi.stat.disk.operations
     type: metric
@@ -467,8 +492,8 @@ groups:
     stability: development
     brief: >
       Completed block reads and writes, those of
-      `obi.stat.disk.service.duration`, per block device, direction and
-      outcome. It is the count of the histogram, and is also reported on the
+      `obi.stat.disk.service.duration`, per block device, direction, outcome
+      and workload the I/O is charged to. It is the count of the histogram, and is also reported on the
       paths of dm-multipath devices, where the failures of a path show.
     attributes:
       - ref: obi.ip
@@ -494,6 +519,19 @@ groups:
       - ref: k8s.cluster.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
 
   - id: metric.obi.obi.stat.disk.service_time
     type: metric
@@ -504,7 +542,8 @@ groups:
     brief: >
       Sum of the device service times of the completed block reads and writes,
       as `obi.stat.disk.service.duration` measures them, per block device,
-      direction and outcome. It is the sum of the histogram, and is also
+      direction, outcome and workload the I/O is charged to. It is the sum of
+      the histogram, and is also
       reported on the paths of dm-multipath devices. Unlike
       `system.disk.operation_time` (/proc/diskstats), it excludes the wait in
       the I/O scheduler. Divided by `obi.stat.disk.operations`, both summed by
@@ -535,3 +574,16 @@ groups:
       - ref: k8s.cluster.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in

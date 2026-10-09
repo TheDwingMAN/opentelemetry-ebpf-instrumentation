@@ -83,10 +83,15 @@ func TestDiskAttributeReads(t *testing.T) {
 			metric.Section: attributes.InclusionLists{Include: include},
 		}}
 	}
-	reads := func(features export.Features, selection *attributes.SelectorConfig, filtered ...attr.Name) diskReads {
-		attrSel, err := attributes.NewAttrSelector(attributes.UndefinedGroup, selection)
+	readsIn := func(groups attributes.AttrGroups, features export.Features, selection *attributes.SelectorConfig,
+		filtered ...attr.Name,
+	) diskReads {
+		attrSel, err := attributes.NewAttrSelector(groups, selection)
 		require.NoError(t, err)
 		return diskAttributeReads(&features, attrSel, filtered)
+	}
+	reads := func(features export.Features, selection *attributes.SelectorConfig, filtered ...attr.Name) diskReads {
+		return readsIn(attributes.UndefinedGroup, features, selection, filtered...)
 	}
 
 	assert.Equal(t, diskReads{}, reads(export.FeatureStatsDisk, &attributes.SelectorConfig{}),
@@ -104,4 +109,18 @@ func TestDiskAttributeReads(t *testing.T) {
 	assert.Equal(t, diskReads{},
 		reads(export.FeatureStatsTCPRtt, &attributes.SelectorConfig{}, "container.id"),
 		"filters don't need reads of the disabled metrics")
+
+	// in Kubernetes, the counters report the workload by default, and the histogram the cluster
+	assert.Equal(t, diskReads{cgroup: true},
+		readsIn(attributes.GroupKubernetes, export.FeatureStatsDiskOperations, &attributes.SelectorConfig{}))
+	assert.Equal(t, diskReads{},
+		readsIn(attributes.GroupKubernetes, export.FeatureStatsDiskServiceDuration, &attributes.SelectorConfig{}),
+		"the cluster name is the same for every workload")
+	assert.Equal(t, diskReads{cgroup: true},
+		reads(export.FeatureStatsDiskIO, &attributes.SelectorConfig{}, "k8s_namespace_name"))
+	assert.Equal(t, diskReads{},
+		reads(export.FeatureStatsDiskIO, &attributes.SelectorConfig{}, "k8s.cluster.name"))
+	assert.Equal(t, diskReads{},
+		reads(export.FeatureStatsDiskIO, &attributes.SelectorConfig{}, "k8s_src_namespace"),
+		"an attribute of the TCP stats only")
 }

@@ -33,8 +33,9 @@ volatile const u32 disk_rqf_flush_seq;
 // kernel numbers its request flags with macros.
 volatile const u32 disk_rqf_io_stat;
 
-// Set by userspace when an enabled block I/O metric reports an attribute that needs the cgroup the
-// I/O is charged to (container.id), or a filter matches one. Otherwise the probes don't read it.
+// Set by userspace when an enabled block I/O metric reports, or a stats filter matches, an attribute
+// of the workload that the I/O is charged to (container.id, the Kubernetes pod and workload, but not
+// the cluster), which the probes find from its cgroup. Otherwise the probes don't read the cgroup.
 volatile const bool disk_read_cgroup;
 
 // Force structs into the ELF for automatic creation of Golang struct

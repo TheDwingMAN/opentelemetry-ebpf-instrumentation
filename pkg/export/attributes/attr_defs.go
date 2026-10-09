@@ -144,12 +144,35 @@ func getDefinitions(
 		nil,
 	)
 
-	// the cluster of the node, for the stats of the devices, which are charged to no workload
-	statsDiskNodeKubeAttributes := NewAttrReportGroup(
+	// the cluster, and the pod and the workload that the block I/O is charged to, when Kubernetes
+	// metadata is enabled. A series per workload, but not per pod, by default.
+	statsDiskKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
 		nil,
 		map[attr.Name]Default{
-			attr.K8sClusterName: true,
+			attr.K8sNamespaceName: true,
+			attr.K8sOwnerName:     true,
+			attr.K8sClusterName:   true,
+			attr.K8sKind:          true,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
+		},
+		nil,
+	)
+
+	// the same attributes, for the block I/O latency histogram, whose series multiply by the number
+	// of buckets: only the cluster is reported by default, and the counters give the mean per
+	// workload
+	statsDiskKubeOptInAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sNamespaceName: false,
+			attr.K8sOwnerName:     false,
+			attr.K8sClusterName:   true,
+			attr.K8sKind:          false,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
 		},
 		nil,
 	)
@@ -945,23 +968,23 @@ func getDefinitions(
 			},
 		},
 		StatDiskServiceDuration.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskNodeKubeAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeOptInAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
 		},
 		StatDiskIO.Section: {
-			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskNodeKubeAttributes},
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
 		StatDiskOperations.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskNodeKubeAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
 		},
 		StatDiskServiceTime.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskNodeKubeAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},

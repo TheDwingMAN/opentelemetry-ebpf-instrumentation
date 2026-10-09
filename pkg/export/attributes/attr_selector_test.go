@@ -243,6 +243,7 @@ func TestDefault_StatDiskServiceDuration(t *testing.T) {
 }
 
 func TestDefault_StatDiskCounters(t *testing.T) {
+	// the counters are reported per workload in Kubernetes, but not per pod
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)
 	for _, metric := range []Name{StatDiskOperations, StatDiskServiceTime} {
@@ -250,6 +251,9 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 			attr.DiskIODirection,
 			attr.ErrorType,
 			attr.K8sClusterName,
+			attr.K8sKind,
+			attr.K8sNamespaceName,
+			attr.K8sOwnerName,
 			attr.DiskStacked,
 			attr.DiskVolumeName,
 			attr.SystemDevice,
@@ -258,10 +262,55 @@ func TestDefault_StatDiskCounters(t *testing.T) {
 	assert.Equal(t, []attr.Name{
 		attr.DiskIODirection,
 		attr.K8sClusterName,
+		attr.K8sKind,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
 		attr.DiskStacked,
 		attr.DiskVolumeName,
 		attr.SystemDevice,
 	}, p.For(StatDiskIO), "the bytes of the successful requests have no error.type")
+
+	// outside Kubernetes, they are reported per device
+	p, err = NewAttrSelector(0, &SelectorConfig{})
+	require.NoError(t, err)
+	for _, metric := range []Name{StatDiskOperations, StatDiskServiceTime} {
+		assert.Equal(t, []attr.Name{
+			attr.DiskIODirection,
+			attr.ErrorType,
+			attr.DiskStacked,
+			attr.DiskVolumeName,
+			attr.SystemDevice,
+		}, p.For(metric), metric.OTEL)
+	}
+}
+
+// The workload attributes of the latency histogram are opt-in, but can be selected
+func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: Selection{
+		StatDiskServiceDuration.Section: InclusionLists{Include: []string{"k8s.namespace.name", "k8s.owner.name", "container.id"}},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ContainerID,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+	}, p.For(StatDiskServiceDuration))
+}
+
+// The selection key of the service time counter has its underscore replaced by a dot, as the
+// keys of attributes.select are normalized, whichever notation it is written in
+func TestStatDiskServiceTimeSelection(t *testing.T) {
+	for _, key := range []Section{
+		"obi.stat.disk.service_time",
+		"obi.stat.disk.service.time",
+		"obi_stat_disk_service_time_seconds_total",
+	} {
+		selection := Selection{key: InclusionLists{Include: []string{"k8s.pod.name"}}}
+		selection.Normalize()
+		p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: selection})
+		require.NoError(t, err)
+		assert.Equal(t, []attr.Name{attr.K8sPodName}, p.For(StatDiskServiceTime), key)
+	}
 }
 
 func TestDefault_HTTPServerMetrics(t *testing.T) {

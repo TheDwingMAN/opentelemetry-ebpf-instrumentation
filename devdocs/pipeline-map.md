@@ -115,7 +115,8 @@ flowchart TD
     DPF(Dynamic PID<br/>filter):::optional --> FLTR
     FLTR(Attributes<br/>filter):::optional --> MRG
     DMT(eBPF Storage<br/>Map Tracer):::optional --> DK8S
-    DK8S(Kubernetes cluster<br/>decorator):::optional --> DDEC
+    KSTORE --> DK8S
+    DK8S(Kubernetes decorator<br/>by container ID):::optional --> DDEC
     DDEC(Disk stats<br/>decorator):::optional --> SFLTR
     SFLTR(Storage attributes<br/>filter):::optional --> MRG
     MRG(Stats<br/>merger):::optional --> OTEL(OpenTelemetry<br/>metrics<br/>export):::optional
