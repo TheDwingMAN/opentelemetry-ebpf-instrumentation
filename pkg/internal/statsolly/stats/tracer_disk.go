@@ -87,8 +87,8 @@ type DiskMapTracerConfig struct {
 	Interval              time.Duration
 }
 
-// DiskMapTracer periodically reads the block I/O accumulation map that the kernel fills, and
-// forwards what changed since the previous read as ebpf.Stat records.
+// DiskMapTracer periodically reads the storage stats that the kernel keeps, and forwards what
+// changed since the previous read as ebpf.Stat records.
 type DiskMapTracer struct {
 	readers  []statReader
 	interval time.Duration
