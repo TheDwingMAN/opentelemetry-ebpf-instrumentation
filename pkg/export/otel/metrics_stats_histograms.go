@@ -6,7 +6,6 @@ package otel // import "go.opentelemetry.io/obi/pkg/export/otel"
 import (
 	"context"
 	"slices"
-	"sort"
 	"sync"
 	"time"
 
@@ -77,9 +76,10 @@ func (p *kernelHistogramProducer) histogram(
 	return h
 }
 
-// record adds the requests of the kernel buckets of a stat to its series of a histogram
-func (p *kernelHistogramProducer) record(h *kernelHistogram, stat *ebpf.Stat, latency []ebpf.LatencySample) {
-	if h == nil || len(latency) == 0 {
+// record adds the requests of the kernel buckets of a stat to its series of a histogram, whose
+// bounds are those of the kernel buckets
+func (p *kernelHistogramProducer) record(h *kernelHistogram, stat *ebpf.Stat, latency *ebpf.LatencyHistogram) {
+	if h == nil || latency == nil {
 		return
 	}
 	attrs, values := attributeSet(h.attrs, stat)
@@ -89,12 +89,11 @@ func (p *kernelHistogramProducer) record(h *kernelHistogram, stat *ebpf.Stat, la
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for _, sample := range latency {
-		// the bucket of the first bound that the latency doesn't exceed
-		series.buckets[sort.SearchFloat64s(h.bounds, sample.Seconds)] += sample.Count
-		series.count += sample.Count
-		series.sum += sample.Seconds * float64(sample.Count)
+	for bucket, count := range latency.BucketCounts {
+		series.buckets[bucket] += count
+		series.count += count
 	}
+	series.sum += latency.Sum
 }
 
 func (p *kernelHistogramProducer) Produce(ctx context.Context) ([]metricdata.ScopeMetrics, error) {

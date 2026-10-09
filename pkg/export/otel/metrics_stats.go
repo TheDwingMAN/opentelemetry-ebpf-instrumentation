@@ -15,6 +15,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 
 	"go.opentelemetry.io/obi/pkg/buildinfo"
+	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	"go.opentelemetry.io/obi/pkg/export/otel/metric"
@@ -241,7 +242,7 @@ func newStatMetricsExporter(
 	if cfg.CommonCfg.Features.StatsDiskOperationDuration() {
 		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskOperationDuration))
 		nme.diskOperationDuration = kernelHistograms.histogram(attributes.StatDiskOperationDuration,
-			cfg.Metrics.Buckets.StatDiskOperationDurationHistogram, attrs)
+			export.DiskLatencyBounds, attrs)
 	}
 
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))

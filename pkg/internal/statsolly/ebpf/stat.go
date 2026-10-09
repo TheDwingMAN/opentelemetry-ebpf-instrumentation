@@ -147,16 +147,17 @@ type DiskIO struct {
 	// ErrorType is empty for successful requests
 	ErrorType string
 
-	// Latency of the completed requests, as one representative value per kernel histogram bucket.
-	// Empty on the paths of a multipath device, which reports the latency of the same I/O.
-	Latency []LatencySample
+	// Latency of the completed requests. Nil on the paths of a multipath device, which reports the
+	// latency of the same I/O.
+	Latency *LatencyHistogram
 }
 
-// LatencySample stands for Count requests whose latency fell in the same kernel histogram
-// bucket. Seconds is their mean latency, which always falls in that bucket.
-type LatencySample struct {
-	Seconds float64
-	Count   uint64
+// LatencyHistogram counts requests in the buckets of export.DiskLatencyBounds
+type LatencyHistogram struct {
+	// BucketCounts counts the requests of each bucket: one per bound, then the overflow bucket
+	BucketCounts []uint64
+	// Sum of the latencies of the requests, in seconds
+	Sum float64
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.

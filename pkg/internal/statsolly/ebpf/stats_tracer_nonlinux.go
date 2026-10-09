@@ -15,13 +15,7 @@ import (
 
 type StatsFetcher struct{}
 
-// LatencyHistograms are the boundaries, in seconds, of the latency histograms that the kernel
-// accumulates
-type LatencyHistograms struct {
-	Disk []float64
-}
-
-func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig, _ LatencyHistograms) (*StatsFetcher, error) {
+func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig) (*StatsFetcher, error) {
 	return nil, nil
 }
 

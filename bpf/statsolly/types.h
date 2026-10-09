@@ -50,8 +50,9 @@ enum disk_op : u8 {
     disk_op_write = 2,
 };
 
-// The latency histogram boundaries are configurable from userspace, up to this many.
+// The latency histogram has fixed bounds, which userspace injects at load (DiskLatencyBounds in
+// pkg/export), and an overflow bucket above them.
 enum {
-    k_disk_latency_max_bounds = 24,
-    k_disk_latency_max_buckets = k_disk_latency_max_bounds + 1,
+    k_disk_latency_bounds = 16,
+    k_disk_latency_buckets = k_disk_latency_bounds + 1,
 };

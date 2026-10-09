@@ -10,6 +10,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/connector"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
@@ -187,7 +188,7 @@ func newStatsReporter(
 
 		mr.diskOperationDuration = newKernelHistogramVec(attributes.StatDiskOperationDuration.Prom,
 			"measures the duration of block I/O requests, from their issue to the device until their completion, in seconds",
-			cfg.Config.Buckets.StatDiskOperationDurationHistogram, labelNames(mr.diskOperationDurationAttrs), cfg.Config.TTL)
+			export.DiskLatencyBounds, labelNames(mr.diskOperationDurationAttrs), cfg.Config.TTL)
 		register = append(register, mr.diskOperationDuration)
 	}
 
@@ -266,8 +267,8 @@ func (r *statMetricsReporter) observeDiskOperationDuration(stat *ebpf.Stat) {
 	observeLatencyIn(r.diskOperationDuration, r.diskOperationDurationAttrs, stat, stat.DiskIO.Latency)
 }
 
-func observeLatencyIn(histogram *kernelHistogramVec, attrs []attributes.Field[*ebpf.Stat, string], stat *ebpf.Stat, latency []ebpf.LatencySample) {
-	if histogram == nil || len(latency) == 0 {
+func observeLatencyIn(histogram *kernelHistogramVec, attrs []attributes.Field[*ebpf.Stat, string], stat *ebpf.Stat, latency *ebpf.LatencyHistogram) {
+	if histogram == nil || latency == nil {
 		return
 	}
 	histogram.observe(labelValues(stat, attrs), latency)

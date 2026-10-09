@@ -164,7 +164,7 @@ func testStatMetricsDiskOperationDuration(t *testing.T) {
 
 			buckets, err := pq.Query(`obi_stat_disk_operation_duration_seconds_bucket` + selector)
 			require.NoError(ct, err)
-			assertHistogramBounds(ct, buckets, export.DefaultBuckets.StatDiskOperationDurationHistogram)
+			assertHistogramBounds(ct, buckets, export.DiskLatencyBounds)
 		}, testTimeout, 100*time.Millisecond)
 	}
 }

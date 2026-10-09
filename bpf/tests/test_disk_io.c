@@ -23,38 +23,26 @@ static void assert_true(bool condition, const char *message) {
     printf("FAIL: %s\n", message);
 }
 
-static const u64 bounds_ns[] = {50000, 100000, 250000};
-static const u32 bounds_len = sizeof(bounds_ns) / sizeof(bounds_ns[0]);
+enum { k_bound_step_ns = 50000 };
 
 static void test_latency_bucket_is_upper_inclusive(void) {
-    assert_true(disk_latency_bucket(bounds_ns, bounds_len, 0) == 0,
-                "zero goes to the first bucket");
-    assert_true(disk_latency_bucket(bounds_ns, bounds_len, 50000) == 0,
-                "a value equal to the first bound stays in the first bucket");
-    assert_true(disk_latency_bucket(bounds_ns, bounds_len, 50001) == 1,
-                "a value just above a bound goes to the next bucket");
-    assert_true(disk_latency_bucket(bounds_ns, bounds_len, 250000) == 2,
-                "a value equal to the last bound stays in the last bounded bucket");
-    assert_true(disk_latency_bucket(bounds_ns, bounds_len, 250001) == bounds_len,
-                "a value above the last bound goes to the overflow bucket");
-}
-
-static void test_latency_bucket_without_bounds(void) {
-    assert_true(disk_latency_bucket(bounds_ns, 0, 1000000000) == 0,
-                "without bounds every value goes to the single bucket");
-}
-
-static void test_latency_bucket_never_exceeds_the_bucket_array(void) {
-    u64 max_bounds[k_disk_latency_max_bounds];
-    for (u32 i = 0; i < k_disk_latency_max_bounds; i++) {
-        max_bounds[i] = i + 1;
+    u64 bounds_ns[k_disk_latency_bounds];
+    for (u32 i = 0; i < k_disk_latency_bounds; i++) {
+        bounds_ns[i] = (i + 1) * k_bound_step_ns;
     }
-    assert_true(disk_latency_bucket(max_bounds, k_disk_latency_max_bounds, ~0ULL) ==
-                    k_disk_latency_max_buckets - 1,
-                "the overflow bucket of a full bounds array is the last histogram bucket");
-    assert_true(disk_latency_bucket(max_bounds, k_disk_latency_max_bounds + 5, ~0ULL) ==
-                    k_disk_latency_max_buckets - 1,
-                "a bounds_len larger than the array is capped");
+    const u64 last_bound_ns = bounds_ns[k_disk_latency_bounds - 1];
+
+    assert_true(disk_latency_bucket(bounds_ns, 0) == 0, "zero goes to the first bucket");
+    assert_true(disk_latency_bucket(bounds_ns, k_bound_step_ns) == 0,
+                "a value equal to the first bound stays in the first bucket");
+    assert_true(disk_latency_bucket(bounds_ns, k_bound_step_ns + 1) == 1,
+                "a value just above a bound goes to the next bucket");
+    assert_true(disk_latency_bucket(bounds_ns, last_bound_ns) == k_disk_latency_bounds - 1,
+                "a value equal to the last bound stays in the last bounded bucket");
+    assert_true(disk_latency_bucket(bounds_ns, last_bound_ns + 1) == k_disk_latency_buckets - 1,
+                "a value above the last bound goes to the overflow bucket, the last one");
+    assert_true(disk_latency_bucket(bounds_ns, ~0ULL) == k_disk_latency_buckets - 1,
+                "the largest value goes to the overflow bucket");
 }
 
 static void test_final_completion(void) {
@@ -154,8 +142,6 @@ static void test_accounted_start_ns(void) {
 
 int main(void) {
     test_latency_bucket_is_upper_inclusive();
-    test_latency_bucket_without_bounds();
-    test_latency_bucket_never_exceeds_the_bucket_array();
     test_final_completion();
     test_completed_before();
     test_status_code();

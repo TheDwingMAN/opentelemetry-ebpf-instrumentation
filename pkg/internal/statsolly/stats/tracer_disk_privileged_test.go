@@ -45,23 +45,12 @@ var allAttributes = &attributes.SelectorConfig{
 }
 
 // TestDiskLatencyIsAccumulatedPerDevice drives a known I/O pattern on a loop device and checks
-// that the kernel accumulates exactly one latency sample per completed request, in the bucket of
-// the boundaries that userspace gives it. The I/O is O_DIRECT and sequential at queue depth 1, so
+// that the kernel accumulates exactly one latency sample per completed request, in the buckets of
+// the bounds that userspace gives it. The I/O is O_DIRECT and sequential at queue depth 1, so
 // the block layer neither caches nor merges it.
 func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
-	// no loop device request completes within the first boundary
-	bounds := []float64{0.000001, 0.01, 0.1}
-	features := export.FeatureStatsDiskOperationDuration
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, allAttributes,
-		ebpf.LatencyHistograms{Disk: bounds})
-	require.NoError(t, err)
-	t.Cleanup(func() { fetcher.Close() })
-	require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
-
 	loopDev := attachLoopDevice(t)
-	reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: fetcher.DiskIOAccumMap()}, bounds,
-		fetcher.DiskStatusIsBlkStatus(), &deviceNames{sysRoot: "/sys"})
-	reader.readStats() // forget the I/O that happened before this test
+	reader := attachDiskReader(t)
 
 	f, err := os.OpenFile(loopDev, os.O_RDWR|unix.O_DIRECT, 0)
 	require.NoError(t, err)
@@ -83,10 +72,11 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 			continue
 		}
 		assert.Empty(t, stat.DiskIO.ErrorType)
-		for _, latency := range stat.DiskIO.Latency {
-			assert.Positive(t, latency.Seconds)
-			completed[stat.DiskIO.Op] += latency.Count
-		}
+		assert.Positive(t, stat.DiskIO.Latency.Sum)
+		// without the bounds, the kernel would put every request above the last one
+		assert.Zero(t, stat.DiskIO.Latency.BucketCounts[len(export.DiskLatencyBounds)],
+			"no request takes longer than the last bound")
+		completed[stat.DiskIO.Op] += requests(stat.DiskIO.Latency)
 	}
 	perDirection := func(value uint64) map[ebpf.DiskOpCode]uint64 {
 		return map[ebpf.DiskOpCode]uint64{
@@ -95,45 +85,33 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 		}
 	}
 	assert.Equal(t, perDirection(directIOBlocks), completed)
-
-	assertKernelBuckets(t, fetcher.DiskIOAccumMap(), loopDev, bounds)
 }
 
-// assertKernelBuckets checks that the kernel accumulated the requests of a device in the buckets of
-// the given boundaries: each latency lies in its bucket, so the mean of a bucket does too.
-func assertKernelBuckets(t *testing.T, accumMap *ciliumebpf.Map, devPath string, bounds []float64) {
-	t.Helper()
-	var dev unix.Stat_t
-	require.NoError(t, unix.Stat(devPath, &dev))
-	entries, err := ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: accumMap}.read()
-	require.NoError(t, err)
+// requests returns how many requests a latency histogram counts
+func requests(latency *ebpf.LatencyHistogram) uint64 {
+	var count uint64
+	if latency != nil {
+		for _, bucketCount := range latency.BucketCounts {
+			count += bucketCount
+		}
+	}
+	return count
+}
 
-	boundsNs := make([]uint64, len(bounds))
-	for i, bound := range bounds {
-		boundsNs[i] = uint64(math.Round(bound * float64(time.Second)))
-	}
-	var accumulated bool
-	for key, accum := range entries {
-		if key.Major != unix.Major(dev.Rdev) || key.Minor != unix.Minor(dev.Rdev) {
-			continue
-		}
-		accumulated = true
-		assert.Zero(t, accum.LatencyCount[0], "no request completes within %v s", bounds[0])
-		for bucket, count := range accum.LatencyCount {
-			if count == 0 {
-				continue
-			}
-			require.LessOrEqual(t, bucket, len(bounds), "the kernel only has a bucket per boundary and one above them")
-			mean := accum.LatencySumNs[bucket] / count
-			if bucket > 0 {
-				assert.Greater(t, mean, boundsNs[bucket-1], "the mean of bucket %d is above its lower boundary", bucket)
-			}
-			if bucket < len(bounds) {
-				assert.LessOrEqual(t, mean, boundsNs[bucket], "the mean of bucket %d is within its upper boundary", bucket)
-			}
+// slowestBound returns the upper bound of the highest bucket of a latency histogram that counts a
+// request, +Inf for the overflow bucket: every request took at most that long
+func slowestBound(latency *ebpf.LatencyHistogram) float64 {
+	slowest := 0.0
+	for bucket, count := range latency.BucketCounts {
+		switch {
+		case count == 0:
+		case bucket < len(export.DiskLatencyBounds):
+			slowest = export.DiskLatencyBounds[bucket]
+		default:
+			slowest = math.Inf(1)
 		}
 	}
-	assert.True(t, accumulated, "the kernel accumulated the requests of %s", devPath)
+	return slowest
 }
 
 // TestAccumLookupAndDelete checks that the kernel returns the last value of the accumulation map
@@ -210,9 +188,7 @@ func TestDiskFileSyncsAreCountedLikeTheKernel(t *testing.T) {
 		if stat.DiskIO.Device != device || stat.DiskIO.Op != ebpf.CodeDiskOpWrite {
 			continue
 		}
-		for _, latency := range stat.DiskIO.Latency {
-			writes += latency.Count
-		}
+		writes += requests(stat.DiskIO.Latency)
 	}
 	assert.Equal(t, after.writes-before.writes, writes)
 }
@@ -243,9 +219,7 @@ func TestDiskWriteZeroesAreCountedLikeTheKernel(t *testing.T) {
 		if stat.DiskIO.Device != device || stat.DiskIO.Op != ebpf.CodeDiskOpWrite {
 			continue
 		}
-		for _, latency := range stat.DiskIO.Latency {
-			writes += latency.Count
-		}
+		writes += requests(stat.DiskIO.Latency)
 	}
 	require.Equal(t, uint64(1), after.writes-before.writes, "the kernel completes one write-zeroes request")
 	assert.Equal(t, uint64(1), writes)
@@ -326,22 +300,22 @@ func TestDiskStartsOfRequestsWithoutIOStatistics(t *testing.T) {
 			assert.GreaterOrEqual(t, stale.reads, uint64(reads))
 			assert.Equal(t, before.reads, after.reads, "the kernel doesn't account the reads")
 			assert.Equal(t, before.writes, after.writes, "the kernel doesn't account the flushes")
-			assert.Less(t, stale.longest, staleAge.Seconds(), "no request is timed from an earlier use")
+			assert.Less(t, stale.slowest, staleAge.Seconds(), "no request is timed from an earlier use")
 
 			writeQueueAttribute(t, device, "iostats", "1")
 			readBlocks(reads)
 			accounted := readDiskTimings(reader, device)
 			assert.GreaterOrEqual(t, accounted.reads, uint64(reads))
-			assert.Less(t, accounted.longest, staleAge.Seconds())
+			assert.Less(t, accounted.slowest, staleAge.Seconds())
 		})
 	}
 }
 
 type diskTimings struct {
 	reads uint64
-	// the longest of the mean write latencies: a request timed from an earlier use would make it at
+	// the upper bound of the slowest write: a request timed from an earlier use would make it at
 	// least as old as that use
-	longest float64
+	slowest float64
 }
 
 func readDiskTimings(reader *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT], device string) diskTimings {
@@ -352,13 +326,9 @@ func readDiskTimings(reader *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoA
 		}
 		switch stat.DiskIO.Op {
 		case ebpf.CodeDiskOpRead:
-			for _, latency := range stat.DiskIO.Latency {
-				timings.reads += latency.Count
-			}
+			timings.reads += requests(stat.DiskIO.Latency)
 		case ebpf.CodeDiskOpWrite:
-			for _, latency := range stat.DiskIO.Latency {
-				timings.longest = max(timings.longest, latency.Seconds)
-			}
+			timings.slowest = max(timings.slowest, slowestBound(stat.DiskIO.Latency))
 		}
 	}
 	return timings
@@ -462,10 +432,8 @@ func TestDiskPassthroughCommands(t *testing.T) {
 		if stat.DiskIO.Device != device {
 			continue
 		}
-		for _, latency := range stat.DiskIO.Latency {
-			operations[stat.DiskIO.Op] += latency.Count
-			assert.Less(t, latency.Seconds, staleAge.Seconds(), "no %v is timed from an earlier request", stat.DiskIO.Op)
-		}
+		operations[stat.DiskIO.Op] += requests(stat.DiskIO.Latency)
+		assert.Less(t, slowestBound(stat.DiskIO.Latency), staleAge.Seconds(), "no %v is timed from an earlier request", stat.DiskIO.Op)
 	}
 	// not compared with /proc/diskstats: before Linux 5.18 (including RHEL 8), it counts the commands
 	// as reads
@@ -693,15 +661,11 @@ func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 		if stat.DiskIO.Device != dmName {
 			continue
 		}
-		var requests uint64
-		for _, latency := range stat.DiskIO.Latency {
-			requests += latency.Count
-		}
 		switch stat.DiskIO.Op {
 		case ebpf.CodeDiskOpRead:
-			reads += requests
+			reads += requests(stat.DiskIO.Latency)
 		case ebpf.CodeDiskOpWrite:
-			writes += requests
+			writes += requests(stat.DiskIO.Latency)
 		}
 	}
 	require.Equal(t, uint64(blocks), after.writes-before.writes, "the kernel completes one request per write")
@@ -714,14 +678,12 @@ func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 func attachDiskReader(t *testing.T) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
 	t.Helper()
 	features := export.FeatureStatsDisk
-	bounds := []float64{0.001, 0.01, 0.1}
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, allAttributes,
-		ebpf.LatencyHistograms{Disk: bounds})
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, allAttributes)
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 	require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
 
-	reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: fetcher.DiskIOAccumMap()}, bounds,
+	reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: fetcher.DiskIOAccumMap()},
 		fetcher.DiskStatusIsBlkStatus(), &deviceNames{sysRoot: "/sys"})
 	reader.readStats()
 	return reader

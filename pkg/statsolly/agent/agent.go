@@ -118,13 +118,7 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	}
 	features := probedFeatures(alog, cfg.Metrics.Features, ctxInfo.DynamicSelector != nil)
 
-	histograms, approximated := latencyHistograms(cfg)
-	if len(approximated) > 0 {
-		alog.Warn("more histogram buckets than the kernel can keep: these histograms are approximated",
-			"histograms", approximated)
-	}
-
-	statsFetcher, err = newFetcher(&cfg.EBPF, &features, selectorCfg, histograms)
+	statsFetcher, err = newFetcher(&cfg.EBPF, &features, selectorCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -137,10 +131,8 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
 }
 
-func newFetcher(cfg *config.EBPFTracer, features *export.Features,
-	selectorCfg *attributes.SelectorConfig, histograms ebpf.LatencyHistograms,
-) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, histograms)
+func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig) (ebpFetcher, error) {
+	return ebpf.NewStatsFetcher(cfg, features, selectorCfg)
 }
 
 // probedFeatures returns the stat features whose probes must be loaded. The storage stats can't be
@@ -167,40 +159,6 @@ func warnDisabledStorage(disabled []ebpf.DisabledFeature) {
 	}
 }
 
-// latencyHistograms returns the boundaries the kernel buckets latencies with: the union of the
-// boundaries of the enabled histograms in the enabled exporters, so that the kernel buckets refine
-// all of them. It also returns the configuration names of the histograms that have more boundaries
-// than the kernel keeps, which are approximated.
-func latencyHistograms(cfg *obi.Config) (ebpf.LatencyHistograms, []string) {
-	var exporters []export.Buckets
-	if cfg.Prometheus.EndpointEnabled() {
-		exporters = append(exporters, cfg.Prometheus.Buckets)
-	}
-	if cfg.OTELMetrics.EndpointEnabled() {
-		exporters = append(exporters, cfg.OTELMetrics.Buckets)
-	}
-	features := cfg.Metrics.Features
-	var histograms ebpf.LatencyHistograms
-	for _, buckets := range exporters {
-		if features.StatsDiskOperationDuration() {
-			histograms.Disk = append(histograms.Disk, buckets.StatDiskOperationDurationHistogram...)
-		}
-	}
-	var approximated []string
-	for _, group := range []struct {
-		bounds *[]float64
-		names  string
-	}{
-		{&histograms.Disk, "stat_disk_operation_duration_histogram"},
-	} {
-		var exact bool
-		if *group.bounds, exact = ebpf.KernelLatencyBounds(*group.bounds); !exact {
-			approximated = append(approximated, group.names)
-		}
-	}
-	return histograms, approximated
-}
-
 // statsAgent is a private constructor with injectable dependencies, usable for tests
 func statsAgent(
 	ctxInfo *global.ContextInfo,
@@ -216,10 +174,8 @@ func statsAgent(
 		if interval <= 0 {
 			interval = defaultDiskReadInterval
 		}
-		histograms, _ := latencyHistograms(cfg)
 		diskTracer = stats.NewDiskMapTracer(&stats.DiskMapTracerConfig{
 			DiskIOAccum:           statsFetcher.DiskIOAccumMap(),
-			DiskLatencyBounds:     histograms.Disk,
 			DiskStatusIsBlkStatus: statsFetcher.DiskStatusIsBlkStatus(),
 			Interval:              interval,
 		})

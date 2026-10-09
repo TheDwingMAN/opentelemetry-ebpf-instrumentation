@@ -23,8 +23,8 @@ typedef struct disk_io_key {
 // Cumulative values: the kernel never resets them, userspace reads them periodically and
 // computes the deltas.
 typedef struct disk_io_accum {
-    u64 latency_count[k_disk_latency_max_buckets];
-    u64 latency_sum_ns[k_disk_latency_max_buckets];
+    u64 latency_count[k_disk_latency_buckets];
+    u64 latency_sum_ns;
 } disk_io_accum_t;
 
 // A plain hash map, not an LRU one: LRU maps evict live entries long before they are full on hosts

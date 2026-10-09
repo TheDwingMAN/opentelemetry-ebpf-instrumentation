@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -93,9 +92,6 @@ func (e ebpfAccum[K, V]) lookupAndDelete(key K) (V, error) {
 type DiskMapTracerConfig struct {
 	// DiskIOAccum is the accumulation map to read. A nil map is not read.
 	DiskIOAccum *ciliumebpf.Map
-	// DiskLatencyBounds are the histogram boundaries, in seconds, that the kernel buckets the
-	// latencies with
-	DiskLatencyBounds []float64
 	// DiskStatusIsBlkStatus tells how the kernel reports block request completion statuses
 	// (see disk_status_code)
 	DiskStatusIsBlkStatus bool
@@ -118,7 +114,7 @@ func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 	var readers []statReader
 	if cfg.DiskIOAccum != nil {
 		readers = append(readers, newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskIOAccum},
-			cfg.DiskLatencyBounds, cfg.DiskStatusIsBlkStatus, devices))
+			cfg.DiskStatusIsBlkStatus, devices))
 	}
 	return &DiskMapTracer{readers: readers, interval: cfg.Interval}
 }
@@ -267,12 +263,10 @@ func (r *accumReader[K, V]) forgetEvicted(entries map[K]V) {
 
 func newDiskReader(
 	accum accumSource[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT],
-	latencyBounds []float64,
 	statusIsBlkStatus bool,
 	devices *deviceNames,
 ) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
 	d := diskStats{
-		latencyBounds:     latencyBounds,
 		statusIsBlkStatus: statusIsBlkStatus,
 		devices:           devices,
 	}
@@ -280,7 +274,6 @@ func newDiskReader(
 }
 
 type diskStats struct {
-	latencyBounds     []float64
 	statusIsBlkStatus bool
 	devices           *deviceNames
 }
@@ -288,13 +281,11 @@ type diskStats struct {
 // stat returns the block requests that completed since the previous read of the key, or nil
 func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsDiskIoAccumT) *ebpf.Stat {
 	// kernel counters only grow; a decrease means the entry was deleted and re-created
-	if anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) ||
-		anyDecreased(current.LatencySumNs[:], previous.LatencySumNs[:]) {
+	if anyDecreased(current.LatencyCount[:], previous.LatencyCount[:]) || current.LatencySumNs < previous.LatencySumNs {
 		previous = ebpf.StatsDiskIoAccumT{}
 	}
-	delta := latencyDelta(d.latencyBounds, current.LatencyCount[:], current.LatencySumNs[:],
-		previous.LatencyCount[:], previous.LatencySumNs[:])
-	if delta.operations == 0 {
+	latency, operations := latencyDelta(current, previous)
+	if operations == 0 {
 		return nil
 	}
 	return &ebpf.Stat{
@@ -305,7 +296,7 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 			Stacked:    d.devices.stacked(key.Major, key.Minor),
 			Op:         ebpf.DiskOpCode(key.Op),
 			ErrorType:  diskErrorType(key.Status, d.statusIsBlkStatus),
-			Latency:    d.latency(key, delta.latency),
+			Latency:    d.latency(key, latency),
 		},
 	}
 }
@@ -313,32 +304,26 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 // latency returns the latencies that the latency histograms report for the requests of a key.
 // The paths of a multipath device report none: the multipath device reports the latency of the
 // same I/O, and the histograms of its paths would multiply its series by their number.
-func (d *diskStats) latency(key ebpf.StatsDiskIoKeyT, latency []ebpf.LatencySample) []ebpf.LatencySample {
+func (d *diskStats) latency(key ebpf.StatsDiskIoKeyT, latency *ebpf.LatencyHistogram) *ebpf.LatencyHistogram {
 	if d.devices.multipathPathOf(key.Major, key.Minor) == dmMultipathPath {
 		return nil
 	}
 	return latency
 }
 
-// latencyGrowth is what a kernel latency histogram grew since a previous read
-type latencyGrowth struct {
-	latency    []ebpf.LatencySample
-	operations uint64
-}
-
-func latencyDelta(bounds []float64, currentCount, currentSumNs, previousCount, previousSumNs []uint64) latencyGrowth {
-	var growth latencyGrowth
-	// one bucket per boundary, plus the overflow bucket
-	for bucket := range len(bounds) + 1 {
-		count := currentCount[bucket] - previousCount[bucket]
-		if count == 0 {
-			continue
-		}
-		sumNs := currentSumNs[bucket] - previousSumNs[bucket]
-		growth.latency = append(growth.latency, latencySample(bounds, bucket, count, sumNs))
-		growth.operations += count
+// latencyDelta returns what a kernel latency histogram counted since a previous read, and how many
+// requests that is
+func latencyDelta(current, previous ebpf.StatsDiskIoAccumT) (*ebpf.LatencyHistogram, uint64) {
+	latency := &ebpf.LatencyHistogram{
+		BucketCounts: make([]uint64, len(current.LatencyCount)),
+		Sum:          float64(current.LatencySumNs-previous.LatencySumNs) / float64(time.Second),
 	}
-	return growth
+	var operations uint64
+	for bucket := range current.LatencyCount {
+		latency.BucketCounts[bucket] = current.LatencyCount[bucket] - previous.LatencyCount[bucket]
+		operations += latency.BucketCounts[bucket]
+	}
+	return latency, operations
 }
 
 func anyDecreased(current, previous []uint64) bool {
@@ -348,20 +333,6 @@ func anyDecreased(current, previous []uint64) bool {
 		}
 	}
 	return false
-}
-
-// latencySample summarizes count requests of a kernel histogram bucket as their mean latency.
-// The mean is kept inside the bucket boundaries, so exporters with the same or coarser
-// boundaries place all the requests in the same bucket the kernel did.
-func latencySample(bounds []float64, bucket int, count, sumNs uint64) ebpf.LatencySample {
-	seconds := float64(sumNs) / float64(count) / float64(time.Second)
-	if bucket < len(bounds) {
-		seconds = math.Min(seconds, bounds[bucket])
-	}
-	if bucket > 0 && seconds <= bounds[bucket-1] {
-		seconds = math.Nextafter(bounds[bucket-1], math.Inf(1))
-	}
-	return ebpf.LatencySample{Seconds: seconds, Count: count}
 }
 
 // diskErrorType names the completion status of a block request after its errno, so it reads

@@ -8,6 +8,8 @@ import (
 	"maps"
 	"net"
 	"net/http/httptest"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -220,14 +222,11 @@ func TestDiskStats(t *testing.T) {
 	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskOperationDuration)
 
 	diskEvents <- []*ebpf.Stat{
-		fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "",
-			ebpf.LatencySample{Seconds: 0.0005, Count: 3}, ebpf.LatencySample{Seconds: 0.004, Count: 2}),
-		fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "EIO",
-			ebpf.LatencySample{Seconds: 0.02, Count: 1}),
+		fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "", fakeLatency(0.0005, 0.0005, 0.0005, 0.004, 0.004)),
+		fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "EIO", fakeLatency(0.02)),
 	}
 	diskEvents <- []*ebpf.Stat{
-		fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "",
-			ebpf.LatencySample{Seconds: 0.0005, Count: 1}),
+		fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "", fakeLatency(0.0005)),
 	}
 
 	// the exposition format writes empty labels, which Prometheus treats as absent
@@ -243,8 +242,15 @@ func TestDiskStats(t *testing.T) {
 		return out
 	}
 
+	// the histograms have a bucket per bound of export.DiskLatencyBounds: these are some of them
+	someBuckets := func(disk []promtest.ScrapedMetric) []promtest.ScrapedMetric {
+		return slices.DeleteFunc(disk, func(m promtest.ScrapedMetric) bool {
+			return strings.HasSuffix(m.Name, "_bucket") && !slices.Contains([]string{"0.001", "0.01", "+Inf"}, m.Labels["le"])
+		})
+	}
+
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		disk := scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_duration_seconds")
+		disk := someBuckets(scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_duration_seconds"))
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
 			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 4, Labels: withLe(okWrite, "0.001")},
 			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 6, Labels: withLe(okWrite, "0.01")},
@@ -381,9 +387,6 @@ func startStatsPipeline(t *testing.T, features export.Features, configure ...fun
 				Registry: registry,
 				Path:     "/metrics",
 				TTL:      time.Hour,
-				Buckets: export.Buckets{
-					StatDiskOperationDurationHistogram: []float64{0.001, 0.01},
-				},
 			},
 			Metrics: perapp.GlobalMetricsConfig{Features: features},
 		},
@@ -440,7 +443,18 @@ func scrapeDiskMetrics(ct *assert.CollectT, promURL, namePrefix string) []promte
 	return disk
 }
 
-func fakeDiskRecord(device string, op ebpf.DiskOpCode, errorType string, latency ...ebpf.LatencySample) *ebpf.Stat {
+// fakeLatency is the latency histogram of requests that took the given latencies, in seconds
+func fakeLatency(latencies ...float64) *ebpf.LatencyHistogram {
+	latency := &ebpf.LatencyHistogram{BucketCounts: make([]uint64, len(export.DiskLatencyBounds)+1)}
+	for _, seconds := range latencies {
+		// the bucket of the first bound that the latency doesn't exceed
+		latency.BucketCounts[sort.SearchFloat64s(export.DiskLatencyBounds, seconds)]++
+		latency.Sum += seconds
+	}
+	return latency
+}
+
+func fakeDiskRecord(device string, op ebpf.DiskOpCode, errorType string, latency *ebpf.LatencyHistogram) *ebpf.Stat {
 	return &ebpf.Stat{
 		Type: ebpf.StatTypeDiskIO,
 		DiskIO: &ebpf.DiskIO{
@@ -470,8 +484,8 @@ func TestStatFiltersOfBothFamilies(t *testing.T) {
 		{Type: ebpf.StatTypeTCPFailedConnection, TCPFailedConnection: &ebpf.TCPFailedConnection{Reason: uint8(ebpf.CodeConnectionRefused)}},
 	}
 	diskEvents <- []*ebpf.Stat{
-		fakeDiskRecord("sda", ebpf.CodeDiskOpRead, "", ebpf.LatencySample{Seconds: 0.0005, Count: 1}),
-		fakeDiskRecord("vda", ebpf.CodeDiskOpRead, "", ebpf.LatencySample{Seconds: 0.0005, Count: 1}),
+		fakeDiskRecord("sda", ebpf.CodeDiskOpRead, "", fakeLatency(0.0005)),
+		fakeDiskRecord("vda", ebpf.CodeDiskOpRead, "", fakeLatency(0.0005)),
 	}
 
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {

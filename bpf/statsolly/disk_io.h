@@ -10,16 +10,14 @@
 
 // Index of the histogram bucket that holds latency_ns. Buckets are upper-inclusive, like
 // Prometheus "le" buckets and OTel explicit bucket histograms: bucket i holds values in
-// (bounds[i-1], bounds[i]], and the last bucket holds everything above bounds[bounds_len-1].
+// (bounds[i-1], bounds[i]], and the last bucket holds everything above the last bound.
 // bounds must be sorted in ascending order, so the index is the number of bounds below
 // latency_ns.
-static __always_inline u32 disk_latency_bucket(const volatile u64 *bounds,
-                                               const u32 bounds_len,
-                                               const u64 latency_ns) {
+static __always_inline u32 disk_latency_bucket(const volatile u64 *bounds, const u64 latency_ns) {
     u32 bucket = 0;
 #pragma unroll
-    for (u32 i = 0; i < k_disk_latency_max_bounds; i++) {
-        if (i < bounds_len && latency_ns > bounds[i]) {
+    for (u32 i = 0; i < k_disk_latency_bounds; i++) {
+        if (latency_ns > bounds[i]) {
             bucket = i + 1;
         }
     }

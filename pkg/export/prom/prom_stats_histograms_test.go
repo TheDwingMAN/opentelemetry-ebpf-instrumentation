@@ -26,14 +26,16 @@ func gatherHistograms(t *testing.T, vec *kernelHistogramVec) []*dto.Metric {
 	return families[0].GetMetric()
 }
 
+// latency builds the latency histogram of a stat: the requests of each bucket, and the sum of their
+// latencies
+func latency(sum float64, bucketCounts ...uint64) *ebpf.LatencyHistogram {
+	return &ebpf.LatencyHistogram{BucketCounts: bucketCounts, Sum: sum}
+}
+
 func TestKernelHistogramVecAddsTheRequestsOfEachBucketAtOnce(t *testing.T) {
 	vec := newKernelHistogramVec("latency_seconds", "help", []float64{0.001, 0.01}, []string{"device"}, time.Hour)
-	vec.observe([]string{"sda"}, []ebpf.LatencySample{
-		{Seconds: 0.0005, Count: 3},
-		{Seconds: 0.001, Count: 2}, // on a bound: in its bucket
-		{Seconds: 0.5, Count: 1000},
-	})
-	vec.observe([]string{"sda"}, []ebpf.LatencySample{{Seconds: 0.005, Count: 4}})
+	vec.observe([]string{"sda"}, latency(0.0005*3+0.001*2+0.5*1000, 5, 0, 1000))
+	vec.observe([]string{"sda"}, latency(0.005*4, 0, 4, 0))
 	vec.observe([]string{"sda"}, nil)
 
 	metrics := gatherHistograms(t, vec)
@@ -54,12 +56,12 @@ func TestKernelHistogramVecDropsTheSeriesNotUpdatedDuringTheTTL(t *testing.T) {
 	t.Cleanup(func() { timeNow = previousClock })
 
 	vec := newKernelHistogramVec("latency_seconds", "help", []float64{0.001}, []string{"device"}, time.Minute)
-	vec.observe([]string{"sda"}, []ebpf.LatencySample{{Seconds: 0.0005, Count: 1}})
-	vec.observe([]string{"sdb"}, []ebpf.LatencySample{{Seconds: 0.0005, Count: 1}})
+	vec.observe([]string{"sda"}, latency(0.0005, 1, 0))
+	vec.observe([]string{"sdb"}, latency(0.0005, 1, 0))
 	require.Len(t, gatherHistograms(t, vec), 2)
 
 	now = now.Add(2 * time.Minute)
-	vec.observe([]string{"sdb"}, []ebpf.LatencySample{{Seconds: 0.0005, Count: 1}})
+	vec.observe([]string{"sdb"}, latency(0.0005, 1, 0))
 	metrics := gatherHistograms(t, vec)
 	require.Len(t, metrics, 1)
 	assert.Equal(t, "sdb", metrics[0].GetLabel()[0].GetValue())

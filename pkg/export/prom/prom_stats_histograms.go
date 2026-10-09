@@ -4,7 +4,6 @@
 package prom // import "go.opentelemetry.io/obi/pkg/export/prom"
 
 import (
-	"sort"
 	"sync"
 	"time"
 
@@ -43,9 +42,10 @@ func newKernelHistogramVec(name, help string, bounds []float64, labelNames []str
 	}
 }
 
-// observe adds the requests of the kernel buckets to the series of the label values
-func (v *kernelHistogramVec) observe(labelValues []string, latency []ebpf.LatencySample) {
-	if len(latency) == 0 {
+// observe adds the requests of the kernel buckets to the series of the label values. The bounds of
+// the histogram are those of the kernel buckets.
+func (v *kernelHistogramVec) observe(labelValues []string, latency *ebpf.LatencyHistogram) {
+	if latency == nil {
 		return
 	}
 	series := v.series.GetOrCreate(labelValues, func() *kernelHistogramSeries {
@@ -54,12 +54,11 @@ func (v *kernelHistogramVec) observe(labelValues []string, latency []ebpf.Latenc
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	for _, sample := range latency {
-		// the bucket of the first bound that the latency doesn't exceed
-		series.buckets[sort.SearchFloat64s(v.bounds, sample.Seconds)] += sample.Count
-		series.count += sample.Count
-		series.sum += sample.Seconds * float64(sample.Count)
+	for bucket, count := range latency.BucketCounts {
+		series.buckets[bucket] += count
+		series.count += count
 	}
+	series.sum += latency.Sum
 }
 
 func (v *kernelHistogramVec) Describe(descs chan<- *prometheus.Desc) {

@@ -30,6 +30,12 @@ func diskStat(device string) *ebpf.Stat {
 	return &ebpf.Stat{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{Device: device, Op: ebpf.CodeDiskOpRead}}
 }
 
+// latency builds the latency histogram of a stat: the requests of each bucket, and the sum of their
+// latencies
+func latency(sum float64, bucketCounts ...uint64) *ebpf.LatencyHistogram {
+	return &ebpf.LatencyHistogram{BucketCounts: bucketCounts, Sum: sum}
+}
+
 var deviceAttribute = []attributes.Field[*ebpf.Stat, attribute.KeyValue]{{
 	ExposedName: "system.device",
 	Get:         func(s *ebpf.Stat) attribute.KeyValue { return attribute.String("system.device", s.DiskIO.Device) },
@@ -53,14 +59,10 @@ func TestKernelHistogramProducerAddsTheRequestsOfEachBucketAtOnce(t *testing.T) 
 	p := newKernelHistogramProducer(metricdata.CumulativeTemporality, time.Hour)
 	h := p.histogram(attributes.StatDiskOperationDuration, []float64{0.001, 0.01}, deviceAttribute)
 
-	p.record(h, diskStat("sda"), []ebpf.LatencySample{
-		{Seconds: 0.0005, Count: 3},
-		{Seconds: 0.001, Count: 2}, // on a bound: in its bucket
-		{Seconds: 0.5, Count: 1000},
-	})
-	p.record(h, diskStat("sda"), []ebpf.LatencySample{{Seconds: 0.005, Count: 4}})
+	p.record(h, diskStat("sda"), latency(0.0005*3+0.001*2+0.5*1000, 5, 0, 1000))
+	p.record(h, diskStat("sda"), latency(0.005*4, 0, 4, 0))
 	p.record(h, diskStat("sda"), nil)
-	p.record(nil, diskStat("sda"), []ebpf.LatencySample{{Seconds: 0.005, Count: 4}})
+	p.record(nil, diskStat("sda"), latency(0.005*4, 0, 4, 0))
 
 	scopes, err := p.Produce(t.Context())
 	require.NoError(t, err)
@@ -93,11 +95,11 @@ func TestKernelHistogramProducerTemporality(t *testing.T) {
 	} {
 		p := newKernelHistogramProducer(tc.temporality, time.Hour)
 		h := p.histogram(attributes.StatDiskOperationDuration, []float64{0.001}, deviceAttribute)
-		p.record(h, diskStat("sda"), []ebpf.LatencySample{{Seconds: 0.0005, Count: 2}})
+		p.record(h, diskStat("sda"), latency(0.001, 2, 0))
 		advance(time.Minute)
 		require.Len(t, produceHistograms(t, p), 1)
 
-		p.record(h, diskStat("sda"), []ebpf.LatencySample{{Seconds: 0.0005, Count: 1}})
+		p.record(h, diskStat("sda"), latency(0.0005, 1, 0))
 		advance(time.Minute)
 		points := produceHistograms(t, p)
 		require.Len(t, points, 1)
@@ -118,12 +120,12 @@ func TestKernelHistogramProducerDropsTheSeriesNotUpdatedDuringTheTTL(t *testing.
 	advance := fixedClock(t)
 	p := newKernelHistogramProducer(metricdata.CumulativeTemporality, time.Minute)
 	h := p.histogram(attributes.StatDiskOperationDuration, []float64{0.001}, deviceAttribute)
-	p.record(h, diskStat("sda"), []ebpf.LatencySample{{Seconds: 0.0005, Count: 1}})
-	p.record(h, diskStat("sdb"), []ebpf.LatencySample{{Seconds: 0.0005, Count: 1}})
+	p.record(h, diskStat("sda"), latency(0.0005, 1, 0))
+	p.record(h, diskStat("sdb"), latency(0.0005, 1, 0))
 	require.Len(t, produceHistograms(t, p), 2)
 
 	advance(2 * time.Minute)
-	p.record(h, diskStat("sdb"), []ebpf.LatencySample{{Seconds: 0.0005, Count: 1}})
+	p.record(h, diskStat("sdb"), latency(0.0005, 1, 0))
 	points := produceHistograms(t, p)
 	require.Len(t, points, 1)
 	device, _ := points[0].Attributes.Value("system.device")
@@ -146,8 +148,8 @@ func TestKernelHistogramProducerOmitsTheErrorTypeOfSuccessfulRequests(t *testing
 
 	failed := diskStat("sda")
 	failed.DiskIO.ErrorType = "EIO"
-	p.record(h, diskStat("sda"), []ebpf.LatencySample{{Seconds: 0.0005, Count: 2}})
-	p.record(h, failed, []ebpf.LatencySample{{Seconds: 0.0005, Count: 1}})
+	p.record(h, diskStat("sda"), latency(0.001, 2, 0))
+	p.record(h, failed, latency(0.0005, 1, 0))
 
 	points := produceHistograms(t, p)
 	require.Len(t, points, 2)

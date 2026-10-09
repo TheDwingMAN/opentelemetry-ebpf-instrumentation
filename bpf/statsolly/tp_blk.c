@@ -210,11 +210,10 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     if (!accum) {
         return 0;
     }
-    const u32 bucket =
-        disk_latency_bucket(disk_latency_bounds_ns, disk_latency_bounds_len, latency_ns);
-    if (bucket < k_disk_latency_max_buckets) {
+    const u32 bucket = disk_latency_bucket(disk_latency_bounds_ns, latency_ns);
+    if (bucket < k_disk_latency_buckets) {
         __sync_fetch_and_add(&accum->latency_count[bucket], 1);
-        __sync_fetch_and_add(&accum->latency_sum_ns[bucket], latency_ns);
+        __sync_fetch_and_add(&accum->latency_sum_ns, latency_ns);
     }
     return 0;
 }

@@ -90,13 +90,6 @@ type StatsFetcher struct {
 	disabled              []DisabledFeature
 }
 
-// LatencyHistograms are the boundaries, in seconds, of the latency histograms that the kernel
-// accumulates
-type LatencyHistograms struct {
-	// Disk buckets the durations of the block requests
-	Disk []float64
-}
-
 func tlog() *slog.Logger {
 	return slog.With("component", "ebpf.StatFetcher")
 }
@@ -104,16 +97,8 @@ func tlog() *slog.Logger {
 // NewStatsFetcher loads and attaches the stat probes of the enabled features. The TCP probes are
 // required, while the storage ones are optional: a storage feature whose probes can't be loaded or
 // attached is disabled, and listed by DisabledStorageFeatures, and the other stats keep working.
-func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features,
-	selectorCfg *attributes.SelectorConfig, histograms LatencyHistograms,
-) (*StatsFetcher, error) {
+func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig) (*StatsFetcher, error) {
 	tlog := tlog()
-	// the kernel buckets each group of histograms with the union of their boundaries in the
-	// enabled exporters
-	diskLatencyBoundsNs, err := diskLatencyBoundsToNs(histograms.Disk)
-	if err != nil {
-		return nil, fmt.Errorf("the buckets of stat_disk_operation_duration_histogram: %w", err)
-	}
 	if err := rlimit.RemoveMemlock(); err != nil {
 		tlog.Warn("can't remove mem lock. The agent could not be able to start eBPF programs",
 			"error", err)
@@ -159,8 +144,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features,
 	load := newStatsLoader(&objects, cfg.MapsConfig.GlobalScaleFactor, map[string]any{
 		"g_bpf_debug":               cfg.BpfDebug,
 		"stats_wakeup_data_bytes":   uint32(cfg.StatsWakeupDataBytes),
-		"disk_latency_bounds_ns":    diskLatencyBoundsNs,
-		"disk_latency_bounds_len":   uint32(len(histograms.Disk)),
+		"disk_latency_bounds_ns":    diskLatencyBoundsNs(),
 		"disk_status_is_blk_status": storage.layout.completeReportsBlkStatus,
 		"disk_rqf_flush_seq":        storage.layout.flushSeqFlag,
 		"disk_req_op_zone_append":   storage.layout.zoneAppendOp,
@@ -583,25 +567,14 @@ func blockTracepointLayoutFrom(proto func(string) (*btf.FuncProto, error)) (bloc
 	return layout, nil
 }
 
-// diskLatencyBoundsToNs converts the disk latency histogram boundaries from seconds to the
-// nanoseconds the kernel buckets latencies with. The kernel needs them in increasing order.
-func diskLatencyBoundsToNs(bounds []float64) ([maxDiskLatencyBounds]uint64, error) {
-	var boundsNs [maxDiskLatencyBounds]uint64
-	if len(bounds) > maxDiskLatencyBounds {
-		return boundsNs, fmt.Errorf("the kernel supports up to %d distinct boundaries across the exporters, got %d",
-			maxDiskLatencyBounds, len(bounds))
-	}
-
-	for i, bound := range bounds {
-		if bound <= 0 {
-			return boundsNs, fmt.Errorf("disk latency histogram boundaries must be positive, got %v", bounds)
-		}
+// diskLatencyBoundsNs returns DiskLatencyBounds in the nanoseconds that the kernel buckets
+// latencies with
+func diskLatencyBoundsNs() [diskLatencyBuckets - 1]uint64 {
+	var boundsNs [diskLatencyBuckets - 1]uint64
+	for i, bound := range export.DiskLatencyBounds {
 		boundsNs[i] = uint64(math.Round(bound * float64(time.Second)))
-		if i > 0 && boundsNs[i] <= boundsNs[i-1] {
-			return boundsNs, fmt.Errorf("disk latency histogram boundaries must increase by at least 1ns, got %v", bounds)
-		}
 	}
-	return boundsNs, nil
+	return boundsNs
 }
 
 // diskProgramsToDisable returns the disk programs that must not be loaded

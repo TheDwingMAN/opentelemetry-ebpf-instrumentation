@@ -14,8 +14,7 @@
 
 // The latency histogram boundaries of block requests. To be injected from userspace
 // during eBPF program load & initialization.
-volatile const u64 disk_latency_bounds_ns[k_disk_latency_max_bounds];
-volatile const u32 disk_latency_bounds_len;
+volatile const u64 disk_latency_bounds_ns[k_disk_latency_bounds];
 
 // The operation of block request flags: the request flags start right after the
 // REQ_OP_BITS-wide operation field.

@@ -215,26 +215,11 @@ func TestDiskProgramsToDisable(t *testing.T) {
 		"older kernels load the (q, rq) block_rq_issue program")
 }
 
-func TestDiskLatencyBoundsToNs(t *testing.T) {
-	boundsNs, err := diskLatencyBoundsToNs([]float64{0.00005, 0.001, 2.5})
-	require.NoError(t, err)
-	assert.Equal(t, []uint64{50_000, 1_000_000, 2_500_000_000}, boundsNs[:3])
-	assert.Zero(t, boundsNs[3], "unused boundaries are left unset")
-
-	_, err = diskLatencyBoundsToNs(nil)
-	require.NoError(t, err, "no boundaries means a single bucket")
-
-	_, err = diskLatencyBoundsToNs(make([]float64, maxDiskLatencyBounds+1))
-	require.Error(t, err, "more boundaries than the kernel has room for")
-
-	_, err = diskLatencyBoundsToNs([]float64{0, 0.001})
-	require.Error(t, err, "boundaries must be positive")
-
-	_, err = diskLatencyBoundsToNs([]float64{0.001, 0.0005})
-	require.Error(t, err, "boundaries must increase")
-
-	_, err = diskLatencyBoundsToNs([]float64{1e-10, 2e-10})
-	require.Error(t, err, "boundaries closer than a nanosecond collapse in the kernel")
+func TestDiskLatencyBoundsNs(t *testing.T) {
+	boundsNs := diskLatencyBoundsNs()
+	assert.Equal(t, uint64(100_000), boundsNs[0])
+	assert.Equal(t, uint64(60_000_000_000), boundsNs[len(boundsNs)-1])
+	assert.IsIncreasing(t, boundsNs[:], "the kernel needs them in increasing order, at the nanosecond")
 }
 
 func TestBlockTracepointLayoutFromBTF(t *testing.T) {

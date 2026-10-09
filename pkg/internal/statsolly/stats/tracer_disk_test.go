@@ -6,7 +6,6 @@ package stats
 import (
 	"fmt"
 	"maps"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,8 +59,6 @@ func (f *fakeDiskAccum) growBeforeDelete(key ebpf.StatsDiskIoKeyT) {
 	}
 }
 
-var testBounds = []float64{0.001, 0.01}
-
 func writeKey(major, minor uint32) ebpf.StatsDiskIoKeyT {
 	return ebpf.StatsDiskIoKeyT{Major: major, Minor: minor, Op: ebpf.StatsDiskOpDiskOpWrite}
 }
@@ -71,13 +68,24 @@ func accum(counts []uint64, latencyNs []uint64) ebpf.StatsDiskIoAccumT {
 	var a ebpf.StatsDiskIoAccumT
 	for i := range counts {
 		a.LatencyCount[i] = counts[i]
-		a.LatencySumNs[i] = counts[i] * latencyNs[i]
+		a.LatencySumNs += counts[i] * latencyNs[i]
 	}
 	return a
 }
 
+// assertLatency checks the requests of each bucket of a latency histogram, from the first one, and
+// the sum of their latencies
+func assertLatency(t *testing.T, latency *ebpf.LatencyHistogram, sumSeconds float64, counts ...uint64) {
+	t.Helper()
+	require.NotNil(t, latency)
+	expected := make([]uint64, len(ebpf.StatsDiskIoAccumT{}.LatencyCount))
+	copy(expected, counts)
+	assert.Equal(t, expected, latency.BucketCounts)
+	assert.InDelta(t, sumSeconds, latency.Sum, 1e-12)
+}
+
 func newTestDiskReader(src *fakeDiskAccum) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
-	return newDiskReader(src, testBounds, false, &deviceNames{sysRoot: "/nonexistent", procRoot: "/nonexistent"})
+	return newDiskReader(src, false, &deviceNames{sysRoot: "/nonexistent", procRoot: "/nonexistent"})
 }
 
 func TestDiskReaderReadsFullMaps(t *testing.T) {
@@ -94,7 +102,7 @@ func TestDiskReaderReadsFullMaps(t *testing.T) {
 	src.entries[writeKey(259, 0)] = accum([]uint64{3, 0, 0}, []uint64{500_000, 0, 0})
 	stats := r.readStats()
 	require.Len(t, stats, 1)
-	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.0005, Count: 2}}, stats[0].DiskIO.Latency)
+	assertLatency(t, stats[0].DiskIO.Latency, 2*0.0005, 2)
 	assert.True(t, r.full)
 	assert.NotContains(t, r.previous, writeKey(259, 1))
 }
@@ -111,16 +119,13 @@ func TestDiskReaderForwardsDeltas(t *testing.T) {
 	assert.Equal(t, "259:0", stats[0].DiskIO.Device)
 	assert.Equal(t, ebpf.CodeDiskOpWrite, stats[0].DiskIO.Op)
 	assert.Empty(t, stats[0].DiskIO.ErrorType)
-	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.002, Count: 3}}, stats[0].DiskIO.Latency)
+	assertLatency(t, stats[0].DiskIO.Latency, 3*0.002, 0, 3)
 
-	// two more requests in the same bucket, one in the overflow bucket
+	// two more requests in the same bucket, one in a higher bucket
 	src.entries[writeKey(259, 0)] = accum([]uint64{0, 5, 1}, []uint64{0, 2_000_000, 50_000_000})
 	stats = r.readStats()
 	require.Len(t, stats, 1)
-	assert.Equal(t, []ebpf.LatencySample{
-		{Seconds: 0.002, Count: 2},
-		{Seconds: 0.05, Count: 1},
-	}, stats[0].DiskIO.Latency)
+	assertLatency(t, stats[0].DiskIO.Latency, 2*0.002+0.05, 0, 2, 1)
 
 	assert.Empty(t, r.readStats(), "nothing changed, nothing forwarded")
 }
@@ -136,7 +141,7 @@ func TestDiskReaderRestartsWhenTheEntryIsRecreated(t *testing.T) {
 	src.entries[writeKey(8, 0)] = accum([]uint64{4, 0, 0}, []uint64{500_000, 0, 0})
 	stats := r.readStats()
 	require.Len(t, stats, 1)
-	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.0005, Count: 4}}, stats[0].DiskIO.Latency)
+	assertLatency(t, stats[0].DiskIO.Latency, 4*0.0005, 4)
 }
 
 func TestDiskReaderRestartsWhenOnlyTheLatencySumDecreased(t *testing.T) {
@@ -150,7 +155,7 @@ func TestDiskReaderRestartsWhenOnlyTheLatencySumDecreased(t *testing.T) {
 	src.entries[writeKey(8, 0)] = accum([]uint64{3, 0, 0}, []uint64{100_000, 0, 0})
 	stats := r.readStats()
 	require.Len(t, stats, 1)
-	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.0001, Count: 3}}, stats[0].DiskIO.Latency)
+	assertLatency(t, stats[0].DiskIO.Latency, 3*0.0001, 3)
 }
 
 func TestDiskReaderDeletesIdleEntries(t *testing.T) {
@@ -189,7 +194,7 @@ func TestDiskReaderReportsWhatGrewBeforeTheDeletion(t *testing.T) {
 	stats := r.readStats()
 	assert.Equal(t, []ebpf.StatsDiskIoKeyT{key}, src.deleted)
 	require.Len(t, stats, 1)
-	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.0001, Count: 2}}, stats[0].DiskIO.Latency)
+	assertLatency(t, stats[0].DiskIO.Latency, 2*0.0001, 2)
 	assert.Empty(t, r.previous, "forgotten once deleted from the kernel map")
 }
 
@@ -209,19 +214,6 @@ func TestDiskReaderDeletesIdleEntriesWithoutLookupAndDelete(t *testing.T) {
 	assert.ElementsMatch(t, []ebpf.StatsDiskIoKeyT{first, second}, src.deleted)
 	assert.Equal(t, 1, src.lookupAndDeletes)
 	assert.Empty(t, r.previous, "forgotten once deleted from the kernel map")
-}
-
-func TestLatencySampleStaysInItsBucket(t *testing.T) {
-	bounds := []float64{0.001, 0.01}
-	// the kernel compares nanoseconds: a mean exactly on a bound belongs to the lower bucket
-	assert.InDelta(t, 0.001, latencySample(bounds, 0, 1, 1_000_000).Seconds, 1e-12)
-	assert.LessOrEqual(t, latencySample(bounds, 0, 1, 1_000_000).Seconds, bounds[0])
-	// a mean that rounding pushed out of its bucket is clamped back into it
-	assert.LessOrEqual(t, latencySample(bounds, 0, 1, 1_000_001).Seconds, bounds[0])
-	assert.Greater(t, latencySample(bounds, 1, 1, 1_000_000).Seconds, bounds[0])
-	// the overflow bucket has no upper bound
-	assert.InDelta(t, 3.0, latencySample(bounds, 2, 2, 6_000_000_000).Seconds, 1e-9)
-	assert.False(t, math.IsInf(latencySample(bounds, 2, 1, 1).Seconds, 0))
 }
 
 func TestDeviceNames(t *testing.T) {
@@ -456,17 +448,17 @@ func TestDiskReaderReportsNoLatencyOfMultipathPaths(t *testing.T) {
 		op     ebpf.DiskOpCode
 	}
 	names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot}
-	r := newDiskReader(&fakeDiskAccum{entries: entries}, testBounds, true, names)
+	r := newDiskReader(&fakeDiskAccum{entries: entries}, true, names)
 	stats := map[deviceOp]*ebpf.DiskIO{}
 	for _, stat := range r.readStats() {
 		stats[deviceOp{device: stat.DiskIO.Device, op: stat.DiskIO.Op}] = stat.DiskIO
 	}
 
 	require.Len(t, stats, len(entries))
-	assert.Empty(t, stats[deviceOp{"sdb", ebpf.CodeDiskOpWrite}].Latency,
+	assert.Nil(t, stats[deviceOp{"sdb", ebpf.CodeDiskOpWrite}].Latency,
 		"the multipath device reports the latency of the I/O of its paths")
-	assert.NotEmpty(t, stats[deviceOp{"dm-1", ebpf.CodeDiskOpWrite}].Latency)
-	assert.NotEmpty(t, stats[deviceOp{"nvme1c0n1", ebpf.CodeDiskOpWrite}].Latency, "the bios of the head are not measured")
+	assert.NotNil(t, stats[deviceOp{"dm-1", ebpf.CodeDiskOpWrite}].Latency)
+	assert.NotNil(t, stats[deviceOp{"nvme1c0n1", ebpf.CodeDiskOpWrite}].Latency, "the bios of the head are not measured")
 }
 
 func TestDeviceMapperNames(t *testing.T) {
@@ -481,7 +473,7 @@ func TestDeviceMapperNames(t *testing.T) {
 		writeKey(253, 1): accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}), // dm-1, a multipath device
 		writeKey(8, 16):  accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}), // sdb, a path of dm-1
 	}}
-	r := newDiskReader(src, testBounds, true, names)
+	r := newDiskReader(src, true, names)
 	volumeNames := map[string]string{}
 	for _, stat := range r.readStats() {
 		volumeNames[stat.DiskIO.Device] = stat.DiskIO.VolumeName
