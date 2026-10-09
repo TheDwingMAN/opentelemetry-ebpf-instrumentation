@@ -134,3 +134,35 @@ func TestDiskAttributeReadsUnderDynamicSelection(t *testing.T) {
 	assert.Equal(t, diskReads{}, diskAttributeReads(&features, attrSel, ProbeReads{}))
 	assert.Equal(t, diskReads{cgroup: true}, diskAttributeReads(&features, attrSel, ProbeReads{Workloads: true}))
 }
+
+func TestFsSyncAttributeReads(t *testing.T) {
+	reads := func(groups attributes.AttrGroups, features export.Features, selection *attributes.SelectorConfig,
+		probeReads ProbeReads,
+	) fsSyncReads {
+		attrSel, err := attributes.NewAttrSelector(groups, selection)
+		require.NoError(t, err)
+		return fsSyncAttributeReads(&features, attrSel, probeReads)
+	}
+	selecting := func(include ...string) *attributes.SelectorConfig {
+		return &attributes.SelectorConfig{SelectionCfg: attributes.Selection{
+			attributes.StatFsSyncDuration.Section: attributes.InclusionLists{Include: include},
+		}}
+	}
+	fsSync := export.FeatureStatsFsSyncDuration
+
+	assert.Equal(t, fsSyncReads{}, reads(attributes.UndefinedGroup, fsSync, &attributes.SelectorConfig{}, ProbeReads{}),
+		"no default attribute of the file sync metrics needs the cgroup")
+	assert.Equal(t, fsSyncReads{cgroup: true}, reads(attributes.UndefinedGroup, fsSync, selecting("container.id"), ProbeReads{}))
+	assert.Equal(t, fsSyncReads{},
+		reads(attributes.UndefinedGroup, export.FeatureStatsDiskIO, selecting("container.id"), ProbeReads{}),
+		"the attributes of disabled metrics don't count")
+	assert.Equal(t, fsSyncReads{cgroup: true},
+		reads(attributes.UndefinedGroup, fsSync, &attributes.SelectorConfig{}, ProbeReads{Filtered: []attr.Name{"k8s_owner_name"}}),
+		"the filters need the attributes that they match")
+	assert.Equal(t, fsSyncReads{},
+		reads(attributes.GroupKubernetes, fsSync, &attributes.SelectorConfig{}, ProbeReads{}),
+		"in Kubernetes, the histogram reports the cluster only by default")
+	assert.Equal(t, fsSyncReads{cgroup: true},
+		reads(attributes.UndefinedGroup, fsSync, &attributes.SelectorConfig{}, ProbeReads{Workloads: true}),
+		"dynamic application selection needs the workload of every sync")
+}

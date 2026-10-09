@@ -46,6 +46,7 @@ type statMetricsReporter struct {
 	diskIO                   *Expirer[prometheus.Counter]
 	diskOperations           *Expirer[prometheus.Counter]
 	diskServiceTime          *Expirer[prometheus.Counter]
+	fsSyncDuration           *kernelHistogramVec
 
 	promConnect *connector.PrometheusManager
 
@@ -58,6 +59,7 @@ type statMetricsReporter struct {
 	diskIOAttrs                   []attributes.Field[*ebpf.Stat, string]
 	diskOperationsAttrs           []attributes.Field[*ebpf.Stat, string]
 	diskServiceTimeAttrs          []attributes.Field[*ebpf.Stat, string]
+	fsSyncDurationAttrs           []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -240,6 +242,19 @@ func newStatsReporter(
 		register = append(register, mr.diskServiceTime)
 	}
 
+	if cfg.CommonCfg.Features.StatsFsSyncDuration() {
+		log.Debug("registering stat fs sync duration metric")
+
+		mr.fsSyncDurationAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatFsSyncDuration))
+
+		mr.fsSyncDuration = newKernelHistogramVec(attributes.StatFsSyncDuration.Prom,
+			"measures the duration of the file syncs of the applications, from the sync call until it returns, in seconds",
+			export.FsSyncLatencyBounds, labelNames(mr.fsSyncDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.fsSyncDuration)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -267,6 +282,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeDiskIO(stat)
 			r.observeDiskOperations(stat)
 			r.observeDiskServiceTime(stat)
+			r.observeFsSyncDuration(stat)
 		}
 	}
 }
@@ -340,4 +356,11 @@ func (r *statMetricsReporter) observeDiskServiceTime(stat *ebpf.Stat) {
 	}
 	r.diskServiceTime.WithLabelValues(labelValues(stat, r.diskServiceTimeAttrs)...).
 		Metric.Add(stat.DiskIO.Time)
+}
+
+func (r *statMetricsReporter) observeFsSyncDuration(stat *ebpf.Stat) {
+	if r.fsSyncDuration == nil || stat.FsSync == nil {
+		return
+	}
+	r.fsSyncDuration.observe(labelValues(stat, r.fsSyncDurationAttrs), stat.FsSync.Latency)
 }

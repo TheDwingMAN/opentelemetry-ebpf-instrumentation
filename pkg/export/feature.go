@@ -57,18 +57,27 @@ const (
 	FeatureGraph
 	FeatureApplicationRuntime
 	FeatureEBPF
-	// The disk stat features are not part of the `stats` aggregate, nor of `all`: the block probes
-	// fire on every block request, so they have to be enabled explicitly. Config v1 is frozen, so
-	// only the Config v2 stats features (see v2OnlyFeatures) enable them.
+	// The disk and file sync stat features are not part of the `stats` aggregate, nor of `all`: the
+	// block probes fire on every block request, and the file sync probes on every sync, so they
+	// have to be enabled explicitly. Config v1 is frozen, so only the Config v2 stats features (see
+	// v2OnlyFeatures) enable them.
 	FeatureStatsDiskServiceDuration
 	FeatureStatsDiskIO
 	FeatureStatsDiskOperations
 	FeatureStatsDiskServiceTime
-	FeatureAll = Features(^uint(0)) &^ FeatureStatsDisk
+	FeatureStatsFsSyncDuration
+	FeatureAll = Features(^uint(0)) &^ featureStatsStorage
 )
 
 // FeatureStatsDisk groups the disk stat features, whose metrics the same block probes measure
 const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskServiceTime
+
+// FeatureStatsFsSync groups the file sync stat features, whose metrics the same file sync probes
+// measure
+const FeatureStatsFsSync = FeatureStatsFsSyncDuration
+
+// featureStatsStorage groups the storage stat features
+const featureStatsStorage = FeatureStatsDisk | FeatureStatsFsSync
 
 // FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -109,6 +118,7 @@ var v2OnlyFeatures = map[string]Features{
 	"disk_io":               FeatureStatsDiskIO,
 	"disk_operations":       FeatureStatsDiskOperations,
 	"disk_service_time":     FeatureStatsDiskServiceTime,
+	"fs_sync_duration":      FeatureStatsFsSyncDuration,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -401,7 +411,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStatsDisk)
+	return f.any(FeatureStats | featureStatsStorage)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -443,6 +453,15 @@ func (f Features) StatsDiskServiceTime() bool {
 // StatsDisk tells whether any disk stat feature is enabled
 func (f Features) StatsDisk() bool {
 	return f.any(FeatureStatsDisk)
+}
+
+func (f Features) StatsFsSyncDuration() bool {
+	return f.any(FeatureStatsFsSyncDuration)
+}
+
+// StatsFsSync tells whether any file sync stat feature is enabled
+func (f Features) StatsFsSync() bool {
+	return f.any(FeatureStatsFsSync)
 }
 
 func (f Features) NetworkInterZone() bool {

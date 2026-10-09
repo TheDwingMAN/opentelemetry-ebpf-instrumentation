@@ -313,6 +313,35 @@ func TestDiskCounters(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// The file sync histogram has a bucket per bound of export.FsSyncLatencyBounds, per sync type and
+// outcome, and the block I/O stats don't reach it
+func TestFsSyncStats(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsFsSyncDuration|export.FeatureStatsDiskServiceDuration)
+
+	fsyncs := fakeFsSyncRecord(ebpf.CodeFsSyncFsync, "", fakeLatency(0.0005, 0.004))
+	diskEvents <- []*ebpf.Stat{
+		fsyncs,
+		fakeFsSyncRecord(ebpf.CodeFsSyncSyncfs, "EIO", fakeLatency(0.02)),
+		fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "", fakeLatency(0.0005)),
+	}
+
+	fsync := map[string]string{"obi_fs_sync_type": "fsync", "error_type": ""}
+	failedSyncfs := map[string]string{"obi_fs_sync_type": "syncfs", "error_type": "EIO"}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_duration_seconds_count", Value: 2, Labels: fsync},
+			{Name: "obi_stat_fs_sync_duration_seconds_count", Value: 1, Labels: failedSyncfs},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_duration_seconds_count"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_duration_seconds_sum", Value: fsyncs.FsSync.Latency.Sum, Labels: fsync},
+			{Name: "obi_stat_fs_sync_duration_seconds_sum", Value: 0.02, Labels: failedSyncfs},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_duration_seconds_sum"))
+		buckets := scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_duration_seconds_bucket")
+		assert.Len(ct, buckets, 2*(len(export.FsSyncLatencyBounds)+1))
+		assert.Len(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_service_duration_seconds_count"), 1)
+	}, timeout, 100*time.Millisecond)
+}
+
 // The disk probes couldn't be loaded: the agent has no disk tracer, and the TCP stats go on without
 // the storage branch
 func TestDiskStatsWithoutDiskProbes(t *testing.T) {
@@ -538,6 +567,19 @@ func fakeDiskRecord(device string, op ebpf.DiskOpCode, errorType string, latency
 			stat.DiskIO.Operations += count
 		}
 		stat.DiskIO.Time = latency.Sum
+	}
+	return stat
+}
+
+// fakeFsSyncRecord is the stat of the file syncs of a latency histogram, counted and timed by it as
+// the disk tracer does
+func fakeFsSyncRecord(syncType ebpf.FsSyncTypeCode, errorType string, latency *ebpf.LatencyHistogram) *ebpf.Stat {
+	stat := &ebpf.Stat{
+		Type:   ebpf.StatTypeFsSync,
+		FsSync: &ebpf.FsSync{Type: syncType, ErrorType: errorType, Latency: latency, Time: latency.Sum},
+	}
+	for _, count := range latency.BucketCounts {
+		stat.FsSync.Operations += count
 	}
 	return stat
 }

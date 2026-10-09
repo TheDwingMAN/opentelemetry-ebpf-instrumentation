@@ -89,3 +89,41 @@ groups:
           of a removed one can carry the name of the removed one for up to 30
           seconds.
         examples: ["mpatha"]
+
+  - id: registry.obi.fs
+    type: attribute_group
+    display_name: OBI File Sync Stats
+    brief: >
+      Attributes of OBI's file sync statistics that the semantic conventions
+      don't define.
+    attributes:
+      # Mirrors `FsSyncTypeCode` in `pkg/internal/statsolly/ebpf/stat.go`.
+      - id: obi.fs.sync.type
+        type:
+          allow_custom_values: true
+          members:
+            - id: fsync
+              value: fsync
+              stability: development
+            - id: fdatasync
+              value: fdatasync
+              stability: development
+            - id: sync
+              value: sync
+              stability: development
+            - id: syncfs
+              value: syncfs
+              stability: development
+            - id: sync_file_range
+              value: sync_file_range
+              stability: development
+            - id: unknown
+              value: unknown
+              stability: development
+        stability: development
+        brief: >
+          How the files were synced: the system call (`fsync`, `fdatasync`,
+          `sync`, `syncfs` or `sync_file_range`) or, for the syncs that the
+          kernel does within other calls (O_SYNC and O_DSYNC writes, msync,
+          io_uring), `fsync` or `fdatasync`, depending on whether the metadata is
+          synced too.

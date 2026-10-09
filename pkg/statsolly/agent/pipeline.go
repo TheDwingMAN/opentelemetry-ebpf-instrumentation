@@ -100,14 +100,15 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		filteredStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredStats")
 	}
 
-	// the storage branch is only built when the disk probes are loaded: not when the features are
-	// disabled or when their probes can't be loaded on the node
+	// the storage branch is only built when the disk or file sync probes are loaded: not when the
+	// features are disabled or when their probes can't be loaded on the node
 	filteredTCPStats := filteredStats
 	if s.diskTracer != nil {
 		filteredTCPStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredTCPStats")
 
-		// Block I/O stats have no network endpoints, so they skip the IP-based nodes above. They
-		// are filtered on their own attributes, then join the TCP stats before the exporters.
+		// Block I/O and file sync stats have no network endpoints, so they skip the IP-based nodes
+		// above. They are filtered on their own attributes, then join the TCP stats before the
+		// exporters.
 		diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
 		swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
 

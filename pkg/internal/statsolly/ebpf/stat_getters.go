@@ -102,12 +102,19 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.KeyValue{}
 		}
+	case attr.FsSyncType:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.FsSync == nil {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.FsSyncType), fsSyncTypeStr(s.FsSync.Type))
+		}
 	case attr.ErrorType:
 		getter = func(s *Stat) attribute.KeyValue {
 			// error.type only applies to failed operations: return an invalid
 			// KeyValue so the attribute is omitted instead of emitted empty.
-			if s.DiskIO != nil && s.DiskIO.ErrorType != "" {
-				return attribute.String(string(attr.ErrorType), s.DiskIO.ErrorType)
+			if errorType := storageErrorType(s); errorType != "" {
+				return attribute.String(string(attr.ErrorType), errorType)
 			}
 			return attribute.KeyValue{}
 		}
@@ -133,9 +140,21 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 	return getter, getter != nil
 }
 
-// isStorageStat tells whether a stat is a block I/O stat, not a TCP one
+// isStorageStat tells whether a stat is a block I/O or file sync stat, not a TCP one
 func isStorageStat(s *Stat) bool {
-	return s.Type == StatTypeDiskIO
+	return s.Type == StatTypeDiskIO || s.Type == StatTypeFsSync
+}
+
+// storageErrorType is the error of a block I/O or file sync stat, empty on success and for any
+// other stat
+func storageErrorType(s *Stat) string {
+	switch {
+	case s.DiskIO != nil:
+		return s.DiskIO.ErrorType
+	case s.FsSync != nil:
+		return s.FsSync.ErrorType
+	}
+	return ""
 }
 
 func StatStringGetters(name attr.Name) (attributes.Getter[*Stat, string], bool) {
@@ -194,4 +213,21 @@ func diskIODirectionStr(op DiskOpCode) string {
 		return string(DiskDirectionWrite)
 	}
 	return ""
+}
+
+// fsSyncTypeStr is the obi.fs.sync.type of a file sync
+func fsSyncTypeStr(t FsSyncTypeCode) string {
+	switch t {
+	case CodeFsSyncFsync:
+		return "fsync"
+	case CodeFsSyncFdatasync:
+		return "fdatasync"
+	case CodeFsSyncSync:
+		return "sync"
+	case CodeFsSyncSyncfs:
+		return "syncfs"
+	case CodeFsSyncSyncFileRange:
+		return "sync_file_range"
+	}
+	return "unknown"
 }

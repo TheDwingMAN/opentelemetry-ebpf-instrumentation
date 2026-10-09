@@ -31,7 +31,8 @@ var v2NetworkMetricsFeatureMask = export.FeatureNetwork |
 	export.FeatureNetworkFlowPackets
 
 var v2StatsMetricsFeatureMask = export.FeatureStats |
-	export.FeatureStatsDisk
+	export.FeatureStatsDisk |
+	export.FeatureStatsFsSync
 
 // V2ToRuntime converts a config v2 extension shape into an OBI runtime
 // configuration.
@@ -2524,6 +2525,8 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsDiskOperations
 		case statsFeatureDiskServiceTime:
 			out |= export.FeatureStatsDiskServiceTime
+		case statsFeatureFsSyncDuration:
+			out |= export.FeatureStatsFsSyncDuration
 		}
 	}
 	return out

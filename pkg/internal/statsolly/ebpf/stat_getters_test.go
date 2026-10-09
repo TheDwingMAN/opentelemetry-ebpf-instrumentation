@@ -55,7 +55,43 @@ func TestStatGetters_DeviceMapperNameOfBlockIO(t *testing.T) {
 
 func TestStatContainerID(t *testing.T) {
 	assert.Equal(t, "aaaa", (&Stat{DiskIO: &DiskIO{ContainerID: "aaaa"}}).ContainerID())
+	assert.Equal(t, "bbbb", (&Stat{FsSync: &FsSync{ContainerID: "bbbb"}}).ContainerID())
 	assert.Empty(t, (&Stat{TCPRetransmit: true}).ContainerID())
+}
+
+func TestStatGetters_FsSync(t *testing.T) {
+	failedSync := &Stat{Type: StatTypeFsSync, FsSync: &FsSync{Type: CodeFsSyncFdatasync, ErrorType: "EIO", ContainerID: "0123abcd"}}
+	okSync := &Stat{Type: StatTypeFsSync, FsSync: &FsSync{Type: CodeFsSyncSync}}
+
+	syncType, ok := StatGetters(attr.FsSyncType)
+	require.True(t, ok)
+	assert.Equal(t, "fdatasync", syncType(failedSync).Value.AsString())
+	assert.Equal(t, "sync", syncType(okSync).Value.AsString())
+	assert.False(t, syncType(&Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{}}).Valid(), "the block I/O has no sync type")
+
+	errorType, ok := StatGetters(attr.ErrorType)
+	require.True(t, ok)
+	assert.Equal(t, "EIO", errorType(failedSync).Value.AsString())
+	assert.False(t, errorType(okSync).Valid(), "omitted for the successful syncs")
+
+	containerID, ok := StatGetters(attr.ContainerID)
+	require.True(t, ok)
+	assert.Equal(t, "0123abcd", containerID(failedSync).Value.AsString())
+	assert.False(t, containerID(okSync).Valid())
+
+	// the attributes of the block I/O are omitted
+	device, ok := StatGetters(attr.SystemDevice)
+	require.True(t, ok)
+	assert.False(t, device(okSync).Valid())
+}
+
+func TestFsSyncTypeStr(t *testing.T) {
+	for code, name := range map[FsSyncTypeCode]string{
+		CodeFsSyncFsync: "fsync", CodeFsSyncFdatasync: "fdatasync", CodeFsSyncSync: "sync",
+		CodeFsSyncSyncfs: "syncfs", CodeFsSyncSyncFileRange: "sync_file_range", 0: "unknown",
+	} {
+		assert.Equal(t, name, fsSyncTypeStr(code))
+	}
 }
 
 func TestStatGetters_DiskIOContainer(t *testing.T) {
@@ -75,11 +111,13 @@ func TestStatGetters_StorageOmitsUnknownKubernetesMetadata(t *testing.T) {
 		attr.K8sNamespaceName: "storage",
 	}}}
 	podLess := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{}}
+	podLessSync := &Stat{Type: StatTypeFsSync, FsSync: &FsSync{}}
 
 	namespace, ok := StatGetters(attr.K8sNamespaceName)
 	require.True(t, ok)
 	assert.Equal(t, "storage", namespace(inPod).Value.AsString())
 	assert.False(t, namespace(podLess).Valid())
+	assert.False(t, namespace(podLessSync).Valid())
 }
 
 // The TCP stats keep exporting the Kubernetes metadata that they don't know, as before

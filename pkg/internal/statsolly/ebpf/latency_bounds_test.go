@@ -16,3 +16,9 @@ func TestDiskLatencyBoundsFitTheKernelHistogram(t *testing.T) {
 	assert.Positive(t, export.DiskLatencyBounds[0])
 	assert.IsIncreasing(t, export.DiskLatencyBounds)
 }
+
+func TestFsSyncLatencyBoundsFitTheKernelHistogram(t *testing.T) {
+	assert.Len(t, StatsFsSyncAccumT{}.LatencyCount, diskLatencyBuckets, "the file syncs have the buckets of the block requests")
+	assert.Len(t, export.FsSyncLatencyBounds, diskLatencyBuckets-1, "a kernel bucket per bound, then the overflow bucket")
+	assert.IsIncreasing(t, export.FsSyncLatencyBounds)
+}

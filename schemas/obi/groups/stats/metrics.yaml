@@ -587,3 +587,50 @@ groups:
         requirement_level: opt_in
       - ref: k8s.container.name
         requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.fs.sync.duration
+    type: metric
+    metric_name: obi.stat.fs.sync.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Time that threads wait for file syncs to make their data durable, per
+      sync type and outcome: the fsync, fdatasync, sync, syncfs and
+      sync_file_range (when it waits) system calls from their entry to their
+      return, and the syncs that the kernel does within other calls (O_SYNC and
+      O_DSYNC writes, msync with MS_SYNC, io_uring fsync). It includes all that
+      a sync waits for, such as the writeback of the dirty pages, the journal
+      commit, the block I/O and the cache flushes, or the COMMIT RPCs on NFS,
+      but not the writeback that the kernel does in the background. The calls
+      that sync nothing, on an invalid file descriptor (EBADF) or on a file
+      that can't be synced, such as a pipe, a socket or a terminal (EINVAL, or
+      ESPIPE for sync_file_range), are not counted. The syncs of kernel
+      threads, such as those of the NFS server and of the loop devices that
+      sync their backing file, are counted without workload attributes. Its
+      workload attributes are opt-in.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: obi.fs.sync.type
+        requirement_level: recommended
+      - ref: error.type
+        requirement_level:
+          conditionally_required: >
+            if the file sync failed: its errno name, e.g. `EIO` or `ENOSPC`, or
+            `_OTHER`
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in

@@ -19,7 +19,7 @@ import (
 )
 
 // kernelHistogramProducer emits the latency histograms that the kernel accumulates, such as the
-// durations of the block requests, as pre-aggregated histograms. An SDK
+// durations of the block requests or of the file syncs, as pre-aggregated histograms. An SDK
 // Float64Histogram can't add the requests of a kernel bucket at once, and recording each of them
 // would cost as much as the I/O rate, so, like bpfProbeLatencyProducer, this implements the SDK
 // Producer interface and emits explicit bounds and bucket counts. Series that aren't updated during

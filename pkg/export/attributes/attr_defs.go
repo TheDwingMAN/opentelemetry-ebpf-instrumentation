@@ -144,9 +144,22 @@ func getDefinitions(
 		nil,
 	)
 
-	// the cluster, and the pod and the workload that the block I/O is charged to, when Kubernetes
-	// metadata is enabled. A series per workload, but not per pod, by default.
-	statsDiskKubeAttributes := NewAttrReportGroup(
+	// file sync stat metrics attributes. As the block I/O ones, they are not reported per
+	// connection
+	statsFsSyncAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:       false,
+			attr.FsSyncType:  true,
+			attr.ContainerID: false,
+		},
+		nil,
+	)
+
+	// the cluster, and the pod and the workload that the block I/O or the file sync is charged to,
+	// when Kubernetes metadata is enabled. A series per workload, but not per pod, by default.
+	statsStorageKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
 		nil,
 		map[attr.Name]Default{
@@ -160,10 +173,10 @@ func getDefinitions(
 		nil,
 	)
 
-	// the same attributes, for the block I/O latency histogram, whose series multiply by the number
-	// of buckets: only the cluster is reported by default, and the counters give the mean per
-	// workload
-	statsDiskKubeOptInAttributes := NewAttrReportGroup(
+	// the same attributes, for the latency histograms of the block I/O and of the file syncs, whose
+	// series multiply by the number of buckets: only the cluster is reported by default, and the
+	// counters give the mean per workload
+	statsStorageKubeOptInAttributes := NewAttrReportGroup(
 		!kubeEnabled,
 		nil,
 		map[attr.Name]Default{
@@ -968,23 +981,29 @@ func getDefinitions(
 			},
 		},
 		StatDiskServiceDuration.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeOptInAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeOptInAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
 		},
 		StatDiskIO.Section: {
-			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
 		StatDiskOperations.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
 		},
 		StatDiskServiceTime.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatFsSyncDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsStorageKubeOptInAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},

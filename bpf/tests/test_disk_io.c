@@ -140,6 +140,38 @@ static void test_accounted_start_ns(void) {
                 "an accounted request without a start stays unknown");
 }
 
+static void test_fs_sync_status(void) {
+    assert_true(fs_sync_status(0) == 0, "a successful sync has no status");
+    assert_true(fs_sync_status(-5) == 5, "-EIO becomes errno 5");
+    assert_true(fs_sync_status(-28) == 28, "-ENOSPC becomes errno 28");
+    assert_true(fs_sync_status(-512) == k_status_other,
+                "-ERESTARTSYS doesn't fit in a status: it is not reported as a success");
+    assert_true(fs_sync_status(-524) == k_status_other,
+                "-ENOTSUPP doesn't fit in a status: it is not reported as ENOMEM");
+}
+
+static void test_fs_sync_attempted(void) {
+    assert_true(!fs_sync_attempted(-9), "an invalid file descriptor is not a file sync");
+    assert_true(!fs_sync_attempted(-22),
+                "a file that can't be synced, such as a pipe, is not a file sync");
+    assert_true(!fs_sync_attempted(-29),
+                "a sync_file_range on a pipe, which fails with ESPIPE, is not a file sync");
+    assert_true(fs_sync_attempted(-5), "a sync that failed with EIO is a failed file sync");
+    assert_true(fs_sync_attempted(0), "a successful sync is a file sync");
+}
+
+static void test_sync_file_range_waits(void) {
+    assert_true(!sync_file_range_waits(k_sync_file_range_write),
+                "a SYNC_FILE_RANGE_WRITE hint doesn't wait for the writeback");
+    assert_true(!sync_file_range_waits(0), "a call without flags doesn't wait");
+    assert_true(sync_file_range_waits(k_sync_file_range_wait_before), "WAIT_BEFORE waits");
+    assert_true(sync_file_range_waits(k_sync_file_range_wait_after), "WAIT_AFTER waits");
+    assert_true(sync_file_range_waits(k_sync_file_range_wait_before | k_sync_file_range_write |
+                                      k_sync_file_range_wait_after),
+                "WAIT_BEFORE|WRITE|WAIT_AFTER waits");
+    assert_true(!sync_file_range_waits(0xfffffff8u), "bits above the three flags are not waits");
+}
+
 int main(void) {
     test_latency_bucket_is_upper_inclusive();
     test_final_completion();
@@ -148,6 +180,9 @@ int main(void) {
     test_op_from_req_op();
     test_zone_append();
     test_accounted_start_ns();
+    test_fs_sync_status();
+    test_fs_sync_attempted();
+    test_sync_file_range_waits();
 
     if (failed_assertions) {
         printf("%u assertion(s) failed\n", failed_assertions);

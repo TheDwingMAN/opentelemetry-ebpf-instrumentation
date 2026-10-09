@@ -101,22 +101,30 @@ func TestTCPStatFiltersKeepTheirSemantics(t *testing.T) {
 func TestStorageStatFiltersOnlyApplyToTheStatsWithTheirAttributes(t *testing.T) {
 	nvme := &ebpf.Stat{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{Device: "nvme0n1"}}
 	sda := &ebpf.Stat{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{Device: "sda"}}
+	fsync := &ebpf.Stat{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{Type: ebpf.CodeFsSyncFsync}}
+	failedSync := &ebpf.Stat{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{Type: ebpf.CodeFsSyncSyncfs, ErrorType: "EIO"}}
 
 	filtered := func(config filter.AttributeFamilyConfig) []*ebpf.Stat {
 		matchers, err := newStorageStatMatchers(config, nil)
 		require.NoError(t, err)
-		return filterStats(matchers, []*ebpf.Stat{nvme, sda})
+		return filterStats(matchers, []*ebpf.Stat{nvme, sda, fsync, failedSync})
 	}
 
-	assert.Equal(t, []*ebpf.Stat{nvme, sda},
+	assert.Equal(t, []*ebpf.Stat{nvme, sda, fsync, failedSync},
 		filtered(filter.AttributeFamilyConfig{"dst.port": {Equals: new(443)}}),
 		"a filter on a TCP attribute keeps the storage stats")
-	assert.Equal(t, []*ebpf.Stat{nvme},
+	assert.Equal(t, []*ebpf.Stat{nvme, fsync, failedSync},
 		filtered(filter.AttributeFamilyConfig{"system.device": {Match: "nvme*"}}),
-		"a filter on a disk attribute applies to the disk stats")
-	assert.Equal(t, []*ebpf.Stat{nvme},
+		"a filter on a disk attribute applies to the disk stats only")
+	assert.Equal(t, []*ebpf.Stat{nvme, fsync, failedSync},
 		filtered(filter.AttributeFamilyConfig{"dst.port": {Equals: new(443)}, "system.device": {Match: "nvme*"}}),
 		"each stat is matched against all the filters of its attributes")
+	assert.Equal(t, []*ebpf.Stat{nvme, sda, fsync},
+		filtered(filter.AttributeFamilyConfig{"obi_fs_sync_type": {Match: "fsync"}}),
+		"a filter on a file sync attribute applies to the file sync stats only")
+	assert.Equal(t, []*ebpf.Stat{failedSync},
+		filtered(filter.AttributeFamilyConfig{"error.type": {Match: "EIO"}}),
+		"a filter on an attribute of both applies to both")
 }
 
 // The storage probes read only the attributes of the filters that apply to the storage stats
@@ -127,8 +135,9 @@ func TestStorageProbesReadTheAttributesOfTheStorageStatFilters(t *testing.T) {
 		"container_id":       {Match: "a1*"},
 		"k8s.namespace.name": {Match: "shop"},
 		"system.device":      {Match: "nvme*"},
+		"obi.fs.sync.type":   {Match: "fsync"},
 	}
-	assert.ElementsMatch(t, []attr.Name{"container_id", "k8s.namespace.name", "system.device"},
+	assert.ElementsMatch(t, []attr.Name{"container_id", "k8s.namespace.name", "system.device", "obi.fs.sync.type"},
 		filteredAttributes(storageStatFilters(filters, nil)))
 }
 
@@ -137,14 +146,18 @@ func TestStatFilterOfAnUnknownAttribute(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Every stat metric but the TCP ones is listed with the disk stat metrics, so that the filters on its
-// attributes apply to the storage stats
+// Every stat metric but the TCP ones is listed with the storage stat metrics of its type, so that
+// the filters on its attributes apply to the storage stats
 func TestEveryStorageStatMetricIsListed(t *testing.T) {
 	sections := attributes.StatSections()
 	require.Subset(t, sections, tcpStatSections)
+	var storageSections []attributes.Section
+	for _, typeSections := range storageStatSections {
+		storageSections = append(storageSections, typeSections...)
+	}
 	for _, section := range sections {
 		if !slices.Contains(tcpStatSections, section) {
-			assert.Contains(t, diskStatSections, section)
+			assert.Contains(t, storageSections, section)
 		}
 	}
 }

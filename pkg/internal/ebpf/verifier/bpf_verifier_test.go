@@ -319,16 +319,31 @@ func TestBPFVerifierWithConstants(t *testing.T) {
 	})
 
 	// statsolly
-	forEachCombination(t, "statsolly/Stats", statsolly.LoadStats, []constOption{
+	forEachCombination(t, "statsolly/Stats", loadStats, []constOption{
 		{"g_bpf_debug", []any{true, false}},
 		{"stats_wakeup_data_bytes", []any{uint32(0), uint32(1 << 20)}},
 	})
 	// the probes read the request flags only where the kernel numbers them with an enum, and the
-	// cgroup of the requests only when an attribute of an enabled metric needs it: the verifier
-	// skips the code of the reads left off
-	forEachCombination(t, "statsolly/Stats", statsolly.LoadStats, []constOption{
+	// cgroup of the requests and of the file syncs only when an attribute of an enabled metric needs
+	// it: the verifier skips the code of the reads left off
+	forEachCombination(t, "statsolly/Stats", loadStats, []constOption{
 		{"g_bpf_debug", []any{true, false}},
 		{"disk_rqf_io_stat", []any{uint32(0), uint32(1 << 8)}},
 		{"disk_read_cgroup", []any{true}},
+		{"fs_sync_read_cgroup", []any{true}},
 	})
+}
+
+// loadStats loads the stats programs as OBI loads them on this kernel, with the fentry and fexit
+// programs of every file sync function that the kernel has
+func loadStats() (*ebpf.CollectionSpec, error) {
+	spec, err := statsolly.LoadStats()
+	if err != nil {
+		return nil, err
+	}
+	kernel, err := btfCache.Kernel()
+	if err != nil {
+		return nil, err
+	}
+	return spec, statsolly.PrepareStatsSpec(spec, kernel)
 }

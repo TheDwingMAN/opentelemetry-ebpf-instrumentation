@@ -14,7 +14,7 @@ import (
 )
 
 // kernelHistogramVec exposes a latency histogram that the kernel accumulates, such as the
-// durations of the block requests, as classic histograms. A client
+// durations of the block requests or of the file syncs, as classic histograms. A client
 // histogram can't add the requests of a kernel bucket at once, and observing each of them would
 // cost as much as the I/O rate, so the series are kept here and exposed as const histograms, like
 // the eBPF probe latencies. Series that aren't updated during the TTL are dropped.

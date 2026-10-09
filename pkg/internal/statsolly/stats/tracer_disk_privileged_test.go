@@ -266,22 +266,29 @@ func issuesRecordedSince(t *testing.T, inFlight *ciliumebpf.Map, devPath string,
 // without mkfs.ext4.
 func loopDeviceOnExt4(t *testing.T) (devPath, mountPoint string) {
 	t.Helper()
-	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
-		t.Skip("needs mkfs.ext4")
-	}
-	fsDev := attachLoopDevice(t)
-	out, err := exec.Command("mkfs.ext4", "-q", "-F", "-E", "lazy_itable_init=0,lazy_journal_init=0", fsDev).CombinedOutput()
-	require.NoError(t, err, "mkfs.ext4: %s", out)
-	mountPoint = t.TempDir()
-	require.NoError(t, unix.Mount(fsDev, mountPoint, "ext4", 0, ""))
-	t.Cleanup(func() { _ = unix.Unmount(mountPoint, 0) })
-
+	mountPoint = ext4OnLoopDevice(t)
 	backing, err := os.Create(filepath.Join(mountPoint, "disk.img"))
 	require.NoError(t, err)
 	t.Cleanup(func() { backing.Close() })
 	require.NoError(t, backing.Truncate(loopBackingFileSize/2))
 	devPath = attachLoopDeviceTo(t, backing)
 	return devPath, mountPoint
+}
+
+// ext4OnLoopDevice mounts an ext4 filesystem on a loop device and returns its mount point. It skips
+// the test without mkfs.ext4.
+func ext4OnLoopDevice(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+		t.Skip("needs mkfs.ext4")
+	}
+	fsDev := attachLoopDevice(t)
+	out, err := exec.Command("mkfs.ext4", "-q", "-F", "-E", "lazy_itable_init=0,lazy_journal_init=0", fsDev).CombinedOutput()
+	require.NoError(t, err, "mkfs.ext4: %s", out)
+	mountPoint := t.TempDir()
+	require.NoError(t, unix.Mount(fsDev, mountPoint, "ext4", 0, ""))
+	t.Cleanup(func() { _ = unix.Unmount(mountPoint, 0) })
+	return mountPoint
 }
 
 // from include/uapi/linux/fs.h
@@ -1066,6 +1073,14 @@ func TestDiskServiceTimeOfAKnownLatency(t *testing.T) {
 // delay, and returns its /dev path. It skips the test if null_blk can't be configured.
 func slowNullBlockDevice(t *testing.T, delay time.Duration) string {
 	t.Helper()
+	return nullBlockDevice(t, delay, nil)
+}
+
+// nullBlockDevice creates a null_blk device that completes each request after the given delay,
+// with the given configfs attributes, and returns its /dev path. It skips the test if null_blk
+// can't be configured.
+func nullBlockDevice(t *testing.T, delay time.Duration, attributes map[string]string) string {
+	t.Helper()
 	_ = exec.Command("modprobe", "null_blk", "nr_devices=0").Run()
 	dir := filepath.Join("/sys/kernel/config/nullb", fmt.Sprintf("obi-test-%d", os.Getpid()))
 	if err := os.Mkdir(dir, 0o755); err != nil {
@@ -1080,6 +1095,9 @@ func slowNullBlockDevice(t *testing.T, delay time.Duration) string {
 		"completion_nsec": strconv.FormatInt(delay.Nanoseconds(), 10),
 		"hw_queue_depth":  "64",
 	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(value), 0o644), name)
+	}
+	for name, value := range attributes {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(value), 0o644), name)
 	}
 	// null_blk names the device nullb<index> on older kernels, and after the configfs directory on

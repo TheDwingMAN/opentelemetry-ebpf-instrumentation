@@ -69,14 +69,42 @@ func TestFeatureStatsDiskIsOptIn(t *testing.T) {
 	}
 }
 
-// The storage stats must be named: their probes fire on every block request
+func TestFeatureStatsFsSyncIsOptIn(t *testing.T) {
+	stats, err := LoadFeatures([]string{"stats"})
+	require.NoError(t, err)
+	assert.False(t, stats.StatsFsSync(), "the stats aggregate must not enable the file sync stats")
+
+	fsSync := FeatureStatsFsSyncDuration
+	assert.True(t, fsSync.StatsFsSync())
+	assert.True(t, fsSync.StatsFsSyncDuration())
+	assert.False(t, fsSync.StatsDisk(), "the file syncs don't need the disk stats")
+	assert.True(t, fsSync.StatMetrics(), "a file-sync-only selection must still enable the stats pipeline")
+}
+
+// The storage stats must be named: their probes fire on every block request or file sync
 func TestFeatureAllDoesntEnableStorageStats(t *testing.T) {
 	for _, name := range []string{"all", "*"} {
 		all, err := LoadFeatures([]string{name})
 		require.NoError(t, err)
 		assert.True(t, all.StatsTCPIo(), "%s enables the TCP stats", name)
 		assert.False(t, all.StatsDisk(), name)
+		assert.False(t, all.StatsFsSync(), name)
 	}
+}
+
+// Config v1 is frozen: only Config v2 enables the file sync stats, and a logged configuration shows
+// them with their Config v2 name
+func TestFeatureStatsFsSyncHasNoV1Name(t *testing.T) {
+	for _, name := range []string{"stats_fs_sync", "stats_fs_sync_duration", "fs_sync_duration"} {
+		_, err := LoadFeatures([]string{name})
+		require.ErrorContains(t, err, "unknown metrics feature", name)
+	}
+
+	out, err := yaml.Marshal(struct {
+		Features Features `yaml:"features"`
+	}{Features: FeatureStatsTCPRtt | FeatureStatsFsSync})
+	require.NoError(t, err)
+	assert.Equal(t, "features:\n    - stats_tcp_rtt\n    - fs_sync_duration\n", string(out))
 }
 
 // Config v1 is frozen: only Config v2 enables the disk stats, and a logged configuration shows

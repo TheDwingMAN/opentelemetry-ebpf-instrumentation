@@ -96,6 +96,7 @@ func TestPrometheusNames(t *testing.T) {
 		{StatDiskIO, "obi_stat_disk_io_bytes_total"},
 		{StatDiskOperations, "obi_stat_disk_operations_total"},
 		{StatDiskServiceTime, "obi_stat_disk_service_time_seconds_total"},
+		{StatFsSyncDuration, "obi_stat_fs_sync_duration_seconds"},
 		{V8JSGCDuration, "v8js_gc_duration_seconds"},
 		{V8JSMemoryHeapLimit, "v8js_memory_heap_limit_bytes"},
 		{V8JSMemoryHeapUsed, "v8js_memory_heap_used_bytes"},

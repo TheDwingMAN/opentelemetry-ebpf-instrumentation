@@ -384,6 +384,7 @@ const (
 	statsFeatureDiskIO                   = "disk_io"
 	statsFeatureDiskOperations           = "disk_operations"
 	statsFeatureDiskServiceTime          = "disk_service_time"
+	statsFeatureFsSyncDuration           = "fs_sync_duration"
 )
 
 func statsFeatures(features featureexport.Features) []string {
@@ -414,6 +415,9 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsDiskServiceTime() {
 		out = append(out, statsFeatureDiskServiceTime)
+	}
+	if features.StatsFsSyncDuration() {
+		out = append(out, statsFeatureFsSyncDuration)
 	}
 	return out
 }

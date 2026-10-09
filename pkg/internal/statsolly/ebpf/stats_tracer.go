@@ -41,9 +41,9 @@ type probe struct {
 // (LOCAL_FREE_TARGET in kernel/bpf/bpf_lru_list.c)
 const lruLocalFreeTarget = 128
 
-// inFlightMap is the LRU map whose live entries must not be evicted: it holds an entry from the
-// issue of each block request until it completes
-const inFlightMap = "disk_rq_start"
+// inFlightMaps are the LRU maps whose live entries must not be evicted: they hold an entry from the
+// issue of each block request, or the start of each file sync, until it completes
+var inFlightMaps = []string{StatsMapDiskRqStart, StatsMapFsSyncStart}
 
 // Program names
 const (
@@ -78,7 +78,7 @@ const (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type fs_sync_type -type fs_sync_key_t -type fs_sync_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -87,6 +87,7 @@ type StatsFetcher struct {
 
 	diskAttached          bool
 	diskStatusIsBlkStatus bool
+	fsSyncAttached        bool
 	disabled              []DisabledFeature
 }
 
@@ -142,35 +143,38 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 
 	storage := planStorageProbes(tlog, features)
 	diskReads := diskAttributeReads(features, attrSel, reads)
+	fsSyncReads := fsSyncAttributeReads(features, attrSel, reads)
 	var unreadMaps []string
-	if !diskReads.cgroup {
-		unreadMaps = diskCgroupMaps
+	if !diskReads.cgroup && !fsSyncReads.cgroup {
+		unreadMaps = cgroupNameMaps
 	}
 
 	objects := StatsObjects{}
 	load := newStatsLoader(&objects, cfg.MapsConfig.GlobalScaleFactor, unreadMaps, map[string]any{
 		"g_bpf_debug":               cfg.BpfDebug,
 		"stats_wakeup_data_bytes":   uint32(cfg.StatsWakeupDataBytes),
-		"disk_latency_bounds_ns":    diskLatencyBoundsNs(),
+		"disk_latency_bounds_ns":    latencyBoundsNs(export.DiskLatencyBounds),
 		"disk_status_is_blk_status": storage.layout.completeReportsBlkStatus,
 		"disk_rqf_flush_seq":        storage.layout.flushSeqFlag,
 		"disk_req_op_zone_append":   storage.layout.zoneAppendOp,
 		"disk_rqf_io_stat":          storage.layout.ioStatFlag,
 		"disk_read_cgroup":          diskReads.cgroup,
+		"fs_sync_latency_bounds_ns": latencyBoundsNs(export.FsSyncLatencyBounds),
+		"fs_sync_read_cgroup":       fsSyncReads.cgroup,
 	})
 	if err := storage.loadOrDisable(load, tcpToDisable); err != nil {
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
 
-	storageLinks, err := storage.attach(&objects)
-	if err != nil {
-		// as when they can't be loaded, the stats programs are loaded again without the storage
-		// ones, so that a disabled feature doesn't keep its programs and full-size maps
-		storage.disableAll(err)
+	storageLinks, attachErr := storage.attach(tlog, &objects)
+	for attachErr != nil {
+		// as when they can't be loaded, the stats programs are loaded again without those of the
+		// feature that was disabled, so that it doesn't keep its programs and full-size maps
 		objects.Close()
 		if err := load(slices.Concat(tcpToDisable, storage.programsToDisable())); err != nil {
-			return nil, fmt.Errorf("loading stats eBPF spec without the storage programs: %w", err)
+			return nil, fmt.Errorf("loading stats eBPF spec without the disabled storage programs: %w", err)
 		}
+		storageLinks, attachErr = storage.attach(tlog, &objects)
 	}
 
 	closables, err := attachTCPProbes(&objects, features, connRoleUsed)
@@ -186,6 +190,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 		closables:             closables,
 		diskAttached:          storage.disk,
 		diskStatusIsBlkStatus: storage.layout.completeReportsBlkStatus,
+		fsSyncAttached:        storage.fsSync,
 		disabled:              storage.disabled,
 	}, nil
 }
@@ -310,28 +315,30 @@ func attachTCPProbes(objects *StatsObjects, features *export.Features, connRoleU
 	return closables, nil
 }
 
-// sizeInFlightMap gives the in-flight map room for twice the free entries that the CPUs can keep
+// sizeInFlightMaps gives the in-flight maps room for twice the free entries that the CPUs can keep
 // for themselves. Before Linux 6.16, except from 6.12.39, 6.6.99, RHEL 9.8 and RHEL 10.2, which
 // have the fix, once those hold most of an LRU map, a CPU that needs an entry evicts a live one
 // instead of taking a free one from another CPU: an evicted request is timed on the kernel's clock,
-// or not counted when the kernel didn't time it. It grows the map of 16384 entries on hosts with
-// more than 64 CPUs.
-func sizeInFlightMap(spec *ebpf.CollectionSpec, cpus int) {
+// or not counted when the kernel didn't time it, and an evicted file sync is not counted. It grows
+// the maps of 16384 entries on hosts with more than 64 CPUs.
+func sizeInFlightMaps(spec *ebpf.CollectionSpec, cpus int) {
 	minEntries := uint32(2 * lruLocalFreeTarget * cpus)
-	if m, ok := spec.Maps[inFlightMap]; ok && m.MaxEntries < minEntries {
-		m.MaxEntries = minEntries
+	for _, name := range inFlightMaps {
+		if m, ok := spec.Maps[name]; ok && m.MaxEntries < minEntries {
+			m.MaxEntries = minEntries
+		}
 	}
 }
 
-// storageMapPrefix starts the names of the maps of the storage features
-const storageMapPrefix = "disk_"
+// storageMapPrefixes start the names of the maps of the storage features
+var storageMapPrefixes = []string{"disk_", "fs_sync_"}
 
-// diskCgroupMaps are the maps where the disk probes record the names of the cgroups, which they
-// only use when they read the cgroup of the requests
-var diskCgroupMaps = []string{StatsMapDiskCgroupNames, StatsMapDiskCgroupNameInitStorage}
+// cgroupNameMaps are the maps where the disk and file sync probes record the names of the cgroups,
+// which they only use when they read the cgroup of the operations
+var cgroupNameMaps = []string{StatsMapDiskCgroupNames, StatsMapDiskCgroupNameInitStorage}
 
 func isStorageMap(name string) bool {
-	return strings.HasPrefix(name, storageMapPrefix)
+	return slices.ContainsFunc(storageMapPrefixes, func(prefix string) bool { return strings.HasPrefix(name, prefix) })
 }
 
 // shrinkUnusedStorageMaps gives a single entry to the storage maps that no program of the spec uses:
@@ -366,14 +373,15 @@ func newStatsLoader(objects *StatsObjects, globalScaleFactor int, unread []strin
 		if err != nil {
 			return fmt.Errorf("loading BPF data: %w", err)
 		}
+		setFsSyncTracingTargets(spec)
 		if err := fixupSpec(spec, toDisable); err != nil {
 			return fmt.Errorf("fixing up BPF spec: %w", err)
 		}
 		ebpfconvenience.SetupMapSizes(spec, globalScaleFactor)
 		if cpus, err := ebpf.PossibleCPU(); err == nil {
-			sizeInFlightMap(spec, cpus)
+			sizeInFlightMaps(spec, cpus)
 		} else {
-			tlog().Debug("can't size the in-flight map to the CPUs", "error", err)
+			tlog().Debug("can't size the in-flight maps to the CPUs", "error", err)
 		}
 		shrinkUnusedStorageMaps(spec, unread)
 
@@ -429,10 +437,20 @@ func (m *StatsFetcher) DiskIOAccumMap() *ebpf.Map {
 	return m.objects.DiskIoAccum
 }
 
+// FsSyncAccumMap returns the map where the kernel accumulates file sync latencies, or nil if the
+// file sync probes are not attached.
+func (m *StatsFetcher) FsSyncAccumMap() *ebpf.Map {
+	if !m.fsSyncAttached {
+		return nil
+	}
+	return m.objects.FsSyncAccum
+}
+
 // DiskCgroupNamesMap returns the map where the kernel records the names of the cgroups that block
-// I/O is charged to, or nil if the disk probes are not attached.
+// I/O and file syncs are charged to, or nil if neither the disk nor the file sync probes are
+// attached.
 func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
-	if !m.diskAttached {
+	if !m.diskAttached && !m.fsSyncAttached {
 		return nil
 	}
 	return m.objects.DiskCgroupNames
@@ -601,11 +619,11 @@ func blockTracepointLayoutFrom(proto func(string) (*btf.FuncProto, error)) (bloc
 	return layout, nil
 }
 
-// diskLatencyBoundsNs returns DiskLatencyBounds in the nanoseconds that the kernel buckets
-// latencies with
-func diskLatencyBoundsNs() [diskLatencyBuckets - 1]uint64 {
+// latencyBoundsNs returns the bounds of a latency histogram in the nanoseconds that the kernel
+// buckets latencies with
+func latencyBoundsNs(bounds []float64) [diskLatencyBuckets - 1]uint64 {
 	var boundsNs [diskLatencyBuckets - 1]uint64
-	for i, bound := range export.DiskLatencyBounds {
+	for i, bound := range bounds {
 		boundsNs[i] = uint64(math.Round(bound * float64(time.Second)))
 	}
 	return boundsNs
@@ -631,9 +649,14 @@ func fixupSpec(spec *ebpf.CollectionSpec, toDisable []string) error {
 		if prog == nil {
 			return fmt.Errorf("unknown program name %s", name)
 		}
+		// a tracing program needs a kernel function to attach to, which a stub doesn't have
+		typ := prog.Type
+		if typ == ebpf.Tracing {
+			typ = ebpf.Kprobe
+		}
 		spec.Programs[name] = &ebpf.ProgramSpec{
 			Name:         "stats_dummy",
-			Type:         prog.Type,
+			Type:         typ,
 			Instructions: asm.Instructions{asm.Mov.Imm(asm.R0, 0), asm.Return()},
 			License:      "Dual MIT/GPL",
 		}

@@ -15,15 +15,28 @@ import (
 // workload
 var perPodAttributes = []attr.Name{attr.K8sPodName, attr.K8sContainerName, attr.ContainerID}
 
-// perPodHistogramAttributes returns the attributes that report the disk latency histogram per pod
-// or container, when it is enabled. Each of its series is multiplied by the number of buckets, and
-// pods come and go, so it is the most expensive way to report the disk stats per pod.
-func perPodHistogramAttributes(features *export.Features, attrSel *attributes.AttrSelector) []attr.Name {
-	if !features.StatsDiskServiceDuration() {
+// storageHistogram is a latency histogram of the storage stats, and whether it is enabled
+type storageHistogram struct {
+	enabled bool
+	name    attributes.Name
+}
+
+func storageHistograms(features *export.Features) []storageHistogram {
+	return []storageHistogram{
+		{enabled: features.StatsDiskServiceDuration(), name: attributes.StatDiskServiceDuration},
+		{enabled: features.StatsFsSyncDuration(), name: attributes.StatFsSyncDuration},
+	}
+}
+
+// perPodHistogramAttributes returns the attributes that report a latency histogram per pod or
+// container, when it is enabled. Each of its series is multiplied by the number of buckets, and
+// pods come and go, so it is the most expensive way to report the storage stats per pod.
+func perPodHistogramAttributes(histogram storageHistogram, attrSel *attributes.AttrSelector) []attr.Name {
+	if !histogram.enabled {
 		return nil
 	}
 	var perPod []attr.Name
-	for _, name := range attrSel.For(attributes.StatDiskServiceDuration) {
+	for _, name := range attrSel.For(histogram.name) {
 		if slices.Contains(perPodAttributes, name) {
 			perPod = append(perPod, name)
 		}
@@ -31,16 +44,18 @@ func perPodHistogramAttributes(features *export.Features, attrSel *attributes.At
 	return perPod
 }
 
-// warnPerPodHistograms warns when the disk latency histogram is reported per pod or container
+// warnPerPodHistograms warns when a latency histogram of the storage stats is reported per pod or
+// container
 func warnPerPodHistograms(features *export.Features, groups attributes.AttrGroups, selectorCfg *attributes.SelectorConfig) {
 	attrSel, err := attributes.NewAttrSelector(groups, selectorCfg)
 	if err != nil {
 		// the exporters report the invalid selection
 		return
 	}
-	if names := perPodHistogramAttributes(features, attrSel); len(names) > 0 {
-		alog().Warn("the disk latency histogram is reported per pod or container: each of them adds a series "+
-			"per bucket. The operations and service time counters give their mean latency at one series each",
-			"histogram", attributes.StatDiskServiceDuration.OTEL, "attributes", names)
+	for _, histogram := range storageHistograms(features) {
+		if names := perPodHistogramAttributes(histogram, attrSel); len(names) > 0 {
+			alog().Warn("a storage latency histogram is reported per pod or container: each of them adds a series "+
+				"per bucket", "histogram", histogram.name.OTEL, "attributes", names)
+		}
 	}
 }

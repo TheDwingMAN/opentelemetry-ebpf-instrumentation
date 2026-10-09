@@ -398,4 +398,6 @@ const (
 	DiskStacked = Name("obi.disk.stacked")
 	// DiskVolumeName is the device mapper name of a block device, as /dev/mapper lists it
 	DiskVolumeName = Name("obi.disk.volume.name")
+	// FsSyncType is the call that synced files, e.g. fsync
+	FsSyncType = Name("obi.fs.sync.type")
 )
