@@ -60,9 +60,7 @@ func TestFeatureStatsDiskIsOptIn(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, stats.StatsDiskServiceDuration(), "the stats aggregate must not enable disk stats")
 
-	disk, err := LoadFeatures([]string{"stats_disk_service_duration"})
-	require.NoError(t, err)
-	assert.True(t, disk.StatsDiskServiceDuration())
+	disk := FeatureStatsDiskServiceDuration
 	assert.False(t, disk.StatsTCPRtt())
 	assert.True(t, disk.StatMetrics(), "a disk-only selection must still enable the stats pipeline")
 }
@@ -75,10 +73,21 @@ func TestFeatureAllDoesntEnableStorageStats(t *testing.T) {
 		assert.True(t, all.StatsTCPIo(), "%s enables the TCP stats", name)
 		assert.False(t, all.StatsDiskServiceDuration(), name)
 	}
+}
 
-	allAndDisk, err := LoadFeatures([]string{"all", "stats_disk_service_duration"})
+// Config v1 is frozen: only Config v2 enables the disk stats, and a logged configuration shows
+// them with their Config v2 name
+func TestFeatureStatsDiskHasNoV1Name(t *testing.T) {
+	for _, name := range []string{"stats_disk_service_duration", "disk_service_duration"} {
+		_, err := LoadFeatures([]string{name})
+		require.ErrorContains(t, err, "unknown metrics feature", name)
+	}
+
+	out, err := yaml.Marshal(struct {
+		Features Features `yaml:"features"`
+	}{Features: FeatureStats | FeatureStatsDiskServiceDuration})
 	require.NoError(t, err)
-	assert.True(t, allAndDisk.StatsDiskServiceDuration(), "they can be named along with all")
+	assert.Equal(t, "features:\n    - stats\n    - disk_service_duration\n", string(out))
 }
 
 func TestFeatureEnv_Separator(t *testing.T) {
@@ -373,11 +382,6 @@ func TestFeatureMarshalYAML(t *testing.T) {
 			name:     "partial aggregate expands to its bits",
 			features: FeatureStatsTCPRtt | FeatureStatsTCPRetransmits,
 			expected: "features:\n    - stats_tcp_rtt\n    - stats_tcp_retransmits\n",
-		},
-		{
-			name:     "disk stats are listed apart from the stats aggregate",
-			features: FeatureStats | FeatureStatsDiskServiceDuration,
-			expected: "features:\n    - stats\n    - stats_disk_service_duration\n",
 		},
 		{name: "all features", features: FeatureAll, expected: "features:\n    - all\n"},
 	} {

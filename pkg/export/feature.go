@@ -6,6 +6,7 @@ package export // import "go.opentelemetry.io/obi/pkg/export"
 import (
 	"cmp"
 	"fmt"
+	stdmaps "maps"
 	"math/bits"
 	"slices"
 	"strings"
@@ -57,7 +58,8 @@ const (
 	FeatureApplicationRuntime
 	FeatureEBPF
 	// FeatureStatsDiskServiceDuration is not part of the `stats` aggregate, nor of `all`: the block
-	// probes fire on every block request, so it has to be enabled explicitly.
+	// probes fire on every block request, so it has to be enabled explicitly. Config v1 is frozen, so
+	// only the Config v2 stats feature `disk_service_duration` enables it.
 	FeatureStatsDiskServiceDuration
 	FeatureAll = Features(^uint(0)) &^ FeatureStatsDiskServiceDuration
 )
@@ -77,7 +79,6 @@ var FeatureMapper = map[string]Features{
 	"stats_tcp_retransmits":            FeatureStatsTCPRetransmits,
 	"stats_tcp_io":                     FeatureStatsTCPIo,
 	"stats_tcp_successful_connections": FeatureStatsTCPSuccessfulConnections,
-	"stats_disk_service_duration":      FeatureStatsDiskServiceDuration,
 	"network":                          FeatureNetwork,
 	"network_inter_zone":               FeatureNetworkInterZone,
 	"network_flow_packets":             FeatureNetworkFlowPackets,
@@ -92,6 +93,13 @@ var FeatureMapper = map[string]Features{
 	"ebpf":                             FeatureEBPF,
 	"all":                              FeatureAll,
 	"*":                                FeatureAll,
+}
+
+// v2OnlyFeatures names the features that only Config v2 enables, with their Config v2 name.
+// Config v1 is frozen, so LoadFeatures doesn't accept these names: they only show the features
+// in a logged configuration.
+var v2OnlyFeatures = map[string]Features{
+	"disk_service_duration": FeatureStatsDiskServiceDuration,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -200,11 +208,15 @@ func validFeatureNames() []string {
 }
 
 // marshalNames returns the enabled feature names: aggregate names (e.g. "all", "stats")
-// when all of their bits are enabled, then the remaining single-bit names in declaration order.
+// when all of their bits are enabled, then the remaining single-bit names in declaration order,
+// including the Config v2 names of the features that only Config v2 enables.
 func (f Features) marshalNames() []string {
-	singles := make([]string, 0, len(FeatureMapper))
-	aggregates := make([]string, 0, len(FeatureMapper))
-	for name, feature := range FeatureMapper {
+	named := stdmaps.Clone(FeatureMapper)
+	stdmaps.Copy(named, v2OnlyFeatures)
+
+	singles := make([]string, 0, len(named))
+	aggregates := make([]string, 0, len(named))
+	for name, feature := range named {
 		// FeatureAll is emitted under its "all" alias
 		if name == "*" {
 			continue
@@ -217,16 +229,16 @@ func (f Features) marshalNames() []string {
 	}
 	// widest aggregate first, so "all" wins over "stats" when both apply
 	slices.SortFunc(aggregates, func(a, b string) int {
-		return bits.OnesCount(uint(FeatureMapper[b])) - bits.OnesCount(uint(FeatureMapper[a]))
+		return bits.OnesCount(uint(named[b])) - bits.OnesCount(uint(named[a]))
 	})
 	slices.SortFunc(singles, func(a, b string) int {
-		return cmp.Compare(FeatureMapper[a], FeatureMapper[b])
+		return cmp.Compare(named[a], named[b])
 	})
 
 	names := make([]string, 0, len(singles))
 	remaining := f
 	for _, name := range slices.Concat(aggregates, singles) {
-		feature := FeatureMapper[name]
+		feature := named[name]
 		if remaining.has(feature) {
 			names = append(names, name)
 			remaining = Features(maps.Bits(remaining) &^ maps.Bits(feature))
@@ -236,7 +248,8 @@ func (f Features) marshalNames() []string {
 }
 
 // MarshalYAML renders the bitmask as the list of enabled feature names, so a logged
-// configuration shows the same values that can be written in the YAML.
+// configuration shows the same values that can be written in the YAML. The features that only
+// Config v2 enables are shown with their Config v2 name, which Config v1 doesn't accept.
 func (f Features) MarshalYAML() (any, error) {
 	if f.Undefined() {
 		return nil, nil

@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/obi/internal/config/convert"
 	"go.opentelemetry.io/obi/internal/config/schema"
 	obiconfig "go.opentelemetry.io/obi/pkg/config"
+	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/otel/otelcfg"
 	"go.opentelemetry.io/obi/pkg/obi"
 )
@@ -1106,26 +1107,27 @@ prometheus_export:
 	require.False(t, plainRoundTripped.Metrics.Features.AppSizes())
 }
 
-// The storage stats are enabled in v2 with the stats features
-func TestMigrateConfigCarriesStorageStats(t *testing.T) {
-	output, _, err := migrateConfig([]byte(`
-discovery:
-  instrument:
-    - exe_path: "/srv/*"
+// Config v1 is frozen: it has no name for the disk stats feature, so there is nothing to migrate
+func TestMigrateConfigRejectsTheDiskStatsFeature(t *testing.T) {
+	_, _, err := migrateConfig([]byte(`
 metrics:
-  features: [application, stats_disk_service_duration]
-prometheus_export:
-  port: 9090
+  features: [stats_disk_service_duration]
 `))
-	require.NoError(t, err)
-	doc, ext, err := schema.ParseStandaloneYAML(output)
-	require.NoError(t, err)
-	require.Contains(t, ext.Capture.Network.Stats.Features, "disk_service_duration")
+	require.ErrorContains(t, err, `unknown metrics feature "stats_disk_service_duration"`)
+}
 
-	roundTripped, err := convert.DocumentToRuntime(doc)
+// Only Config v2 enables the disk stats, as the disk compose suite does
+func TestDiskStatsSuiteConfigEnablesOnlyTheDiskStats(t *testing.T) {
+	doc, _, err := schema.ParseStandaloneYAML(integrationConfig(t, "internal/test/integration/configs/obi-config-go-disk-stat-metrics.yml"))
 	require.NoError(t, err)
-	features := roundTripped.Metrics.Features
-	require.True(t, features.StatsDiskServiceDuration())
+	cfg, err := convert.DocumentToRuntime(doc)
+	require.NoError(t, err)
+
+	require.True(t, cfg.Enabled(obi.FeatureStatsO11y))
+	require.False(t, cfg.Enabled(obi.FeatureAppO11y))
+	require.True(t, cfg.Metrics.Features.StatsDiskServiceDuration())
+	require.Zero(t, cfg.Metrics.Features&export.FeatureStats, "no TCP stats")
+	require.Equal(t, "http://otelcol:4317", cfg.OTELMetrics.MetricsEndpoint)
 }
 
 func TestMigrateConfigExpandsGlobalRoutes(t *testing.T) {

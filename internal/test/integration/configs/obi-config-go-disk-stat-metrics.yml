@@ -1,0 +1,37 @@
+# Config v2 only enables the disk stats: their feature has no Config v1 name. A v2 document takes
+# no OTEL_EBPF_* overrides, so the settings of the suite live here.
+file_format: "1.0"
+log_level: debug
+meter_provider:
+  readers:
+    - periodic:
+        interval: 1000
+        exporter:
+          otlp_grpc:
+            endpoint: http://otelcol:4317
+            default_histogram_aggregation: explicit_bucket_histogram
+            tls:
+              insecure: true
+resource:
+  attributes:
+    - name: host.name
+      value: obi
+extensions:
+  obi:
+    version: "2.0"
+    capture:
+      policy:
+        default_action: exclude
+      network:
+        stats:
+          features: [disk_service_duration]
+      engine:
+        batching:
+          batch_timeout: 10ms
+        debug:
+          bpf: true
+    enrich:
+      attributes:
+        select:
+          "*":
+            include: ["*"]

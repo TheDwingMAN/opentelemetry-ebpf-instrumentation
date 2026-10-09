@@ -29,7 +29,7 @@ func TestStat_GoStatMetrics(t *testing.T) {
 
 func TestStat_GoDiskStatMetrics(t *testing.T) {
 	compose, err := docker.ComposeSuite("docker-compose-go-disk-stat-metrics.yml", path.Join(pathOutput, "test-suite-go-disk-stat-metrics.log"))
-	compose.Env = append(compose.Env, `OTEL_EBPF_CONFIG_SUFFIX=-go-stat-metrics`, `PROM_CONFIG_SUFFIX=-promscrape-otel`)
+	compose.Env = append(compose.Env, `OTEL_EBPF_CONFIG_SUFFIX=-go-disk-stat-metrics`, `PROM_CONFIG_SUFFIX=-promscrape-otel`)
 	require.NoError(t, err)
 	require.NoError(t, compose.Up())
 	t.Run("Go Stat Metrics disk service duration tests", testStatMetricsDiskServiceDuration)

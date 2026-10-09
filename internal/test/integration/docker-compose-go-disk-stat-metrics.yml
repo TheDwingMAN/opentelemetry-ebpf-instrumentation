@@ -26,14 +26,9 @@ services:
     privileged: true # in some environments (not GH Pull Requests) you can set it to false and then cap_add: [ SYS_ADMIN ]
     pid: "host"
     environment:
+      # a Config v2 document, as only Config v2 enables the disk stats
       OTEL_EBPF_CONFIG_PATH: /configs/obi-config${OTEL_EBPF_CONFIG_SUFFIX}.yml
       GOCOVERDIR: "/coverage"
-      OTEL_EBPF_METRICS_INTERVAL: "1s"
-      OTEL_EBPF_BPF_BATCH_TIMEOUT: "10ms"
-      OTEL_EBPF_LOG_LEVEL: "DEBUG"
-      OTEL_EBPF_BPF_DEBUG: "TRUE"
-      OTEL_EBPF_HOSTNAME: "obi"
-      OTEL_EBPF_METRICS_FEATURES: "stats_disk_service_duration"
     depends_on:
       otelcol:
         condition: service_started
