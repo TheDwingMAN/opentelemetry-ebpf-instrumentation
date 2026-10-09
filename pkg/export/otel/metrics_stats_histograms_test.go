@@ -13,6 +13,7 @@ import (
 	metricdata "go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 )
 
@@ -128,4 +129,37 @@ func TestKernelHistogramProducerDropsTheSeriesNotUpdatedDuringTheTTL(t *testing.
 	device, _ := points[0].Attributes.Value("system.device")
 	assert.Equal(t, "sdb", device.AsString())
 	assert.Equal(t, uint64(2), points[0].Count)
+}
+
+// error.type only applies to failed requests: the series of the successful ones doesn't export it,
+// and stays apart from the series of the failed ones
+func TestKernelHistogramProducerOmitsTheErrorTypeOfSuccessfulRequests(t *testing.T) {
+	fixedClock(t)
+	var fields []attributes.Field[*ebpf.Stat, attribute.KeyValue]
+	for _, name := range []attr.Name{attr.SystemDevice, attr.ErrorType} {
+		get, ok := ebpf.StatGetters(name)
+		require.True(t, ok)
+		fields = append(fields, attributes.Field[*ebpf.Stat, attribute.KeyValue]{ExposedName: string(name.OTEL()), Get: get})
+	}
+	p := newKernelHistogramProducer(metricdata.CumulativeTemporality, time.Hour)
+	h := p.histogram(attributes.StatDiskOperationDuration, []float64{0.001}, fields)
+
+	failed := diskStat("sda")
+	failed.DiskIO.ErrorType = "EIO"
+	p.record(h, diskStat("sda"), []ebpf.LatencySample{{Seconds: 0.0005, Count: 2}})
+	p.record(h, failed, []ebpf.LatencySample{{Seconds: 0.0005, Count: 1}})
+
+	points := produceHistograms(t, p)
+	require.Len(t, points, 2)
+	counts := map[string]uint64{}
+	for _, point := range points {
+		errorType, present := point.Attributes.Value(attr.ErrorType.OTEL())
+		if present {
+			counts[errorType.AsString()] += point.Count
+		} else {
+			counts["absent"] += point.Count
+		}
+		assert.False(t, point.Attributes.HasValue(""), "no attribute is exported without a key")
+	}
+	assert.Equal(t, map[string]uint64{"absent": 2, "EIO": 1}, counts)
 }

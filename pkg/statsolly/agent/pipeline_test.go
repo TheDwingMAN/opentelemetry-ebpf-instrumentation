@@ -258,6 +258,57 @@ func TestDiskStats(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// The disk probes couldn't be loaded: the agent has no disk tracer, and the TCP stats go on
+func TestDiskStatsWithoutDiskProbes(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	promServer := httptest.NewServer(promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
+	t.Cleanup(promServer.Close)
+
+	stats := Stats{
+		agentIP: net.ParseIP("1.2.3.4"),
+		ctxInfo: &global.ContextInfo{
+			Prometheus: &connector.PrometheusManager{},
+		},
+		cfg: &obi.Config{
+			Prometheus: prom.PrometheusConfig{Registry: registry, Path: "/metrics", TTL: time.Hour},
+			Metrics:    perapp.GlobalMetricsConfig{Features: export.FeatureStatsTCPRtt | export.FeatureStatsDiskOperationDuration},
+		},
+	}
+
+	ringBuf := make(chan []*ebpf.Stat, 1)
+	defaultRingBufTracer := newRingBufTracer
+	t.Cleanup(func() {
+		newRingBufTracer = defaultRingBufTracer
+		close(ringBuf)
+	})
+	newRingBufTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+		return func(ctx context.Context) {
+			defer out.MarkCloseable()
+			for i := range ringBuf {
+				out.SendCtx(ctx, i)
+			}
+		}
+	}
+
+	runner, err := stats.buildPipeline(t.Context())
+	require.NoError(t, err)
+	go runner.Start(t.Context())
+
+	ringBuf <- []*ebpf.Stat{fakeRecord(123, 456)}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		allMetrics, err := promtest.Scrape(promServer.URL)
+		require.NoError(ct, err)
+		var rtt []promtest.ScrapedMetric
+		for _, m := range allMetrics {
+			if m.Name == "obi_stat_tcp_rtt_seconds_count" {
+				rtt = append(rtt, m)
+			}
+		}
+		assert.Len(ct, rtt, 1)
+	}, timeout, 100*time.Millisecond)
+}
+
 // startDiskPipeline runs the stats pipeline with the given disk features, exporting to
 // Prometheus. It returns the channel to send disk stats through and the Prometheus URL.
 func startDiskPipeline(t *testing.T, features export.Features, configure ...func(*Stats)) (chan<- []*ebpf.Stat, string) {
