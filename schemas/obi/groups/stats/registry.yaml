@@ -76,8 +76,9 @@ groups:
           devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop
           devices pass their I/O down to the devices below them, which report it
           too. To count the I/O once on the disk counters, add up the devices
-          where it is `false`; on `obi.stat.disk.service.duration`, add those
-          and the dm-multipath devices, whose paths don't report it.
+          where it is `false`; on `obi.stat.disk.service.duration` and
+          `obi.stat.disk.flush.duration`, add those and the dm-multipath
+          devices, whose paths don't report them.
       - id: obi.disk.volume.name
         type: string
         stability: development

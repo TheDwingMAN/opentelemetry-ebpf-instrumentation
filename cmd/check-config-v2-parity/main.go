@@ -427,6 +427,9 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsFsSyncTime() {
 		want = append(want, "fs_sync_time")
 	}
+	if features.StatsDiskFlush() {
+		want = append(want, "disk_flush_duration")
+	}
 
 	got := toStringSlice(featuresValue)
 	if !sameStringSet(got, want) {

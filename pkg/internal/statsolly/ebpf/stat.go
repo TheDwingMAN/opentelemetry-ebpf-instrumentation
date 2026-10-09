@@ -97,6 +97,7 @@ type DiskOpCode uint8
 const (
 	CodeDiskOpRead  = DiskOpCode(StatsDiskOpDiskOpRead)
 	CodeDiskOpWrite = DiskOpCode(StatsDiskOpDiskOpWrite)
+	CodeDiskOpFlush = DiskOpCode(StatsDiskOpDiskOpFlush)
 )
 
 // FsSyncTypeCode aliases the bpf2go-generated constants derived from enum fs_sync_type in

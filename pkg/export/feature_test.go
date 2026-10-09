@@ -62,6 +62,7 @@ func TestFeatureStatsDiskIsOptIn(t *testing.T) {
 
 	for _, disk := range []Features{
 		FeatureStatsDiskServiceDuration, FeatureStatsDiskIO, FeatureStatsDiskOperations, FeatureStatsDiskServiceTime,
+		FeatureStatsDiskFlush,
 	} {
 		assert.False(t, disk.StatsTCPRtt())
 		assert.True(t, disk.StatsDisk())
@@ -118,6 +119,7 @@ func TestFeatureStatsFsSyncHasNoV1Name(t *testing.T) {
 func TestFeatureStatsDiskHasNoV1Name(t *testing.T) {
 	for _, name := range []string{
 		"stats_disk_service_duration", "disk_service_duration", "disk_io", "disk_operations", "disk_service_time",
+		"stats_disk_flush_duration", "disk_flush_duration",
 	} {
 		_, err := LoadFeatures([]string{name})
 		require.ErrorContains(t, err, "unknown metrics feature", name)
@@ -128,7 +130,7 @@ func TestFeatureStatsDiskHasNoV1Name(t *testing.T) {
 	}{Features: FeatureStats | FeatureStatsDisk})
 	require.NoError(t, err)
 	assert.Equal(t, "features:\n    - stats\n    - disk_service_duration\n    - disk_io\n    - disk_operations\n"+
-		"    - disk_service_time\n", string(out))
+		"    - disk_service_time\n    - disk_flush_duration\n", string(out))
 }
 
 func TestFeatureEnv_Separator(t *testing.T) {

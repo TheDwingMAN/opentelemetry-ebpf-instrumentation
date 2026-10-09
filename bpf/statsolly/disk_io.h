@@ -30,12 +30,14 @@ static __always_inline u32 disk_latency_bucket(const volatile u64 *bounds, const
 enum {
     k_req_op_read = 0,
     k_req_op_write = 1,
+    k_req_op_flush = 2,
     k_req_op_write_zeroes = 9,
 };
 
 // disk_op_from_req_op classifies the REQ_OP_* operation of a request. Writing zeroes and appending
-// to a zone count as writes, as /proc/diskstats counts them. zone_append_op is REQ_OP_ZONE_APPEND,
-// or 0 when the kernel has none: reads are classified first, so 0 matches nothing.
+// to a zone count as writes, as /proc/diskstats counts them. Cache flushes are measured; discards
+// are not. zone_append_op is REQ_OP_ZONE_APPEND, or 0 when the kernel has none: reads are
+// classified first, so 0 matches nothing.
 static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op,
                                                         const u32 zone_append_op) {
     switch (req_op) {
@@ -44,6 +46,8 @@ static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op,
     case k_req_op_write:
     case k_req_op_write_zeroes:
         return disk_op_write;
+    case k_req_op_flush:
+        return disk_op_flush;
     default:
         return req_op == zone_append_op ? disk_op_write : disk_op_unknown;
     }

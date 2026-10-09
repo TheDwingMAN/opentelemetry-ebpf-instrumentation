@@ -127,6 +127,28 @@ func TestStorageStatFiltersOnlyApplyToTheStatsWithTheirAttributes(t *testing.T) 
 		"a filter on an attribute of both applies to both")
 }
 
+// The cache flushes are matched against the filters on the attributes of the disk metrics, but
+// have no workload: a match filter on a workload attribute drops them, a not_match filter keeps them
+func TestStorageStatFiltersOnAWorkloadAttributeAndTheCacheFlushes(t *testing.T) {
+	written := &ebpf.Stat{
+		Type:        ebpf.StatTypeDiskIO,
+		DiskIO:      &ebpf.DiskIO{Device: "sda", Op: ebpf.CodeDiskOpWrite},
+		CommonAttrs: pipe.CommonAttrs{Metadata: map[attr.Name]string{attr.K8sNamespaceName: "prod"}},
+	}
+	flush := &ebpf.Stat{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{Device: "sda", Op: ebpf.CodeDiskOpFlush}}
+
+	filtered := func(config filter.AttributeFamilyConfig) []*ebpf.Stat {
+		matchers, err := newStorageStatMatchers(config, nil)
+		require.NoError(t, err)
+		return filterStats(matchers, []*ebpf.Stat{written, flush})
+	}
+
+	assert.Equal(t, []*ebpf.Stat{written},
+		filtered(filter.AttributeFamilyConfig{"k8s_namespace_name": {Match: "prod*"}}))
+	assert.Equal(t, []*ebpf.Stat{written, flush},
+		filtered(filter.AttributeFamilyConfig{"k8s_namespace_name": {NotMatch: "kube-*"}}))
+}
+
 // The storage probes read only the attributes of the filters that apply to the storage stats
 func TestStorageProbesReadTheAttributesOfTheStorageStatFilters(t *testing.T) {
 	filters := filter.AttributeFamilyConfig{

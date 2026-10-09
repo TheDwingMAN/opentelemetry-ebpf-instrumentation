@@ -387,6 +387,7 @@ const (
 	statsFeatureFsSyncDuration           = "fs_sync_duration"
 	statsFeatureFsSyncOperations         = "fs_sync_operations"
 	statsFeatureFsSyncTime               = "fs_sync_time"
+	statsFeatureDiskFlush                = "disk_flush_duration"
 )
 
 func statsFeatures(features featureexport.Features) []string {
@@ -426,6 +427,9 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsFsSyncTime() {
 		out = append(out, statsFeatureFsSyncTime)
+	}
+	if features.StatsDiskFlush() {
+		out = append(out, statsFeatureDiskFlush)
 	}
 	return out
 }

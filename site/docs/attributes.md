@@ -27,7 +27,7 @@ Attributes of OBI's block I/O (disk) statistics that the semantic conventions do
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
-| `obi.disk.stacked` | boolean | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass their I/O down to the devices below them, which report it too. To count the I/O once on the disk counters, add up the devices where it is `false`; on `obi.stat.disk.service.duration`, add those and the dm-multipath devices, whose paths don't report it. |  |
+| `obi.disk.stacked` | boolean | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass their I/O down to the devices below them, which report it too. To count the I/O once on the disk counters, add up the devices where it is `false`; on `obi.stat.disk.service.duration` and `obi.stat.disk.flush.duration`, add those and the dm-multipath devices, whose paths don't report them. |  |
 | `obi.disk.volume.name` | string | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it, of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | mpatha |
 
 ## `registry.obi.exception`

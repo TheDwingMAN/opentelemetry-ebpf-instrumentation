@@ -44,6 +44,13 @@ func TestStatGetters_DiskIO(t *testing.T) {
 	assert.Empty(t, errorTypeString(okRead))
 }
 
+// A cache flush has no direction
+func TestStatGetters_DiskFlushHasNoDirection(t *testing.T) {
+	direction, ok := StatGetters(attr.DiskIODirection)
+	require.True(t, ok)
+	assert.False(t, direction(&Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "sda", Op: CodeDiskOpFlush}}).Valid())
+}
+
 func TestStatGetters_DeviceMapperNameOfBlockIO(t *testing.T) {
 	volumeName, ok := StatGetters(attr.DiskVolumeName)
 	require.True(t, ok)

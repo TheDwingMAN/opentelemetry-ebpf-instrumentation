@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
@@ -125,6 +126,77 @@ func TestStatMetricsExporter_DiskCountersSplitByError(t *testing.T) {
 		assert.Equal(ct, map[string]int64{"none": 1000, "ETIMEDOUT": 1}, operations)
 		// the mean service time of the successful writes stays 0.1 ms
 		assert.Equal(ct, map[string]float64{"none": 0.1, "ETIMEDOUT": 30}, serviceTime)
+	}, timeout, 100*time.Millisecond)
+}
+
+// The cache flushes are only recorded in their own histogram, per device and outcome: the metrics of
+// the reads and writes don't count them
+func TestStatMetricsExporter_FlushesOnlyInTheirHistogram(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	exporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: cfg}},
+		&StatMetricsConfig{
+			Metrics:     cfg,
+			SelectorCfg: &attributes.SelectorConfig{SelectionCfg: attributes.Selection{}},
+			CommonCfg:   &perapp.GlobalMetricsConfig{Features: export.FeatureStatsDisk},
+		}, stats)(ctx)
+	require.NoError(t, err)
+
+	go exporter(ctx)
+
+	// 2 writes of 4 KiB that took 1 ms each, 3 flushes that took 10 ms each, and one that failed
+	stats.Send([]*ebpf.Stat{
+		{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{
+			Device: "vda", Op: ebpf.CodeDiskOpWrite, Operations: 2, Time: 0.002, Bytes: 2 * 4096, Latency: latency(0.002, 2),
+		}},
+		{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{
+			Device: "vda", Op: ebpf.CodeDiskOpFlush, Operations: 3, Time: 0.03, Latency: latency(0.03, 0, 3),
+		}},
+		{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{
+			Device: "vda", Op: ebpf.CodeDiskOpFlush, ErrorType: "EIO", Operations: 1, Time: 0.5, Latency: latency(0.5, 0, 0, 1),
+		}},
+	})
+
+	// the last exported value of each series of each metric, by its error.type and direction: the
+	// count of a histogram, the value of a counter
+	values := map[string]map[string]float64{}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case record := <-otlp.Records():
+				series := record.Attributes["error.type"] + "/" + record.Attributes["disk.io.direction"]
+				if values[record.Name] == nil {
+					values[record.Name] = map[string]float64{}
+				}
+				switch record.Type {
+				case pmetric.MetricTypeHistogram:
+					values[record.Name][series] = float64(record.Count)
+				default:
+					values[record.Name][series] = float64(record.IntVal) + record.FloatVal
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.Equal(ct, map[string]map[string]float64{
+			attributes.StatDiskServiceDuration.OTEL: {"/write": 2},
+			attributes.StatDiskOperations.OTEL:      {"/write": 2},
+			attributes.StatDiskServiceTime.OTEL:     {"/write": 0.002},
+			attributes.StatDiskIO.OTEL:              {"/write": 2 * 4096},
+			attributes.StatDiskFlushDuration.OTEL:   {"/": 3, "EIO/": 1},
+		}, values)
 	}, timeout, 100*time.Millisecond)
 }
 

@@ -26,7 +26,7 @@ var tcpStatSections = []attributes.Section{
 var storageStatSections = map[ebpf.StatType][]attributes.Section{
 	ebpf.StatTypeDiskIO: {
 		attributes.StatDiskServiceDuration.Section, attributes.StatDiskIO.Section, attributes.StatDiskOperations.Section,
-		attributes.StatDiskServiceTime.Section,
+		attributes.StatDiskServiceTime.Section, attributes.StatDiskFlushDuration.Section,
 	},
 	ebpf.StatTypeFsSync: {
 		attributes.StatFsSyncDuration.Section, attributes.StatFsSyncOperations.Section, attributes.StatFsSyncTime.Section,
