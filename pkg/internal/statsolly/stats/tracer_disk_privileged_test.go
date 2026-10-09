@@ -265,7 +265,7 @@ func loopDeviceOnExt4(t *testing.T) (devPath, mountPoint string) {
 	require.NoError(t, err)
 	t.Cleanup(func() { backing.Close() })
 	require.NoError(t, backing.Truncate(loopBackingFileSize/2))
-	devPath, _ = attachLoopDeviceTo(t, backing)
+	devPath = attachLoopDeviceTo(t, backing)
 	return devPath, mountPoint
 }
 
@@ -1011,13 +1011,12 @@ func attachLoopDevice(t *testing.T) string {
 	require.NoError(t, err)
 	t.Cleanup(func() { backing.Close() })
 	require.NoError(t, backing.Truncate(loopBackingFileSize))
-	path, _ := attachLoopDeviceTo(t, backing)
+	path := attachLoopDeviceTo(t, backing)
 	return path
 }
 
-// attachLoopDeviceTo attaches a new loop device to a file and returns its /dev path and the
-// open device
-func attachLoopDeviceTo(t *testing.T, backing *os.File) (string, *os.File) {
+// attachLoopDeviceTo attaches a new loop device to a file and returns its /dev path
+func attachLoopDeviceTo(t *testing.T, backing *os.File) string {
 	t.Helper()
 	control, err := os.OpenFile("/dev/loop-control", os.O_RDWR, 0)
 	require.NoError(t, err)
@@ -1036,7 +1035,7 @@ func attachLoopDeviceTo(t *testing.T, backing *os.File) (string, *os.File) {
 		_ = unix.IoctlSetInt(int(loop.Fd()), unix.LOOP_CLR_FD, 0)
 		loop.Close()
 	})
-	return path, loop
+	return path
 }
 
 // deviceNode creates a node of a block device in a temporary directory, from its numbers in sysfs,
