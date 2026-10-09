@@ -143,6 +143,16 @@ func getDefinitions(
 		nil,
 	)
 
+	// the cluster of the node, for the stats of the devices, which are charged to no workload
+	statsDiskNodeKubeAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sClusterName: true,
+		},
+		nil,
+	)
+
 	// attributes to be reported exclusively for network metrics when
 	// kubernetes metadata is enabled
 	networkKubeAttributes := NewAttrReportGroup(
@@ -934,7 +944,7 @@ func getDefinitions(
 			},
 		},
 		StatDiskOperationDuration.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskNodeKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},

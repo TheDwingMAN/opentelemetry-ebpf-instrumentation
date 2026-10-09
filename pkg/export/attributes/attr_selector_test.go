@@ -231,10 +231,15 @@ func TestDefault_StatDiskOperationDuration(t *testing.T) {
 	assert.Equal(t, []attr.Name{
 		attr.DiskIODirection,
 		attr.ErrorType,
+		attr.K8sClusterName,
 		attr.DiskStacked,
 		attr.DiskVolumeName,
 		attr.SystemDevice,
-	}, p.For(StatDiskOperationDuration))
+	}, p.For(StatDiskOperationDuration), "the cluster name, as the TCP stats have it")
+
+	p, err = NewAttrSelector(0, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.NotContains(t, p.For(StatDiskOperationDuration), attr.K8sClusterName, "outside Kubernetes")
 }
 
 func TestStatDiskMetricsNameTheDeviceMapperDevices(t *testing.T) {

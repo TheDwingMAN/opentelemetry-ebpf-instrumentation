@@ -112,8 +112,12 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
 		swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
 
+		kubeDecoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "kubeDecoratedDiskStats")
+		swi.Add(k8s.ClusterNameDecoratorProvider(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
+			statAttrs, diskStats, kubeDecoratedDiskStats), swarm.WithID("DiskKubeDecorator"))
+
 		decoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "decoratedDiskStats")
-		swi.Add(decorate.Decorate(s.agentIP, statAttrs, diskStats, decoratedDiskStats),
+		swi.Add(decorate.Decorate(s.agentIP, statAttrs, kubeDecoratedDiskStats, decoratedDiskStats),
 			swarm.WithID("DiskStatsDecorator"))
 
 		filteredStorageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredStorageStats")

@@ -414,3 +414,6 @@ groups:
             `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target),
             `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ`
             (protection), or `_OTHER`
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled

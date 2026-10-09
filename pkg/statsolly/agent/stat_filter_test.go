@@ -69,7 +69,7 @@ func TestTCPStatFiltersKeepTheirSemantics(t *testing.T) {
 		{"dst.cidr, from the CIDR decorator", filter.AttributeFamilyConfig{"dst.cidr": {Match: "10.0.0.0/8"}}, internalOnes, true},
 		{"dst.country, from the GeoIP decorator", filter.AttributeFamilyConfig{"dst_country": {Match: "US"}}, internalOnes, true},
 		{"obi.ip, which storage metrics have too", filter.AttributeFamilyConfig{"obi.ip": {NotMatch: "1.2.3.4"}}, nil, true},
-		{"k8s.cluster.name", filter.AttributeFamilyConfig{"k8s.cluster.name": {NotMatch: "c1"}}, nil, true},
+		{"k8s.cluster.name, which storage metrics have too", filter.AttributeFamilyConfig{"k8s.cluster.name": {NotMatch: "c1"}}, nil, true},
 		{"http.route, which no stat metric has", filter.AttributeFamilyConfig{"http.route": {Match: "/foo"}}, nil, true},
 		{"reason and dst.cidr", filter.AttributeFamilyConfig{"reason": {Match: "refused"}, "dst.cidr": {Match: "10.*"}}, []string{"refused"}, true},
 		// no TCP stat is matched against the filters on the attributes that the storage stat metrics
