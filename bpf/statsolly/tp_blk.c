@@ -3,14 +3,27 @@
 
 //go:build obi_bpf_ignore
 #include <bpfcore/vmlinux.h>
+#include <bpfcore/bpf_builtins.h>
 #include <bpfcore/bpf_helpers.h>
 #include <bpfcore/bpf_core_read.h>
 
-#include <statsolly/disk_accum.h>
+#include <common/scratch_mem.h>
+
 #include <statsolly/disk_io.h>
 #include <statsolly/types.h>
 #include <statsolly/maps/disk_io_accum.h>
 #include <statsolly/maps/disk_rq_start.h>
+
+// The latency histogram boundaries of block requests. To be injected from userspace
+// during eBPF program load & initialization.
+volatile const u64 disk_latency_bounds_ns[k_disk_latency_bounds];
+
+// REQ_OP_ZONE_APPEND, which userspace finds in the kernel BTF: its value depends on the kernel
+// version. 0 when the kernel has none.
+volatile const u32 disk_req_op_zone_append;
+
+// Set when block_rq_complete reports a blk_status_t (Linux 5.16+) instead of a negative errno.
+volatile const bool disk_status_is_blk_status;
 
 // The RQF_FLUSH_SEQ flag of struct request, which userspace finds in the kernel BTF: its bit
 // depends on the kernel version, and some kernels number it in an anonymous enum.
@@ -22,6 +35,12 @@ volatile const u32 disk_rqf_io_stat;
 // Force structs into the ELF for automatic creation of Golang struct
 const disk_io_key_t *unused_disk_io_key __attribute__((unused));
 const disk_io_accum_t *unused_disk_io_accum __attribute__((unused));
+
+SCRATCH_MEM_TYPED(disk_io_accum_init, disk_io_accum_t)
+
+// The operation of block request flags: the request flags start right after the
+// REQ_OP_BITS-wide operation field.
+enum { k_op_mask = (1U << __REQ_FAILFAST_DEV) - 1 };
 
 static __always_inline enum disk_op request_op(struct request *rq) {
     return disk_op_from_req_op(BPF_CORE_READ(rq, cmd_flags) & k_op_mask, disk_req_op_zone_append);
@@ -63,24 +82,30 @@ static __always_inline bool never_issued(struct request *rq) {
     return BPF_CORE_READ(rq, state) == bpf_core_enum_value(enum mq_rq_state, MQ_RQ_IDLE);
 }
 
+// fill_start fills start with the whole disk of a request, its operation and when it started
+static __always_inline void fill_start(struct request *rq,
+                                       const enum disk_op op,
+                                       const u64 started_ns,
+                                       disk_rq_start_t *start) {
+    struct gendisk *disk = request_disk(rq);
+    start->issued_ns = started_ns;
+    start->major = BPF_CORE_READ(disk, major);
+    start->minor = BPF_CORE_READ(disk, first_minor);
+    start->op = op;
+}
+
 // record_issue records when a request is issued to the device, on OBI's clock. A request issued
 // again after a requeue keeps its last issue. The kernel's own timestamps are only a fallback (see
-// kernel_issue_start): from Linux 6.9 (and RHEL 9.6), they read the clock cached by the
+// kernel_start_ns): from Linux 6.9 (and RHEL 9.6), they read the clock cached by the
 // submitter's block plug, which can be hundreds of milliseconds old for writeback.
 static __always_inline void record_issue(struct request *rq) {
     const enum disk_op op = request_op(rq);
     if (op == disk_op_unknown) {
         return;
     }
-    const u64 issued_ns = bpf_ktime_get_ns();
-    struct gendisk *disk = request_disk(rq);
     const u64 key = (u64)(uintptr_t)rq;
-    const disk_rq_start_t start = {
-        .issued_ns = issued_ns,
-        .major = BPF_CORE_READ(disk, major),
-        .minor = BPF_CORE_READ(disk, first_minor),
-        .op = op,
-    };
+    disk_rq_start_t start = {};
+    fill_start(rq, op, bpf_ktime_get_ns(), &start);
     bpf_map_update_elem(&disk_rq_start, &key, &start, BPF_ANY);
 }
 
@@ -121,42 +146,35 @@ static __always_inline bool recorded_start(struct request *rq, disk_rq_start_t *
     return true;
 }
 
-// kernel_issue_start fills start for an issued request that record_issue didn't record, from the
-// issue time that the kernel recorded, if it times the requests of the queue (QUEUE_FLAG_STATS), or
-// else from its start, so that the request is still counted.
-static __always_inline bool kernel_issue_start(struct request *rq, disk_rq_start_t *start) {
-    u64 started_ns = 0;
-    if (bpf_core_field_exists(rq->io_start_time_ns)) {
-        started_ns = BPF_CORE_READ(rq, io_start_time_ns);
+// kernel_start_ns is the kernel's own start of a request that record_issue didn't record, or 0 if
+// the kernel didn't time it. An issued request starts at the issue time that the kernel recorded, if
+// it times the requests of the queue (QUEUE_FLAG_STATS), or else at its start, so that the request
+// is still counted. A request that was never issued has no issue time: it starts when the kernel
+// started timing it, as in /proc/diskstats.
+static __always_inline u64 kernel_start_ns(struct request *rq, const bool issued) {
+    if (issued && bpf_core_field_exists(rq->io_start_time_ns)) {
+        const u64 issued_ns = BPF_CORE_READ(rq, io_start_time_ns);
+        if (issued_ns != 0) {
+            return issued_ns;
+        }
     }
-    if (started_ns == 0) {
-        started_ns = request_start_ns(rq);
-    }
-    if (started_ns == 0) {
-        return false;
-    }
-    struct gendisk *disk = request_disk(rq);
-    start->issued_ns = started_ns;
-    start->major = BPF_CORE_READ(disk, major);
-    start->minor = BPF_CORE_READ(disk, first_minor);
-    start->op = request_op(rq);
-    return true;
+    return request_start_ns(rq);
 }
 
-// never_issued_start fills start for a request that was never issued, which OBI has no issue time
-// for: from when the kernel started timing it, as it also does in /proc/diskstats. The kernel
-// doesn't count requests that it doesn't time.
-static __always_inline bool never_issued_start(struct request *rq, disk_rq_start_t *start) {
-    const u64 started_ns = request_start_ns(rq);
-    if (started_ns == 0) {
-        return false;
+// lookup_or_init_accum returns the accumulation entry of a key, created zeroed if missing
+static __always_inline disk_io_accum_t *lookup_or_init_accum(const disk_io_key_t *key) {
+    disk_io_accum_t *accum = bpf_map_lookup_elem(&disk_io_accum, key);
+    if (accum) {
+        return accum;
     }
-    struct gendisk *disk = request_disk(rq);
-    start->issued_ns = started_ns;
-    start->major = BPF_CORE_READ(disk, major);
-    start->minor = BPF_CORE_READ(disk, first_minor);
-    start->op = request_op(rq);
-    return true;
+    disk_io_accum_t *init = disk_io_accum_init_mem();
+    if (!init) {
+        return 0;
+    }
+    bpf_memset(init, 0, sizeof(*init));
+    // BPF_NOEXIST: another CPU may have created the entry since the lookup above
+    bpf_map_update_elem(&disk_io_accum, key, init, BPF_NOEXIST);
+    return bpf_map_lookup_elem(&disk_io_accum, key);
 }
 
 SEC("raw_tracepoint/block_rq_complete")
@@ -190,12 +208,14 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     }
 
     disk_rq_start_t start = {};
-    if (never_issued(rq)) {
-        if (!never_issued_start(rq, &start)) {
+    const bool issued = !never_issued(rq);
+    if (!issued || !recorded_start(rq, &start)) {
+        const u64 started_ns = kernel_start_ns(rq, issued);
+        // the kernel doesn't count the requests that it doesn't time
+        if (started_ns == 0) {
             return 0;
         }
-    } else if (!recorded_start(rq, &start) && !kernel_issue_start(rq, &start)) {
-        return 0;
+        fill_start(rq, op, started_ns, &start);
     }
     const u64 now_ns = bpf_ktime_get_ns();
     const u64 latency_ns = now_ns > start.issued_ns ? now_ns - start.issued_ns : 0;
@@ -206,7 +226,7 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         .status = status,
     };
 
-    disk_io_accum_t *accum = lookup_or_init_accum(&disk_io_accum, &key);
+    disk_io_accum_t *accum = lookup_or_init_accum(&key);
     if (!accum) {
         return 0;
     }
