@@ -214,6 +214,8 @@ type fsSyncReads struct {
 func fsSyncAttributeReads(features *export.Features, attrSel *attributes.AttrSelector, reads ProbeReads) fsSyncReads {
 	return fsSyncReads{cgroup: readsWorkload([]storageMetric{
 		{enabled: features.StatsFsSyncDuration(), name: attributes.StatFsSyncDuration},
+		{enabled: features.StatsFsSyncOperations(), name: attributes.StatFsSyncOperations},
+		{enabled: features.StatsFsSyncTime(), name: attributes.StatFsSyncTime},
 	}, attrSel, reads)}
 }
 

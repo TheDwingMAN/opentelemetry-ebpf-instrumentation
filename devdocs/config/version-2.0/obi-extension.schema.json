@@ -2099,11 +2099,13 @@
                   "disk_io",
                   "disk_operations",
                   "disk_service_time",
-                  "fs_sync_duration"
+                  "fs_sync_duration",
+                  "fs_sync_operations",
+                  "fs_sync_time"
                 ]
               },
               "default": [],
-              "description": "Enabled stats families: the TCP ones, the block I/O (disk) ones, disk_service_duration, disk_io, disk_operations and disk_service_time, and the file sync one, fs_sync_duration.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones, the block I/O (disk) ones, disk_service_duration, disk_io, disk_operations and disk_service_time, and the file sync ones, fs_sync_duration, fs_sync_operations and fs_sync_time.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",

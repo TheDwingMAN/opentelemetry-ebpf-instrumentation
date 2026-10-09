@@ -709,6 +709,18 @@ var (
 		Unit:    "s",
 		Type:    InstrumentHistogram,
 	})
+	StatFsSyncOperations = metric(Name{
+		Section: "obi.stat.fs.sync.operations",
+		OTEL:    "obi.stat.fs.sync.operations",
+		Unit:    "{operation}",
+		Type:    InstrumentCounter,
+	})
+	StatFsSyncTime = metric(Name{
+		Section: "obi.stat.fs.sync.time",
+		OTEL:    "obi.stat.fs.sync.time",
+		Unit:    "s",
+		Type:    InstrumentCounter,
+	})
 )
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.

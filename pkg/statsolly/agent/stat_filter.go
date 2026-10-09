@@ -28,7 +28,9 @@ var storageStatSections = map[ebpf.StatType][]attributes.Section{
 		attributes.StatDiskServiceDuration.Section, attributes.StatDiskIO.Section, attributes.StatDiskOperations.Section,
 		attributes.StatDiskServiceTime.Section,
 	},
-	ebpf.StatTypeFsSync: {attributes.StatFsSyncDuration.Section},
+	ebpf.StatTypeFsSync: {
+		attributes.StatFsSyncDuration.Section, attributes.StatFsSyncOperations.Section, attributes.StatFsSyncTime.Section,
+	},
 }
 
 // tcpStatFilters returns the stats attribute filters that apply to the TCP stats: all of them but

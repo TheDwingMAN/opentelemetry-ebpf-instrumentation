@@ -74,11 +74,14 @@ func TestFeatureStatsFsSyncIsOptIn(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, stats.StatsFsSync(), "the stats aggregate must not enable the file sync stats")
 
-	fsSync := FeatureStatsFsSyncDuration
-	assert.True(t, fsSync.StatsFsSync())
-	assert.True(t, fsSync.StatsFsSyncDuration())
-	assert.False(t, fsSync.StatsDisk(), "the file syncs don't need the disk stats")
-	assert.True(t, fsSync.StatMetrics(), "a file-sync-only selection must still enable the stats pipeline")
+	for _, fsSync := range []Features{FeatureStatsFsSyncDuration, FeatureStatsFsSyncOperations, FeatureStatsFsSyncTime} {
+		assert.True(t, fsSync.StatsFsSync())
+		assert.False(t, fsSync.StatsDisk(), "the file syncs don't need the disk stats")
+		assert.True(t, fsSync.StatMetrics(), "a file-sync-only selection must still enable the stats pipeline")
+	}
+	assert.True(t, FeatureStatsFsSync.StatsFsSyncDuration())
+	assert.True(t, FeatureStatsFsSync.StatsFsSyncOperations())
+	assert.True(t, FeatureStatsFsSync.StatsFsSyncTime())
 }
 
 // The storage stats must be named: their probes fire on every block request or file sync
@@ -95,7 +98,9 @@ func TestFeatureAllDoesntEnableStorageStats(t *testing.T) {
 // Config v1 is frozen: only Config v2 enables the file sync stats, and a logged configuration shows
 // them with their Config v2 name
 func TestFeatureStatsFsSyncHasNoV1Name(t *testing.T) {
-	for _, name := range []string{"stats_fs_sync", "stats_fs_sync_duration", "fs_sync_duration"} {
+	for _, name := range []string{
+		"stats_fs_sync", "stats_fs_sync_duration", "fs_sync_duration", "fs_sync_operations", "fs_sync_time",
+	} {
 		_, err := LoadFeatures([]string{name})
 		require.ErrorContains(t, err, "unknown metrics feature", name)
 	}
@@ -104,7 +109,8 @@ func TestFeatureStatsFsSyncHasNoV1Name(t *testing.T) {
 		Features Features `yaml:"features"`
 	}{Features: FeatureStatsTCPRtt | FeatureStatsFsSync})
 	require.NoError(t, err)
-	assert.Equal(t, "features:\n    - stats_tcp_rtt\n    - fs_sync_duration\n", string(out))
+	assert.Equal(t, "features:\n    - stats_tcp_rtt\n    - fs_sync_duration\n    - fs_sync_operations\n"+
+		"    - fs_sync_time\n", string(out))
 }
 
 // Config v1 is frozen: only Config v2 enables the disk stats, and a logged configuration shows

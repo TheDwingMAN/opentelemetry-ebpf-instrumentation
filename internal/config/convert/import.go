@@ -2527,6 +2527,10 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsDiskServiceTime
 		case statsFeatureFsSyncDuration:
 			out |= export.FeatureStatsFsSyncDuration
+		case statsFeatureFsSyncOperations:
+			out |= export.FeatureStatsFsSyncOperations
+		case statsFeatureFsSyncTime:
+			out |= export.FeatureStatsFsSyncTime
 		}
 	}
 	return out
