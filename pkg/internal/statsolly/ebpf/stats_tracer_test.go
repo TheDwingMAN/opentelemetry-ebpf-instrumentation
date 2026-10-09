@@ -205,8 +205,6 @@ func TestDiskProgramsToDisable(t *testing.T) {
 	}
 	assert.ElementsMatch(t, allDisk, diskProgramsToDisable(false, blockTracepointLayout{}),
 		"no disk program is loaded when disk stats are disabled")
-	assert.ElementsMatch(t, allDisk, diskProgramsToDisable(true, blockTracepointLayout{unknown: true}),
-		"no disk program is loaded when the tracepoint layout can't be told")
 	assert.Equal(t, []string{progObiStatsRawTpBlockRqIssueLegacy},
 		diskProgramsToDisable(true, blockTracepointLayout{}),
 		"current kernels load the single-argument block_rq_issue program")

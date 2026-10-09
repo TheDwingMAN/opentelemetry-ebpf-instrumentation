@@ -419,8 +419,6 @@ type blockTracepointLayout struct {
 	issueHasQueueArg bool
 	// block_rq_complete reports a blk_status_t (Linux 5.16+) instead of a negative errno
 	completeReportsBlkStatus bool
-	// the layout could not be told, so the disk probes can't be loaded
-	unknown bool
 	// flushSeqFlag is the RQF_FLUSH_SEQ flag of the block requests
 	flushSeqFlag uint32
 	// zoneAppendOp is REQ_OP_ZONE_APPEND, whose value depends on the kernel, or 0 if the kernel has none
@@ -435,11 +433,11 @@ type blockTracepointLayout struct {
 func kernelBlockTracepointLayout(log *slog.Logger) (blockTracepointLayout, error) {
 	spec, err := btf.LoadKernelSpec()
 	if err != nil {
-		return blockTracepointLayout{unknown: true}, err
+		return blockTracepointLayout{}, err
 	}
 	layout, err := blockTracepointLayoutFrom(tracepointProto(spec))
 	if err != nil {
-		return blockTracepointLayout{unknown: true}, err
+		return blockTracepointLayout{}, err
 	}
 	major, minor := ebpfcommon.KernelVersion()
 	layout.flushSeqFlag = requestFlushSeqFlag(enumerator(spec), major, minor)
@@ -579,7 +577,7 @@ func diskLatencyBoundsNs() [diskLatencyBuckets - 1]uint64 {
 // diskProgramsToDisable returns the disk programs that must not be loaded
 func diskProgramsToDisable(enabled bool, layout blockTracepointLayout) []string {
 	switch {
-	case !enabled || layout.unknown:
+	case !enabled:
 		return []string{progObiStatsRawTpBlockRqIssue, progObiStatsRawTpBlockRqIssueLegacy, progObiStatsRawTpBlockRqComplete}
 	case layout.issueHasQueueArg:
 		return []string{progObiStatsRawTpBlockRqIssue}
