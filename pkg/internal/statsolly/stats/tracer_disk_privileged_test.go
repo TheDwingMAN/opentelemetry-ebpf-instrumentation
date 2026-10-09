@@ -1017,7 +1017,7 @@ func attachDiskReader(t *testing.T) *diskReader {
 // accumulation map that already forgot the I/O that happened before
 func attachDiskReaderOf(t *testing.T, features export.Features) *diskReader {
 	t.Helper()
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, allAttributes, ebpf.ProbeReads{})
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, allAttributes, ebpf.ProbeReads{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 	require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")

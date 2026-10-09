@@ -98,8 +98,8 @@ func tlog() *slog.Logger {
 // read the attributes that the reported attributes need, and the ones in reads. The TCP probes are
 // required, while the storage ones are optional: a storage feature whose probes can't be loaded or
 // attached is disabled, and listed by DisabledStorageFeatures, and the other stats keep working.
-func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig,
-	reads ProbeReads,
+func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups attributes.AttrGroups,
+	selectorCfg *attributes.SelectorConfig, reads ProbeReads,
 ) (*StatsFetcher, error) {
 	tlog := tlog()
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -107,9 +107,8 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 			"error", err)
 	}
 
-	// UndefinedGroup is intentional: we only need to check NetworkTCPHandshakeRole,
-	// which is a direct metric attribute.
-	attrSel, err := attributes.NewAttrSelector(attributes.UndefinedGroup, selectorCfg)
+	// the groups tell the defaults of the storage metrics, such as their Kubernetes attributes
+	attrSel, err := attributes.NewAttrSelector(attrGroups, selectorCfg)
 	if err != nil {
 		return nil, fmt.Errorf("creating attr selector: %w", err)
 	}

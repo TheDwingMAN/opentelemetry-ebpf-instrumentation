@@ -50,7 +50,7 @@ func TestStorageMapsOfDisabledFeatures(t *testing.T) {
 	require.NoError(t, err)
 	sizeInFlightMap(spec, cpus)
 	load := func(features export.Features, selection *attributes.SelectorConfig) map[string]uint32 {
-		fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, selection, ProbeReads{})
+		fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, attributes.UndefinedGroup, selection, ProbeReads{})
 		require.NoError(t, err)
 		t.Cleanup(func() {
 			fetcher.Close()

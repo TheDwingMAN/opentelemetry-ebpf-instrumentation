@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
+	"go.opentelemetry.io/obi/pkg/internal/pipe"
 )
 
 func TestStatGetters_DiskIO(t *testing.T) {
@@ -65,4 +66,27 @@ func TestStatGetters_DiskIOContainer(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "0123abcd", containerID(inContainer).Value.AsString())
 	assert.False(t, containerID(onHost).Valid(), "omitted for I/O charged to no container")
+}
+
+// The Kubernetes metadata of the I/O charged to no pod, or of a node whose cluster name is unknown,
+// is omitted from the storage stats instead of being exported empty
+func TestStatGetters_StorageOmitsUnknownKubernetesMetadata(t *testing.T) {
+	inPod := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{}, CommonAttrs: pipe.CommonAttrs{Metadata: map[attr.Name]string{
+		attr.K8sNamespaceName: "storage",
+	}}}
+	podLess := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{}}
+
+	namespace, ok := StatGetters(attr.K8sNamespaceName)
+	require.True(t, ok)
+	assert.Equal(t, "storage", namespace(inPod).Value.AsString())
+	assert.False(t, namespace(podLess).Valid())
+}
+
+// The TCP stats keep exporting the Kubernetes metadata that they don't know, as before
+func TestStatGetters_TCPKeepsEmptyClusterName(t *testing.T) {
+	clusterName, ok := StatGetters(attr.K8sClusterName)
+	require.True(t, ok)
+	value := clusterName(&Stat{Type: StatTypeTCPRtt, TCPRtt: &TCPRtt{}})
+	assert.True(t, value.Valid())
+	assert.Empty(t, value.Value.AsString())
 }

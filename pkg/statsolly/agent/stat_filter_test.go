@@ -77,6 +77,8 @@ func TestTCPStatFiltersKeepTheirSemantics(t *testing.T) {
 		// drop them all, also on those that other metrics have, like k8s.namespace.name or container.id
 		{"system.device", filter.AttributeFamilyConfig{"system.device": {Match: "sda"}}, all, false},
 		{"error.type", filter.AttributeFamilyConfig{"error.type": {Match: "EIO"}}, all, false},
+		{"container.id", filter.AttributeFamilyConfig{"container.id": {Match: "abc*"}}, all, false},
+		{"k8s.namespace.name", filter.AttributeFamilyConfig{"k8s_namespace_name": {Match: "storage"}}, all, false},
 		{"dst.port and system.device", filter.AttributeFamilyConfig{"dst.port": {Equals: new(443)}, "system.device": {Match: "sda"}}, internalOnes, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -120,11 +122,13 @@ func TestStorageStatFiltersOnlyApplyToTheStatsWithTheirAttributes(t *testing.T) 
 // The storage probes read only the attributes of the filters that apply to the storage stats
 func TestStorageProbesReadTheAttributesOfTheStorageStatFilters(t *testing.T) {
 	filters := filter.AttributeFamilyConfig{
-		"dst.port":      {Equals: new(443)},
-		"container_id":  {Match: "a1*"},
-		"system.device": {Match: "nvme*"},
+		"dst.port":           {Equals: new(443)},
+		"k8s_src_namespace":  {Match: "shop"},
+		"container_id":       {Match: "a1*"},
+		"k8s.namespace.name": {Match: "shop"},
+		"system.device":      {Match: "nvme*"},
 	}
-	assert.ElementsMatch(t, []attr.Name{"container_id", "system.device"},
+	assert.ElementsMatch(t, []attr.Name{"container_id", "k8s.namespace.name", "system.device"},
 		filteredAttributes(storageStatFilters(filters, nil)))
 }
 
