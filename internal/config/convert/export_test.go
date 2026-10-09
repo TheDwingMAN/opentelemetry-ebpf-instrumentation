@@ -1076,6 +1076,8 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 		require.ElementsMatch(t, []string{
 			"tcp_rtt",
 			"fs_sync_duration",
+			"fs_sync_operations",
+			"fs_sync_time",
 		}, value(t, ext.Capture.Network, "stats", "features"))
 	})
 

@@ -66,6 +66,8 @@ const (
 	FeatureStatsDiskOperations
 	FeatureStatsDiskServiceTime
 	FeatureStatsFsSyncDuration
+	FeatureStatsFsSyncOperations
+	FeatureStatsFsSyncTime
 	FeatureAll = Features(^uint(0)) &^ featureStatsStorage
 )
 
@@ -74,7 +76,7 @@ const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | 
 
 // FeatureStatsFsSync groups the file sync stat features, whose metrics the same file sync probes
 // measure
-const FeatureStatsFsSync = FeatureStatsFsSyncDuration
+const FeatureStatsFsSync = FeatureStatsFsSyncDuration | FeatureStatsFsSyncOperations | FeatureStatsFsSyncTime
 
 // featureStatsStorage groups the storage stat features
 const featureStatsStorage = FeatureStatsDisk | FeatureStatsFsSync
@@ -119,6 +121,8 @@ var v2OnlyFeatures = map[string]Features{
 	"disk_operations":       FeatureStatsDiskOperations,
 	"disk_service_time":     FeatureStatsDiskServiceTime,
 	"fs_sync_duration":      FeatureStatsFsSyncDuration,
+	"fs_sync_operations":    FeatureStatsFsSyncOperations,
+	"fs_sync_time":          FeatureStatsFsSyncTime,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -457,6 +461,14 @@ func (f Features) StatsDisk() bool {
 
 func (f Features) StatsFsSyncDuration() bool {
 	return f.any(FeatureStatsFsSyncDuration)
+}
+
+func (f Features) StatsFsSyncOperations() bool {
+	return f.any(FeatureStatsFsSyncOperations)
+}
+
+func (f Features) StatsFsSyncTime() bool {
+	return f.any(FeatureStatsFsSyncTime)
 }
 
 // StatsFsSync tells whether any file sync stat feature is enabled

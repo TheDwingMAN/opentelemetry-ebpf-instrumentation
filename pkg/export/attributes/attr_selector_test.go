@@ -330,6 +330,29 @@ func TestDefault_StatFsSyncDuration(t *testing.T) {
 	}, p.For(StatFsSyncDuration))
 }
 
+func TestDefault_StatFsSyncCounters(t *testing.T) {
+	// the counters are reported per workload in Kubernetes, but not per pod
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	for _, metric := range []Name{StatFsSyncOperations, StatFsSyncTime} {
+		assert.Equal(t, []attr.Name{
+			attr.ErrorType,
+			attr.K8sClusterName,
+			attr.K8sKind,
+			attr.K8sNamespaceName,
+			attr.K8sOwnerName,
+			attr.FsSyncType,
+		}, p.For(metric), metric.OTEL)
+	}
+
+	// outside Kubernetes, they are reported per sync type and outcome
+	p, err = NewAttrSelector(0, &SelectorConfig{})
+	require.NoError(t, err)
+	for _, metric := range []Name{StatFsSyncOperations, StatFsSyncTime} {
+		assert.Equal(t, []attr.Name{attr.ErrorType, attr.FsSyncType}, p.For(metric), metric.OTEL)
+	}
+}
+
 // The selection key of the service time counter has its underscore replaced by a dot, as the
 // keys of attributes.select are normalized, whichever notation it is written in
 func TestStatDiskServiceTimeSelection(t *testing.T) {

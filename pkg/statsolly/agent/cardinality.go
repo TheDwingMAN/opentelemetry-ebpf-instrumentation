@@ -55,7 +55,8 @@ func warnPerPodHistograms(features *export.Features, groups attributes.AttrGroup
 	for _, histogram := range storageHistograms(features) {
 		if names := perPodHistogramAttributes(histogram, attrSel); len(names) > 0 {
 			alog().Warn("a storage latency histogram is reported per pod or container: each of them adds a series "+
-				"per bucket", "histogram", histogram.name.OTEL, "attributes", names)
+				"per bucket. The operations and time counters of the same stats give their mean latency at one series each",
+				"histogram", histogram.name.OTEL, "attributes", names)
 		}
 	}
 }

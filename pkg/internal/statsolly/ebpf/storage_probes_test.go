@@ -162,6 +162,13 @@ func TestFsSyncAttributeReads(t *testing.T) {
 	assert.Equal(t, fsSyncReads{},
 		reads(attributes.GroupKubernetes, fsSync, &attributes.SelectorConfig{}, ProbeReads{}),
 		"in Kubernetes, the histogram reports the cluster only by default")
+	for _, counter := range []export.Features{export.FeatureStatsFsSyncOperations, export.FeatureStatsFsSyncTime} {
+		assert.Equal(t, fsSyncReads{cgroup: true},
+			reads(attributes.GroupKubernetes, counter, &attributes.SelectorConfig{}, ProbeReads{}),
+			"in Kubernetes, the counters report the workload by default")
+		assert.Equal(t, fsSyncReads{}, reads(attributes.UndefinedGroup, counter, &attributes.SelectorConfig{}, ProbeReads{}),
+			"outside Kubernetes, the counters have no workload attribute by default")
+	}
 	assert.Equal(t, fsSyncReads{cgroup: true},
 		reads(attributes.UndefinedGroup, fsSync, &attributes.SelectorConfig{}, ProbeReads{Workloads: true}),
 		"dynamic application selection needs the workload of every sync")

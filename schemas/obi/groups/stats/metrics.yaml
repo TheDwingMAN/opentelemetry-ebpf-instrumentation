@@ -608,7 +608,9 @@ groups:
       ESPIPE for sync_file_range), are not counted. The syncs of kernel
       threads, such as those of the NFS server and of the loop devices that
       sync their backing file, are counted without workload attributes. Its
-      workload attributes are opt-in.
+      workload attributes are opt-in:
+      `obi.stat.fs.sync.time` and `obi.stat.fs.sync.operations` give the mean
+      per workload.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -630,6 +632,87 @@ groups:
         requirement_level: opt_in
       - ref: k8s.kind
         requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.fs.sync.operations
+    type: metric
+    metric_name: obi.stat.fs.sync.operations
+    instrument: counter
+    unit: "{operation}"
+    stability: development
+    brief: >
+      Count of the file syncs that `obi.stat.fs.sync.duration` measures, per
+      sync type, outcome and workload that the thread that synced belongs to.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: obi.fs.sync.type
+        requirement_level: recommended
+      - ref: error.type
+        requirement_level:
+          conditionally_required: >
+            if the file sync failed: its errno name, e.g. `EIO` or `ENOSPC`, or
+            `_OTHER`
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the sync is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the sync is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the sync is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.fs.sync.time
+    type: metric
+    metric_name: obi.stat.fs.sync.time
+    instrument: counter
+    unit: "s"
+    stability: development
+    brief: >
+      Sum of the durations of the file syncs that `obi.stat.fs.sync.duration`
+      measures, as it measures them, per sync type, outcome and workload that
+      the thread that synced belongs to: the sum of that histogram. Like
+      `system.cpu.time`, it is a time counter, of the time that threads waited
+      for their syncs. Divided by `obi.stat.fs.sync.operations`, both summed by
+      the workload attributes, it gives the mean sync time of each workload;
+      outside Kubernetes, the histogram gives the same per sync type.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: obi.fs.sync.type
+        requirement_level: recommended
+      - ref: error.type
+        requirement_level:
+          conditionally_required: >
+            if the file sync failed: its errno name, e.g. `EIO` or `ENOSPC`, or
+            `_OTHER`
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the sync is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the sync is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the sync is charged to a pod
       - ref: k8s.pod.name
         requirement_level: opt_in
       - ref: k8s.container.name

@@ -342,6 +342,32 @@ func TestFsSyncStats(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// The file sync counters give the count and the sum of the histogram, per sync type and outcome
+func TestFsSyncCounters(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsFsSync)
+
+	fsyncs := fakeFsSyncRecord(ebpf.CodeFsSyncFsync, "", fakeLatency(0.0005, 0.004))
+	failed := fakeFsSyncRecord(ebpf.CodeFsSyncSyncFileRange, "EIO", fakeLatency(0.02))
+	diskEvents <- []*ebpf.Stat{fsyncs, failed}
+
+	fsync := map[string]string{"obi_fs_sync_type": "fsync", "error_type": ""}
+	failedRange := map[string]string{"obi_fs_sync_type": "sync_file_range", "error_type": "EIO"}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_operations_total", Value: 2, Labels: fsync},
+			{Name: "obi_stat_fs_sync_operations_total", Value: 1, Labels: failedRange},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_operations"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_time_seconds_total", Value: fsyncs.FsSync.Time, Labels: fsync},
+			{Name: "obi_stat_fs_sync_time_seconds_total", Value: 0.02, Labels: failedRange},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_time"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_duration_seconds_count", Value: 2, Labels: fsync},
+			{Name: "obi_stat_fs_sync_duration_seconds_count", Value: 1, Labels: failedRange},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_duration_seconds_count"))
+	}, timeout, 100*time.Millisecond)
+}
+
 // The disk probes couldn't be loaded: the agent has no disk tracer, and the TCP stats go on without
 // the storage branch
 func TestDiskStatsWithoutDiskProbes(t *testing.T) {

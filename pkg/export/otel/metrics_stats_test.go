@@ -128,6 +128,73 @@ func TestStatMetricsExporter_DiskCountersSplitByError(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// The file sync counters split the syncs and their time by type and outcome, and omit the
+// Kubernetes metadata of the syncs charged to no pod
+func TestStatMetricsExporter_FsSyncCounters(t *testing.T) {
+	defer otelcfg.RestoreEnvAfterExecution()()
+	ctx := t.Context()
+
+	otlp, err := collector.Start(ctx)
+	require.NoError(t, err)
+
+	stats := msg.NewQueue[[]*ebpf.Stat](msg.ChannelBufferLen(10))
+	cfg := &otelcfg.MetricsConfig{
+		Interval:        50 * time.Millisecond,
+		CommonEndpoint:  otlp.ServerEndpoint,
+		MetricsProtocol: otelcfg.ProtocolHTTPProtobuf,
+		TTL:             3 * time.Minute,
+	}
+	exporter, err := StatMetricsExporterProvider(
+		&global.ContextInfo{
+			OTELMetricsExporter:   &otelcfg.MetricsExporterInstancer{Cfg: cfg},
+			MetricAttributeGroups: attributes.GroupKubernetes,
+		},
+		&StatMetricsConfig{
+			Metrics:     cfg,
+			SelectorCfg: &attributes.SelectorConfig{SelectionCfg: attributes.Selection{}},
+			CommonCfg:   &perapp.GlobalMetricsConfig{Features: export.FeatureStatsFsSyncOperations | export.FeatureStatsFsSyncTime},
+		}, stats)(ctx)
+	require.NoError(t, err)
+
+	go exporter(ctx)
+
+	stats.Send([]*ebpf.Stat{
+		{
+			Type:        ebpf.StatTypeFsSync,
+			FsSync:      &ebpf.FsSync{Type: ebpf.CodeFsSyncFdatasync, Operations: 100, Time: 0.5},
+			CommonAttrs: pipe.CommonAttrs{Metadata: map[attr.Name]string{attr.K8sClusterName: "c", attr.K8sNamespaceName: "ns", attr.K8sOwnerName: "db", attr.K8sKind: "StatefulSet"}},
+		},
+		{
+			Type:        ebpf.StatTypeFsSync,
+			FsSync:      &ebpf.FsSync{Type: ebpf.CodeFsSyncFsync, ErrorType: "EIO", Operations: 1, Time: 2},
+			CommonAttrs: pipe.CommonAttrs{Metadata: map[attr.Name]string{attr.K8sClusterName: "c"}},
+		},
+	})
+
+	type series struct {
+		syncType, errorType, owner string
+	}
+	operations, syncTime := map[series]int64{}, map[series]float64{}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for drained := false; !drained; {
+			select {
+			case record := <-otlp.Records():
+				key := series{record.Attributes["obi.fs.sync.type"], record.Attributes["error.type"], record.Attributes["k8s.owner.name"]}
+				switch record.Name {
+				case attributes.StatFsSyncOperations.OTEL:
+					operations[key] = record.IntVal
+				case attributes.StatFsSyncTime.OTEL:
+					syncTime[key] = record.FloatVal
+				}
+			default:
+				drained = true
+			}
+		}
+		assert.Equal(ct, map[series]int64{{"fdatasync", "", "db"}: 100, {"fsync", "EIO", ""}: 1}, operations)
+		assert.Equal(ct, map[series]float64{{"fdatasync", "", "db"}: 0.5, {"fsync", "EIO", ""}: 2}, syncTime)
+	}, timeout, 100*time.Millisecond)
+}
+
 // Over OTLP, the disk stats omit the Kubernetes metadata of the I/O charged to no pod instead of
 // exporting it empty
 func TestStatMetricsExporter_StorageOmitsUnknownKubernetesMetadata(t *testing.T) {
