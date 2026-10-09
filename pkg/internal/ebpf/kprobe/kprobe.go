@@ -43,14 +43,16 @@ func attachTraceFS(symbol string, prog *ebpf.Program, ret bool) (io.Closer, erro
 	}
 
 	// Match Cilium's retry for syscall names such as sys_connect.
-	if prefix := syscallPrefix(); prefix != "" {
+	if prefix := SyscallPrefix(); prefix != "" {
 		opts.Targets = []string{prefix + symbol}
 		return attachTraceFSEvent(prog, opts)
 	}
 	return closer, err
 }
 
-func syscallPrefix() string {
+// SyscallPrefix is the prefix of the kernel functions of the system calls on this architecture, e.g.
+// __x64_ in __x64_sys_fsync, or an empty string where OBI doesn't know it
+func SyscallPrefix() string {
 	switch runtime.GOARCH {
 	case "amd64":
 		return "__x64_"
