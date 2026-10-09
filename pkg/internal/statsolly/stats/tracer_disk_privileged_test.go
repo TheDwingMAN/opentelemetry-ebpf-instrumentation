@@ -136,6 +136,49 @@ func assertKernelBuckets(t *testing.T, accumMap *ciliumebpf.Map, devPath string,
 	assert.True(t, accumulated, "the kernel accumulated the requests of %s", devPath)
 }
 
+// TestAccumLookupAndDelete checks that the kernel returns the last value of the accumulation map
+// entries that the reader deletes, or that the reader is told that it can't: hash maps support it
+// from Linux 5.14
+func TestAccumLookupAndDelete(t *testing.T) {
+	accumMap, err := ciliumebpf.NewMap(&ciliumebpf.MapSpec{
+		Type: ciliumebpf.Hash, KeySize: 4, ValueSize: 8, MaxEntries: 1,
+	})
+	require.NoError(t, err)
+	defer accumMap.Close()
+	accum := ebpfAccum[uint32, uint64]{accum: accumMap}
+	require.NoError(t, accumMap.Put(uint32(1), uint64(42)))
+
+	last, err := accum.lookupAndDelete(1)
+	if errors.Is(err, ciliumebpf.ErrNotSupported) {
+		var value uint64
+		require.NoError(t, accumMap.Lookup(uint32(1), &value), "the entry is not deleted")
+		t.Skipf("the kernel can't look up and delete hash map entries: %v", err)
+	}
+	require.NoError(t, err)
+	assert.Equal(t, uint64(42), last)
+	_, err = accum.lookupAndDelete(1)
+	assert.ErrorIs(t, err, ciliumebpf.ErrKeyNotExist, "the entry is deleted")
+}
+
+// TestAccumLookupAndDeleteUnsupported checks that the reader is told when the kernel can't look up
+// and delete an entry at once, and that the entry is kept. Array maps never support it, so this
+// runs the error path that hash maps take before Linux 5.14 on any kernel.
+func TestAccumLookupAndDeleteUnsupported(t *testing.T) {
+	accumMap, err := ciliumebpf.NewMap(&ciliumebpf.MapSpec{
+		Type: ciliumebpf.Array, KeySize: 4, ValueSize: 8, MaxEntries: 1,
+	})
+	require.NoError(t, err)
+	defer accumMap.Close()
+	accum := ebpfAccum[uint32, uint64]{accum: accumMap}
+	require.NoError(t, accumMap.Put(uint32(0), uint64(42)))
+
+	_, err = accum.lookupAndDelete(0)
+	require.ErrorIs(t, err, ciliumebpf.ErrNotSupported)
+	var value uint64
+	require.NoError(t, accumMap.Lookup(uint32(0), &value))
+	assert.Equal(t, uint64(42), value, "the entry is kept")
+}
+
 // TestDiskFileSyncsAreCountedLikeTheKernel syncs the files of an ext4 filesystem. The kernel
 // completes the journal writes that have a cache flush before or after them twice, and completes
 // the empty flushes of files that didn't change without issuing them: writes must be counted as in

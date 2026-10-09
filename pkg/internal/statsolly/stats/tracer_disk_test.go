@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	ciliumebpf "github.com/cilium/ebpf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -24,6 +25,12 @@ type fakeDiskAccum struct {
 	deleted []ebpf.StatsDiskIoKeyT
 	// the error that read returns
 	err error
+	// grownBeforeDelete are the values that the kernel gives entries after their read and before
+	// their deletion
+	grownBeforeDelete map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT
+	// noLookupAndDelete makes lookupAndDelete fail as on kernels before Linux 5.14
+	noLookupAndDelete bool
+	lookupAndDeletes  int
 }
 
 func (f *fakeDiskAccum) read() (map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT, error) {
@@ -31,9 +38,26 @@ func (f *fakeDiskAccum) read() (map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT,
 }
 
 func (f *fakeDiskAccum) delete(key ebpf.StatsDiskIoKeyT) error {
+	f.growBeforeDelete(key)
 	f.deleted = append(f.deleted, key)
 	delete(f.entries, key)
 	return nil
+}
+
+func (f *fakeDiskAccum) lookupAndDelete(key ebpf.StatsDiskIoKeyT) (ebpf.StatsDiskIoAccumT, error) {
+	f.lookupAndDeletes++
+	if f.noLookupAndDelete {
+		return ebpf.StatsDiskIoAccumT{}, ciliumebpf.ErrNotSupported
+	}
+	f.growBeforeDelete(key)
+	last := f.entries[key]
+	return last, f.delete(key)
+}
+
+func (f *fakeDiskAccum) growBeforeDelete(key ebpf.StatsDiskIoKeyT) {
+	if grown, ok := f.grownBeforeDelete[key]; ok {
+		f.entries[key] = grown
+	}
 }
 
 var testBounds = []float64{0.001, 0.01}
@@ -143,6 +167,47 @@ func TestDiskReaderDeletesIdleEntries(t *testing.T) {
 	}
 	assert.Empty(t, r.readStats())
 	assert.Equal(t, []ebpf.StatsDiskIoKeyT{key}, src.deleted)
+	assert.Empty(t, r.previous, "forgotten once deleted from the kernel map")
+}
+
+// The kernel can add to an idle entry between its last read and its deletion: what it added is
+// reported when the entry is deleted
+func TestDiskReaderReportsWhatGrewBeforeTheDeletion(t *testing.T) {
+	key := writeKey(8, 16)
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
+		key: accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}),
+	}}
+	r := newTestDiskReader(src)
+	require.Len(t, r.readStats(), 1)
+	for range diskIdleReadsBeforeDelete - 1 {
+		require.Empty(t, r.readStats())
+	}
+
+	src.grownBeforeDelete = map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
+		key: accum([]uint64{3, 0, 0}, []uint64{100_000, 0, 0}),
+	}
+	stats := r.readStats()
+	assert.Equal(t, []ebpf.StatsDiskIoKeyT{key}, src.deleted)
+	require.Len(t, stats, 1)
+	assert.Equal(t, []ebpf.LatencySample{{Seconds: 0.0001, Count: 2}}, stats[0].DiskIO.Latency)
+	assert.Empty(t, r.previous, "forgotten once deleted from the kernel map")
+}
+
+// Before Linux 5.14, the kernel can't look up and delete a hash map entry at once: the idle
+// entries are deleted without their last value, and the reader doesn't try again
+func TestDiskReaderDeletesIdleEntriesWithoutLookupAndDelete(t *testing.T) {
+	first, second := writeKey(8, 16), writeKey(8, 32)
+	src := &fakeDiskAccum{noLookupAndDelete: true, entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
+		first:  accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}),
+		second: accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}),
+	}}
+	r := newTestDiskReader(src)
+	require.Len(t, r.readStats(), 2)
+	for range diskIdleReadsBeforeDelete {
+		require.Empty(t, r.readStats())
+	}
+	assert.ElementsMatch(t, []ebpf.StatsDiskIoKeyT{first, second}, src.deleted)
+	assert.Equal(t, 1, src.lookupAndDeletes)
 	assert.Empty(t, r.previous, "forgotten once deleted from the kernel map")
 }
 

@@ -47,6 +47,9 @@ type accumSource[K comparable, V any] interface {
 	// read returns the entries of the map, with errAccumFull if it is full
 	read() (map[K]V, error)
 	delete(key K) error
+	// lookupAndDelete deletes an entry and returns its last value, or ciliumebpf.ErrNotSupported
+	// when the kernel can't do both at once
+	lookupAndDelete(key K) (V, error)
 }
 
 type ebpfAccum[K comparable, V any] struct {
@@ -72,6 +75,18 @@ func (e ebpfAccum[K, V]) read() (map[K]V, error) {
 
 func (e ebpfAccum[K, V]) delete(key K) error {
 	return e.accum.Delete(key)
+}
+
+func (e ebpfAccum[K, V]) lookupAndDelete(key K) (V, error) {
+	var last V
+	err := e.accum.LookupAndDelete(key, &last)
+	// hash maps support it from Linux 5.14: older kernels return ENOTSUPP. Kernels without the
+	// command (before 4.20) return EINVAL. OBI supports none, so this only guards eBPF backports
+	// that lack it, whose idle entries would never be deleted otherwise.
+	if errors.Is(err, unix.EINVAL) {
+		return last, fmt.Errorf("%w: %w", ciliumebpf.ErrNotSupported, err)
+	}
+	return last, err
 }
 
 // DiskMapTracerConfig tells a DiskMapTracer which kernel maps to read, and how to interpret them
@@ -148,6 +163,8 @@ type accumReader[K comparable, V any] struct {
 	idleReads map[K]int
 	// the map was full at the previous read
 	full bool
+	// the kernel can't look up and delete an entry at once
+	noLookupAndDelete bool
 }
 
 func newAccumReader[K comparable, V any](
@@ -186,8 +203,8 @@ func (r *accumReader[K, V]) readStats() []*ebpf.Stat {
 		if stat := r.toStat(key, current, r.previous[key]); stat != nil {
 			stats = append(stats, stat)
 			r.idleReads[key] = 0
-		} else {
-			r.forgetIfIdle(key)
+		} else if lastGrowth := r.forgetIfIdle(key, current); lastGrowth != nil {
+			stats = append(stats, lastGrowth)
 		}
 		if _, tracked := r.idleReads[key]; tracked {
 			r.previous[key] = current
@@ -199,17 +216,43 @@ func (r *accumReader[K, V]) readStats() []*ebpf.Stat {
 	return stats
 }
 
-func (r *accumReader[K, V]) forgetIfIdle(key K) {
+// forgetIfIdle deletes the entry of a key after diskIdleReadsBeforeDelete reads without changes.
+// It returns the stat of what the kernel added to the entry between its read, current, and its
+// deletion, or nil.
+func (r *accumReader[K, V]) forgetIfIdle(key K, current V) *ebpf.Stat {
 	r.idleReads[key]++
 	if r.idleReads[key] < diskIdleReadsBeforeDelete {
-		return
+		return nil
 	}
-	if err := r.accum.delete(key); err != nil && !errors.Is(err, ciliumebpf.ErrKeyNotExist) {
+	last, known, err := r.deleteEntry(key)
+	if err != nil && !errors.Is(err, ciliumebpf.ErrKeyNotExist) {
 		r.log.Debug("can't delete idle accumulation map entry", "error", err)
-		return
+		return nil
 	}
 	delete(r.idleReads, key)
 	delete(r.previous, key)
+	if err != nil || !known {
+		return nil
+	}
+	return r.toStat(key, last, current)
+}
+
+// deleteEntry deletes the entry of a key, and returns its last value when the kernel can look it
+// up and delete it at once. Otherwise, what the kernel adds to the entry between its read and its
+// deletion is lost. Either way, a probe that found the entry before its deletion can still add to
+// it after. The hash maps are preallocated, so that is lost, or counted once in the entry, of the
+// same key or another, that reuses its element.
+func (r *accumReader[K, V]) deleteEntry(key K) (last V, known bool, err error) {
+	if !r.noLookupAndDelete {
+		last, err = r.accum.lookupAndDelete(key)
+		if !errors.Is(err, ciliumebpf.ErrNotSupported) {
+			return last, true, err
+		}
+		r.log.Debug("the kernel can't look up and delete map entries at once: the idle entries are "+
+			"deleted without their last value", "error", err)
+		r.noLookupAndDelete = true
+	}
+	return last, false, r.accum.delete(key)
 }
 
 // forgetEvicted drops what is remembered about entries that are no longer in the map
