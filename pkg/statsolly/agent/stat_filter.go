@@ -16,18 +16,40 @@ import (
 	"go.opentelemetry.io/obi/pkg/pipe/swarm/swarms"
 )
 
-// statMatchers are the attribute matchers of each stat type
-type statMatchers struct {
-	byType map[ebpf.StatType]filter.MatcherSet[*ebpf.Stat]
-	// all the matchers, for the stats of a type without its own
-	all filter.MatcherSet[*ebpf.Stat]
+// tcpStatSections are the metrics of the TCP stats
+var tcpStatSections = []attributes.Section{
+	attributes.StatTCPRtt.Section, attributes.StatTCPFailedConnections.Section, attributes.StatTCPRetransmits.Section,
+	attributes.StatTCPIo.Section, attributes.StatTCPSuccessfulConnections.Section,
 }
 
-// filterStatsByAttribute drops the stats that don't match the stats attribute filters. A stat is
-// only matched against the filters of the attributes that the metrics of its type have: a filter
-// on an attribute of the TCP metrics doesn't drop the storage stats, nor a filter on an attribute
-// of the disk metrics the TCP stats.
-func filterStatsByAttribute(
+// storageStatMetrics are the metrics that report the storage stats of each type
+var storageStatMetrics = map[ebpf.StatType][]attributes.Name{
+	ebpf.StatTypeDiskIO: {
+		attributes.StatDiskOperationDuration,
+	},
+}
+
+// tcpStatFilters returns the stats attribute filters that apply to the TCP stats: all of them but
+// those on the attributes that the storage stat metrics have and the TCP stat metrics don't. A
+// filter on an attribute that no metric has is an error.
+func tcpStatFilters(config filter.AttributeFamilyConfig, extraGroupAttributesCfg map[string][]attr.Name) (filter.AttributeFamilyConfig, error) {
+	if _, err := filter.NewMatcherSet(config, nil, extraGroupAttributesCfg, ebpf.StatStringGetters); err != nil {
+		return nil, err
+	}
+	names := attributes.AllAttributeNames(nil, extraGroupAttributesCfg)
+	tcpNames := attributes.SectionAttributeNames(extraGroupAttributesCfg, tcpStatSections...)
+	for name := range attributes.SectionAttributeNames(extraGroupAttributesCfg, attributes.StatSections()...) {
+		if _, ok := tcpNames[name]; !ok {
+			delete(names, name)
+		}
+	}
+	return configOfAttributes(config, names), nil
+}
+
+// filterStorageStatsByAttribute drops the storage stats that don't match the stats attribute
+// filters. A storage stat is only matched against the filters of the attributes that the metrics
+// of its type have: a filter on an attribute of the TCP metrics doesn't drop any storage stat.
+func filterStorageStatsByAttribute(
 	config filter.AttributeFamilyConfig,
 	extraGroupAttributesCfg map[string][]attr.Name,
 	input, output *msg.Queue[[]*ebpf.Stat],
@@ -36,12 +58,12 @@ func filterStatsByAttribute(
 		if len(config) == 0 {
 			return swarm.Bypass(input, output)
 		}
-		matchers, err := newStatMatchers(config, extraGroupAttributesCfg)
+		matchers, err := newStorageStatMatchers(config, extraGroupAttributesCfg)
 		if err != nil {
 			return nil, err
 		}
 
-		in := input.Subscribe(msg.SubscriberName("StatsAttributeFilter"))
+		in := input.Subscribe(msg.SubscriberName("StorageAttributeFilter"))
 		return func(ctx context.Context) {
 			defer output.Close()
 			swarms.ForEachInput(ctx, in, nil, func(stats []*ebpf.Stat) {
@@ -53,21 +75,19 @@ func filterStatsByAttribute(
 	}
 }
 
-func newStatMatchers(config filter.AttributeFamilyConfig, extraGroupAttributesCfg map[string][]attr.Name) (*statMatchers, error) {
-	// an attribute that no metric has is still an error
-	all, err := filter.NewMatcherSet(config, nil, extraGroupAttributesCfg, ebpf.StatStringGetters)
-	if err != nil {
-		return nil, err
-	}
+// storageStatMatchers are the attribute matchers of each type of storage stat
+type storageStatMatchers map[ebpf.StatType]filter.MatcherSet[*ebpf.Stat]
 
-	matchers := &statMatchers{byType: map[ebpf.StatType]filter.MatcherSet[*ebpf.Stat]{}, all: all}
-	for statType, metrics := range ebpf.StatTypeMetrics() {
+func newStorageStatMatchers(config filter.AttributeFamilyConfig, extraGroupAttributesCfg map[string][]attr.Name) (storageStatMatchers, error) {
+	matchers := storageStatMatchers{}
+	for statType, metrics := range storageStatMetrics {
 		sections := make([]attributes.Section, 0, len(metrics))
 		for _, metric := range metrics {
 			sections = append(sections, metric.Section)
 		}
 		typeConfig := configOfAttributes(config, attributes.SectionAttributeNames(extraGroupAttributesCfg, sections...))
-		if matchers.byType[statType], err = filter.NewMatcherSet(typeConfig, nil, extraGroupAttributesCfg,
+		var err error
+		if matchers[statType], err = filter.NewMatcherSet(typeConfig, nil, extraGroupAttributesCfg,
 			ebpf.StatStringGetters); err != nil {
 			return nil, fmt.Errorf("stats of type %d: %w", statType, err)
 		}
@@ -91,14 +111,11 @@ func configOfAttributes(config filter.AttributeFamilyConfig, names map[attr.Name
 	return selected
 }
 
-func (m *statMatchers) filter(stats []*ebpf.Stat) []*ebpf.Stat {
+func (m storageStatMatchers) filter(stats []*ebpf.Stat) []*ebpf.Stat {
 	w := 0
 	for _, stat := range stats {
-		matchers, ok := m.byType[stat.Type]
-		if !ok {
-			matchers = m.all
-		}
-		if !matchers.Matches(stat) {
+		// a type without metrics has no matchers, and is kept
+		if !m[stat.Type].Matches(stat) {
 			continue
 		}
 		stats[w] = stat
