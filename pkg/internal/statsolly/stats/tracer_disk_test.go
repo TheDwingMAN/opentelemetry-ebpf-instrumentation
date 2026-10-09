@@ -85,7 +85,7 @@ func assertLatency(t *testing.T, latency *ebpf.LatencyHistogram, sumSeconds floa
 }
 
 func newTestDiskReader(src *fakeDiskAccum) *diskReader {
-	return newDiskReader(src, false, &deviceNames{sysRoot: "/nonexistent", procRoot: "/nonexistent"})
+	return newDiskReader(src, false, &deviceNames{sysRoot: "/nonexistent", procRoot: "/nonexistent"}, time.Second)
 }
 
 func TestDiskReaderReadsFullMaps(t *testing.T) {
@@ -158,6 +158,15 @@ func TestDiskReaderRestartsWhenOnlyTheLatencySumDecreased(t *testing.T) {
 	assertLatency(t, stats[0].DiskIO.Latency, 3*0.0001, 3)
 }
 
+// The idle entries are deleted after a minute without changes, whatever the read period
+func TestIdleReadsBeforeDelete(t *testing.T) {
+	assert.Equal(t, 60, idleReadsBeforeDelete(time.Second))
+	assert.Equal(t, 6000, idleReadsBeforeDelete(10*time.Millisecond))
+	assert.Equal(t, 9, idleReadsBeforeDelete(7*time.Second), "rounded up")
+	assert.Equal(t, 1, idleReadsBeforeDelete(time.Minute))
+	assert.Equal(t, 1, idleReadsBeforeDelete(time.Hour), "at least one read")
+}
+
 func TestDiskReaderDeletesIdleEntries(t *testing.T) {
 	key := writeKey(8, 16)
 	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
@@ -166,7 +175,7 @@ func TestDiskReaderDeletesIdleEntries(t *testing.T) {
 	r := newTestDiskReader(src)
 	require.Len(t, r.readStats(), 1)
 
-	for range diskIdleReadsBeforeDelete - 1 {
+	for range r.idleReadsBeforeDelete - 1 {
 		assert.Empty(t, r.readStats())
 		assert.Empty(t, src.deleted)
 	}
@@ -184,7 +193,7 @@ func TestDiskReaderReportsWhatGrewBeforeTheDeletion(t *testing.T) {
 	}}
 	r := newTestDiskReader(src)
 	require.Len(t, r.readStats(), 1)
-	for range diskIdleReadsBeforeDelete - 1 {
+	for range r.idleReadsBeforeDelete - 1 {
 		require.Empty(t, r.readStats())
 	}
 
@@ -208,7 +217,7 @@ func TestDiskReaderDeletesIdleEntriesWithoutLookupAndDelete(t *testing.T) {
 	}}
 	r := newTestDiskReader(src)
 	require.Len(t, r.readStats(), 2)
-	for range diskIdleReadsBeforeDelete {
+	for range r.idleReadsBeforeDelete {
 		require.Empty(t, r.readStats())
 	}
 	assert.ElementsMatch(t, []ebpf.StatsDiskIoKeyT{first, second}, src.deleted)
@@ -448,7 +457,7 @@ func TestDiskReaderReportsNoLatencyOfMultipathPaths(t *testing.T) {
 		op     ebpf.DiskOpCode
 	}
 	names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot}
-	r := newDiskReader(&fakeDiskAccum{entries: entries}, true, names)
+	r := newDiskReader(&fakeDiskAccum{entries: entries}, true, names, time.Second)
 	stats := map[deviceOp]*ebpf.DiskIO{}
 	for _, stat := range r.readStats() {
 		stats[deviceOp{device: stat.DiskIO.Device, op: stat.DiskIO.Op}] = stat.DiskIO
@@ -473,7 +482,7 @@ func TestDeviceMapperNames(t *testing.T) {
 		writeKey(253, 1): accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}), // dm-1, a multipath device
 		writeKey(8, 16):  accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}), // sdb, a path of dm-1
 	}}
-	r := newDiskReader(src, true, names)
+	r := newDiskReader(src, true, names, time.Second)
 	volumeNames := map[string]string{}
 	for _, stat := range r.readStats() {
 		volumeNames[stat.DiskIO.Device] = stat.DiskIO.VolumeName

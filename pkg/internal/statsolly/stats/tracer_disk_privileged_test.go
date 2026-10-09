@@ -684,7 +684,7 @@ func attachDiskReader(t *testing.T) *diskReader {
 	require.NotNil(t, fetcher.DiskIOAccumMap(), "the disk probes must be attached on this kernel")
 
 	reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: fetcher.DiskIOAccumMap()},
-		fetcher.DiskStatusIsBlkStatus(), &deviceNames{sysRoot: "/sys"})
+		fetcher.DiskStatusIsBlkStatus(), &deviceNames{sysRoot: "/sys"}, time.Second)
 	reader.readStats()
 	return reader
 }

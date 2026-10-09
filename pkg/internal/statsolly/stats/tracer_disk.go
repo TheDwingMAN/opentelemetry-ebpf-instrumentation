@@ -27,10 +27,15 @@ import (
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
 )
 
-// diskIdleReadsBeforeDelete is how many consecutive reads without changes an entry of the
-// kernel accumulation map survives before it is deleted, so entries of devices that stopped
-// doing I/O don't fill the map.
-const diskIdleReadsBeforeDelete = 60
+// diskIdleDeleteAfter is how long an entry of the kernel accumulation map survives without changes
+// before it is deleted, so entries of devices that stopped doing I/O don't fill the map.
+const diskIdleDeleteAfter = time.Minute
+
+// idleReadsBeforeDelete is how many consecutive reads without changes, one every readInterval,
+// take diskIdleDeleteAfter, and at least one
+func idleReadsBeforeDelete(readInterval time.Duration) int {
+	return max(1, int((diskIdleDeleteAfter+readInterval-1)/readInterval))
+}
 
 func dtlog() *slog.Logger {
 	return slog.With("component", "stat.DiskMapTracer")
@@ -106,7 +111,10 @@ type DiskMapTracer struct {
 func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 	accum := ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskIOAccum}
 	devices := &deviceNames{sysRoot: "/sys", procRoot: "/proc"}
-	return &DiskMapTracer{reader: newDiskReader(accum, cfg.DiskStatusIsBlkStatus, devices), interval: cfg.Interval}
+	return &DiskMapTracer{
+		reader:   newDiskReader(accum, cfg.DiskStatusIsBlkStatus, devices, cfg.Interval),
+		interval: cfg.Interval,
+	}
 }
 
 func (m *DiskMapTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
@@ -137,6 +145,8 @@ type diskReader struct {
 
 	previous  map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT
 	idleReads map[ebpf.StatsDiskIoKeyT]int
+	// idleReadsBeforeDelete is how many reads without changes an entry survives
+	idleReadsBeforeDelete int
 	// the map was full at the previous read
 	full bool
 	// the kernel can't look up and delete an entry at once
@@ -147,13 +157,15 @@ func newDiskReader(
 	accum accumSource[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT],
 	statusIsBlkStatus bool,
 	devices *deviceNames,
+	readInterval time.Duration,
 ) *diskReader {
 	return &diskReader{
-		log:       dtlog().With("map", "disk_io_accum"),
-		accum:     accum,
-		stats:     diskStats{statusIsBlkStatus: statusIsBlkStatus, devices: devices},
-		previous:  map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{},
-		idleReads: map[ebpf.StatsDiskIoKeyT]int{},
+		log:                   dtlog().With("map", "disk_io_accum"),
+		accum:                 accum,
+		stats:                 diskStats{statusIsBlkStatus: statusIsBlkStatus, devices: devices},
+		previous:              map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{},
+		idleReads:             map[ebpf.StatsDiskIoKeyT]int{},
+		idleReadsBeforeDelete: idleReadsBeforeDelete(readInterval),
 	}
 }
 
@@ -192,12 +204,12 @@ func (r *diskReader) readStats() []*ebpf.Stat {
 	return stats
 }
 
-// forgetIfIdle deletes the entry of a key after diskIdleReadsBeforeDelete reads without changes.
+// forgetIfIdle deletes the entry of a key once it went diskIdleDeleteAfter without changes.
 // It returns the stat of what the kernel added to the entry between its read, current, and its
 // deletion, or nil.
 func (r *diskReader) forgetIfIdle(key ebpf.StatsDiskIoKeyT, current ebpf.StatsDiskIoAccumT) *ebpf.Stat {
 	r.idleReads[key]++
-	if r.idleReads[key] < diskIdleReadsBeforeDelete {
+	if r.idleReads[key] < r.idleReadsBeforeDelete {
 		return nil
 	}
 	last, known, err := r.deleteEntry(key)
