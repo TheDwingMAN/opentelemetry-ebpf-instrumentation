@@ -396,6 +396,6 @@ const (
 	// DiskStacked tells whether system.device is built on other block devices, which report the
 	// same I/O too
 	DiskStacked = Name("obi.disk.stacked")
-	// DiskVolumeName is the device mapper name of system.device, e.g. mpatha
+	// DiskVolumeName is the device mapper name of a block device, as /dev/mapper lists it
 	DiskVolumeName = Name("obi.disk.volume.name")
 )
