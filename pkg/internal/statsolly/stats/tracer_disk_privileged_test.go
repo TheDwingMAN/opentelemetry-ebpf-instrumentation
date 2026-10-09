@@ -66,7 +66,7 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	f, err := os.OpenFile(loopDev, os.O_RDWR|unix.O_DIRECT, 0)
 	require.NoError(t, err)
 	defer f.Close()
-	block := alignedBuffer(t, directIOBlockSize)
+	block := alignedBuffer(t)
 	for i := range directIOBlocks {
 		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
 		require.NoError(t, err)
@@ -252,7 +252,7 @@ func TestDiskStartsOfRequestsWithoutIOStatistics(t *testing.T) {
 			f, err := os.OpenFile(loopDev, os.O_RDWR|unix.O_DIRECT, 0)
 			require.NoError(t, err)
 			defer f.Close()
-			block := alignedBuffer(t, directIOBlockSize)
+			block := alignedBuffer(t)
 			readBlocks := func(count int) {
 				t.Helper()
 				for i := range count {
@@ -479,7 +479,7 @@ func writeAndReadConcurrently(t *testing.T, device string, workers, blocks int) 
 	t.Helper()
 	done := make(chan error, workers)
 	for i := range workers {
-		block := alignedBuffer(t, directIOBlockSize)
+		block := alignedBuffer(t)
 		// a block apart, so that the scheduler can't merge the requests of two goroutines
 		offset := int64(i * (blocks + 1) * directIOBlockSize)
 		go func() {
@@ -627,7 +627,7 @@ func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 	f, err := os.OpenFile(deviceNode(t, dmName), os.O_RDWR|unix.O_DIRECT, 0)
 	require.NoError(t, err)
 	defer f.Close()
-	block := alignedBuffer(t, directIOBlockSize)
+	block := alignedBuffer(t)
 	before := readKernelDiskStats(t, dmName)
 	for i := range blocks {
 		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
@@ -768,10 +768,10 @@ func deviceNode(t *testing.T, name string) string {
 	return node
 }
 
-// alignedBuffer returns a page-aligned buffer, as O_DIRECT requires
-func alignedBuffer(t *testing.T, size int) []byte {
+// alignedBuffer returns a page-aligned buffer of a direct I/O block, as O_DIRECT requires
+func alignedBuffer(t *testing.T) []byte {
 	t.Helper()
-	buf, err := unix.Mmap(-1, 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+	buf, err := unix.Mmap(-1, 0, directIOBlockSize, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = unix.Munmap(buf) })
 	return buf
