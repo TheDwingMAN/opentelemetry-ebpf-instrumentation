@@ -109,8 +109,19 @@ flowchart TD
     K8S(Kubernetes<br/>decorator):::optional --> RDNS
     RDNS(Reverse DNS):::optional --> GeoIP
     GeoIP(Geo IP Provider):::optional --> CIDRS
-    CIDRS(CIDRs<br/>redecorator):::optional --> FLTR
-    FLTR(Attributes<br/>filter):::optional --> OTEL(OpenTelemetry<br/>metrics<br/>export):::optional
-    FLTR --> PROM(Prometheus<br/>metrics<br/>export):::optional
-    FLTR --> StatPrinter(Stat Printer):::optional
+    CIDRS(CIDRs<br/>redecorator):::optional --> DEC
+    DEC(Stats<br/>decorator) --> DPD
+    DPD(Dynamic PID<br/>decorator):::optional --> DPF
+    DPF(Dynamic PID<br/>filter):::optional --> FLTR
+    FLTR(Attributes<br/>filter):::optional --> MRG
+    DMT(eBPF Storage<br/>Map Tracer):::optional --> DCF
+    VT(Stacked and pod<br/>volume tracers):::optional --> DCF
+    DCF(Dynamic container<br/>filter):::optional --> DK8S
+    KSTORE --> DK8S
+    DK8S(Kubernetes decorator<br/>by container ID):::optional --> DDEC
+    DDEC(Disk stats<br/>decorator):::optional --> SFLTR
+    SFLTR(Storage attributes<br/>filter):::optional --> MRG
+    MRG(Stats<br/>merger):::optional --> OTEL(OpenTelemetry<br/>metrics<br/>export):::optional
+    MRG --> PROM(Prometheus<br/>metrics<br/>export):::optional
+    MRG --> StatPrinter(Stat Printer):::optional
 ```

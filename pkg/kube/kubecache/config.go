@@ -39,6 +39,9 @@ type Config struct {
 	InformerResyncPeriod time.Duration `yaml:"informer_resync_period" env:"OTEL_EBPF_K8S_CACHE_INFORMER_RESYNC_PERIOD" validate:"gte=0"`
 	// SendTimeout is the maximum duration to wait to receive an event before dropping the connection.
 	SendTimeout time.Duration `yaml:"informer_send_timeout" env:"OTEL_EBPF_K8S_CACHE_INFORMER_SEND_TIMEOUT" validate:"gte=0"`
+	// PersistentVolumes watches the PersistentVolumes too, for the OBI instances that report the
+	// devices of the pod volumes. It needs extra RBAC permissions.
+	PersistentVolumes bool `yaml:"persistent_volumes" env:"OTEL_EBPF_K8S_CACHE_PERSISTENT_VOLUMES"`
 
 	InternalMetrics instrument.InternalMetricsConfig `yaml:"internal_metrics"`
 }

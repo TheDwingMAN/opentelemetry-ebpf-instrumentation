@@ -30,6 +30,9 @@ type Options struct {
 	Targets []string
 	PID     uint32
 	Return  bool
+	// MaxActive is how many concurrent calls of a return kprobe the kernel tracks, written as
+	// r<MaxActive>. Zero keeps the kernel's default. It is used only for return kprobes.
+	MaxActive int
 }
 
 var fallbackUsed atomic.Bool

@@ -55,6 +55,164 @@ func TestFeatureEnv_NetworkFlowPackets(t *testing.T) {
 	assert.False(t, doc.Features.has(FeatureAll))
 }
 
+func TestFeatureStatsDiskIsOptIn(t *testing.T) {
+	stats, err := LoadFeatures([]string{"stats"})
+	require.NoError(t, err)
+	assert.False(t, stats.StatsDiskOperationDuration(), "the stats aggregate must not enable disk stats")
+
+	disk, err := LoadFeatures([]string{"stats_disk_operation_duration"})
+	require.NoError(t, err)
+	assert.True(t, disk.StatsDiskOperationDuration())
+	assert.False(t, disk.StatsTCPRtt())
+	assert.True(t, disk.StatMetrics(), "a disk-only selection must still enable the stats pipeline")
+}
+
+// The storage stats must be named: their probes fire on every block request, file sync or NFS RPC,
+// and the pod volumes watch the PersistentVolumes of the cluster
+func TestFeatureAllDoesntEnableStorageStats(t *testing.T) {
+	for _, name := range []string{"all", "*"} {
+		all, err := LoadFeatures([]string{name})
+		require.NoError(t, err)
+		assert.True(t, all.StatsTCPIo(), "%s enables the TCP stats", name)
+		assert.False(t, all.StatsDisk(), name)
+		assert.False(t, all.StatsDiskOperationInflight(), name)
+		assert.False(t, all.StatsDiskVolumeDevices(), name)
+		assert.False(t, all.StatsFsSyncDuration(), name)
+		assert.False(t, all.StatsNFS(), name)
+		assert.False(t, all.StatsDiskPodVolumes(), name)
+	}
+
+	allAndDisk, err := LoadFeatures([]string{"all", "stats_disk"})
+	require.NoError(t, err)
+	assert.True(t, allAndDisk.StatsDiskOperationDuration(), "they can be named along with all")
+}
+
+func TestFeatureStatsFsSyncIsOptIn(t *testing.T) {
+	fsSync, err := LoadFeatures([]string{"stats_fs_sync_duration"})
+	require.NoError(t, err)
+	assert.True(t, fsSync.StatsFsSyncDuration())
+	assert.True(t, fsSync.StatMetrics(), "a file sync only selection must still enable the stats pipeline")
+	assert.False(t, fsSync.StatsDisk())
+
+	for _, aggregate := range []string{"stats", "stats_disk"} {
+		features, err := LoadFeatures([]string{aggregate})
+		require.NoError(t, err)
+		assert.False(t, features.StatsFsSyncDuration(), "%s must not enable file sync stats", aggregate)
+	}
+}
+
+func TestFeatureStatsFsSyncGroup(t *testing.T) {
+	group, err := LoadFeatures([]string{"stats_fs_sync"})
+	require.NoError(t, err)
+	assert.True(t, group.StatsFsSyncDuration())
+	assert.True(t, group.StatsFsSyncOperations())
+	assert.True(t, group.StatsFsSyncOperationTime())
+
+	counters, err := LoadFeatures([]string{"stats_fs_sync_operations"})
+	require.NoError(t, err)
+	assert.True(t, counters.StatsFsSync(), "a file sync counter needs the file sync probes")
+	assert.True(t, counters.StatMetrics())
+	assert.False(t, counters.StatsFsSyncDuration())
+
+	all, err := LoadFeatures([]string{"all"})
+	require.NoError(t, err)
+	assert.False(t, all.StatsFsSync(), "all must not enable file sync stats")
+}
+
+func TestFeatureStatsNFSIsOptIn(t *testing.T) {
+	nfs, err := LoadFeatures([]string{"stats_nfs"})
+	require.NoError(t, err)
+	assert.True(t, nfs.StatsNFSClientProcedureDuration())
+	assert.True(t, nfs.StatsNFSClientProcedureCount())
+	assert.True(t, nfs.StatsNFSClientProcedureTime())
+	assert.True(t, nfs.StatsNFSClientIO())
+	assert.True(t, nfs.StatMetrics(), "an NFS only selection must still enable the stats pipeline")
+	assert.False(t, nfs.StatsDisk())
+
+	io, err := LoadFeatures([]string{"stats_nfs_client_io"})
+	require.NoError(t, err)
+	assert.True(t, io.StatsNFS())
+	assert.False(t, io.StatsNFSClientProcedureDuration())
+	assert.False(t, io.StatsNFSClientProcedures(), "the I/O metric doesn't need the RPC probes")
+
+	count, err := LoadFeatures([]string{"stats_nfs_client_procedure_count"})
+	require.NoError(t, err)
+	assert.True(t, count.StatsNFSClientProcedures(), "a procedure counter needs the RPC probes")
+
+	for _, aggregate := range []string{"stats", "stats_disk"} {
+		features, err := LoadFeatures([]string{aggregate})
+		require.NoError(t, err)
+		assert.False(t, features.StatsNFS(), "%s must not enable NFS stats", aggregate)
+	}
+}
+
+func TestFeatureStatsDiskPodVolumesIsOptIn(t *testing.T) {
+	volumes, err := LoadFeatures([]string{"stats_disk_pod_volumes"})
+	require.NoError(t, err)
+	assert.True(t, volumes.StatsDiskPodVolumes())
+	assert.True(t, volumes.StatMetrics(), "a pod volumes only selection must still enable the stats pipeline")
+	assert.False(t, volumes.StatsDisk(), "it loads no block I/O probes")
+
+	for _, aggregate := range []string{"stats", "stats_disk"} {
+		features, err := LoadFeatures([]string{aggregate})
+		require.NoError(t, err)
+		assert.False(t, features.StatsDiskPodVolumes(), "%s must not watch the PersistentVolumes", aggregate)
+	}
+}
+
+func TestFeatureStatsDiskVolumeDevices(t *testing.T) {
+	volumes, err := LoadFeatures([]string{"stats_disk_volume_devices"})
+	require.NoError(t, err)
+	assert.True(t, volumes.StatsDiskVolumeDevices())
+	assert.True(t, volumes.StatMetrics(), "a volume devices only selection must still enable the stats pipeline")
+	assert.False(t, volumes.StatsDisk(), "it loads no block I/O probes")
+
+	stats, err := LoadFeatures([]string{"stats"})
+	require.NoError(t, err)
+	assert.False(t, stats.StatsDiskVolumeDevices(), "the stats aggregate must not enable any disk stat")
+}
+
+func TestFeatureStatsDiskAggregate(t *testing.T) {
+	disk, err := LoadFeatures([]string{"stats_disk"})
+	require.NoError(t, err)
+	assert.True(t, disk.StatsDiskIO())
+	assert.True(t, disk.StatsDiskOperations())
+	assert.True(t, disk.StatsDiskServiceTime())
+	assert.True(t, disk.StatsDiskOperationDuration())
+	assert.True(t, disk.StatsDiskQueueTime())
+	assert.True(t, disk.StatsDiskFlush())
+	assert.True(t, disk.StatsDiskDiscard())
+	assert.True(t, disk.StatsDiskOperationInflight())
+	assert.True(t, disk.StatsDiskVolumeDevices())
+	assert.False(t, disk.StatsTCPIo(), "the disk aggregate doesn't enable TCP stats")
+
+	for _, feature := range []string{"stats_disk_queue_time", "stats_disk_flush", "stats_disk_discard"} {
+		features, err := LoadFeatures([]string{feature})
+		require.NoError(t, err)
+		assert.True(t, features.StatsDisk(), "%s loads the block I/O probes", feature)
+		assert.True(t, features.StatMetrics(), "%s enables the stats pipeline", feature)
+		assert.False(t, features.StatsDiskOperationDuration(), "%s alone doesn't report the request durations", feature)
+	}
+
+	// the operations in flight are read from the kernel counters, and the bio-based devices are only
+	// measured along with a metric that the block probes measure
+	for _, feature := range []string{"stats_disk_operation_inflight", "stats_disk_bio_devices"} {
+		features, err := LoadFeatures([]string{feature})
+		require.NoError(t, err)
+		assert.False(t, features.StatsDisk(), "%s alone loads no block I/O probes", feature)
+		assert.True(t, features.StatMetrics(), "%s enables the stats pipeline", feature)
+	}
+
+	counters, err := LoadFeatures([]string{"stats_disk_io", "stats_disk_operations", "stats_disk_service_time"})
+	require.NoError(t, err)
+	assert.True(t, counters.StatsDisk())
+	assert.False(t, counters.StatsDiskOperationDuration())
+
+	stats, err := LoadFeatures([]string{"stats"})
+	require.NoError(t, err)
+	assert.False(t, stats.StatsDisk(), "the stats aggregate must not enable any disk stat")
+}
+
 func TestFeatureEnv_Separator(t *testing.T) {
 	doc := struct {
 		Features Features `env:"FOO" envSeparator:","`
@@ -347,6 +505,16 @@ func TestFeatureMarshalYAML(t *testing.T) {
 			name:     "partial aggregate expands to its bits",
 			features: FeatureStatsTCPRtt | FeatureStatsTCPRetransmits,
 			expected: "features:\n    - stats_tcp_rtt\n    - stats_tcp_retransmits\n",
+		},
+		{
+			name:     "disk stats are listed apart from the stats aggregate",
+			features: FeatureStats | FeatureStatsDiskOperationDuration,
+			expected: "features:\n    - stats\n    - stats_disk_operation_duration\n",
+		},
+		{
+			name:     "disk aggregate",
+			features: FeatureStatsDisk,
+			expected: "features:\n    - stats_disk\n",
 		},
 		{name: "all features", features: FeatureAll, expected: "features:\n    - all\n"},
 	} {

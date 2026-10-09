@@ -109,7 +109,7 @@ func TestTraceFSRetrySyscallPrefix(t *testing.T) {
 					return want, nil
 				}
 
-				got, err := attachTraceFS("sys_connect", nil, ret)
+				got, err := attachTraceFS("sys_connect", nil, ret, 0)
 				if errors.Is(firstErr, unix.ENOENT) || errors.Is(firstErr, unix.EINVAL) {
 					require.NoError(t, err)
 					assert.Same(t, want, got)
@@ -121,5 +121,78 @@ func TestTraceFSRetrySyscallPrefix(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAttachRetprobe(t *testing.T) {
+	const maxActive = 256
+	noTraceFS := errors.New("neither debugfs nor tracefs has a writable mount")
+	for _, tc := range []struct {
+		name        string
+		symbol      string
+		traceErrs   []error
+		pmuErr      error
+		wantTargets []string
+		wantPMU     bool
+	}{
+		{
+			name: "tracefs", symbol: "vfs_fsync_range", traceErrs: []error{nil},
+			wantTargets: []string{"vfs_fsync_range"},
+		},
+		{
+			name: "syscall prefix", symbol: "sys_fsync", traceErrs: []error{unix.ENOENT, nil},
+			wantTargets: []string{"sys_fsync", syscallPrefix() + "sys_fsync"},
+		},
+		{
+			name: "no tracefs", symbol: "vfs_fsync_range", traceErrs: []error{noTraceFS},
+			wantTargets: []string{"vfs_fsync_range"}, wantPMU: true,
+		},
+		{
+			name: "missing function", symbol: "do_fsync", traceErrs: []error{unix.ENOENT, unix.ENOENT}, pmuErr: unix.ENOENT,
+			wantTargets: []string{"do_fsync", syscallPrefix() + "do_fsync"}, wantPMU: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			restoreAttachments(t)
+			prog := &ebpf.Program{}
+			want := &nopCloser{}
+			var targets []string
+			attachTraceFSEvent = func(got *ebpf.Program, opts tracefs.Options) (io.Closer, error) {
+				assert.Same(t, prog, got)
+				assert.True(t, opts.Return)
+				assert.Equal(t, maxActive, opts.MaxActive)
+				targets = append(targets, opts.Targets...)
+				if err := tc.traceErrs[len(targets)-1]; err != nil {
+					return nil, err
+				}
+				return want, nil
+			}
+			pmuCalls := 0
+			attachPMU = func(symbol string, got *ebpf.Program, ret bool) (io.Closer, error) {
+				pmuCalls++
+				assert.Equal(t, tc.symbol, symbol)
+				assert.Same(t, prog, got)
+				assert.True(t, ret)
+				if tc.pmuErr != nil {
+					return nil, tc.pmuErr
+				}
+				return want, nil
+			}
+
+			got, err := AttachRetprobe(tc.symbol, prog, maxActive)
+			assert.Equal(t, tc.wantTargets, targets)
+			if tc.wantPMU {
+				assert.Equal(t, 1, pmuCalls)
+			} else {
+				assert.Zero(t, pmuCalls)
+			}
+			if tc.pmuErr != nil {
+				require.ErrorIs(t, err, tc.pmuErr)
+				assert.Nil(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Same(t, want, got)
+		})
 	}
 }

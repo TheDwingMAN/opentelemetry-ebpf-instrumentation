@@ -5,8 +5,11 @@ package agent
 
 import (
 	"context"
+	"maps"
 	"net"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,17 +19,20 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/obi/internal/test/integration/components/promtest"
+	"go.opentelemetry.io/obi/pkg/appolly/discover"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/connector"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
 	"go.opentelemetry.io/obi/pkg/export/prom"
+	"go.opentelemetry.io/obi/pkg/filter"
 	"go.opentelemetry.io/obi/pkg/internal/pipe"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/obi"
 	"go.opentelemetry.io/obi/pkg/pipe/global"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
+	"go.opentelemetry.io/obi/pkg/selection"
 )
 
 const timeout = 5 * time.Second
@@ -209,4 +215,569 @@ func fakeIoRecord(srcPort, dstPort uint16, direction uint8, bytes uint32) *ebpf.
 			DstPort: dstPort,
 		},
 	}
+}
+
+func TestDiskStats(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskOperationDuration)
+
+	diskEvents <- []*ebpf.Stat{
+		fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "",
+			ebpf.LatencySample{Seconds: 0.0005, Count: 3}, ebpf.LatencySample{Seconds: 0.004, Count: 2}),
+		fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "EIO",
+			ebpf.LatencySample{Seconds: 0.02, Count: 1}),
+	}
+	diskEvents <- []*ebpf.Stat{
+		fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "",
+			ebpf.LatencySample{Seconds: 0.0005, Count: 1}),
+	}
+
+	// the exposition format writes empty labels, which Prometheus treats as absent
+	okWrite := map[string]string{
+		"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "nvme0n1", "disk_io_direction": "write", "error_type": "",
+	}
+	failedWrite := map[string]string{
+		"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "nvme0n1", "disk_io_direction": "write", "error_type": "EIO",
+	}
+	withLe := func(labels map[string]string, le string) map[string]string {
+		out := map[string]string{"le": le}
+		maps.Copy(out, labels)
+		return out
+	}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		disk := scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_duration_seconds")
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 4, Labels: withLe(okWrite, "0.001")},
+			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 6, Labels: withLe(okWrite, "0.01")},
+			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 6, Labels: withLe(okWrite, "+Inf")},
+			{Name: "obi_stat_disk_operation_duration_seconds_count", Value: 6, Labels: okWrite},
+			{Name: "obi_stat_disk_operation_duration_seconds_sum", Value: 0.0005*4 + 0.004*2, Labels: okWrite},
+			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 0, Labels: withLe(failedWrite, "0.001")},
+			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 0, Labels: withLe(failedWrite, "0.01")},
+			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 1, Labels: withLe(failedWrite, "+Inf")},
+			{Name: "obi_stat_disk_operation_duration_seconds_count", Value: 1, Labels: failedWrite},
+			{Name: "obi_stat_disk_operation_duration_seconds_sum", Value: 0.02, Labels: failedWrite},
+		}, disk)
+	}, timeout, 100*time.Millisecond)
+}
+
+// The disk probes couldn't be loaded: the agent has no disk tracer, and the TCP stats go on
+func TestDiskStatsWithoutDiskProbes(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	promServer := httptest.NewServer(promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
+	t.Cleanup(promServer.Close)
+
+	stats := Stats{
+		agentIP: net.ParseIP("1.2.3.4"),
+		ctxInfo: &global.ContextInfo{
+			Prometheus: &connector.PrometheusManager{},
+		},
+		cfg: &obi.Config{
+			Prometheus: prom.PrometheusConfig{Registry: registry, Path: "/metrics", TTL: time.Hour},
+			Metrics:    perapp.GlobalMetricsConfig{Features: export.FeatureStatsTCPRtt | export.FeatureStatsDiskOperationDuration},
+		},
+	}
+
+	ringBuf := make(chan []*ebpf.Stat, 1)
+	defaultRingBufTracer := newRingBufTracer
+	t.Cleanup(func() {
+		newRingBufTracer = defaultRingBufTracer
+		close(ringBuf)
+	})
+	newRingBufTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+		return func(ctx context.Context) {
+			defer out.MarkCloseable()
+			for i := range ringBuf {
+				out.SendCtx(ctx, i)
+			}
+		}
+	}
+
+	runner, err := stats.buildPipeline(t.Context())
+	require.NoError(t, err)
+	go runner.Start(t.Context())
+
+	ringBuf <- []*ebpf.Stat{fakeRecord(123, 456)}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		allMetrics, err := promtest.Scrape(promServer.URL)
+		require.NoError(ct, err)
+		var rtt []promtest.ScrapedMetric
+		for _, m := range allMetrics {
+			if m.Name == "obi_stat_tcp_rtt_seconds_count" {
+				rtt = append(rtt, m)
+			}
+		}
+		assert.Len(ct, rtt, 1)
+	}, timeout, 100*time.Millisecond)
+}
+
+func TestDiskCounters(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskIO|export.FeatureStatsDiskOperations|
+		export.FeatureStatsDiskServiceTime|export.FeatureStatsDiskQueueTime)
+
+	write := fakeDiskRecord("vda", ebpf.CodeDiskOpWrite, "")
+	write.DiskIO.Operations, write.DiskIO.Time, write.DiskIO.QueueTime, write.DiskIO.Bytes = 3, 0.25, 0.0625, 12288
+	failedWrite := fakeDiskRecord("vda", ebpf.CodeDiskOpWrite, "EIO")
+	failedWrite.DiskIO.Operations, failedWrite.DiskIO.Time, failedWrite.DiskIO.QueueTime = 1, 0.5, 0.125
+	read := fakeDiskRecord("vda", ebpf.CodeDiskOpRead, "")
+	read.DiskIO.Operations, read.DiskIO.Time, read.DiskIO.QueueTime, read.DiskIO.Bytes = 2, 0.125, 0.03125, 8192
+	// the kernel also adds up the wait of the flushes, which are neither reads nor writes
+	flush := fakeDiskRecord("vda", ebpf.CodeDiskOpFlush, "")
+	flush.DiskIO.Operations, flush.DiskIO.QueueTime = 1, 1
+	diskEvents <- []*ebpf.Stat{write, failedWrite, read, flush}
+
+	vdaWrite := map[string]string{"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda", "disk_io_direction": "write"}
+	vdaRead := map[string]string{"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda", "disk_io_direction": "read"}
+	withError := func(errorType string) map[string]string {
+		out := map[string]string{"error_type": errorType}
+		maps.Copy(out, vdaWrite)
+		return out
+	}
+	vdaReadOK := map[string]string{"error_type": ""}
+	maps.Copy(vdaReadOK, vdaRead)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_io_bytes_total", Value: 12288, Labels: vdaWrite},
+			{Name: "obi_stat_disk_io_bytes_total", Value: 8192, Labels: vdaRead},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_io_bytes_total"), "failed requests transfer no bytes")
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_operations_total", Value: 3, Labels: withError("")},
+			{Name: "obi_stat_disk_operations_total", Value: 1, Labels: withError("EIO")},
+			{Name: "obi_stat_disk_operations_total", Value: 2, Labels: vdaReadOK},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operations_total"))
+		// the time of the failed write is not added to that of the successful ones
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.25, Labels: withError("")},
+			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.5, Labels: withError("EIO")},
+			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.125, Labels: vdaReadOK},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_service_time_seconds_total"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_queue_time_seconds_total", Value: 0.0625, Labels: withError("")},
+			{Name: "obi_stat_disk_queue_time_seconds_total", Value: 0.125, Labels: withError("EIO")},
+			{Name: "obi_stat_disk_queue_time_seconds_total", Value: 0.03125, Labels: vdaReadOK},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_queue_time_seconds_total"))
+	}, timeout, 100*time.Millisecond)
+}
+
+func TestDiskOperationsBeyondReadsAndWrites(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskOperations|
+		export.FeatureStatsDiskFlush|export.FeatureStatsDiskDiscard|export.FeatureStatsDiskOperationInflight)
+
+	write := fakeDiskRecord("vda", ebpf.CodeDiskOpWrite, "", ebpf.LatencySample{Seconds: 0.004, Count: 2})
+	write.DiskIO.Operations = 2
+	flush := fakeDiskRecord("vda", ebpf.CodeDiskOpFlush, "", ebpf.LatencySample{Seconds: 0.02, Count: 3})
+	flush.DiskIO.Operations = 3
+	discard := fakeDiskRecord("vda", ebpf.CodeDiskOpDiscard, "", ebpf.LatencySample{Seconds: 0.004, Count: 1})
+	discard.DiskIO.Operations, discard.DiskIO.Bytes = 1, 1<<20
+	pending := &ebpf.Stat{Type: ebpf.StatTypeDiskPending, DiskPending: &ebpf.DiskPending{
+		Device: "vda", Op: ebpf.CodeDiskOpRead, Requests: 5,
+	}}
+	lvm := fakeDiskRecord("dm-0", ebpf.CodeDiskOpWrite, "")
+	lvm.DiskIO.Operations, lvm.DiskIO.Stacked, lvm.DiskIO.VolumeName = 4, true, "vg0-data"
+	diskEvents <- []*ebpf.Stat{write, flush, discard, pending, lvm}
+
+	vda := map[string]string{"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda", "error_type": ""}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_operations_total", Value: 2, Labels: map[string]string{
+				"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda", "disk_io_direction": "write",
+				"error_type": "",
+			}},
+			{Name: "obi_stat_disk_operations_total", Value: 4, Labels: map[string]string{
+				"obi_disk_stacked": "true", "obi_disk_volume_name": "vg0-data", "system_device": "dm-0", "disk_io_direction": "write",
+				"error_type": "",
+			}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operations_total"), "flushes and discards have their own metrics")
+		assert.Contains(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_flush_duration_seconds_count"),
+			promtest.ScrapedMetric{Name: "obi_stat_disk_flush_duration_seconds_count", Value: 3, Labels: vda})
+		assert.Contains(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_discard_duration_seconds_count"),
+			promtest.ScrapedMetric{Name: "obi_stat_disk_discard_duration_seconds_count", Value: 1, Labels: vda})
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_discard_io_bytes_total", Value: 1 << 20, Labels: map[string]string{
+				"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda",
+			}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_discard_io_bytes_total"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_operation_inflight", Value: 5, Labels: map[string]string{
+				"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda", "disk_io_direction": "read",
+			}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_inflight"))
+	}, timeout, 100*time.Millisecond)
+}
+
+func TestDiskOperationInflightOfSeveralStatsInOneSeries(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskOperationInflight, func(s *Stats) {
+		s.cfg.Attributes.Select = attributes.Selection{
+			attributes.StatDiskOperationInflight.Section: attributes.InclusionLists{Exclude: []string{"disk.io.direction"}},
+		}
+	})
+
+	pending := func(op ebpf.DiskOpCode, requests int64) *ebpf.Stat {
+		return &ebpf.Stat{Type: ebpf.StatTypeDiskPending, DiskPending: &ebpf.DiskPending{Device: "vda", Op: op, Requests: requests}}
+	}
+	diskEvents <- []*ebpf.Stat{pending(ebpf.CodeDiskOpRead, 5), pending(ebpf.CodeDiskOpWrite, 3)}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_operation_inflight", Value: 8, Labels: map[string]string{
+				"obi_disk_stacked": "false", "obi_disk_volume_name": "", "system_device": "vda",
+			}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_inflight"), "the reads and writes add up")
+	}, timeout, 100*time.Millisecond)
+}
+
+func TestFsSyncStats(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsFsSync)
+
+	diskEvents <- []*ebpf.Stat{
+		{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{
+			Type:       ebpf.CodeFsSyncFsync,
+			Operations: 3,
+			Time:       0.012,
+			Latency:    []ebpf.LatencySample{{Seconds: 0.004, Count: 3}},
+		}},
+		{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{
+			Type:       ebpf.CodeFsSyncFdatasync,
+			ErrorType:  "EIO",
+			Operations: 1,
+			Time:       0.02,
+			Latency:    []ebpf.LatencySample{{Seconds: 0.02, Count: 1}},
+		}},
+	}
+
+	ok := map[string]string{"error_type": "", "obi_fs_sync_type": "fsync"}
+	failed := map[string]string{"error_type": "EIO", "obi_fs_sync_type": "fdatasync"}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_duration_seconds_count", Value: 3, Labels: ok},
+			{Name: "obi_stat_fs_sync_duration_seconds_count", Value: 1, Labels: failed},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_duration_seconds_count"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_duration_seconds_sum", Value: 0.012, Labels: ok},
+			{Name: "obi_stat_fs_sync_duration_seconds_sum", Value: 0.02, Labels: failed},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_duration_seconds_sum"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_operations_total", Value: 3, Labels: ok},
+			{Name: "obi_stat_fs_sync_operations_total", Value: 1, Labels: failed},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_operations_total"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_fs_sync_operation_time_seconds_total", Value: 0.012, Labels: ok},
+			{Name: "obi_stat_fs_sync_operation_time_seconds_total", Value: 0.02, Labels: failed},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_fs_sync_operation_time_seconds_total"))
+	}, timeout, 100*time.Millisecond)
+}
+
+func TestNFSStats(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsNFS)
+
+	diskEvents <- []*ebpf.Stat{
+		{Type: ebpf.StatTypeNFSProcedure, NFSProcedure: &ebpf.NFSProcedure{
+			Server: "10.0.0.5", Procedure: "READ", Version: 4, Calls: 3, Time: 0.012,
+			Latency: []ebpf.LatencySample{{Seconds: 0.004, Count: 3}},
+		}},
+		{Type: ebpf.StatTypeNFSProcedure, NFSProcedure: &ebpf.NFSProcedure{
+			Server: "10.0.0.5", Procedure: "GETATTR", Version: 4, ErrorType: "ESTALE", Calls: 1, Time: 0.02,
+			Latency: []ebpf.LatencySample{{Seconds: 0.02, Count: 1}},
+		}},
+		{Type: ebpf.StatTypeNFSIO, NFSIO: &ebpf.NFSIO{
+			Server: "10.0.0.5", Direction: uint8(ebpf.CodeDirectionReceive), Bytes: 1 << 20,
+		}},
+		{Type: ebpf.StatTypeNFSIO, NFSIO: &ebpf.NFSIO{
+			Server: "10.0.0.5", Direction: uint8(ebpf.CodeDirectionTransmit), Bytes: 4096,
+		}},
+	}
+
+	read := map[string]string{"server_address": "10.0.0.5", "onc_rpc_procedure_name": "READ", "onc_rpc_version": "4", "error_type": ""}
+	stale := map[string]string{"server_address": "10.0.0.5", "onc_rpc_procedure_name": "GETATTR", "onc_rpc_version": "4", "error_type": "ESTALE"}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_nfs_client_procedure_duration_seconds_count", Value: 3, Labels: read},
+			{Name: "obi_stat_nfs_client_procedure_duration_seconds_count", Value: 1, Labels: stale},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_nfs_client_procedure_duration_seconds_count"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_nfs_client_procedure_count_total", Value: 3, Labels: read},
+			{Name: "obi_stat_nfs_client_procedure_count_total", Value: 1, Labels: stale},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_nfs_client_procedure_count_total"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_nfs_client_procedure_time_seconds_total", Value: 0.012, Labels: read},
+			{Name: "obi_stat_nfs_client_procedure_time_seconds_total", Value: 0.02, Labels: stale},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_nfs_client_procedure_time_seconds_total"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_nfs_client_io_bytes_total", Value: 1 << 20, Labels: map[string]string{
+				"server_address": "10.0.0.5", "network_io_direction": "receive",
+			}},
+			{Name: "obi_stat_nfs_client_io_bytes_total", Value: 4096, Labels: map[string]string{
+				"server_address": "10.0.0.5", "network_io_direction": "transmit",
+			}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_nfs_client_io_bytes_total"))
+	}, timeout, 100*time.Millisecond)
+}
+
+func TestPodVolumeStats(t *testing.T) {
+	volumes := make(chan []*ebpf.Stat, 10)
+	defaultPodVolumesTracer := newPodVolumesTracer
+	t.Cleanup(func() {
+		newPodVolumesTracer = defaultPodVolumesTracer
+		close(volumes)
+	})
+	newPodVolumesTracer = func(_ context.Context, _ *Stats, out *msg.Queue[[]*ebpf.Stat]) (swarm.RunFunc, error) {
+		return func(ctx context.Context) {
+			defer out.MarkCloseable()
+			for i := range volumes {
+				out.SendCtx(ctx, i)
+			}
+		}, nil
+	}
+	_, promURL := startDiskPipeline(t, export.FeatureStatsDiskPodVolumes)
+
+	volume := ebpf.PodVolume{
+		Namespace: "default", PodName: "db-0", OwnerName: "db", OwnerKind: "StatefulSet",
+		VolumeName: "data", ClaimName: "data-db-0", PersistentVolume: "pvc-5d1c",
+		MountedDevice: "dm-0", Device: "sda", Value: 1,
+	}
+	volumes <- []*ebpf.Stat{{Type: ebpf.StatTypePodVolume, PodVolume: &volume}}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_k8s_pod_volume_info", Value: 1, Labels: map[string]string{
+				"k8s_volume_name":                "data",
+				"k8s_persistentvolumeclaim_name": "data-db-0",
+				"k8s_persistentvolume_name":      "pvc-5d1c",
+				"obi_disk_volume_device":         "dm-0",
+				"system_device":                  "sda",
+			}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_k8s_pod_volume_info"))
+	}, timeout, 100*time.Millisecond)
+}
+
+// fakeDiskVolumesTracer replaces the tracer of the disks of the stacked volumes, and returns the
+// channel to send its stats through
+func fakeDiskVolumesTracer(t *testing.T) chan<- []*ebpf.Stat {
+	volumes := make(chan []*ebpf.Stat, 10)
+	defaultDiskVolumesTracer := newDiskVolumesTracer
+	t.Cleanup(func() {
+		newDiskVolumesTracer = defaultDiskVolumesTracer
+		close(volumes)
+	})
+	newDiskVolumesTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+		return func(ctx context.Context) {
+			defer out.MarkCloseable()
+			for i := range volumes {
+				out.SendCtx(ctx, i)
+			}
+		}
+	}
+	return volumes
+}
+
+func TestDiskVolumeStats(t *testing.T) {
+	volumes := fakeDiskVolumesTracer(t)
+	_, promURL := startDiskPipeline(t, export.FeatureStatsDiskVolumeDevices)
+
+	lvm := ebpf.DiskVolume{Volume: "dm-0", Name: "rhel-root", Device: "sda", Value: 1}
+	raid := ebpf.DiskVolume{Volume: "md0", Device: "sdb", Value: 1}
+	volumes <- []*ebpf.Stat{
+		{Type: ebpf.StatTypeDiskVolume, DiskVolume: &lvm},
+		{Type: ebpf.StatTypeDiskVolume, DiskVolume: &raid},
+	}
+
+	lvmLabels := map[string]string{"obi_disk_volume_device": "dm-0", "obi_disk_volume_name": "rhel-root", "system_device": "sda"}
+	raidLabels := map[string]string{"obi_disk_volume_device": "md0", "obi_disk_volume_name": "", "system_device": "sdb"}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_volume_info", Value: 1, Labels: lvmLabels},
+			{Name: "obi_stat_disk_volume_info", Value: 1, Labels: raidLabels},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_volume_info"))
+	}, timeout, 100*time.Millisecond)
+
+	// the LVM volume is gone: the tracer reports it once more, with 0
+	gone := lvm
+	gone.Value = 0
+	volumes <- []*ebpf.Stat{
+		{Type: ebpf.StatTypeDiskVolume, DiskVolume: &gone},
+		{Type: ebpf.StatTypeDiskVolume, DiskVolume: &raid},
+	}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_volume_info", Value: 0, Labels: lvmLabels},
+			{Name: "obi_stat_disk_volume_info", Value: 1, Labels: raidLabels},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_volume_info"))
+	}, timeout, 100*time.Millisecond)
+}
+
+func TestStorageStatsOfUnselectedApplicationsUnderDynamicSelection(t *testing.T) {
+	volumes := fakeDiskVolumesTracer(t)
+	diskEvents, promURL := startDiskPipeline(t,
+		export.FeatureStatsDiskOperations|export.FeatureStatsDiskOperationInflight|export.FeatureStatsDiskVolumeDevices,
+		func(s *Stats) { s.ctxInfo.DynamicSelector = discover.NewDynamicSelector() })
+
+	ofContainer := fakeDiskRecord("vda", ebpf.CodeDiskOpWrite, "")
+	ofContainer.DiskIO.ContainerID = "0123abcd"
+	ofNoContainer := fakeDiskRecord("vda", ebpf.CodeDiskOpRead, "")
+	pending := &ebpf.Stat{Type: ebpf.StatTypeDiskPending, DiskPending: &ebpf.DiskPending{Device: "vda", Op: ebpf.CodeDiskOpRead, Requests: 2}}
+	diskEvents <- []*ebpf.Stat{ofContainer, ofNoContainer, pending}
+	volumes <- []*ebpf.Stat{{Type: ebpf.StatTypeDiskVolume, DiskVolume: &ebpf.DiskVolume{Volume: "dm-0", Device: "vda", Value: 1}}}
+
+	exported := func() bool {
+		allMetrics, err := promtest.Scrape(promURL)
+		return err == nil &&
+			slices.ContainsFunc(allMetrics, func(m promtest.ScrapedMetric) bool { return strings.HasPrefix(m.Name, "obi_stat_disk") })
+	}
+	assert.Never(t, exported, time.Second, 100*time.Millisecond, "no application is selected, and the stats of devices belong to none")
+}
+
+// The removal of a pod volume is reported once its pod is deleted, and no longer selected
+func TestStorageSelectionReportsTheRemovalOfAReportedPodVolume(t *testing.T) {
+	selector := newStorageStatSelector()
+	allSelected := selection.NewDynamicAppContainers(nil, nil)
+	noneSelected := selection.NewDynamicAppContainers(discover.NewDynamicSelector().StatsMetrics(), nil)
+	stat := func(volume ebpf.PodVolume) *ebpf.Stat {
+		return &ebpf.Stat{Type: ebpf.StatTypePodVolume, PodVolume: &volume}
+	}
+	mounted := ebpf.PodVolume{Namespace: "default", PodName: "db-0", VolumeName: "data", MountedDevice: "dm-0", Device: "sda", Value: 1}
+	gone := mounted
+	gone.Value = 0
+	other := mounted
+	other.PodName = "db-1"
+
+	assert.True(t, selector.selects(allSelected, stat(mounted)))
+	assert.False(t, selector.selects(noneSelected, stat(other)), "the volumes of the unselected pods are not reported")
+	assert.True(t, selector.selects(noneSelected, stat(gone)), "the removal of a reported volume is")
+	assert.False(t, selector.selects(noneSelected, stat(gone)), "once")
+
+	otherGone := other
+	otherGone.Value = 0
+	assert.False(t, selector.selects(noneSelected, stat(otherGone)), "nor the removal of a volume that was never reported")
+}
+
+// startDiskPipeline runs the stats pipeline with the given disk features, exporting to
+// Prometheus. It returns the channel to send disk stats through and the Prometheus URL.
+func startDiskPipeline(t *testing.T, features export.Features, configure ...func(*Stats)) (chan<- []*ebpf.Stat, string) {
+	_, diskEvents, promURL := startStatsPipeline(t, features, configure...)
+	return diskEvents, promURL
+}
+
+// startStatsPipeline runs the stats pipeline with the given features, exporting to Prometheus. It
+// returns the channels to send TCP and disk stats through, and the Prometheus URL.
+func startStatsPipeline(t *testing.T, features export.Features, configure ...func(*Stats)) (ringBufEvents, diskEvents chan<- []*ebpf.Stat, promURL string) {
+	registry := prometheus.NewRegistry()
+	promServer := httptest.NewServer(promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))
+	t.Cleanup(promServer.Close)
+
+	stats := Stats{
+		agentIP: net.ParseIP("1.2.3.4"),
+		ctxInfo: &global.ContextInfo{
+			Prometheus: &connector.PrometheusManager{},
+		},
+		cfg: &obi.Config{
+			Prometheus: prom.PrometheusConfig{
+				Registry: registry,
+				Path:     "/metrics",
+				TTL:      time.Hour,
+				Buckets: export.Buckets{
+					StatDiskOperationDurationHistogram:      []float64{0.001, 0.01},
+					StatFsSyncDurationHistogram:             []float64{0.001, 0.01},
+					StatNFSClientProcedureDurationHistogram: []float64{0.001, 0.01},
+				},
+			},
+			Metrics: perapp.GlobalMetricsConfig{Features: features},
+		},
+	}
+
+	for _, c := range configure {
+		c(&stats)
+	}
+
+	disk := make(chan []*ebpf.Stat, 10)
+	defaultDiskTracer := newDiskTracer
+	t.Cleanup(func() {
+		newDiskTracer = defaultDiskTracer
+		close(disk)
+	})
+	newDiskTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+		return func(ctx context.Context) {
+			defer out.MarkCloseable()
+			for i := range disk {
+				out.SendCtx(ctx, i)
+			}
+		}
+	}
+	ringBuf := make(chan []*ebpf.Stat, 10)
+	defaultRingBufTracer := newRingBufTracer
+	t.Cleanup(func() {
+		newRingBufTracer = defaultRingBufTracer
+		close(ringBuf)
+	})
+	newRingBufTracer = func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+		return func(ctx context.Context) {
+			defer out.MarkCloseable()
+			for i := range ringBuf {
+				out.SendCtx(ctx, i)
+			}
+		}
+	}
+
+	runner, err := stats.buildPipeline(t.Context())
+	require.NoError(t, err)
+	go runner.Start(t.Context())
+	return ringBuf, disk, promServer.URL
+}
+
+func scrapeDiskMetrics(ct *assert.CollectT, promURL, namePrefix string) []promtest.ScrapedMetric {
+	allMetrics, err := promtest.Scrape(promURL)
+	require.NoError(ct, err)
+	var disk []promtest.ScrapedMetric
+	for _, m := range allMetrics {
+		if strings.HasPrefix(m.Name, namePrefix) {
+			disk = append(disk, m)
+		}
+	}
+	return disk
+}
+
+func fakeDiskRecord(device string, op ebpf.DiskOpCode, errorType string, latency ...ebpf.LatencySample) *ebpf.Stat {
+	return &ebpf.Stat{
+		Type: ebpf.StatTypeDiskIO,
+		DiskIO: &ebpf.DiskIO{
+			Device:    device,
+			Op:        op,
+			ErrorType: errorType,
+			Latency:   latency,
+		},
+	}
+}
+
+// The TCP stats are matched against every filter but those on the attributes that the storage stat
+// metrics have and the TCP stat metrics don't, and the filters of each family don't drop the stats
+// of the other
+func TestStatFiltersOfBothFamilies(t *testing.T) {
+	ringBuf, diskEvents, promURL := startStatsPipeline(t,
+		export.FeatureStatsTCPRtt|export.FeatureStatsTCPFailedConnections|export.FeatureStatsDiskOperations,
+		func(s *Stats) {
+			s.cfg.Filters.Stats = filter.AttributeFamilyConfig{
+				"reason":        {NotMatch: "unknown"},
+				"system.device": {Match: "sda"},
+			}
+		})
+
+	ringBuf <- []*ebpf.Stat{
+		{Type: ebpf.StatTypeTCPRtt, TCPRtt: &ebpf.TCPRtt{SrttUs: 100}},
+		{Type: ebpf.StatTypeTCPFailedConnection, TCPFailedConnection: &ebpf.TCPFailedConnection{Reason: uint8(ebpf.CodeConnectionRefused)}},
+	}
+	sda := fakeDiskRecord("sda", ebpf.CodeDiskOpRead, "")
+	sda.DiskIO.Operations = 1
+	vda := fakeDiskRecord("vda", ebpf.CodeDiskOpRead, "")
+	vda.DiskIO.Operations = 1
+	diskEvents <- []*ebpf.Stat{sda, vda}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		// the RTT stats have no reason, so a filter on it drops them
+		assert.Empty(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_tcp_rtt"))
+		assert.Len(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_tcp_failed_connections_total"), 1)
+		operations := scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operations_total")
+		if assert.Len(ct, operations, 1) {
+			assert.Equal(ct, "sda", operations[0].Labels["system_device"])
+		}
+	}, timeout, 100*time.Millisecond)
 }

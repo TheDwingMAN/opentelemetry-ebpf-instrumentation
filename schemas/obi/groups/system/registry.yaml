@@ -1,0 +1,24 @@
+groups:
+  # Re-types `system.filesystem.type` as string (upstream: an enum of fat32,
+  # exfat, ntfs, refs, hfsplus and ext4). OBI reports the kernel's names, which
+  # form an open set that cannot be enumerated. Emitters must omit the
+  # attribute when the filesystem is not in the mount table and never send an
+  # empty string; pinned by pkg/internal/statsolly/ebpf/stat_getters_test.go.
+  #
+  # See ../../README.md for the override mechanics (x.obi.* group id, string
+  # re-typing of open-ended value spaces, lint allowlist).
+  - id: x.obi.system.filesystem
+    type: attribute_group
+    display_name: OBI Filesystem Attribute Overrides
+    brief: >
+      OBI override of `system.filesystem.type` re-typed as an open-ended
+      string: OBI reports the filesystem type names of the kernel.
+    attributes:
+      - id: system.filesystem.type
+        type: string
+        stability: development
+        brief: >
+          The filesystem type, as the kernel names it in the mount table, not
+          as the members of the semantic conventions: `vfat` is not `fat32`.
+          The subtype of a FUSE filesystem is appended (`fuse.sshfs`).
+        examples: ['ext4', 'xfs', 'tmpfs', 'overlay', 'nfs4', 'fuse.sshfs']

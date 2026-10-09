@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -41,6 +42,24 @@ type statMetricsReporter struct {
 	tcpRetransmits           *Expirer[prometheus.Counter]
 	tcpIo                    *Expirer[prometheus.Counter]
 	tcpSuccessfulConnections *Expirer[prometheus.Counter]
+	diskOperationDuration    *kernelHistogramVec
+	diskIO                   *Expirer[prometheus.Counter]
+	diskOperations           *Expirer[prometheus.Counter]
+	diskServiceTime          *Expirer[prometheus.Counter]
+	fsSyncDuration           *kernelHistogramVec
+	fsSyncOperations         *Expirer[prometheus.Counter]
+	fsSyncOperationTime      *Expirer[prometheus.Counter]
+	diskQueueTime            *Expirer[prometheus.Counter]
+	diskFlushDuration        *kernelHistogramVec
+	diskDiscardDuration      *kernelHistogramVec
+	diskDiscardIO            *Expirer[prometheus.Counter]
+	diskOperationInflight    *Expirer[prometheus.Gauge]
+	nfsProcedureDuration     *kernelHistogramVec
+	nfsProcedureCount        *Expirer[prometheus.Counter]
+	nfsProcedureTime         *Expirer[prometheus.Counter]
+	nfsIO                    *Expirer[prometheus.Counter]
+	k8sPodVolumeInfo         *Expirer[prometheus.Gauge]
+	diskVolumeInfo           *Expirer[prometheus.Gauge]
 
 	promConnect *connector.PrometheusManager
 
@@ -49,6 +68,24 @@ type statMetricsReporter struct {
 	tcpRetransmitsAttrs           []attributes.Field[*ebpf.Stat, string]
 	tcpIoAttrs                    []attributes.Field[*ebpf.Stat, string]
 	tcpSuccessfulConnectionsAttrs []attributes.Field[*ebpf.Stat, string]
+	diskOperationDurationAttrs    []attributes.Field[*ebpf.Stat, string]
+	diskIOAttrs                   []attributes.Field[*ebpf.Stat, string]
+	diskOperationsAttrs           []attributes.Field[*ebpf.Stat, string]
+	diskServiceTimeAttrs          []attributes.Field[*ebpf.Stat, string]
+	fsSyncDurationAttrs           []attributes.Field[*ebpf.Stat, string]
+	fsSyncOperationsAttrs         []attributes.Field[*ebpf.Stat, string]
+	fsSyncOperationTimeAttrs      []attributes.Field[*ebpf.Stat, string]
+	diskQueueTimeAttrs            []attributes.Field[*ebpf.Stat, string]
+	diskFlushDurationAttrs        []attributes.Field[*ebpf.Stat, string]
+	diskDiscardDurationAttrs      []attributes.Field[*ebpf.Stat, string]
+	diskDiscardIOAttrs            []attributes.Field[*ebpf.Stat, string]
+	diskOperationInflightAttrs    []attributes.Field[*ebpf.Stat, string]
+	nfsProcedureDurationAttrs     []attributes.Field[*ebpf.Stat, string]
+	nfsProcedureCountAttrs        []attributes.Field[*ebpf.Stat, string]
+	nfsProcedureTimeAttrs         []attributes.Field[*ebpf.Stat, string]
+	nfsIOAttrs                    []attributes.Field[*ebpf.Stat, string]
+	k8sPodVolumeInfoAttrs         []attributes.Field[*ebpf.Stat, string]
+	diskVolumeInfoAttrs           []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -176,6 +213,61 @@ func newStatsReporter(
 		register = append(register, mr.tcpSuccessfulConnections)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskOperationDuration() {
+		log.Debug("registering stat disk operation duration metric")
+
+		mr.diskOperationDurationAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskOperationDuration))
+
+		mr.diskOperationDuration = newKernelHistogramVec(attributes.StatDiskOperationDuration.Prom,
+			"measures the duration of block I/O requests, from their issue to the device until their completion, in seconds",
+			cfg.Config.Buckets.StatDiskOperationDurationHistogram, labelNames(mr.diskOperationDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.diskOperationDuration)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskIO() {
+		mr.diskIOAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskIO))
+		mr.diskIO = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskIO.Prom,
+			Help: "bytes transferred by the block I/O requests that completed successfully",
+		}, labelNames(mr.diskIOAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskIO)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskOperations() {
+		mr.diskOperationsAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskOperations))
+		mr.diskOperations = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskOperations.Prom,
+			Help: "number of completed block I/O requests",
+		}, labelNames(mr.diskOperationsAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskOperations)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskServiceTime() {
+		mr.diskServiceTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskServiceTime))
+		mr.diskServiceTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskServiceTime.Prom,
+			Help: "sum of the device service times of the completed block reads and writes (without the I/O scheduler wait), in seconds",
+		}, labelNames(mr.diskServiceTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskServiceTime)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskQueueTime() {
+		mr.diskQueueTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskQueueTime))
+		mr.diskQueueTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskQueueTime.Prom,
+			Help: "sum of the time that the completed block reads and writes waited in the I/O scheduler before their issue to the device, in seconds",
+		}, labelNames(mr.diskQueueTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskQueueTime)
+	}
+
+	register = append(register, mr.registerFsSyncMetrics(cfg, provider)...)
+	register = append(register, mr.registerDiskOperationMetrics(cfg, provider)...)
+	register = append(register, mr.registerNFSMetrics(cfg, provider)...)
+	register = append(register, mr.registerPodVolumeMetrics(cfg, provider)...)
+	register = append(register, mr.registerDiskVolumeMetrics(cfg, provider)...)
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -199,8 +291,163 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPSuccessfulConnections(stat)
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
+			r.observeDiskOperationDuration(stat)
+			r.observeDiskCounters(stat)
+			r.observeFsSync(stat)
+			r.observeDiskOperations(stat)
+			r.observeNFS(stat)
 		}
+		r.observeDiskOperationInflight(stats)
+		r.observePodVolumes(stats)
+		r.observeDiskVolumes(stats)
 	}
+}
+
+// registerFsSyncMetrics creates the metrics of the file syncs
+func (r *statMetricsReporter) registerFsSyncMetrics(cfg *StatsPrometheusConfig, provider *attributes.AttrSelector) []prometheus.Collector {
+	features := cfg.CommonCfg.Features
+	var register []prometheus.Collector
+	if features.StatsFsSyncDuration() {
+		r.fsSyncDurationAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncDuration))
+		r.fsSyncDuration = newKernelHistogramVec(attributes.StatFsSyncDuration.Prom,
+			"measures the duration of file syncs (fsync, fdatasync, sync, syncfs, sync_file_range and their equivalents), in seconds",
+			cfg.Config.Buckets.StatFsSyncDurationHistogram, labelNames(r.fsSyncDurationAttrs), cfg.Config.TTL)
+		register = append(register, r.fsSyncDuration)
+	}
+	if features.StatsFsSyncOperations() {
+		r.fsSyncOperationsAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncOperations))
+		r.fsSyncOperations = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatFsSyncOperations.Prom,
+			Help: "number of completed file syncs",
+		}, labelNames(r.fsSyncOperationsAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, r.fsSyncOperations)
+	}
+	if features.StatsFsSyncOperationTime() {
+		r.fsSyncOperationTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncOperationTime))
+		r.fsSyncOperationTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatFsSyncOperationTime.Prom,
+			Help: "sum of the durations of the completed file syncs, in seconds",
+		}, labelNames(r.fsSyncOperationTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, r.fsSyncOperationTime)
+	}
+	return register
+}
+
+// registerNFSMetrics creates the metrics of the NFS client
+func (r *statMetricsReporter) registerNFSMetrics(cfg *StatsPrometheusConfig, provider *attributes.AttrSelector) []prometheus.Collector {
+	features := cfg.CommonCfg.Features
+	var register []prometheus.Collector
+	if features.StatsNFSClientProcedureDuration() {
+		r.nfsProcedureDurationAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatNFSClientProcedureDuration))
+		r.nfsProcedureDuration = newKernelHistogramVec(attributes.StatNFSClientProcedureDuration.Prom,
+			"measures the duration of the RPCs of the NFS client, in seconds",
+			cfg.Config.Buckets.StatNFSClientProcedureDurationHistogram, labelNames(r.nfsProcedureDurationAttrs), cfg.Config.TTL)
+		register = append(register, r.nfsProcedureDuration)
+	}
+	if features.StatsNFSClientProcedureCount() {
+		r.nfsProcedureCountAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatNFSClientProcedureCount))
+		r.nfsProcedureCount = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatNFSClientProcedureCount.Prom,
+			Help: "number of completed RPCs of the NFS client",
+		}, labelNames(r.nfsProcedureCountAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, r.nfsProcedureCount)
+	}
+	if features.StatsNFSClientProcedureTime() {
+		r.nfsProcedureTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatNFSClientProcedureTime))
+		r.nfsProcedureTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatNFSClientProcedureTime.Prom,
+			Help: "sum of the durations of the completed RPCs of the NFS client, in seconds",
+		}, labelNames(r.nfsProcedureTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, r.nfsProcedureTime)
+	}
+	if features.StatsNFSClientIO() {
+		r.nfsIOAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatNFSClientIO))
+		r.nfsIO = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatNFSClientIO.Prom,
+			Help: "bytes that the NFS client read from and wrote to servers",
+		}, labelNames(r.nfsIOAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, r.nfsIO)
+	}
+	return register
+}
+
+// registerPodVolumeMetrics creates the metric of the devices of the pod volumes
+func (r *statMetricsReporter) registerPodVolumeMetrics(cfg *StatsPrometheusConfig, provider *attributes.AttrSelector) []prometheus.Collector {
+	if !cfg.CommonCfg.Features.StatsDiskPodVolumes() {
+		return nil
+	}
+	r.k8sPodVolumeInfoAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatK8sPodVolumeInfo))
+	r.k8sPodVolumeInfo = NewExpirer[prometheus.Gauge](prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: attributes.StatK8sPodVolumeInfo.Prom,
+		Help: "1 for each disk under a volume that a pod mounts from a PersistentVolumeClaim: join on system_device",
+	}, labelNames(r.k8sPodVolumeInfoAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+	return []prometheus.Collector{r.k8sPodVolumeInfo}
+}
+
+// registerDiskVolumeMetrics creates the metric of the disks of the stacked volumes
+func (r *statMetricsReporter) registerDiskVolumeMetrics(cfg *StatsPrometheusConfig, provider *attributes.AttrSelector) []prometheus.Collector {
+	if !cfg.CommonCfg.Features.StatsDiskVolumeDevices() {
+		return nil
+	}
+	r.diskVolumeInfoAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskVolumeInfo))
+	r.diskVolumeInfo = NewExpirer[prometheus.Gauge](prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: attributes.StatDiskVolumeInfo.Prom,
+		Help: "1 for each disk that a stacked volume (device mapper, md RAID or loop device) is on: join on system_device",
+	}, labelNames(r.diskVolumeInfoAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+	return []prometheus.Collector{r.diskVolumeInfo}
+}
+
+// registerDiskOperationMetrics creates the metrics of the block requests beyond reads and
+// writes: flushes, discards and the requests in flight
+func (r *statMetricsReporter) registerDiskOperationMetrics(cfg *StatsPrometheusConfig, provider *attributes.AttrSelector) []prometheus.Collector {
+	features := cfg.CommonCfg.Features
+	var register []prometheus.Collector
+	histograms := []struct {
+		enabled bool
+		name    attributes.Name
+		help    string
+		buckets []float64
+		dst     **kernelHistogramVec
+		attrs   *[]attributes.Field[*ebpf.Stat, string]
+	}{
+		{
+			features.StatsDiskFlush(), attributes.StatDiskFlushDuration,
+			"measures the duration of the cache flushes of block devices, in seconds",
+			cfg.Config.Buckets.StatDiskFlushDurationHistogram, &r.diskFlushDuration, &r.diskFlushDurationAttrs,
+		},
+		{
+			features.StatsDiskDiscard(), attributes.StatDiskDiscardDuration,
+			"measures the duration of the block discard requests, in seconds",
+			cfg.Config.Buckets.StatDiskDiscardDurationHistogram, &r.diskDiscardDuration, &r.diskDiscardDurationAttrs,
+		},
+	}
+	for _, h := range histograms {
+		if !h.enabled {
+			continue
+		}
+		*h.attrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(h.name))
+		*h.dst = newKernelHistogramVec(h.name.Prom, h.help, h.buckets, labelNames(*h.attrs), cfg.Config.TTL)
+		register = append(register, *h.dst)
+	}
+
+	if features.StatsDiskDiscard() {
+		r.diskDiscardIOAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskDiscardIO))
+		r.diskDiscardIO = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskDiscardIO.Prom,
+			Help: "bytes discarded by the block discard requests that completed successfully",
+		}, labelNames(r.diskDiscardIOAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, r.diskDiscardIO)
+	}
+
+	if features.StatsDiskOperationInflight() {
+		r.diskOperationInflightAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskOperationInflight))
+		r.diskOperationInflight = NewExpirer[prometheus.Gauge](prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: attributes.StatDiskOperationInflight.Prom,
+			Help: "number of block reads and writes issued to the device and not yet completed (sysfs inflight)",
+		}, labelNames(r.diskOperationInflightAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, r.diskOperationInflight)
+	}
+	return register
 }
 
 func (r *statMetricsReporter) observeTCPRtt(stat *ebpf.Stat) {
@@ -241,4 +488,155 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 	}
 	r.tcpIo.WithLabelValues(labelValues(stat, r.tcpIoAttrs)...).
 		Metric.Add(float64(stat.TCPIo.Bytes))
+}
+
+func (r *statMetricsReporter) observeDiskOperationDuration(stat *ebpf.Stat) {
+	if stat.DiskIO == nil || !stat.DiskIO.Op.IsTransfer() {
+		return
+	}
+	observeLatencyIn(r.diskOperationDuration, r.diskOperationDurationAttrs, stat, stat.DiskIO.Latency)
+}
+
+func (r *statMetricsReporter) observeFsSync(stat *ebpf.Stat) {
+	if stat.FsSync == nil {
+		return
+	}
+	observeLatencyIn(r.fsSyncDuration, r.fsSyncDurationAttrs, stat, stat.FsSync.Latency)
+	if r.fsSyncOperations != nil {
+		r.fsSyncOperations.WithLabelValues(labelValues(stat, r.fsSyncOperationsAttrs)...).
+			Metric.Add(float64(stat.FsSync.Operations))
+	}
+	if r.fsSyncOperationTime != nil {
+		r.fsSyncOperationTime.WithLabelValues(labelValues(stat, r.fsSyncOperationTimeAttrs)...).
+			Metric.Add(stat.FsSync.Time)
+	}
+}
+
+func (r *statMetricsReporter) observeDiskCounters(stat *ebpf.Stat) {
+	if stat.DiskIO == nil || !stat.DiskIO.Op.IsTransfer() {
+		return
+	}
+	if r.diskIO != nil && stat.DiskIO.Bytes > 0 {
+		r.diskIO.WithLabelValues(labelValues(stat, r.diskIOAttrs)...).
+			Metric.Add(float64(stat.DiskIO.Bytes))
+	}
+	if r.diskOperations != nil {
+		r.diskOperations.WithLabelValues(labelValues(stat, r.diskOperationsAttrs)...).
+			Metric.Add(float64(stat.DiskIO.Operations))
+	}
+	if r.diskServiceTime != nil {
+		r.diskServiceTime.WithLabelValues(labelValues(stat, r.diskServiceTimeAttrs)...).
+			Metric.Add(stat.DiskIO.Time)
+	}
+	if r.diskQueueTime != nil {
+		r.diskQueueTime.WithLabelValues(labelValues(stat, r.diskQueueTimeAttrs)...).
+			Metric.Add(stat.DiskIO.QueueTime)
+	}
+}
+
+// observeDiskOperations observes the flushes and discards
+func (r *statMetricsReporter) observeDiskOperations(stat *ebpf.Stat) {
+	if stat.DiskIO == nil {
+		return
+	}
+	switch stat.DiskIO.Op {
+	case ebpf.CodeDiskOpFlush:
+		observeLatencyIn(r.diskFlushDuration, r.diskFlushDurationAttrs, stat, stat.DiskIO.Latency)
+	case ebpf.CodeDiskOpDiscard:
+		observeLatencyIn(r.diskDiscardDuration, r.diskDiscardDurationAttrs, stat, stat.DiskIO.Latency)
+		if r.diskDiscardIO != nil && stat.DiskIO.Bytes > 0 {
+			r.diskDiscardIO.WithLabelValues(labelValues(stat, r.diskDiscardIOAttrs)...).
+				Metric.Add(float64(stat.DiskIO.Bytes))
+		}
+	}
+}
+
+func observeLatencyIn(histogram *kernelHistogramVec, attrs []attributes.Field[*ebpf.Stat, string], stat *ebpf.Stat, latency []ebpf.LatencySample) {
+	if histogram == nil || len(latency) == 0 {
+		return
+	}
+	histogram.observe(labelValues(stat, attrs), latency)
+}
+
+func (r *statMetricsReporter) observeNFS(stat *ebpf.Stat) {
+	if stat.NFSProcedure != nil {
+		r.observeNFSProcedure(stat)
+	}
+	if r.nfsIO != nil && stat.NFSIO != nil {
+		r.nfsIO.WithLabelValues(labelValues(stat, r.nfsIOAttrs)...).Metric.Add(float64(stat.NFSIO.Bytes))
+	}
+}
+
+func (r *statMetricsReporter) observeNFSProcedure(stat *ebpf.Stat) {
+	observeLatencyIn(r.nfsProcedureDuration, r.nfsProcedureDurationAttrs, stat, stat.NFSProcedure.Latency)
+	if r.nfsProcedureCount != nil {
+		r.nfsProcedureCount.WithLabelValues(labelValues(stat, r.nfsProcedureCountAttrs)...).
+			Metric.Add(float64(stat.NFSProcedure.Calls))
+	}
+	if r.nfsProcedureTime != nil {
+		r.nfsProcedureTime.WithLabelValues(labelValues(stat, r.nfsProcedureTimeAttrs)...).
+			Metric.Add(stat.NFSProcedure.Time)
+	}
+}
+
+func (r *statMetricsReporter) observePodVolumes(stats []*ebpf.Stat) {
+	if r.k8sPodVolumeInfo == nil {
+		return
+	}
+	setGaugeSums(r.k8sPodVolumeInfo, r.k8sPodVolumeInfoAttrs, stats, func(stat *ebpf.Stat) (float64, bool) {
+		if stat.PodVolume == nil {
+			return 0, false
+		}
+		return float64(stat.PodVolume.Value), true
+	})
+}
+
+func (r *statMetricsReporter) observeDiskVolumes(stats []*ebpf.Stat) {
+	if r.diskVolumeInfo == nil {
+		return
+	}
+	setGaugeSums(r.diskVolumeInfo, r.diskVolumeInfoAttrs, stats, func(stat *ebpf.Stat) (float64, bool) {
+		if stat.DiskVolume == nil {
+			return 0, false
+		}
+		return float64(stat.DiskVolume.Value), true
+	})
+}
+
+func (r *statMetricsReporter) observeDiskOperationInflight(stats []*ebpf.Stat) {
+	if r.diskOperationInflight == nil {
+		return
+	}
+	setGaugeSums(r.diskOperationInflight, r.diskOperationInflightAttrs, stats, func(stat *ebpf.Stat) (float64, bool) {
+		if stat.DiskPending == nil {
+			return 0, false
+		}
+		return float64(stat.DiskPending.Requests), true
+	})
+}
+
+// setGaugeSums sets each series of a gauge to the sum of the values of the stats of a batch that
+// fall into it. Several stats fall into the same series when some of their attributes are not
+// selected, e.g. the reads and writes of a device without disk.io.direction.
+func setGaugeSums(
+	gauge *Expirer[prometheus.Gauge],
+	attrs []attributes.Field[*ebpf.Stat, string],
+	stats []*ebpf.Stat,
+	valueOf func(*ebpf.Stat) (float64, bool),
+) {
+	sums := map[string]float64{}
+	labels := map[string][]string{}
+	for _, stat := range stats {
+		value, ok := valueOf(stat)
+		if !ok {
+			continue
+		}
+		values := labelValues(stat, attrs)
+		key := strings.Join(values, "\x00")
+		sums[key] += value
+		labels[key] = values
+	}
+	for key, sum := range sums {
+		gauge.WithLabelValues(labels[key]...).Metric.Set(sum)
+	}
 }

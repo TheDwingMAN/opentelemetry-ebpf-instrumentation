@@ -562,9 +562,11 @@ This section is the primary user control for defining how OBI captures and proce
 The current shape separates packet/flow capture from TCP stats capture:
 
 - `capture.network.capture` controls network flow capture and flow-derived telemetry.
-- `capture.network.stats` controls TCP stats telemetry. `enabled` is the stats master switch, and `features` lists enabled stats families: `tcp_rtt`, `tcp_failed_connections`, `tcp_successful_connections`, `tcp_retransmits`, and `tcp_io`.
+- `capture.network.stats` controls TCP, block I/O (disk), file sync, NFS client, pod volume and stacked volume stats telemetry. `enabled` is the stats master switch, and `features` lists enabled stats families: `tcp_rtt`, `tcp_failed_connections`, `tcp_successful_connections`, `tcp_retransmits`, `tcp_io`, `disk_io`, `disk_operations`, `disk_service_time`, `disk_operation_duration`, `disk_queue_time`, `disk_flush`, `disk_discard`, `disk_operation_inflight`, `disk_bio_devices`, `fs_sync_duration`, `fs_sync_operations`, `fs_sync_operation_time`, `nfs_client_procedure_duration`, `nfs_client_procedure_count`, `nfs_client_procedure_time`, `nfs_client_io`, `disk_pod_volumes`, and `disk_volume_devices`.
 
 `tcp_io` can produce substantially more events than the other stats families, so users should opt into it deliberately when they need per-send/per-receive I/O stats.
+
+The `disk_*` families probe every block I/O request, the `fs_sync_*` families every file sync, the `nfs_client_*` families every NFS RPC, `disk_operation_inflight` reads the kernel's counters of requests in flight, `disk_pod_volumes` watches the Kubernetes PersistentVolumes, and `disk_volume_devices` reads the stacked volumes of the node from sysfs, so they are never enabled by `enabled: true` alone: list them in `features` to opt in.
 
 ### `capture.engine` Section
 

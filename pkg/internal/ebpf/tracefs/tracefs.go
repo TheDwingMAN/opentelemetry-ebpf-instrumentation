@@ -117,6 +117,9 @@ func attach(prog *ebpf.Program, opts Options, attachEvent func(*ebpf.Program, Op
 		}
 	}
 
+	// Not only fallbacks use tracefs: return kprobes with a raised maxactive need it too, and
+	// shutdown must allow for removing their events.
+	fallbackUsed.Store(true)
 	return &traceFSLinks{links: links, group: group}, nil
 }
 
@@ -127,7 +130,7 @@ func attachTraceFSEvent(
 	group string,
 	name string,
 ) (*traceFSLink, error) {
-	event, err := createTraceFSEvent(opts.Type, target, opts.Return, group, name)
+	event, err := createTraceFSEvent(opts.Type, target, opts.Return, opts.MaxActive, group, name)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +166,7 @@ func createTraceFSEvent(
 	kind ProbeType,
 	target string,
 	ret bool,
+	maxActive int,
 	group string,
 	name string,
 ) (*traceFSEvent, error) {
@@ -177,7 +181,7 @@ func createTraceFSEvent(
 		name:       name,
 	}
 
-	command := traceFSEventCommand(target, ret, event.group, event.name)
+	command := traceFSEventCommand(target, ret, maxActive, event.group, event.name)
 	if err := writeTraceFSCommand(event.eventsFile, command); err != nil {
 		return nil, fmt.Errorf("creating tracefs %s %q: %w", kind, command, err)
 	}
@@ -203,10 +207,13 @@ func randomTraceFSGroup() (string, error) {
 	return fmt.Sprintf("obi_%x", suffix), nil
 }
 
-func traceFSEventCommand(target string, ret bool, group, name string) string {
+func traceFSEventCommand(target string, ret bool, maxActive int, group, name string) string {
 	prefix := "p"
 	if ret {
 		prefix = "r"
+		if maxActive > 0 {
+			prefix += strconv.Itoa(maxActive)
+		}
 	}
 	return fmt.Sprintf("%s:%s/%s %s", prefix, group, name, target)
 }

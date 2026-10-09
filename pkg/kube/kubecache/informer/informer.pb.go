@@ -84,6 +84,8 @@ type ObjectMeta struct {
 	Kind        string                 `protobuf:"bytes,5,opt,name=kind,proto3" json:"kind,omitempty"`
 	// If the Kube object is not a Pod, this field will be empty.
 	Pod *PodInfo `protobuf:"bytes,6,opt,name=pod,proto3,oneof" json:"pod,omitempty"`
+	// If the Kube object is not a PersistentVolume, this field will be empty.
+	PersistentVolume *PersistentVolumeInfo `protobuf:"bytes,9,opt,name=persistent_volume,json=persistentVolume,proto3,oneof" json:"persistent_volume,omitempty"`
 	// Timestamp of the last status: creation/update/deletion, in Unix seconds
 	// We don't need more precision as Kubernetes events are timestamped in seconds
 	StatusTimeEpoch int64 `protobuf:"varint,7,opt,name=status_time_epoch,json=statusTimeEpoch,proto3" json:"status_time_epoch,omitempty"`
@@ -170,6 +172,13 @@ func (x *ObjectMeta) GetPod() *PodInfo {
 	return nil
 }
 
+func (x *ObjectMeta) GetPersistentVolume() *PersistentVolumeInfo {
+	if x != nil {
+		return x.PersistentVolume
+	}
+	return nil
+}
+
 func (x *ObjectMeta) GetStatusTimeEpoch() int64 {
 	if x != nil {
 		return x.StatusTimeEpoch
@@ -185,6 +194,7 @@ type PodInfo struct {
 	HostIp        string                 `protobuf:"bytes,4,opt,name=host_ip,json=hostIp,proto3" json:"host_ip,omitempty"`
 	Containers    []*ContainerInfo       `protobuf:"bytes,5,rep,name=containers,proto3" json:"containers,omitempty"`
 	Owners        []*Owner               `protobuf:"bytes,6,rep,name=owners,proto3" json:"owners,omitempty"`
+	VolumeClaims  []*VolumeClaim         `protobuf:"bytes,7,rep,name=volume_claims,json=volumeClaims,proto3" json:"volume_claims,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -261,6 +271,130 @@ func (x *PodInfo) GetOwners() []*Owner {
 	return nil
 }
 
+func (x *PodInfo) GetVolumeClaims() []*VolumeClaim {
+	if x != nil {
+		return x.VolumeClaims
+	}
+	return nil
+}
+
+// VolumeClaim is a volume of a Pod that mounts a PersistentVolumeClaim
+type VolumeClaim struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name of the volume in the Pod
+	VolumeName string `protobuf:"bytes,1,opt,name=volume_name,json=volumeName,proto3" json:"volume_name,omitempty"`
+	// name of the PersistentVolumeClaim, in the namespace of the Pod
+	ClaimName     string `protobuf:"bytes,2,opt,name=claim_name,json=claimName,proto3" json:"claim_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VolumeClaim) Reset() {
+	*x = VolumeClaim{}
+	mi := &file_proto_informer_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VolumeClaim) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VolumeClaim) ProtoMessage() {}
+
+func (x *VolumeClaim) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_informer_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VolumeClaim.ProtoReflect.Descriptor instead.
+func (*VolumeClaim) Descriptor() ([]byte, []int) {
+	return file_proto_informer_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *VolumeClaim) GetVolumeName() string {
+	if x != nil {
+		return x.VolumeName
+	}
+	return ""
+}
+
+func (x *VolumeClaim) GetClaimName() string {
+	if x != nil {
+		return x.ClaimName
+	}
+	return ""
+}
+
+type PersistentVolumeInfo struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// namespace and name of the PersistentVolumeClaim bound to the volume, if any
+	ClaimNamespace string `protobuf:"bytes,1,opt,name=claim_namespace,json=claimNamespace,proto3" json:"claim_namespace,omitempty"`
+	ClaimName      string `protobuf:"bytes,2,opt,name=claim_name,json=claimName,proto3" json:"claim_name,omitempty"`
+	// path of local and hostPath volumes on their node
+	LocalPath     string `protobuf:"bytes,3,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PersistentVolumeInfo) Reset() {
+	*x = PersistentVolumeInfo{}
+	mi := &file_proto_informer_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PersistentVolumeInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PersistentVolumeInfo) ProtoMessage() {}
+
+func (x *PersistentVolumeInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_informer_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PersistentVolumeInfo.ProtoReflect.Descriptor instead.
+func (*PersistentVolumeInfo) Descriptor() ([]byte, []int) {
+	return file_proto_informer_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PersistentVolumeInfo) GetClaimNamespace() string {
+	if x != nil {
+		return x.ClaimNamespace
+	}
+	return ""
+}
+
+func (x *PersistentVolumeInfo) GetClaimName() string {
+	if x != nil {
+		return x.ClaimName
+	}
+	return ""
+}
+
+func (x *PersistentVolumeInfo) GetLocalPath() string {
+	if x != nil {
+		return x.LocalPath
+	}
+	return ""
+}
+
 type ContainerInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -272,7 +406,7 @@ type ContainerInfo struct {
 
 func (x *ContainerInfo) Reset() {
 	*x = ContainerInfo{}
-	mi := &file_proto_informer_proto_msgTypes[2]
+	mi := &file_proto_informer_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -284,7 +418,7 @@ func (x *ContainerInfo) String() string {
 func (*ContainerInfo) ProtoMessage() {}
 
 func (x *ContainerInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_informer_proto_msgTypes[2]
+	mi := &file_proto_informer_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -297,7 +431,7 @@ func (x *ContainerInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContainerInfo.ProtoReflect.Descriptor instead.
 func (*ContainerInfo) Descriptor() ([]byte, []int) {
-	return file_proto_informer_proto_rawDescGZIP(), []int{2}
+	return file_proto_informer_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ContainerInfo) GetId() string {
@@ -331,7 +465,7 @@ type Owner struct {
 
 func (x *Owner) Reset() {
 	*x = Owner{}
-	mi := &file_proto_informer_proto_msgTypes[3]
+	mi := &file_proto_informer_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -343,7 +477,7 @@ func (x *Owner) String() string {
 func (*Owner) ProtoMessage() {}
 
 func (x *Owner) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_informer_proto_msgTypes[3]
+	mi := &file_proto_informer_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -356,7 +490,7 @@ func (x *Owner) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Owner.ProtoReflect.Descriptor instead.
 func (*Owner) Descriptor() ([]byte, []int) {
-	return file_proto_informer_proto_rawDescGZIP(), []int{3}
+	return file_proto_informer_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Owner) GetName() string {
@@ -386,7 +520,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_proto_informer_proto_msgTypes[4]
+	mi := &file_proto_informer_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -398,7 +532,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_informer_proto_msgTypes[4]
+	mi := &file_proto_informer_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -411,7 +545,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_proto_informer_proto_rawDescGZIP(), []int{4}
+	return file_proto_informer_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Event) GetType() EventType {
@@ -438,7 +572,7 @@ type SubscribeMessage struct {
 
 func (x *SubscribeMessage) Reset() {
 	*x = SubscribeMessage{}
-	mi := &file_proto_informer_proto_msgTypes[5]
+	mi := &file_proto_informer_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -450,7 +584,7 @@ func (x *SubscribeMessage) String() string {
 func (*SubscribeMessage) ProtoMessage() {}
 
 func (x *SubscribeMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_informer_proto_msgTypes[5]
+	mi := &file_proto_informer_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -463,7 +597,7 @@ func (x *SubscribeMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeMessage.ProtoReflect.Descriptor instead.
 func (*SubscribeMessage) Descriptor() ([]byte, []int) {
-	return file_proto_informer_proto_rawDescGZIP(), []int{5}
+	return file_proto_informer_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SubscribeMessage) GetFromTimestampEpoch() int64 {
@@ -477,7 +611,7 @@ var File_proto_informer_proto protoreflect.FileDescriptor
 
 const file_proto_informer_proto_rawDesc = "" +
 	"\n" +
-	"\x14proto/informer.proto\x12\binformer\"\xc0\x03\n" +
+	"\x14proto/informer.proto\x12\binformer\"\xa8\x04\n" +
 	"\n" +
 	"ObjectMeta\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
@@ -486,7 +620,8 @@ const file_proto_informer_proto_rawDesc = "" +
 	"\vannotations\x18\b \x03(\v2%.informer.ObjectMeta.AnnotationsEntryR\vannotations\x12\x10\n" +
 	"\x03ips\x18\x04 \x03(\tR\x03ips\x12\x12\n" +
 	"\x04kind\x18\x05 \x01(\tR\x04kind\x12(\n" +
-	"\x03pod\x18\x06 \x01(\v2\x11.informer.PodInfoH\x00R\x03pod\x88\x01\x01\x12*\n" +
+	"\x03pod\x18\x06 \x01(\v2\x11.informer.PodInfoH\x00R\x03pod\x88\x01\x01\x12P\n" +
+	"\x11persistent_volume\x18\t \x01(\v2\x1e.informer.PersistentVolumeInfoH\x01R\x10persistentVolume\x88\x01\x01\x12*\n" +
 	"\x11status_time_epoch\x18\a \x01(\x03R\x0fstatusTimeEpoch\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
@@ -494,7 +629,8 @@ const file_proto_informer_proto_rawDesc = "" +
 	"\x10AnnotationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x06\n" +
-	"\x04_pod\"\xd9\x01\n" +
+	"\x04_podB\x14\n" +
+	"\x12_persistent_volume\"\x95\x02\n" +
 	"\aPodInfo\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12\x1b\n" +
 	"\tnode_name\x18\x02 \x01(\tR\bnodeName\x12$\n" +
@@ -503,7 +639,19 @@ const file_proto_informer_proto_rawDesc = "" +
 	"\n" +
 	"containers\x18\x05 \x03(\v2\x17.informer.ContainerInfoR\n" +
 	"containers\x12'\n" +
-	"\x06owners\x18\x06 \x03(\v2\x0f.informer.OwnerR\x06owners\"\x9f\x01\n" +
+	"\x06owners\x18\x06 \x03(\v2\x0f.informer.OwnerR\x06owners\x12:\n" +
+	"\rvolume_claims\x18\a \x03(\v2\x15.informer.VolumeClaimR\fvolumeClaims\"M\n" +
+	"\vVolumeClaim\x12\x1f\n" +
+	"\vvolume_name\x18\x01 \x01(\tR\n" +
+	"volumeName\x12\x1d\n" +
+	"\n" +
+	"claim_name\x18\x02 \x01(\tR\tclaimName\"}\n" +
+	"\x14PersistentVolumeInfo\x12'\n" +
+	"\x0fclaim_namespace\x18\x01 \x01(\tR\x0eclaimNamespace\x12\x1d\n" +
+	"\n" +
+	"claim_name\x18\x02 \x01(\tR\tclaimName\x12\x1d\n" +
+	"\n" +
+	"local_path\x18\x03 \x01(\tR\tlocalPath\"\x9f\x01\n" +
 	"\rContainerInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x122\n" +
@@ -542,35 +690,39 @@ func file_proto_informer_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_informer_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_informer_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_proto_informer_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_proto_informer_proto_goTypes = []any{
-	(EventType)(0),           // 0: informer.EventType
-	(*ObjectMeta)(nil),       // 1: informer.ObjectMeta
-	(*PodInfo)(nil),          // 2: informer.PodInfo
-	(*ContainerInfo)(nil),    // 3: informer.ContainerInfo
-	(*Owner)(nil),            // 4: informer.Owner
-	(*Event)(nil),            // 5: informer.Event
-	(*SubscribeMessage)(nil), // 6: informer.SubscribeMessage
-	nil,                      // 7: informer.ObjectMeta.LabelsEntry
-	nil,                      // 8: informer.ObjectMeta.AnnotationsEntry
-	nil,                      // 9: informer.ContainerInfo.EnvEntry
+	(EventType)(0),               // 0: informer.EventType
+	(*ObjectMeta)(nil),           // 1: informer.ObjectMeta
+	(*PodInfo)(nil),              // 2: informer.PodInfo
+	(*VolumeClaim)(nil),          // 3: informer.VolumeClaim
+	(*PersistentVolumeInfo)(nil), // 4: informer.PersistentVolumeInfo
+	(*ContainerInfo)(nil),        // 5: informer.ContainerInfo
+	(*Owner)(nil),                // 6: informer.Owner
+	(*Event)(nil),                // 7: informer.Event
+	(*SubscribeMessage)(nil),     // 8: informer.SubscribeMessage
+	nil,                          // 9: informer.ObjectMeta.LabelsEntry
+	nil,                          // 10: informer.ObjectMeta.AnnotationsEntry
+	nil,                          // 11: informer.ContainerInfo.EnvEntry
 }
 var file_proto_informer_proto_depIdxs = []int32{
-	7, // 0: informer.ObjectMeta.labels:type_name -> informer.ObjectMeta.LabelsEntry
-	8, // 1: informer.ObjectMeta.annotations:type_name -> informer.ObjectMeta.AnnotationsEntry
-	2, // 2: informer.ObjectMeta.pod:type_name -> informer.PodInfo
-	3, // 3: informer.PodInfo.containers:type_name -> informer.ContainerInfo
-	4, // 4: informer.PodInfo.owners:type_name -> informer.Owner
-	9, // 5: informer.ContainerInfo.env:type_name -> informer.ContainerInfo.EnvEntry
-	0, // 6: informer.Event.type:type_name -> informer.EventType
-	1, // 7: informer.Event.resource:type_name -> informer.ObjectMeta
-	6, // 8: informer.EventStreamService.Subscribe:input_type -> informer.SubscribeMessage
-	5, // 9: informer.EventStreamService.Subscribe:output_type -> informer.Event
-	9, // [9:10] is the sub-list for method output_type
-	8, // [8:9] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	9,  // 0: informer.ObjectMeta.labels:type_name -> informer.ObjectMeta.LabelsEntry
+	10, // 1: informer.ObjectMeta.annotations:type_name -> informer.ObjectMeta.AnnotationsEntry
+	2,  // 2: informer.ObjectMeta.pod:type_name -> informer.PodInfo
+	4,  // 3: informer.ObjectMeta.persistent_volume:type_name -> informer.PersistentVolumeInfo
+	5,  // 4: informer.PodInfo.containers:type_name -> informer.ContainerInfo
+	6,  // 5: informer.PodInfo.owners:type_name -> informer.Owner
+	3,  // 6: informer.PodInfo.volume_claims:type_name -> informer.VolumeClaim
+	11, // 7: informer.ContainerInfo.env:type_name -> informer.ContainerInfo.EnvEntry
+	0,  // 8: informer.Event.type:type_name -> informer.EventType
+	1,  // 9: informer.Event.resource:type_name -> informer.ObjectMeta
+	8,  // 10: informer.EventStreamService.Subscribe:input_type -> informer.SubscribeMessage
+	7,  // 11: informer.EventStreamService.Subscribe:output_type -> informer.Event
+	11, // [11:12] is the sub-list for method output_type
+	10, // [10:11] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_proto_informer_proto_init() }
@@ -579,14 +731,14 @@ func file_proto_informer_proto_init() {
 		return
 	}
 	file_proto_informer_proto_msgTypes[0].OneofWrappers = []any{}
-	file_proto_informer_proto_msgTypes[4].OneofWrappers = []any{}
+	file_proto_informer_proto_msgTypes[6].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_informer_proto_rawDesc), len(file_proto_informer_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

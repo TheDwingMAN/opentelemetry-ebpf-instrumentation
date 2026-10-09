@@ -406,6 +406,60 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsTCPIo() {
 		want = append(want, "tcp_io")
 	}
+	if features.StatsDiskIO() {
+		want = append(want, "disk_io")
+	}
+	if features.StatsDiskOperations() {
+		want = append(want, "disk_operations")
+	}
+	if features.StatsDiskServiceTime() {
+		want = append(want, "disk_service_time")
+	}
+	if features.StatsDiskOperationDuration() {
+		want = append(want, "disk_operation_duration")
+	}
+	if features.StatsFsSyncDuration() {
+		want = append(want, "fs_sync_duration")
+	}
+	if features.StatsFsSyncOperations() {
+		want = append(want, "fs_sync_operations")
+	}
+	if features.StatsFsSyncOperationTime() {
+		want = append(want, "fs_sync_operation_time")
+	}
+	if features.StatsDiskQueueTime() {
+		want = append(want, "disk_queue_time")
+	}
+	if features.StatsDiskFlush() {
+		want = append(want, "disk_flush")
+	}
+	if features.StatsDiskDiscard() {
+		want = append(want, "disk_discard")
+	}
+	if features.StatsDiskOperationInflight() {
+		want = append(want, "disk_operation_inflight")
+	}
+	if features.StatsDiskBioDevices() {
+		want = append(want, "disk_bio_devices")
+	}
+	if features.StatsNFSClientProcedureDuration() {
+		want = append(want, "nfs_client_procedure_duration")
+	}
+	if features.StatsNFSClientProcedureCount() {
+		want = append(want, "nfs_client_procedure_count")
+	}
+	if features.StatsNFSClientProcedureTime() {
+		want = append(want, "nfs_client_procedure_time")
+	}
+	if features.StatsNFSClientIO() {
+		want = append(want, "nfs_client_io")
+	}
+	if features.StatsDiskPodVolumes() {
+		want = append(want, "disk_pod_volumes")
+	}
+	if features.StatsDiskVolumeDevices() {
+		want = append(want, "disk_volume_devices")
+	}
 
 	got := toStringSlice(featuresValue)
 	if !sameStringSet(got, want) {

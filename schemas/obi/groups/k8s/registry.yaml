@@ -23,5 +23,6 @@ groups:
         brief: >
           Kind of the top-level Kubernetes owner of the decorated Pod
           (falls back to the direct owner's kind when no top-level owner is
-          resolved). Deliberately never `Pod`, to bound label cardinality.
+          resolved). A Pod without an owner is its own owner (`Pod`), and the
+          mirror Pod of a static Pod is owned by its `Node`.
         examples: ["Deployment", "StatefulSet"]

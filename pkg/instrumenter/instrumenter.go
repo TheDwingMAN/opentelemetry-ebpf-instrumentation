@@ -238,6 +238,7 @@ func BuildCommonContextInfo(
 		ResourceLabels:           resourceLabels,
 		RestrictLocalNode:        config.Attributes.Kubernetes.MetaRestrictLocalNode,
 		ServiceNameTemplate:      templ,
+		PersistentVolumes:        config.Metrics.Features.StatsDiskPodVolumes(),
 	}, imetrics.NoopReporter{})
 
 	ctxInfo.NodeMeta = metadata.NewNodeMeta(

@@ -60,3 +60,88 @@ groups:
         brief: >
           Role of the local endpoint in the TCP three-way handshake
           (`client` initiated the SYN, `server` was awaiting it).
+
+  - id: registry.obi.disk
+    type: attribute_group
+    display_name: OBI Disk Stats
+    brief: >
+      Attributes of OBI's block I/O (disk) statistics that the semantic
+      conventions don't define.
+    attributes:
+      - id: obi.disk.partition
+        type: string
+        stability: development
+        brief: >
+          Partition of the block device (`system.device`) that the I/O targets.
+          Omitted for I/O on the whole device, and for requests that target no
+          partition, such as cache flushes. Before Linux 5.11 (including RHEL 8),
+          the partition is only known on devices that keep I/O statistics.
+        examples: ["nvme0n1p1", "sda2"]
+      - id: obi.disk.stacked
+        type: boolean
+        stability: development
+        brief: >
+          Whether the block device (`system.device`) is built on other block
+          devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop
+          devices, the head devices of NVMe native multipath and DRBD devices
+          pass their I/O down to the devices below them, which report it too. To
+          count the I/O once, add up the devices where it is `false`.
+      - id: obi.disk.volume.device
+        type: string
+        stability: development
+        brief: >
+          Block device of a volume, such as the one that a pod volume is mounted
+          from: the disk that `system.device` names, or a partition or a stacked
+          device (such as an LVM volume) on it.
+        examples: ["dm-0", "nvme0n1p1", "sdb"]
+      - id: obi.disk.volume.name
+        type: string
+        stability: development
+        brief: >
+          Name of the device mapper device, as `/dev/mapper` and `dmsetup ls`
+          list it: of `obi.disk.volume.device` on the volume metrics, and of
+          `system.device` on the block I/O metrics. Omitted for the other
+          devices, such as disks, md RAID and loop devices. OBI refreshes it
+          every 30 seconds, so a new volume that the kernel gives the numbers
+          of a removed one can carry the name of the removed one for up to 30
+          seconds.
+        examples: ["rhel-root", "vg0-data", "mpatha"]
+
+  - id: registry.obi.fs
+    type: attribute_group
+    display_name: OBI File Sync Stats
+    brief: >
+      Attributes of OBI's file sync statistics that the semantic conventions
+      don't define.
+    attributes:
+      # Mirrors `FsSyncTypeCode` in `pkg/internal/statsolly/ebpf/stat.go`.
+      - id: obi.fs.sync.type
+        type:
+          allow_custom_values: true
+          members:
+            - id: fsync
+              value: fsync
+              stability: development
+            - id: fdatasync
+              value: fdatasync
+              stability: development
+            - id: sync
+              value: sync
+              stability: development
+            - id: syncfs
+              value: syncfs
+              stability: development
+            - id: sync_file_range
+              value: sync_file_range
+              stability: development
+            - id: unknown
+              value: unknown
+              stability: development
+        stability: development
+        brief: >
+          How the files were synced: the system call (`fsync`, `fdatasync`,
+          `sync`, `syncfs` or `sync_file_range`) or, for the syncs that the
+          kernel does within other calls (O_SYNC and O_DSYNC writes, msync,
+          io_uring), `fsync` or `fdatasync`, depending on whether the metadata is
+          synced too. `sync` flushes every filesystem, so its syncs have no
+          `system.filesystem.mountpoint`.

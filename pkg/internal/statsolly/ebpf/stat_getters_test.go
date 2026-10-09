@@ -1,0 +1,294 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package ebpf
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"go.opentelemetry.io/otel/attribute"
+
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
+)
+
+func TestStatGetters_DiskIO(t *testing.T) {
+	failedWrite := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{
+		Device:    "nvme0n1",
+		Op:        CodeDiskOpWrite,
+		ErrorType: "EIO",
+	}}
+	okRead := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{
+		Device: "vda",
+		Op:     CodeDiskOpRead,
+	}}
+
+	device, ok := StatGetters(attr.SystemDevice)
+	require.True(t, ok)
+	assert.Equal(t, "nvme0n1", device(failedWrite).Value.AsString())
+
+	direction, ok := StatGetters(attr.DiskIODirection)
+	require.True(t, ok)
+	assert.Equal(t, "write", direction(failedWrite).Value.AsString())
+	assert.Equal(t, "read", direction(okRead).Value.AsString())
+
+	errorType, ok := StatGetters(attr.ErrorType)
+	require.True(t, ok)
+	assert.Equal(t, "EIO", errorType(failedWrite).Value.AsString())
+	// error.type only applies to failed requests: omitted instead of emitted empty
+	assert.False(t, errorType(okRead).Valid())
+
+	errorTypeString, ok := StatStringGetters(attr.ErrorType)
+	require.True(t, ok)
+	assert.Empty(t, errorTypeString(okRead))
+}
+
+func TestStatGetters_DiskPartition(t *testing.T) {
+	onPartition := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "nvme0n1", Partition: "nvme0n1p2"}}
+	onDisk := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "nvme0n1"}}
+
+	partition, ok := StatGetters(attr.DiskPartition)
+	require.True(t, ok)
+	assert.Equal(t, "nvme0n1p2", partition(onPartition).Value.AsString())
+	assert.False(t, partition(onDisk).Valid(), "omitted for I/O on the whole disk")
+}
+
+func TestStatGetters_DiskOperationsWithoutDirection(t *testing.T) {
+	flush := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "sda", Op: CodeDiskOpFlush}}
+	discard := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "sda", Op: CodeDiskOpDiscard}}
+
+	direction, ok := StatGetters(attr.DiskIODirection)
+	require.True(t, ok)
+	assert.False(t, direction(flush).Valid(), "flushes neither read nor write")
+	assert.False(t, direction(discard).Valid(), "discards neither read nor write")
+}
+
+func TestStatGetters_DiskPending(t *testing.T) {
+	pending := &Stat{Type: StatTypeDiskPending, DiskPending: &DiskPending{Device: "sdb", Op: CodeDiskOpRead, Requests: 3}}
+
+	device, ok := StatGetters(attr.SystemDevice)
+	require.True(t, ok)
+	assert.Equal(t, "sdb", device(pending).Value.AsString())
+
+	direction, ok := StatGetters(attr.DiskIODirection)
+	require.True(t, ok)
+	assert.Equal(t, "read", direction(pending).Value.AsString())
+}
+
+func TestStatGetters_FsSync(t *testing.T) {
+	failed := &Stat{Type: StatTypeFsSync, FsSync: &FsSync{ErrorType: "EIO", ContainerID: "0123abcd"}}
+	succeeded := &Stat{Type: StatTypeFsSync, FsSync: &FsSync{}}
+
+	errorType, ok := StatGetters(attr.ErrorType)
+	require.True(t, ok)
+	assert.Equal(t, "EIO", errorType(failed).Value.AsString())
+	assert.False(t, errorType(succeeded).Valid())
+
+	containerID, ok := StatGetters(attr.ContainerID)
+	require.True(t, ok)
+	assert.Equal(t, "0123abcd", containerID(failed).Value.AsString())
+	assert.False(t, containerID(succeeded).Valid())
+}
+
+func TestStatGetters_FilesystemType(t *testing.T) {
+	filesystemType, ok := StatGetters(attr.FilesystemType)
+	require.True(t, ok)
+	filesystemTypeString, ok := StatStringGetters(attr.FilesystemType)
+	require.True(t, ok)
+	ofType := func(kernelType string) *Stat {
+		return &Stat{Type: StatTypeFsSync, FsSync: &FsSync{FilesystemType: kernelType}}
+	}
+
+	tests := []struct {
+		name string
+		stat *Stat
+		want string
+	}{
+		{name: "ext4", stat: ofType("ext4"), want: "ext4"},
+		{name: "xfs", stat: ofType("xfs"), want: "xfs"},
+		{name: "tmpfs", stat: ofType("tmpfs"), want: "tmpfs"},
+		{name: "overlay", stat: ofType("overlay"), want: "overlay"},
+		{name: "nfs4", stat: ofType("nfs4"), want: "nfs4"},
+		{name: "vfat is not mapped to fat32", stat: ofType("vfat"), want: "vfat"},
+		{name: "fuse subtype", stat: ofType("fuse.sshfs"), want: "fuse.sshfs"},
+		{name: "fuse subtype with a hyphen", stat: ofType("fuse.gvfsd-fuse"), want: "fuse.gvfsd-fuse"},
+		{name: "filesystem not in the mount table", stat: ofType("")},
+		{name: "not a file sync", stat: &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, filesystemTypeString(tt.stat))
+			if tt.want == "" {
+				assert.False(t, filesystemType(tt.stat).Valid())
+				return
+			}
+			assert.Equal(t, attribute.String("system.filesystem.type", tt.want), filesystemType(tt.stat))
+		})
+	}
+}
+
+func TestStatGetters_NFSProcedure(t *testing.T) {
+	failed := &Stat{Type: StatTypeNFSProcedure, NFSProcedure: &NFSProcedure{
+		Server: "10.0.0.5", Procedure: "GETATTR", Version: 4, ErrorType: "ESTALE", ContainerID: "0123abcd",
+	}}
+	succeeded := &Stat{Type: StatTypeNFSProcedure, NFSProcedure: &NFSProcedure{Server: "10.0.0.5", Procedure: "READ", Version: 3}}
+
+	server, ok := StatGetters(attr.ServerAddr)
+	require.True(t, ok)
+	assert.Equal(t, "10.0.0.5", server(failed).Value.AsString())
+
+	procedure, ok := StatGetters(attr.OncRPCProcedureName)
+	require.True(t, ok)
+	assert.Equal(t, "GETATTR", procedure(failed).Value.AsString())
+
+	version, ok := StatGetters(attr.OncRPCVersion)
+	require.True(t, ok)
+	assert.Equal(t, int64(3), version(succeeded).Value.AsInt64())
+	versionString, ok := StatStringGetters(attr.OncRPCVersion)
+	require.True(t, ok)
+	assert.Equal(t, "4", versionString(failed))
+
+	errorType, ok := StatGetters(attr.ErrorType)
+	require.True(t, ok)
+	assert.Equal(t, "ESTALE", errorType(failed).Value.AsString())
+	assert.False(t, errorType(succeeded).Valid())
+
+	containerID, ok := StatGetters(attr.ContainerID)
+	require.True(t, ok)
+	assert.Equal(t, "0123abcd", containerID(failed).Value.AsString())
+}
+
+func TestStatGetters_NFSIO(t *testing.T) {
+	read := &Stat{Type: StatTypeNFSIO, NFSIO: &NFSIO{Server: "fd00::5", Direction: uint8(CodeDirectionReceive)}}
+	write := &Stat{Type: StatTypeNFSIO, NFSIO: &NFSIO{Server: "fd00::5", Direction: uint8(CodeDirectionTransmit)}}
+
+	direction, ok := StatGetters(attr.NetworkIoDirection)
+	require.True(t, ok)
+	assert.Equal(t, "receive", direction(read).Value.AsString())
+	assert.Equal(t, "transmit", direction(write).Value.AsString())
+
+	server, ok := StatGetters(attr.ServerAddr)
+	require.True(t, ok)
+	assert.Equal(t, "fd00::5", server(write).Value.AsString())
+
+	procedure, ok := StatGetters(attr.OncRPCProcedureName)
+	require.True(t, ok)
+	assert.False(t, procedure(write).Valid(), "transferred bytes have no procedure")
+}
+
+func TestStatGetters_PodVolume(t *testing.T) {
+	volume := &Stat{Type: StatTypePodVolume, PodVolume: &PodVolume{
+		VolumeName: "data", ClaimName: "data-db-0", PersistentVolume: "pvc-5d1c",
+		MountedDevice: "dm-0", Device: "sda", Value: 1,
+	}}
+	for name, expected := range map[attr.Name]string{
+		attr.K8sVolumeName:                "data",
+		attr.K8sVolumeType:                "persistentVolumeClaim",
+		attr.K8sPersistentVolumeClaimName: "data-db-0",
+		attr.K8sPersistentVolumeName:      "pvc-5d1c",
+		attr.DiskVolumeDevice:             "dm-0",
+		attr.SystemDevice:                 "sda",
+	} {
+		getter, ok := StatGetters(name)
+		require.True(t, ok)
+		assert.Equal(t, expected, getter(volume).Value.AsString(), name)
+	}
+
+	volumeName, ok := StatGetters(attr.K8sVolumeName)
+	require.True(t, ok)
+	assert.False(t, volumeName(&Stat{DiskIO: &DiskIO{Device: "sda"}}).Valid(), "block I/O has no volume")
+}
+
+func TestStatGetters_DiskVolume(t *testing.T) {
+	lvm := &Stat{Type: StatTypeDiskVolume, DiskVolume: &DiskVolume{Volume: "dm-0", Name: "rhel-root", Device: "sda", Value: 1}}
+	for name, expected := range map[attr.Name]string{
+		attr.DiskVolumeDevice: "dm-0",
+		attr.DiskVolumeName:   "rhel-root",
+		attr.SystemDevice:     "sda",
+	} {
+		getter, ok := StatGetters(name)
+		require.True(t, ok)
+		assert.Equal(t, expected, getter(lvm).Value.AsString(), name)
+	}
+
+	volumeName, ok := StatGetters(attr.DiskVolumeName)
+	require.True(t, ok)
+	raid := &Stat{Type: StatTypeDiskVolume, DiskVolume: &DiskVolume{Volume: "md0", Device: "sdb", Value: 1}}
+	assert.False(t, volumeName(raid).Valid(), "only device mapper volumes have a name")
+}
+
+func TestStatGetters_DeviceMapperNameOfBlockIO(t *testing.T) {
+	volumeName, ok := StatGetters(attr.DiskVolumeName)
+	require.True(t, ok)
+	multipathIO := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "dm-1", VolumeName: "mpatha"}}
+	multipathPending := &Stat{Type: StatTypeDiskPending, DiskPending: &DiskPending{Device: "dm-1", VolumeName: "mpatha"}}
+	assert.Equal(t, "mpatha", volumeName(multipathIO).Value.AsString())
+	assert.Equal(t, "mpatha", volumeName(multipathPending).Value.AsString())
+	assert.False(t, volumeName(&Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "sda"}}).Valid(),
+		"omitted for the devices that are not device mapper devices")
+}
+
+func TestStatContainerID(t *testing.T) {
+	assert.Equal(t, "aaaa", (&Stat{DiskIO: &DiskIO{ContainerID: "aaaa"}}).ContainerID())
+	assert.Equal(t, "bbbb", (&Stat{FsSync: &FsSync{ContainerID: "bbbb"}}).ContainerID(),
+		"file syncs are charged to containers too")
+	assert.Equal(t, "cccc", (&Stat{NFSProcedure: &NFSProcedure{ContainerID: "cccc"}}).ContainerID())
+	assert.Equal(t, "dddd", (&Stat{NFSIO: &NFSIO{ContainerID: "dddd"}}).ContainerID())
+	assert.Empty(t, (&Stat{TCPRetransmit: true}).ContainerID())
+}
+
+func TestStatGetters_DiskIOContainer(t *testing.T) {
+	inContainer := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{ContainerID: "0123abcd"}}
+	onHost := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{}}
+
+	containerID, ok := StatGetters(attr.ContainerID)
+	require.True(t, ok)
+	assert.Equal(t, "0123abcd", containerID(inContainer).Value.AsString())
+	assert.False(t, containerID(onHost).Valid(), "omitted for I/O charged to no container")
+}
+
+func TestStatGetters_StorageOmitsUnknownKubernetesMetadata(t *testing.T) {
+	kubeNames := []attr.Name{
+		attr.K8sNamespaceName, attr.K8sOwnerName, attr.K8sClusterName,
+		attr.K8sPodName, attr.K8sContainerName, attr.K8sKind,
+	}
+	tests := []struct {
+		name string
+		stat *Stat
+	}{
+		{name: "disk io", stat: &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{}}},
+		{name: "disk pending", stat: &Stat{Type: StatTypeDiskPending, DiskPending: &DiskPending{}}},
+		{name: "fs sync", stat: &Stat{Type: StatTypeFsSync, FsSync: &FsSync{}}},
+		{name: "nfs procedure", stat: &Stat{Type: StatTypeNFSProcedure, NFSProcedure: &NFSProcedure{}}},
+		{name: "nfs io", stat: &Stat{Type: StatTypeNFSIO, NFSIO: &NFSIO{}}},
+		{name: "pod volume", stat: &Stat{Type: StatTypePodVolume, PodVolume: &PodVolume{}}},
+		{name: "disk volume", stat: &Stat{Type: StatTypeDiskVolume, DiskVolume: &DiskVolume{}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, name := range kubeNames {
+				get, ok := StatGetters(name)
+				require.True(t, ok)
+				getString, ok := StatStringGetters(name)
+				require.True(t, ok)
+
+				tt.stat.CommonAttrs.Metadata = nil
+				assert.False(t, get(tt.stat).Valid(), name)
+				assert.Empty(t, getString(tt.stat), "the Prometheus label stays empty")
+
+				tt.stat.CommonAttrs.Metadata = map[attr.Name]string{name: "x"}
+				assert.Equal(t, attribute.String(string(name), "x"), get(tt.stat))
+			}
+		})
+	}
+}
+
+func TestStatGetters_TCPKeepsEmptyClusterName(t *testing.T) {
+	// k8s.cluster.name is the only Kubernetes attribute that TCP and storage stats share
+	clusterName, ok := StatGetters(attr.K8sClusterName)
+	require.True(t, ok)
+	tcp := &Stat{Type: StatTypeTCPIo, TCPIo: &TCPIo{}}
+	assert.Equal(t, attribute.String(string(attr.K8sClusterName), ""), clusterName(tcp))
+}

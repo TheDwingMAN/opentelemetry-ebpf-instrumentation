@@ -224,6 +224,233 @@ func TestDefault_DBServerDuration(t *testing.T) {
 	}, p.For(DBServerDuration))
 }
 
+func TestDefault_StatDiskOperationDuration(t *testing.T) {
+	// block I/O stats have no connection endpoints, so no src/dst attributes even with k8s enabled
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.DiskIODirection,
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.DiskStacked,
+		attr.DiskVolumeName,
+		attr.SystemDevice,
+	}, p.For(StatDiskOperationDuration), "the workload is opt-in on the histogram, not the cluster")
+}
+
+func TestStatDiskMetricsNameTheDeviceMapperDevices(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	for _, metric := range []Name{
+		StatDiskOperationDuration, StatDiskIO, StatDiskOperations, StatDiskServiceTime, StatDiskQueueTime,
+		StatDiskFlushDuration, StatDiskDiscardDuration, StatDiskDiscardIO, StatDiskOperationInflight,
+	} {
+		assert.Contains(t, p.For(metric), attr.DiskVolumeName, metric.OTEL)
+	}
+}
+
+func TestDefault_StatDiskCounters(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.DiskIODirection,
+		attr.K8sClusterName,
+		attr.K8sKind,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.DiskStacked,
+		attr.DiskVolumeName,
+		attr.SystemDevice,
+	}, p.For(StatDiskIO))
+	// the time counters have the attributes of the operations counter, so that their ratio is the
+	// mean time of each outcome too
+	withOutcome := []attr.Name{
+		attr.DiskIODirection,
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.K8sKind,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.DiskStacked,
+		attr.DiskVolumeName,
+		attr.SystemDevice,
+	}
+	assert.Equal(t, withOutcome, p.For(StatDiskOperations))
+	assert.Equal(t, withOutcome, p.For(StatDiskServiceTime))
+	assert.Equal(t, withOutcome, p.For(StatDiskQueueTime))
+
+	// outside Kubernetes, the disk counters are reported per device only
+	p, err = NewAttrSelector(0, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{attr.DiskIODirection, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice},
+		p.For(StatDiskIO))
+}
+
+func TestStatDiskServiceTimeSelection(t *testing.T) {
+	// the attributes.select keys are normalized: the name with dots, obi.stat.disk.service.time,
+	// selects the metric too
+	for _, key := range []Section{
+		"obi.stat.disk.service_time",
+		"obi.stat.disk.service.time",
+		"obi_stat_disk_service_time_seconds_total",
+	} {
+		selection := Selection{key: InclusionLists{Include: []string{"k8s.pod.name"}}}
+		selection.Normalize()
+		p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: selection})
+		require.NoError(t, err)
+		assert.Equal(t, []attr.Name{attr.K8sPodName}, p.For(StatDiskServiceTime), key)
+	}
+}
+
+func TestStatDiskOperationInflightSelection(t *testing.T) {
+	for _, key := range []Section{
+		"obi.stat.disk.operation.inflight",
+		"obi_stat_disk_operation_inflight",
+	} {
+		selection := Selection{key: InclusionLists{Include: []string{"obi.ip"}}}
+		selection.Normalize()
+		p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: selection})
+		require.NoError(t, err)
+		assert.Equal(t, []attr.Name{attr.OBIIP}, p.For(StatDiskOperationInflight), key)
+	}
+}
+
+func TestDefault_StatDiskOperationInflight(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.DiskIODirection,
+		attr.K8sClusterName,
+		attr.DiskStacked,
+		attr.DiskVolumeName,
+		attr.SystemDevice,
+	}, p.For(StatDiskOperationInflight), "the requests in flight of a device are charged to no workload")
+}
+
+func TestDefault_StatFsSyncDuration(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.FsSyncType,
+	}, p.For(StatFsSyncDuration), "the workload is opt-in on the histogram")
+	counters := []attr.Name{
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.K8sKind,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.FsSyncType,
+	}
+	assert.Equal(t, counters, p.For(StatFsSyncOperations), "the counters carry the workload")
+	assert.Equal(t, counters, p.For(StatFsSyncOperationTime))
+
+	p, err = NewAttrSelector(GroupKubernetes, &SelectorConfig{
+		SelectionCfg: Selection{"obi.stat.fs.sync.duration": InclusionLists{Include: []string{"*"}}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ContainerID,
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.K8sContainerName,
+		attr.K8sKind,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.K8sPodName,
+		attr.FsSyncType,
+		attr.OBIIP,
+		attr.FilesystemMountpoint,
+		attr.FilesystemType,
+	}, p.For(StatFsSyncDuration), "file syncs have no device or direction")
+}
+
+func TestDefault_StatNFSClient(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.OncRPCProcedureName,
+		attr.OncRPCVersion,
+		attr.ServerAddr,
+	}, p.For(StatNFSClientProcedureDuration), "the workload is opt-in on the histogram")
+	counters := []attr.Name{
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.K8sKind,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.OncRPCProcedureName,
+		attr.OncRPCVersion,
+		attr.ServerAddr,
+	}
+	assert.Equal(t, counters, p.For(StatNFSClientProcedureCount), "the counters carry the workload")
+	assert.Equal(t, counters, p.For(StatNFSClientProcedureTime))
+	assert.Equal(t, []attr.Name{
+		attr.K8sClusterName,
+		attr.K8sKind,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.NetworkIoDirection,
+		attr.ServerAddr,
+	}, p.For(StatNFSClientIO))
+}
+
+func TestDefault_StatK8sPodVolumeInfo(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.K8sClusterName,
+		attr.K8sKind,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.K8sPersistentVolumeName,
+		attr.K8sPersistentVolumeClaimName,
+		attr.K8sPodName,
+		attr.K8sVolumeName,
+		attr.DiskVolumeDevice,
+		attr.SystemDevice,
+	}, p.For(StatK8sPodVolumeInfo))
+}
+
+func TestDefault_StatDiskVolumeInfo(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.K8sClusterName,
+		attr.DiskVolumeDevice,
+		attr.DiskVolumeName,
+		attr.SystemDevice,
+	}, p.For(StatDiskVolumeInfo), "the volumes are charged to no workload")
+}
+
+func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{
+		SelectionCfg: Selection{
+			"obi.stat.disk.*": InclusionLists{Include: []string{"*"}},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ContainerID,
+		attr.DiskIODirection,
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.K8sContainerName,
+		attr.K8sKind,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.K8sPodName,
+		attr.DiskPartition,
+		attr.DiskStacked,
+		attr.DiskVolumeName,
+		attr.OBIIP,
+		attr.SystemDevice,
+	}, p.For(StatDiskOperationDuration))
+}
+
 func TestDefault_HTTPServerMetrics(t *testing.T) {
 	p, err := NewAttrSelector(0, &SelectorConfig{})
 	require.NoError(t, err)

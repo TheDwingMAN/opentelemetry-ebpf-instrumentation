@@ -465,6 +465,36 @@ func TestUnchanged(t *testing.T) {
 			},
 			true,
 		},
+		{
+			"volume_claims",
+			informer.ObjectMeta{
+				Pod: &informer.PodInfo{VolumeClaims: []*informer.VolumeClaim{{VolumeName: "data", ClaimName: "pvc-a"}}},
+			},
+			informer.ObjectMeta{
+				Pod: &informer.PodInfo{VolumeClaims: []*informer.VolumeClaim{{VolumeName: "data", ClaimName: "pvc-b"}}},
+			},
+			false,
+		},
+		{
+			"persistent_volume_claim_eq",
+			informer.ObjectMeta{
+				PersistentVolume: &informer.PersistentVolumeInfo{ClaimNamespace: "default", ClaimName: "pvc-a"},
+			},
+			informer.ObjectMeta{
+				PersistentVolume: &informer.PersistentVolumeInfo{ClaimNamespace: "default", ClaimName: "pvc-a"},
+			},
+			true,
+		},
+		{
+			"persistent_volume_bound",
+			informer.ObjectMeta{
+				PersistentVolume: &informer.PersistentVolumeInfo{},
+			},
+			informer.ObjectMeta{
+				PersistentVolume: &informer.PersistentVolumeInfo{ClaimNamespace: "default", ClaimName: "pvc-a"},
+			},
+			false,
+		},
 	}
 
 	for i := range data {
@@ -539,4 +569,66 @@ func TestRefreshStatusTimeEpochPreservesCurrentTimestamp(t *testing.T) {
 	refreshStatusTimeEpoch(em)
 
 	assert.Greater(t, em.StatusTimeEpoch, time.Now().Unix())
+}
+
+func TestPodVolumeClaims(t *testing.T) {
+	inf := &Informers{config: &informersConfig{}}
+	entity, err := inf.podToIndexableEntity(&v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "db-0", Namespace: "default", UID: "1234"},
+		Spec: v1.PodSpec{Volumes: []v1.Volume{
+			{Name: "data", VolumeSource: v1.VolumeSource{
+				PersistentVolumeClaim: &v1.PersistentVolumeClaimVolumeSource{ClaimName: "data-db-0"},
+			}},
+			{Name: "tmp", VolumeSource: v1.VolumeSource{EmptyDir: &v1.EmptyDirVolumeSource{}}},
+		}},
+	})
+	require.NoError(t, err)
+	claims := entity.(*indexableEntity).EncodedMeta.Pod.VolumeClaims
+	require.Len(t, claims, 1, "only the volumes that mount a PersistentVolumeClaim")
+	assert.Equal(t, "data", claims[0].VolumeName)
+	assert.Equal(t, "data-db-0", claims[0].ClaimName)
+}
+
+func TestPersistentVolumeToIndexableEntity(t *testing.T) {
+	entity, err := persistentVolumeToIndexableEntity(&v1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-5d1c"},
+		Spec: v1.PersistentVolumeSpec{
+			ClaimRef: &v1.ObjectReference{Namespace: "default", Name: "data-db-0"},
+			PersistentVolumeSource: v1.PersistentVolumeSource{
+				HostPath: &v1.HostPathVolumeSource{Path: "/var/local-path-provisioner/pvc-5d1c"},
+			},
+		},
+		Status: v1.PersistentVolumeStatus{Phase: v1.VolumeBound},
+	})
+	require.NoError(t, err)
+	meta := entity.(*indexableEntity).EncodedMeta
+	assert.Equal(t, "pvc-5d1c", meta.Name)
+	assert.Equal(t, typePersistentVolume, meta.Kind)
+	assert.Equal(t, &informer.PersistentVolumeInfo{
+		ClaimNamespace: "default",
+		ClaimName:      "data-db-0",
+		LocalPath:      "/var/local-path-provisioner/pvc-5d1c",
+	}, meta.PersistentVolume)
+
+	entity, err = persistentVolumeToIndexableEntity(&v1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-unbound"},
+		Spec: v1.PersistentVolumeSpec{PersistentVolumeSource: v1.PersistentVolumeSource{
+			CSI: &v1.CSIPersistentVolumeSource{Driver: "ebs.csi.aws.com", VolumeHandle: "vol-1"},
+		}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, entity.(*indexableEntity).EncodedMeta.PersistentVolume.ClaimName)
+	assert.Empty(t, entity.(*indexableEntity).EncodedMeta.PersistentVolume.LocalPath,
+		"CSI volumes are found by their mount")
+
+	entity, err = persistentVolumeToIndexableEntity(&v1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-released"},
+		Spec: v1.PersistentVolumeSpec{
+			ClaimRef: &v1.ObjectReference{Namespace: "default", Name: "data-db-0"},
+		},
+		Status: v1.PersistentVolumeStatus{Phase: v1.VolumeReleased},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, entity.(*indexableEntity).EncodedMeta.PersistentVolume.ClaimName,
+		"a Released PersistentVolume keeps the claimRef of a claim that is gone")
 }

@@ -1329,6 +1329,416 @@ Ratio [0-1] between the unread messages of an internal Go channel and its total 
 | --- | --- | --- | --- | --- | --- |
 | `subscriber` | string | `required` | development | Name of the pipeline stage consuming the internal queue, as given to msg.SubscriberName when the stage subscribed. Subscribers that do not provide a name fall back to the name of the queue they subscribed to. | discover.CriteriaMatcher; traceAttacher |
 
+## `obi.stat.disk.discard.duration`
+
+Duration of the block discard (TRIM) and secure erase requests, from their issue to the device until their completion, per block device and outcome. The discards of bio-based devices are timed from the submission of their bio. It is not reported on the paths of dm-multipath devices, nor, when `stats_disk_bio_devices` measures the NVMe native multipath heads, on their paths: the multipath device reports the same I/O.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. Omitted for I/O on the whole device, and for requests that target no partition, such as cache flushes. Before Linux 5.11 (including RHEL 8), the partition is only known on devices that keep I/O statistics. | nvme0n1p1; sda2 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices, the head devices of NVMe native multipath and DRBD devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | rhel-root; vg0-data; mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.discard.io`
+
+Bytes discarded by the block discard (TRIM) and secure erase requests that completed successfully, per block device and workload the requests are charged to.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. Omitted for I/O on the whole device, and for requests that target no partition, such as cache flushes. Before Linux 5.11 (including RHEL 8), the partition is only known on devices that keep I/O statistics. | nvme0n1p1; sda2 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices, the head devices of NVMe native multipath and DRBD devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | rhel-root; vg0-data; mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.flush.duration`
+
+Duration of the cache flush requests of block devices, from their issue to the device until their completion, per block device and outcome. The flushes of bio-based devices (such as LVM, md RAID and NVMe native multipath heads), which issue no requests of their own, are timed from the submission of their bio. It is not reported on the paths of dm-multipath devices: the multipath device reports the same flushes.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. Omitted for I/O on the whole device, and for requests that target no partition, such as cache flushes. Before Linux 5.11 (including RHEL 8), the partition is only known on devices that keep I/O statistics. | nvme0n1p1; sda2 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices, the head devices of NVMe native multipath and DRBD devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | rhel-root; vg0-data; mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.io`
+
+Bytes transferred by the block I/O requests that completed successfully, per block device, direction and workload the I/O is charged to.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. Omitted for I/O on the whole device, and for requests that target no partition, such as cache flushes. Before Linux 5.11 (including RHEL 8), the partition is only known on devices that keep I/O statistics. | nvme0n1p1; sda2 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices, the head devices of NVMe native multipath and DRBD devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | rhel-root; vg0-data; mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.operation.duration`
+
+Device service time of the block reads and writes: from the issue of each request to the device until its completion, per block device, direction and outcome. It excludes the wait in the I/O scheduler, which `obi.stat.disk.queue_time` adds up. Three cases are timed otherwise: the bios of bio-based devices (LVM, md RAID, NVMe native multipath heads) from their submission, a write with a cache flush (a journal commit) until the end of its flush sequence, and the empty flush write of a file sync, which is never issued, from its allocation. Cache flushes and discards have their own histograms. It is not reported on the paths of dm-multipath devices, nor, when `stats_disk_bio_devices` measures the NVMe native multipath heads, on their paths: the multipath device reports the same I/O. Its workload attributes are opt-in: `obi.stat.disk.service_time` and `obi.stat.disk.operations` give the mean per workload.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `error.type` | string | `conditionally_required`: if the block I/O request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. Omitted for I/O on the whole device, and for requests that target no partition, such as cache flushes. Before Linux 5.11 (including RHEL 8), the partition is only known on devices that keep I/O statistics. | nvme0n1p1; sda2 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices, the head devices of NVMe native multipath and DRBD devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | rhel-root; vg0-data; mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.operation.inflight`
+
+Block reads and writes that each device is serving when sampled, every `ebpf.batch_timeout`: issued to the device and not yet completed, as `/sys/block/<device>/inflight` counts them, per block device and direction. Discards count as writes. Requests waiting in the I/O scheduler are not counted: from Linux 6.10 and on RHEL 9.6, /proc/diskstats field 9 (node_exporter's node_disk_io_now, the hostmetrics receiver's system.disk.pending_operations) counts them too, so it can be higher. For a bio-based volume (LVM, md RAID), it counts the bios submitted to the volume and not yet completed, and for the head of NVMe native multipath, from Linux 6.2 and on RHEL 9.6, the requests in flight on its paths, whose path devices report none.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| updowncounter | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices, the head devices of NVMe native multipath and DRBD devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | rhel-root; vg0-data; mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.operations`
+
+Completed block I/O requests, per block device, direction, outcome and workload the I/O is charged to.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `error.type` | string | `conditionally_required`: if the block I/O request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. Omitted for I/O on the whole device, and for requests that target no partition, such as cache flushes. Before Linux 5.11 (including RHEL 8), the partition is only known on devices that keep I/O statistics. | nvme0n1p1; sda2 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices, the head devices of NVMe native multipath and DRBD devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | rhel-root; vg0-data; mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.queue_time`
+
+Sum of the time that the completed block reads and writes waited between their allocation (from Linux 6.13, the start of their accounting) and their issue to the device, in the I/O scheduler or the dispatch queues, per block device, direction, outcome and workload the I/O is charged to. For a write that must follow a cache flush (a journal commit), it includes that flush. Waits before the allocation, such as those of blk-throttle (io.max) and of writeback throttling, are not included. Plus `obi.stat.disk.service_time`, divided by `obi.stat.disk.operations`, it gives iostat's r_await or w_await of each device or workload, and the rate of the sum of both time counters is iostat's aqu-sz for the reads and writes, without the flushes and discards. The wait is measured for the requests that the kernel accounts in /proc/diskstats, those of devices that keep I/O statistics, and, on Linux 6.10 and earlier and RHEL 8 (but not RHEL 9.6), for those of devices that use an I/O scheduler. Nothing is added for the other requests, whose ratio is then their service time, nor for the bios of bio-based devices (LVM, md RAID, zram) and the empty flush writes of file syncs, which are timed from their submission or allocation, so that their service time holds their wait.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `error.type` | string | `conditionally_required`: if the block I/O request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. Omitted for I/O on the whole device, and for requests that target no partition, such as cache flushes. Before Linux 5.11 (including RHEL 8), the partition is only known on devices that keep I/O statistics. | nvme0n1p1; sda2 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices, the head devices of NVMe native multipath and DRBD devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | rhel-root; vg0-data; mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.service_time`
+
+Sum of the device service times of the completed block reads and writes, as `obi.stat.disk.operation.duration` measures them, per block device, direction, outcome and workload the I/O is charged to. Unlike `system.disk.operation_time` (/proc/diskstats), it excludes the wait in the I/O scheduler: plus `obi.stat.disk.queue_time`, it is the time that /proc/diskstats counts for the reads and writes. Divided by `obi.stat.disk.operations`, both summed by the same attributes, it is the mean service time, and, added to `obi.stat.disk.queue_time` first, iostat's r_await or w_await. Its rate is the average number of requests that the device serves at once, above 1 on devices that serve requests in parallel.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `error.type` | string | `conditionally_required`: if the block I/O request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.partition` | string | `opt_in` | development | Partition of the block device (`system.device`) that the I/O targets. Omitted for I/O on the whole device, and for requests that target no partition, such as cache flushes. Before Linux 5.11 (including RHEL 8), the partition is only known on devices that keep I/O statistics. | nvme0n1p1; sda2 |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices, the head devices of NVMe native multipath and DRBD devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`. |  |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | rhel-root; vg0-data; mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.disk.volume.info`
+
+Info metric that links each stacked volume of the node (device mapper, md RAID or loop device) to the disks it is on: one series per volume and disk, of value 1, reported once more with 0 when the volume is gone. Join it on `system.device` with the block I/O metrics. A volume over several disks (md RAID1) has a series per disk, a volume over another stacked volume has the disks of the bottom one, and a loop device has the disks of the filesystem that holds its file. A dm-multipath device has its paths, and a volume over it has the multipath device, which reports the I/O of the paths.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| updowncounter | 1 | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `obi.disk.volume.device` | string | `recommended` | development | Block device of a volume, such as the one that a pod volume is mounted from: the disk that `system.device` names, or a partition or a stacked device (such as an LVM volume) on it. | dm-0; nvme0n1p1; sdb |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the volume is a device mapper volume | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it: of `obi.disk.volume.device` on the volume metrics, and of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | rhel-root; vg0-data; mpatha |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.fs.sync.duration`
+
+Time that threads wait for file syncs to make their data durable, per sync type and outcome: the fsync, fdatasync, sync, syncfs and sync_file_range (when it waits) system calls from their entry to their return, and the syncs that the kernel does within other calls (O_SYNC and O_DSYNC writes, msync with MS_SYNC, io_uring fsync). It includes all that a sync waits for, such as the writeback of the dirty pages, the journal commit, the block I/O and the cache flushes, or the COMMIT RPCs on NFS, but not the writeback that the kernel does in the background. Its workload attributes are opt-in: `obi.stat.fs.sync.operation_time` and `obi.stat.fs.sync.operations` give the mean per workload.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the file sync failed: its errno name, e.g. `EIO`, `ENOSPC` or `EINVAL` (a file that can't be synced, such as a pipe), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.fs.sync.type` | enum | `recommended` | development | How the files were synced: the system call (`fsync`, `fdatasync`, `sync`, `syncfs` or `sync_file_range`) or, for the syncs that the kernel does within other calls (O_SYNC and O_DSYNC writes, msync, io_uring), `fsync` or `fdatasync`, depending on whether the metadata is synced too. `sync` flushes every filesystem, so its syncs have no `system.filesystem.mountpoint`. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
+| `system.filesystem.type` | string | `opt_in` | development | The filesystem type, as the kernel names it in the mount table, not as the members of the semantic conventions: `vfat` is not `fat32`. The subtype of a FUSE filesystem is appended (`fuse.sshfs`). | ext4; xfs; tmpfs; overlay; nfs4; fuse.sshfs |
+
+## `obi.stat.fs.sync.operation_time`
+
+Sum of the durations of the completed file syncs, as `obi.stat.fs.sync.duration` measures them, per sync type, outcome and workload whose thread synced. Divided by `obi.stat.fs.sync.operations`, both summed by the same attributes, it is the mean sync time; its rate is the average number of syncs in progress.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the file sync failed: its errno name, e.g. `EIO`, `ENOSPC` or `EINVAL` (a file that can't be synced, such as a pipe), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.fs.sync.type` | enum | `recommended` | development | How the files were synced: the system call (`fsync`, `fdatasync`, `sync`, `syncfs` or `sync_file_range`) or, for the syncs that the kernel does within other calls (O_SYNC and O_DSYNC writes, msync, io_uring), `fsync` or `fdatasync`, depending on whether the metadata is synced too. `sync` flushes every filesystem, so its syncs have no `system.filesystem.mountpoint`. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
+| `system.filesystem.type` | string | `opt_in` | development | The filesystem type, as the kernel names it in the mount table, not as the members of the semantic conventions: `vfat` is not `fat32`. The subtype of a FUSE filesystem is appended (`fuse.sshfs`). | ext4; xfs; tmpfs; overlay; nfs4; fuse.sshfs |
+
+## `obi.stat.fs.sync.operations`
+
+Completed file syncs, those of `obi.stat.fs.sync.duration`, per sync type, outcome and workload whose thread synced.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {operation} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the file sync failed: its errno name, e.g. `EIO`, `ENOSPC` or `EINVAL` (a file that can't be synced, such as a pipe), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that synced runs in a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.fs.sync.type` | enum | `recommended` | development | How the files were synced: the system call (`fsync`, `fdatasync`, `sync`, `syncfs` or `sync_file_range`) or, for the syncs that the kernel does within other calls (O_SYNC and O_DSYNC writes, msync, io_uring), `fsync` or `fdatasync`, depending on whether the metadata is synced too. `sync` flushes every filesystem, so its syncs have no `system.filesystem.mountpoint`. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.filesystem.mountpoint` | string | `opt_in` | development | The filesystem mount path | /mnt/data |
+| `system.filesystem.type` | string | `opt_in` | development | The filesystem type, as the kernel names it in the mount table, not as the members of the semantic conventions: `vfat` is not `fat32`. The subtype of a FUSE filesystem is appended (`fuse.sshfs`). | ext4; xfs; tmpfs; overlay; nfs4; fuse.sshfs |
+
+## `obi.stat.k8s.pod.volume.info`
+
+Info metric that links each volume that a pod of the node mounts from a PersistentVolumeClaim to the device it is mounted from (`obi.disk.volume.device`) and to the disks of that device (`system.device`): one series per pod, volume and disk, of value 1, reported once more with 0 when the pod no longer mounts it. Join it on `system.device` with the block I/O metrics. A volume on a stacked device, such as an LVM volume over several disks, has one series per disk. A volume on a dm-multipath device has the multipath device, which reports the I/O of its paths.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| updowncounter | 1 | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `k8s.cluster.name` | string | `recommended` | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.kind` | string | `recommended` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.persistentvolume.name` | string | `recommended` | development | The name of the PersistentVolume. | pv-data-01 |
+| `k8s.persistentvolumeclaim.name` | string | `recommended` | development | The name of the PersistentVolumeClaim. | pvc-data-01 |
+| `k8s.pod.name` | string | `recommended` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `k8s.volume.name` | string | `recommended` | development | The name of the K8s volume. | volume0 |
+| `k8s.volume.type` | enum | `opt_in` | development | The type of the K8s volume. | emptyDir; persistentVolumeClaim |
+| `obi.disk.volume.device` | string | `recommended` | development | Block device of a volume, such as the one that a pod volume is mounted from: the disk that `system.device` names, or a partition or a stacked device (such as an LVM volume) on it. | dm-0; nvme0n1p1; sdb |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `system.device` | string | `recommended` | development | The device identifier | (identifier) |
+
+## `obi.stat.nfs.client.io`
+
+File data that the READ and WRITE RPCs of the kernel NFS client transferred, per server, direction (`receive`: read from the server, `transmit`: written to it) and workload whose thread started the RPCs: the bytes that the server read and wrote, as /proc/self/mountstats counts them, without the RPC headers and the other procedures.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `network.io.direction` | enum | `recommended` | development | The network IO operation direction. | transmit |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
+## `obi.stat.nfs.client.procedure.count`
+
+Completed RPCs of the kernel NFS client, those of `obi.stat.nfs.client.procedure.duration`, per server, procedure, NFS version, outcome and workload whose thread started them. For NFSv3, they are the counts of the semantic conventions' `nfs.client.procedure.count`, with the server, the outcome and the workload. For NFSv4, `onc_rpc.procedure.name` is the name that the kernel client gives to each kind of COMPOUND request (e.g. `READ` or `OPEN`), whose counts the hostmetrics receiver reports as `nfs.client.operation.count`, with `nfs.operation.name`.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {procedure} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the RPC failed: its errno name, e.g. `EIO`, `ENOENT` (no such file) or `EJUKEBOX`, the name of its NFSv4 status, e.g. `NFS4ERR_DELAY`, or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `onc_rpc.procedure.name` | string | `recommended` | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
+## `obi.stat.nfs.client.procedure.duration`
+
+Time that each RPC of the kernel NFS client takes, from the start of its RPC task to its completion, per server, procedure, NFS version and outcome: the wait for a transport slot, the transmissions, the retransmissions and the server's reply. It is the execute time of /proc/self/mountstats (nfsiostat's avg exe), which includes the round-trip time, not the round-trip time alone. For NFSv4, `onc_rpc.procedure.name` is the name that the kernel client gives to each kind of COMPOUND request, after its main operation, e.g. `READ` or `OPEN`. Its workload attributes are opt-in: `obi.stat.nfs.client.procedure.time` and `obi.stat.nfs.client.procedure.count` give the mean per workload.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the RPC failed: its errno name, e.g. `EIO`, `ENOENT` (no such file) or `EJUKEBOX`, the name of its NFSv4 status, e.g. `NFS4ERR_DELAY`, or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `onc_rpc.procedure.name` | string | `recommended` | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
+## `obi.stat.nfs.client.procedure.time`
+
+Sum of the durations of the completed RPCs of the kernel NFS client, as `obi.stat.nfs.client.procedure.duration` measures them, per server, procedure, NFS version, outcome and workload whose thread started them. Divided by `obi.stat.nfs.client.procedure.count`, both summed by the same attributes, it is the mean RPC time.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the RPC failed: its errno name, e.g. `EIO`, `ENOENT` (no such file) or `EJUKEBOX`, the name of its NFSv4 status, e.g. `NFS4ERR_DELAY`, or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the thread that started the RPC runs in a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `onc_rpc.procedure.name` | string | `recommended` | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
 ## `obi.stat.tcp.failed.connections`
 
 Count of TCP connections that failed to establish, broken down by `reason`.
@@ -1594,7 +2004,7 @@ OBI-emitted rpc.server.call.duration
 | `k8s.daemonset.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a DaemonSet | release_candidate | The name of the DaemonSet. | opentelemetry |
 | `k8s.deployment.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a Deployment | release_candidate | The name of the Deployment. | opentelemetry |
 | `k8s.job.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a Job | release_candidate | The name of the Job. | opentelemetry |
-| `k8s.kind` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.kind` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
 | `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
@@ -1682,7 +2092,7 @@ OBI counterpart of `target.info` for the traces pipeline. Carries the resource a
 | `k8s.daemonset.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a DaemonSet | release_candidate | The name of the DaemonSet. | opentelemetry |
 | `k8s.deployment.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a Deployment | release_candidate | The name of the Deployment. | opentelemetry |
 | `k8s.job.name` | string | `recommended`: if Kubernetes decoration is enabled and the pod's owner chain includes a Job | release_candidate | The name of the Job. | opentelemetry |
-| `k8s.kind` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.kind` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
 | `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.node.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the Node. | node-1 |
 | `k8s.owner.name` | string | `conditionally_required`: if Kubernetes decoration is enabled and the pod has an owner | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |

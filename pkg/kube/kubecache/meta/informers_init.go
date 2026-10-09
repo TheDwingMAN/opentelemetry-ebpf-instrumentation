@@ -17,6 +17,7 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/informers"
@@ -35,6 +36,7 @@ const (
 	typeNode              = "Node"
 	typePod               = "Pod"
 	typeService           = "Service"
+	typePersistentVolume  = "PersistentVolume"
 	defaultResyncTime     = 30 * time.Minute
 	EnvServiceName        = "OTEL_SERVICE_NAME"
 	EnvResourceAttrs      = "OTEL_RESOURCE_ATTRIBUTES"
@@ -48,6 +50,8 @@ type informersConfig struct {
 	resyncPeriod    time.Duration
 	disableNodes    bool
 	disableServices bool
+	// persistentVolumes are only watched when enabled, since they need extra RBAC permissions
+	persistentVolumes bool
 
 	restrictNode string
 
@@ -83,6 +87,13 @@ func WithoutNodes() InformerOption {
 func WithoutServices() InformerOption {
 	return func(c *informersConfig) {
 		c.disableServices = true
+	}
+}
+
+// WithPersistentVolumes watches the PersistentVolumes too
+func WithPersistentVolumes() InformerOption {
+	return func(c *informersConfig) {
+		c.persistentVolumes = true
 	}
 }
 
@@ -143,6 +154,9 @@ func InitInformers(ctx context.Context, opts ...InformerOption) (*Informers, err
 	}
 
 	svc.log.Debug("starting kubernetes informers")
+	if svc.persistentVolumesFactory != nil {
+		svc.persistentVolumesFactory.Start(ctx.Done())
+	}
 	allSynced := sync.WaitGroup{}
 	allSynced.Add(len(createdFactories))
 	for _, factory := range createdFactories {
@@ -211,6 +225,14 @@ func (inf *Informers) initInformers(ctx context.Context, config *informersConfig
 			createdFactories = append(createdFactories, svcIFactory)
 		}
 		if err := inf.initServiceIPInformer(ctx, svcIFactory); err != nil {
+			return nil, err
+		}
+	}
+	if inf.config.persistentVolumes {
+		// PersistentVolumes are cluster-scoped: they can't be filtered by "spec.nodeName". They have
+		// a factory of their own, which isn't waited for (see persistentVolumesFactory).
+		inf.persistentVolumesFactory = informers.NewSharedInformerFactory(inf.config.kubeClient, inf.config.resyncPeriod)
+		if err := inf.initPersistentVolumeInformer(ctx, inf.persistentVolumesFactory); err != nil {
 			return nil, err
 		}
 	}
@@ -385,10 +407,21 @@ func (inf *Informers) podToIndexableEntity(pod *v1.Pod) (any, error) {
 				Containers:   containers,
 				Owners:       ownersFrom(&pod.ObjectMeta),
 				HostIp:       pod.Status.HostIP,
+				VolumeClaims: volumeClaims(pod.Spec.Volumes),
 			},
 			StatusTimeEpoch: objLastUpdateTime(&pod.ObjectMeta, pod.Status.Conditions, nil),
 		},
 	}, nil
+}
+
+func volumeClaims(volumes []v1.Volume) []*informer.VolumeClaim {
+	var claims []*informer.VolumeClaim
+	for i := range volumes {
+		if pvc := volumes[i].PersistentVolumeClaim; pvc != nil {
+			claims = append(claims, &informer.VolumeClaim{VolumeName: volumes[i].Name, ClaimName: pvc.ClaimName})
+		}
+	}
+	return claims
 }
 
 func nodeToIndexableEntity(node *v1.Node) (any, error) {
@@ -430,6 +463,31 @@ func serviceToIndexableEntity(svc *v1.Service) (any, error) {
 			Kind:            typeService,
 			Annotations:     svc.Annotations,
 			StatusTimeEpoch: objLastUpdateTime(&svc.ObjectMeta, nil, nil),
+		},
+	}, nil
+}
+
+func persistentVolumeToIndexableEntity(pv *v1.PersistentVolume) (any, error) {
+	info := &informer.PersistentVolumeInfo{}
+	// only a Bound PersistentVolume is the volume of its claim: a Released one keeps the claimRef
+	// of a deleted claim, whose name a new claim may have taken
+	if claim := pv.Spec.ClaimRef; claim != nil && pv.Status.Phase == v1.VolumeBound {
+		info.ClaimNamespace, info.ClaimName = claim.Namespace, claim.Name
+	}
+	switch {
+	case pv.Spec.Local != nil:
+		info.LocalPath = pv.Spec.Local.Path
+	case pv.Spec.HostPath != nil:
+		info.LocalPath = pv.Spec.HostPath.Path
+	}
+	return &indexableEntity{
+		ObjectMeta: minimalIndex(&pv.ObjectMeta),
+		EncodedMeta: &informer.ObjectMeta{
+			Name:             pv.Name,
+			Labels:           pv.Labels,
+			Kind:             typePersistentVolume,
+			PersistentVolume: info,
+			StatusTimeEpoch:  objLastUpdateTime(&pv.ObjectMeta, nil, nil),
 		},
 	}, nil
 }
@@ -505,6 +563,37 @@ func (inf *Informers) initServiceIPInformer(ctx context.Context, informerFactory
 	inf.log.Debug("registered Service event handler in the K8s informer")
 
 	inf.services = services
+	return nil
+}
+
+func (inf *Informers) initPersistentVolumeInformer(ctx context.Context, informerFactory informers.SharedInformerFactory) error {
+	pvs := informerFactory.Core().V1().PersistentVolumes().Informer()
+	// Transform any *v1.PersistentVolume instance into a *indexableEntity instance to save space
+	// in the informer's cache
+	if err := pvs.SetTransform(transformFunc("*v1.PersistentVolume", persistentVolumeToIndexableEntity)); err != nil {
+		return fmt.Errorf("can't set persistent volumes transform: %w", err)
+	}
+
+	if _, err := pvs.AddEventHandler(inf.ipInfoEventHandler(ctx)); err != nil {
+		return fmt.Errorf("can't register PersistentVolume event handler in the K8s informer: %w", err)
+	}
+	// the informer retries forever: warn once
+	var warnForbidden sync.Once
+	if err := pvs.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
+		if apierrors.IsForbidden(err) {
+			warnForbidden.Do(func() {
+				inf.log.Warn("can't watch the PersistentVolumes: the volumes of the pods are not reported until "+
+					"OBI can list and watch persistentvolumes", "error", err)
+			})
+			return
+		}
+		inf.log.Debug("error watching the PersistentVolumes", "error", err)
+	}); err != nil {
+		return fmt.Errorf("can't set PersistentVolume watch error handler: %w", err)
+	}
+	inf.log.Debug("registered PersistentVolume event handler in the K8s informer")
+
+	inf.persistentVolumes = pvs
 	return nil
 }
 
@@ -620,7 +709,21 @@ func podInfoEquals(p1, p2 *informer.PodInfo) bool {
 		p1.NodeName == p2.NodeName &&
 		p1.StartTimeStr == p2.StartTimeStr &&
 		p1.HostIp == p2.HostIp &&
-		slices.EqualFunc(p1.Containers, p2.Containers, containerInfoEquals)
+		slices.EqualFunc(p1.Containers, p2.Containers, containerInfoEquals) &&
+		slices.EqualFunc(p1.VolumeClaims, p2.VolumeClaims, volumeClaimEquals)
+}
+
+func volumeClaimEquals(c1, c2 *informer.VolumeClaim) bool {
+	return c1.GetVolumeName() == c2.GetVolumeName() && c1.GetClaimName() == c2.GetClaimName()
+}
+
+func persistentVolumeInfoEquals(pv1, pv2 *informer.PersistentVolumeInfo) bool {
+	if pv1 == nil || pv2 == nil {
+		return pv1 == pv2
+	}
+	return pv1.ClaimNamespace == pv2.ClaimNamespace &&
+		pv1.ClaimName == pv2.ClaimName &&
+		pv1.LocalPath == pv2.LocalPath
 }
 
 // unchanged compares the relevant fields from two versions of an object and returns whether they are
@@ -629,5 +732,6 @@ func unchanged(o, n *informer.ObjectMeta) bool {
 	return slices.Equal(o.Ips, n.Ips) &&
 		maps.Equal(o.Labels, n.Labels) &&
 		maps.Equal(o.Annotations, n.Annotations) &&
-		podInfoEquals(o.Pod, n.Pod)
+		podInfoEquals(o.Pod, n.Pod) &&
+		persistentVolumeInfoEquals(o.PersistentVolume, n.PersistentVolume)
 }

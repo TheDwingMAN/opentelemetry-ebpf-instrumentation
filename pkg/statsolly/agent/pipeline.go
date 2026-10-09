@@ -5,6 +5,8 @@ package agent // import "go.opentelemetry.io/obi/pkg/statsolly/agent"
 
 import (
 	"context"
+	"fmt"
+	"sync"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/otel"
@@ -20,8 +22,11 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/pipe/transform/k8s"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/export"
+	"go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
+	"go.opentelemetry.io/obi/pkg/kube"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
+	"go.opentelemetry.io/obi/pkg/pipe/swarm/swarms"
 	"go.opentelemetry.io/obi/pkg/selection"
 )
 
@@ -30,6 +35,44 @@ func statAttrs(s *ebpf.Stat) *pipe.CommonAttrs { return &s.CommonAttrs }
 // mockable functions for testing
 var newRingBufTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 	return s.rbTracer.TraceLoop(out)
+}
+
+var newDiskTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+	if s.diskTracer == nil {
+		return func(_ context.Context) { out.MarkCloseable() }
+	}
+	return s.diskTracer.TraceLoop(out)
+}
+
+// newDiskVolumesTracer reports the disks of the stacked volumes of the node
+var newDiskVolumesTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+	if !s.cfg.Metrics.Features.StatsDiskVolumeDevices() {
+		return func(_ context.Context) { out.MarkCloseable() }
+	}
+	return stats.NewDiskVolumesTracer(s.bioDevicesMeasured()).TraceLoop(out)
+}
+
+// newPodVolumesTracer reports the devices of the volumes of the pods of the node. It needs the
+// Kubernetes metadata.
+var newPodVolumesTracer = func(ctx context.Context, s *Stats, out *msg.Queue[[]*ebpf.Stat]) (swarm.RunFunc, error) {
+	closeOutput := func(_ context.Context) { out.MarkCloseable() }
+	if !s.cfg.Metrics.Features.StatsDiskPodVolumes() {
+		return closeOutput, nil
+	}
+	k8sInformer := s.ctxInfo.K8sInformer
+	if k8sInformer == nil || !k8sInformer.IsKubeEnabled() {
+		alog().Warn("the devices of the pod volumes are not reported: they need Kubernetes metadata")
+		return closeOutput, nil
+	}
+	store, err := k8sInformer.Get(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting the Kubernetes metadata of the pod volumes: %w", err)
+	}
+	nodeName, err := k8sInformer.CurrentNodeName(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting the node of the pod volumes: %w", err)
+	}
+	return stats.NewPodVolumesTracer(store, nodeName, s.bioDevicesMeasured()).TraceLoop(out), nil
 }
 
 // buildPipeline defines the different nodes in the OBI's StatsO11y module,
@@ -85,12 +128,56 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		statAttrs, dynamicDecoratedStats, dynamicFilteredStats),
 		swarm.WithID("DynamicPIDFilter"))
 
+	tcpFilters, err := tcpStatFilters(s.cfg.Filters.Stats, selectorCfg.ExtraGroupAttributesCfg)
+	if err != nil {
+		return nil, err
+	}
 	filteredStats := s.ctxInfo.OverrideStatsExportQueue
 	if filteredStats == nil {
 		filteredStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredStats")
 	}
-	swi.Add(filter.ByAttribute(s.cfg.Filters.Stats, nil, selectorCfg.ExtraGroupAttributesCfg, ebpf.StatStringGetters, dynamicFilteredStats, filteredStats),
-		swarm.WithID("AttributeFilter"))
+
+	filteredTCPStats := filteredStats
+	if s.storageStatsEnabled() {
+		filteredTCPStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredTCPStats")
+
+		// Block I/O stats have no network endpoints, so they skip the IP-based nodes above. They
+		// are filtered on their own attributes, then join the TCP stats before the exporters.
+		diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
+		swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
+
+		diskVolumeStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskVolumeStats")
+		swi.Add(swarm.DirectInstance(newDiskVolumesTracer(s, diskVolumeStats)), swarm.WithID("DiskVolumesTracer"))
+
+		podVolumeStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "podVolumeStats")
+		swi.Add(func(ctx context.Context) (swarm.RunFunc, error) { return newPodVolumesTracer(ctx, s, podVolumeStats) },
+			swarm.WithID("PodVolumesTracer"))
+
+		storageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "storageStats")
+		swi.Add(mergeStats(storageStats, diskStats, diskVolumeStats, podVolumeStats), swarm.WithID("StorageStatsMerger"))
+
+		selectedStorageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "selectedStorageStats")
+		swi.Add(filter.ByDynamicContainer(dynamicSelector, s.ctxInfo.K8sInformer, newStorageStatSelector().selects,
+			storageStats, selectedStorageStats), swarm.WithID("DynamicContainerFilter"))
+
+		kubeDecoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "kubeDecoratedDiskStats")
+		swi.Add(k8s.ContainerMetadataDecoratorProvider(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
+			(*ebpf.Stat).ContainerID, statAttrs, selectedStorageStats, kubeDecoratedDiskStats),
+			swarm.WithID("DiskKubeDecorator"))
+
+		decoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "decoratedDiskStats")
+		swi.Add(decorate.Decorate(s.agentIP, statAttrs, kubeDecoratedDiskStats, decoratedDiskStats),
+			swarm.WithID("DiskStatsDecorator"))
+
+		filteredStorageStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredStorageStats")
+		swi.Add(filterStorageStatsByAttribute(s.cfg.Filters.Stats, selectorCfg.ExtraGroupAttributesCfg,
+			decoratedDiskStats, filteredStorageStats), swarm.WithID("StorageAttributeFilter"))
+
+		swi.Add(mergeStats(filteredStats, filteredTCPStats, filteredStorageStats), swarm.WithID("StatsMerger"))
+	}
+
+	swi.Add(filter.ByAttribute(tcpFilters, nil, selectorCfg.ExtraGroupAttributesCfg, ebpf.StatStringGetters,
+		dynamicFilteredStats, filteredTCPStats), swarm.WithID("AttributeFilter"))
 
 	// Terminal nodes export the stats record information out of the pipeline: OTEL, Prom and printer.
 	// Not all the nodes are mandatory here. Is the responsibility of each Provider function to decide
@@ -111,4 +198,77 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		swarm.WithID("StatPrinter"))
 
 	return swi.Instance(ctx)
+}
+
+// storageStatsEnabled tells whether any disk, file sync, NFS or volume stat is enabled. Their
+// branch of the pipeline, and its Kubernetes decorator, is only added then.
+func (s *Stats) storageStatsEnabled() bool {
+	features := s.cfg.Metrics.Features
+	return features.StatsDisk() || features.StatsDiskOperationInflight() || features.StatsFsSync() ||
+		features.StatsNFS() || features.StatsDiskVolumeDevices() || features.StatsDiskPodVolumes()
+}
+
+// bioDevicesMeasured tells whether the kernel measures the bios of the bio-based devices: with
+// stats_disk_bio_devices, once its probes are attached, as for the disk tracer
+func (s *Stats) bioDevicesMeasured() bool {
+	return s.fetcher.DiskBioAccumMap() != nil && s.fetcher.DiskBioDevicesMap() != nil
+}
+
+// storageStatSelector tells whether a storage stat belongs to a dynamically selected application: a
+// pod volume, to a selected pod, and any other stat, to a selected container. The stats of devices,
+// like their requests in flight or the disks of the stacked volumes, belong to no application.
+type storageStatSelector struct {
+	// reportedVolumes are the pod volumes that were let through, by their value of 1. Their
+	// removal, which a value of 0 reports, is let through too: once its pod is deleted, the pod
+	// is no longer selected.
+	reportedVolumes map[ebpf.PodVolume]struct{}
+}
+
+func newStorageStatSelector() *storageStatSelector {
+	return &storageStatSelector{reportedVolumes: map[ebpf.PodVolume]struct{}{}}
+}
+
+func (s *storageStatSelector) selects(containers *selection.DynamicAppContainers, stat *ebpf.Stat) bool {
+	volume := stat.PodVolume
+	if volume == nil {
+		return containers.AllowsContainer(stat.ContainerID())
+	}
+
+	series := *volume
+	series.Value = 1
+	if volume.Value == 0 {
+		_, reported := s.reportedVolumes[series]
+		delete(s.reportedVolumes, series)
+		return reported
+	}
+
+	owner := kube.WorkloadOwner{Namespace: volume.Namespace, Kind: volume.OwnerKind, Name: volume.OwnerName}
+	if !containers.AllowsPod(volume.Namespace, volume.PodName, owner) {
+		return false
+	}
+	s.reportedVolumes[series] = struct{}{}
+	return true
+}
+
+// mergeStats forwards the stats of all the inputs to the output, and closes the output once all the
+// inputs are closed.
+func mergeStats(out *msg.Queue[[]*ebpf.Stat], inputs ...*msg.Queue[[]*ebpf.Stat]) swarm.InstanceFunc {
+	return func(_ context.Context) (swarm.RunFunc, error) {
+		subscriptions := make([]<-chan []*ebpf.Stat, 0, len(inputs))
+		for _, input := range inputs {
+			subscriptions = append(subscriptions, input.Subscribe(msg.SubscriberName("StatsMerger")))
+		}
+		return func(ctx context.Context) {
+			defer out.Close()
+			var wg sync.WaitGroup
+			for _, in := range subscriptions {
+				wg.Go(func() {
+					swarms.ForEachInput(ctx, in, nil, func(stats []*ebpf.Stat) {
+						out.SendCtx(ctx, stats)
+					})
+				})
+			}
+			wg.Wait()
+		}, nil
+	}
 }

@@ -966,23 +966,8 @@ func (r *RuntimeMetricsReporter) close() {
 	}()
 }
 
-type runtimeCurrentUpDownCounter struct {
-	ctx     context.Context
-	metric  instrument.Int64UpDownCounter
-	attrs   []attributes.Field[runtimemetrics.RuntimeMetricSnapshot, attribute.KeyValue]
-	entries *expire.ExpiryMap[*runtimeCurrentUpDownCounterEntry]
-	log     *slog.Logger
-
-	clock          expire.Clock
-	lastExpiration time.Time
-	ttl            time.Duration
-}
-
-type runtimeCurrentUpDownCounterEntry struct {
-	attrs       attribute.Set
-	value       int64
-	initialized bool
-}
+// runtimeCurrentUpDownCounter reports the current value of runtime metrics snapshots
+type runtimeCurrentUpDownCounter = currentUpDownCounter[runtimemetrics.RuntimeMetricSnapshot]
 
 func newRuntimeCurrentUpDownCounter(
 	ctx context.Context,
@@ -991,11 +976,42 @@ func newRuntimeCurrentUpDownCounter(
 	clock expire.Clock,
 	ttl time.Duration,
 ) *runtimeCurrentUpDownCounter {
-	return &runtimeCurrentUpDownCounter{
+	return newCurrentUpDownCounter(ctx, metric, attrs, clock, ttl)
+}
+
+// currentUpDownCounter reports current values, such as sizes or counts of things, with an
+// UpDownCounter: it adds the difference to the previous value of each attribute set, and takes
+// the value of the attribute sets that stop being recorded back to 0 when they expire.
+type currentUpDownCounter[T any] struct {
+	ctx     context.Context
+	metric  instrument.Int64UpDownCounter
+	attrs   []attributes.Field[T, attribute.KeyValue]
+	entries *expire.ExpiryMap[*currentUpDownCounterEntry]
+	log     *slog.Logger
+
+	clock          expire.Clock
+	lastExpiration time.Time
+	ttl            time.Duration
+}
+
+type currentUpDownCounterEntry struct {
+	attrs       attribute.Set
+	value       int64
+	initialized bool
+}
+
+func newCurrentUpDownCounter[T any](
+	ctx context.Context,
+	metric instrument.Int64UpDownCounter,
+	attrs []attributes.Field[T, attribute.KeyValue],
+	clock expire.Clock,
+	ttl time.Duration,
+) *currentUpDownCounter[T] {
+	return &currentUpDownCounter[T]{
 		ctx:            ctx,
 		metric:         metric,
 		attrs:          attrs,
-		entries:        expire.NewExpiryMap[*runtimeCurrentUpDownCounterEntry](clock, ttl),
+		entries:        expire.NewExpiryMap[*currentUpDownCounterEntry](clock, ttl),
 		log:            plog().With("type", fmt.Sprintf("%T", metric)),
 		clock:          clock,
 		lastExpiration: clock(),
@@ -1003,17 +1019,17 @@ func newRuntimeCurrentUpDownCounter(
 	}
 }
 
-func (c *runtimeCurrentUpDownCounter) Record(snapshot runtimemetrics.RuntimeMetricSnapshot, value int64) {
+func (c *currentUpDownCounter[T]) Record(record T, value int64) {
 	now := c.clock()
 	if now.Sub(c.lastExpiration) >= c.ttl {
 		c.removeOutdated(c.ctx)
 		c.lastExpiration = now
 	}
 
-	recordAttrs, attrValues := runtimeAttributeSet(c.attrs, snapshot)
-	entry := c.entries.GetOrCreate(attrValues, func() *runtimeCurrentUpDownCounterEntry {
+	recordAttrs, attrValues := attributeSet(c.attrs, record)
+	entry := c.entries.GetOrCreate(attrValues, func() *currentUpDownCounterEntry {
 		c.log.Debug("storing new metric label set", "labelValues", attrValues)
-		return &runtimeCurrentUpDownCounterEntry{attrs: recordAttrs}
+		return &currentUpDownCounterEntry{attrs: recordAttrs}
 	})
 
 	delta := value - entry.value
@@ -1024,24 +1040,28 @@ func (c *runtimeCurrentUpDownCounter) Record(snapshot runtimemetrics.RuntimeMetr
 	entry.initialized = true
 }
 
-func (c *runtimeCurrentUpDownCounter) removeOutdated(ctx context.Context) {
+func (c *currentUpDownCounter[T]) removeOutdated(ctx context.Context) {
 	for _, entry := range c.entries.DeleteExpired() {
 		c.metric.Add(ctx, -entry.value, instrument.WithAttributeSet(entry.attrs))
 		c.metric.Remove(ctx, instrument.WithAttributeSet(entry.attrs))
 	}
 }
 
-func runtimeAttributeSet(
-	fields []attributes.Field[runtimemetrics.RuntimeMetricSnapshot, attribute.KeyValue],
-	snapshot runtimemetrics.RuntimeMetricSnapshot,
+func attributeSet[T any](
+	fields []attributes.Field[T, attribute.KeyValue],
+	record T,
 ) (attribute.Set, []string) {
 	keyVals := make([]attribute.KeyValue, 0, len(fields))
 	vals := make([]string, 0, len(fields))
 
 	for _, field := range fields {
-		kv := sanitizeKeyValue(field.Get(snapshot))
-		keyVals = append(keyVals, kv)
+		kv := sanitizeKeyValue(field.Get(record))
+		// an invalid KeyValue is an absent attribute: it is not exported, but keeps its position
+		// in the values, so that records with different absent attributes stay apart
 		vals = append(vals, kv.Value.Emit())
+		if kv.Valid() {
+			keyVals = append(keyVals, kv)
+		}
 	}
 
 	return attribute.NewSet(keyVals...), vals

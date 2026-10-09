@@ -2515,6 +2515,42 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsTCPRetransmits
 		case statsFeatureTCPIo:
 			out |= export.FeatureStatsTCPIo
+		case statsFeatureDiskIO:
+			out |= export.FeatureStatsDiskIO
+		case statsFeatureDiskOperations:
+			out |= export.FeatureStatsDiskOperations
+		case statsFeatureDiskServiceTime:
+			out |= export.FeatureStatsDiskServiceTime
+		case statsFeatureDiskOperationDuration:
+			out |= export.FeatureStatsDiskOperationDuration
+		case statsFeatureFsSyncDuration:
+			out |= export.FeatureStatsFsSyncDuration
+		case statsFeatureFsSyncOperations:
+			out |= export.FeatureStatsFsSyncOperations
+		case statsFeatureFsSyncOperationTime:
+			out |= export.FeatureStatsFsSyncOperationTime
+		case statsFeatureDiskQueueTime:
+			out |= export.FeatureStatsDiskQueueTime
+		case statsFeatureDiskFlush:
+			out |= export.FeatureStatsDiskFlush
+		case statsFeatureDiskDiscard:
+			out |= export.FeatureStatsDiskDiscard
+		case statsFeatureDiskOperationInflight:
+			out |= export.FeatureStatsDiskOperationInflight
+		case statsFeatureDiskBioDevices:
+			out |= export.FeatureStatsDiskBioDevices
+		case statsFeatureNFSClientProcedureDuration:
+			out |= export.FeatureStatsNFSClientProcedureDuration
+		case statsFeatureNFSClientProcedureCount:
+			out |= export.FeatureStatsNFSClientProcedureCount
+		case statsFeatureNFSClientProcedureTime:
+			out |= export.FeatureStatsNFSClientProcedureTime
+		case statsFeatureNFSClientIO:
+			out |= export.FeatureStatsNFSClientIO
+		case statsFeatureDiskPodVolumes:
+			out |= export.FeatureStatsDiskPodVolumes
+		case statsFeatureDiskVolumeDevices:
+			out |= export.FeatureStatsDiskVolumeDevices
 		}
 	}
 	return out
