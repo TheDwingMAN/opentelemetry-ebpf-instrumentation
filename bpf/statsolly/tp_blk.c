@@ -35,7 +35,8 @@ volatile const u32 disk_rqf_io_stat;
 
 // Set by userspace when an enabled block I/O metric reports, or a stats filter matches, an attribute
 // of the workload that the I/O is charged to (container.id, the Kubernetes pod and workload, but not
-// the cluster), which the probes find from its cgroup. Otherwise the probes don't read the cgroup.
+// the cluster), which the probes find from its cgroup, or under dynamic application selection.
+// Otherwise the probes don't read the cgroup.
 volatile const bool disk_read_cgroup;
 
 // Force structs into the ELF for automatic creation of Golang struct

@@ -119,11 +119,13 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		SelectionCfg:            cfg.Attributes.Select,
 		ExtraGroupAttributesCfg: cfg.Attributes.ExtraGroupAttributes,
 	}
-	features := probedFeatures(alog, cfg.Metrics.Features, ctxInfo.DynamicSelector != nil)
+	features := cfg.Metrics.Features
 
-	// the storage probes also read what the stats filters on the storage stats match
+	// the storage probes also read what the stats filters on the storage stats match, and, under
+	// dynamic application selection, the workload of every operation, which the selection filters on
 	reads := ebpf.ProbeReads{
-		Filtered: filteredAttributes(storageStatFilters(cfg.Filters.Stats, cfg.Attributes.ExtraGroupAttributes)),
+		Workloads: ctxInfo.DynamicSelector != nil,
+		Filtered:  filteredAttributes(storageStatFilters(cfg.Filters.Stats, cfg.Attributes.ExtraGroupAttributes)),
 	}
 	warnPerPodHistograms(&features, ctxInfo.MetricAttributeGroups, selectorCfg)
 	statsFetcher, err = newFetcher(&cfg.EBPF, &features, ctxInfo.MetricAttributeGroups, selectorCfg, reads)
@@ -152,17 +154,6 @@ func filteredAttributes(filters filter.AttributeFamilyConfig) []attr.Name {
 		names = append(names, attr.Name(name))
 	}
 	return names
-}
-
-// probedFeatures returns the stat features whose probes must be loaded. The storage stats can't be
-// matched to dynamically selected applications yet: the dynamic PID filter matches network
-// endpoints, which they don't have. So they are left out under dynamic selection, with a warning.
-func probedFeatures(log *slog.Logger, features export.Features, dynamicSelection bool) export.Features {
-	if !dynamicSelection || !features.StatsDisk() {
-		return features
-	}
-	log.Warn("the storage stat metrics are disabled: they are not supported with dynamic application selection")
-	return features &^ export.FeatureStatsDisk
 }
 
 // warnDisabledStorage logs the enabled storage features whose probes can't be loaded or attached

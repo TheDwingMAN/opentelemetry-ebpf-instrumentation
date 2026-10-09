@@ -141,7 +141,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 	}
 
 	storage := planStorageProbes(tlog, features)
-	diskReads := diskAttributeReads(features, attrSel, reads.Filtered)
+	diskReads := diskAttributeReads(features, attrSel, reads)
 	var unreadMaps []string
 	if !diskReads.cgroup {
 		unreadMaps = diskCgroupMaps

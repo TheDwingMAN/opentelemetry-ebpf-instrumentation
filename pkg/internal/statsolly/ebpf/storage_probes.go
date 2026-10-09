@@ -115,8 +115,11 @@ type diskReads struct {
 }
 
 // diskAttributeReads returns the attributes of the block I/O that the enabled disk metrics report
-// or that the filters match
-func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelector, filtered []attr.Name) diskReads {
+// or that the filters match, and the workload of all the I/O when reads asks for it
+func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelector, reads ProbeReads) diskReads {
+	if reads.Workloads {
+		return diskReads{cgroup: true}
+	}
 	metrics := []struct {
 		enabled bool
 		name    attributes.Name
@@ -126,13 +129,13 @@ func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelec
 		{enabled: features.StatsDiskOperations(), name: attributes.StatDiskOperations},
 		{enabled: features.StatsDiskServiceTime(), name: attributes.StatDiskServiceTime},
 	}
-	var reads diskReads
+	var needed diskReads
 	for _, metric := range metrics {
-		if metric.enabled && slices.ContainsFunc(slices.Concat(attrSel.For(metric.name), filtered), reportsWorkload) {
-			reads.cgroup = true
+		if metric.enabled && slices.ContainsFunc(slices.Concat(attrSel.For(metric.name), reads.Filtered), reportsWorkload) {
+			needed.cgroup = true
 		}
 	}
-	return reads
+	return needed
 }
 
 // workloadAttributes are the attributes of the storage stats that describe the workload that the

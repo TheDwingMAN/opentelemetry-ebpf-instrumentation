@@ -100,9 +100,8 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		filteredStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredStats")
 	}
 
-	// the storage branch is only built when the disk probes are loaded: not when the feature is
-	// disabled, left out under dynamic application selection (see probedFeatures) or when its probes
-	// can't be loaded on the node
+	// the storage branch is only built when the disk probes are loaded: not when the features are
+	// disabled or when their probes can't be loaded on the node
 	filteredTCPStats := filteredStats
 	if s.diskTracer != nil {
 		filteredTCPStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredTCPStats")
@@ -112,9 +111,15 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
 		swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
 
+		// under dynamic application selection, the storage stats are matched to the selected
+		// applications by the containers they are charged to, as they have no network endpoints
+		selectedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "selectedDiskStats")
+		swi.Add(filter.ByDynamicContainer(dynamicSelector, s.ctxInfo.K8sInformer, allowsStorageStat,
+			diskStats, selectedDiskStats), swarm.WithID("DynamicContainerFilter"))
+
 		kubeDecoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "kubeDecoratedDiskStats")
 		swi.Add(k8s.ContainerMetadataDecoratorProvider(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
-			(*ebpf.Stat).ContainerID, statAttrs, diskStats, kubeDecoratedDiskStats), swarm.WithID("DiskKubeDecorator"))
+			(*ebpf.Stat).ContainerID, statAttrs, selectedDiskStats, kubeDecoratedDiskStats), swarm.WithID("DiskKubeDecorator"))
 
 		decoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "decoratedDiskStats")
 		swi.Add(decorate.Decorate(s.agentIP, statAttrs, kubeDecoratedDiskStats, decoratedDiskStats),
@@ -149,6 +154,12 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		swarm.WithID("StatPrinter"))
 
 	return swi.Instance(ctx)
+}
+
+// allowsStorageStat tells whether a storage stat belongs to a dynamically selected application: to
+// the container of a selected process, or of a pod of a selected workload
+func allowsStorageStat(containers *selection.DynamicAppContainers, stat *ebpf.Stat) bool {
+	return containers.AllowsContainer(stat.ContainerID())
 }
 
 // mergeStats forwards the stats of all the inputs to the output, and closes the output once all the

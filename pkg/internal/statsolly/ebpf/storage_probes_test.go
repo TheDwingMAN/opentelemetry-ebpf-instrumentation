@@ -88,7 +88,7 @@ func TestDiskAttributeReads(t *testing.T) {
 	) diskReads {
 		attrSel, err := attributes.NewAttrSelector(groups, selection)
 		require.NoError(t, err)
-		return diskAttributeReads(&features, attrSel, filtered)
+		return diskAttributeReads(&features, attrSel, ProbeReads{Filtered: filtered})
 	}
 	reads := func(features export.Features, selection *attributes.SelectorConfig, filtered ...attr.Name) diskReads {
 		return readsIn(attributes.UndefinedGroup, features, selection, filtered...)
@@ -123,4 +123,14 @@ func TestDiskAttributeReads(t *testing.T) {
 	assert.Equal(t, diskReads{},
 		reads(export.FeatureStatsDiskIO, &attributes.SelectorConfig{}, "k8s_src_namespace"),
 		"an attribute of the TCP stats only")
+}
+
+// Under dynamic application selection, the probes read the workload of all the I/O, which the
+// selection filters on
+func TestDiskAttributeReadsUnderDynamicSelection(t *testing.T) {
+	attrSel, err := attributes.NewAttrSelector(attributes.UndefinedGroup, &attributes.SelectorConfig{})
+	require.NoError(t, err)
+	features := export.FeatureStatsDiskServiceDuration
+	assert.Equal(t, diskReads{}, diskAttributeReads(&features, attrSel, ProbeReads{}))
+	assert.Equal(t, diskReads{cgroup: true}, diskAttributeReads(&features, attrSel, ProbeReads{Workloads: true}))
 }
