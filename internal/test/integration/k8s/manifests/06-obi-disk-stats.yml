@@ -1,0 +1,93 @@
+# OBI with the disk stats, configured with a Config v2 document: the disk stats families have no
+# Config v1 name, and a v2 document takes no OTEL_EBPF_* overrides, so the settings live here
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: obi-config
+data:
+  obi-config.yml: |
+    file_format: "1.0"
+    log_level: debug
+    meter_provider:
+      readers:
+        - periodic:
+            interval: 1000
+            exporter:
+              otlp_grpc:
+                endpoint: http://otelcol.default:4317
+                default_histogram_aggregation: explicit_bucket_histogram
+                tls:
+                  insecure: true
+    extensions:
+      obi:
+        version: "2.0"
+        capture:
+          policy:
+            default_action: exclude
+          network:
+            stats:
+              features: [disk_service_duration, disk_io, disk_operations, disk_service_time]
+          engine:
+            batching:
+              batch_timeout: 10ms
+        enrich:
+          enrichers:
+            kubernetes:
+              mode: enabled
+              cluster_name: my-kube
+          attributes:
+            select:
+              # every attribute on the bytes only: the operations, the service time and the
+              # histogram keep their default attributes, which the suite checks
+              obi.stat.disk.io:
+                include: ["*"]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: obi
+spec:
+  selector:
+    matchLabels:
+      instrumentation: obi
+  template:
+    metadata:
+      labels:
+        instrumentation: obi
+        # this label will trigger a deletion of OBI pods before tearing down
+        # kind, to force OBI writing the coverage data
+        teardown: delete
+    spec:
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet # important to get connection to otelcollector from hostnetwork !!
+      serviceAccountName: obi
+      volumes:
+        - name: obi-config
+          configMap:
+            name: obi-config
+        - name: testoutput
+          persistentVolumeClaim:
+            claimName: testoutput
+        - name: tracefs
+          hostPath:
+            path: /sys/kernel/tracing
+      containers:
+        - name: obi
+          image: obi:dev
+          imagePullPolicy: Never # loaded into Kind from localhost
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          volumeMounts:
+            - mountPath: /config
+              name: obi-config
+            - mountPath: /testoutput
+              name: testoutput
+            - mountPath: /sys/kernel/tracing
+              name: tracefs
+          env:
+            - name: GOCOVERDIR
+              value: "/testoutput"
+            - name: OTEL_EBPF_CONFIG_PATH
+              value: /config/obi-config.yml
