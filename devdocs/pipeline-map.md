@@ -114,8 +114,8 @@ flowchart TD
     DPD(Dynamic PID<br/>decorator):::optional --> DPF
     DPF(Dynamic PID<br/>filter):::optional --> MRG
     DMT(eBPF Disk<br/>Map Tracer):::optional --> DDEC
-    DDEC(Disk stats<br/>decorator) --> MRG
-    MRG(Stats<br/>merger) --> FLTR
+    DDEC(Disk stats<br/>decorator):::optional --> MRG
+    MRG(Stats<br/>merger):::optional --> FLTR
     FLTR(Attributes<br/>filter):::optional --> OTEL(OpenTelemetry<br/>metrics<br/>export):::optional
     FLTR --> PROM(Prometheus<br/>metrics<br/>export):::optional
     FLTR --> StatPrinter(Stat Printer):::optional
