@@ -30,7 +30,8 @@ var v2NetworkMetricsFeatureMask = export.FeatureNetwork |
 	export.FeatureNetworkInterZone |
 	export.FeatureNetworkFlowPackets
 
-var v2StatsMetricsFeatureMask = export.FeatureStats
+var v2StatsMetricsFeatureMask = export.FeatureStats |
+	export.FeatureStatsDiskServiceDuration
 
 // V2ToRuntime converts a config v2 extension shape into an OBI runtime
 // configuration.
