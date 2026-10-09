@@ -203,10 +203,75 @@ func testStatMetricsDiskCounters(t *testing.T, containerID string) {
 	}
 }
 
-// testStatMetricsNoDiskStats checks that the stats aggregate feature doesn't enable the disk stats
-func testStatMetricsNoDiskStats(t *testing.T) {
+// fsSyncStatLabels are the Prometheus labels of all the attributes that the file sync stat metrics
+// can have
+var fsSyncStatLabels = []string{
+	"obi_fs_sync_type", "error_type", "container_id", "obi_ip",
+	// not outside Kubernetes
+	"k8s_cluster_name", "k8s_namespace_name", "k8s_owner_name", "k8s_kind", "k8s_pod_name", "k8s_container_name",
+}
+
+// fsyncLabels are the expected attributes of the successful fsyncs of a container: all the
+// attributes are selected
+func fsyncLabels(containerID string) map[string]*regexp.Regexp {
+	return map[string]*regexp.Regexp{
+		"obi_fs_sync_type": regexp.MustCompile(`^fsync$`),
+		"container_id":     regexp.MustCompile("^" + containerID + "$"),
+		"obi_ip":           ipPattern,
+	}
+}
+
+// testStatMetricsFsSyncDuration checks the latency histogram of the fsyncs of the disk-io container:
+// its attributes and its buckets
+func testStatMetricsFsSyncDuration(t *testing.T, containerID string) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
-	results, err := pq.Query(`{__name__=~"obi_stat_disk_.*"}`)
+	selector := `{container_id="` + containerID + `",obi_fs_sync_type="fsync",error_type=""}`
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		counts, err := pq.Query(`obi_stat_fs_sync_duration_seconds_count` + selector + ` > 0`)
+		require.NoError(ct, err)
+		enoughPromResults(ct, counts)
+		for _, res := range counts {
+			assert.Empty(ct, promtest.LabelMismatches(res.Metric, fsSyncStatLabels, fsyncLabels(containerID)), res.Metric)
+		}
+
+		buckets, err := pq.Query(`obi_stat_fs_sync_duration_seconds_bucket` + selector)
+		require.NoError(ct, err)
+		assertHistogramBounds(ct, buckets, export.FsSyncLatencyBounds)
+	}, testTimeout, 100*time.Millisecond)
+}
+
+// testStatMetricsFsSyncCounters checks the counters of the fsyncs of the disk-io container: their
+// attributes, and that they are the count and the sum of the latency histogram
+func testStatMetricsFsSyncCounters(t *testing.T, containerID string) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	selector := `{container_id="` + containerID + `",obi_fs_sync_type="fsync",error_type=""}`
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for _, counter := range []string{"obi_stat_fs_sync_operations_total", "obi_stat_fs_sync_time_seconds_total"} {
+			results, err := pq.Query(counter + selector + ` > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, results)
+			for _, res := range results {
+				assert.Empty(ct, promtest.LabelMismatches(res.Metric, fsSyncStatLabels, fsyncLabels(containerID)), res.Metric)
+			}
+		}
+
+		mismatches, err := pq.Query(`obi_stat_fs_sync_duration_seconds_count` + selector +
+			` != obi_stat_fs_sync_operations_total` + selector)
+		require.NoError(ct, err)
+		assert.Empty(ct, mismatches, "the operations are the count of the histogram")
+
+		mismatches, err = pq.Query(`abs(obi_stat_fs_sync_duration_seconds_sum` + selector +
+			` - obi_stat_fs_sync_time_seconds_total` + selector + `) > 1e-6`)
+		require.NoError(ct, err)
+		assert.Empty(ct, mismatches, "the time is the sum of the histogram")
+	}, testTimeout, 100*time.Millisecond)
+}
+
+// testStatMetricsNoStorageStats checks that the stats aggregate feature doesn't enable the disk and
+// file sync stats
+func testStatMetricsNoStorageStats(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	results, err := pq.Query(`{__name__=~"obi_stat_(disk|fs)_.*"}`)
 	require.NoError(t, err)
 	assert.Empty(t, results)
 }
