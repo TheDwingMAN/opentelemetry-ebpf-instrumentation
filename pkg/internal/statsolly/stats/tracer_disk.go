@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/procfs/blockdevice"
 	"golang.org/x/sys/unix"
 
+	"go.opentelemetry.io/obi/pkg/internal/errtype"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
@@ -30,9 +31,6 @@ import (
 // kernel accumulation map survives before it is deleted, so entries of devices that stopped
 // doing I/O don't fill the map.
 const diskIdleReadsBeforeDelete = 60
-
-// errorTypeOther is the semantic conventions fallback for error.type values OBI can't name
-const errorTypeOther = "_OTHER"
 
 func dtlog() *slog.Logger {
 	return slog.With("component", "stat.DiskMapTracer")
@@ -345,13 +343,13 @@ func diskErrorType(status uint8, isBlkStatus bool) string {
 	if isBlkStatus {
 		var ok bool
 		if errno, ok = blkStatusErrno[status]; !ok {
-			return errorTypeOther
+			return errtype.Other
 		}
 	}
 	if name := unix.ErrnoName(errno); name != "" {
 		return name
 	}
-	return errorTypeOther
+	return errtype.Other
 }
 
 // deviceNamesCachePeriod is how long device names are cached: the kernel gives the numbers of
