@@ -84,7 +84,7 @@ func assertLatency(t *testing.T, latency *ebpf.LatencyHistogram, sumSeconds floa
 	assert.InDelta(t, sumSeconds, latency.Sum, 1e-12)
 }
 
-func newTestDiskReader(src *fakeDiskAccum) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
+func newTestDiskReader(src *fakeDiskAccum) *diskReader {
 	return newDiskReader(src, false, &deviceNames{sysRoot: "/nonexistent", procRoot: "/nonexistent"})
 }
 

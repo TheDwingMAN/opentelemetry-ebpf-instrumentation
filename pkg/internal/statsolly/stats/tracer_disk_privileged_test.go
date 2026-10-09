@@ -318,7 +318,7 @@ type diskTimings struct {
 	slowest float64
 }
 
-func readDiskTimings(reader *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT], device string) diskTimings {
+func readDiskTimings(reader *diskReader, device string) diskTimings {
 	var timings diskTimings
 	for _, stat := range reader.readStats() {
 		if stat.DiskIO.Device != device {
@@ -675,7 +675,7 @@ func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 
 // attachDiskReader loads the disk probes and returns a reader of their accumulation map that already
 // forgot the I/O that happened before
-func attachDiskReader(t *testing.T) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
+func attachDiskReader(t *testing.T) *diskReader {
 	t.Helper()
 	features := export.FeatureStatsDiskServiceDuration
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, allAttributes)

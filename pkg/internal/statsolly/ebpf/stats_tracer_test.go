@@ -329,7 +329,7 @@ func TestRequestIOStatFlag(t *testing.T) {
 	}
 }
 
-func TestSizeInFlightMaps(t *testing.T) {
+func TestSizeInFlightMap(t *testing.T) {
 	newSpec := func() *ebpf.CollectionSpec {
 		return &ebpf.CollectionSpec{Maps: map[string]*ebpf.MapSpec{
 			"disk_rq_start": {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
@@ -337,21 +337,21 @@ func TestSizeInFlightMaps(t *testing.T) {
 		}}
 	}
 
-	// up to 64 CPUs, the maps of 16384 entries keep their size
+	// up to 64 CPUs, the map of 16384 entries keeps its size
 	spec := newSpec()
-	sizeInFlightMaps(spec, 64)
+	sizeInFlightMap(spec, 64)
 	assert.Equal(t, uint32(1<<14), spec.Maps["disk_rq_start"].MaxEntries)
 
-	// beyond, they get twice the free entries that the CPUs can keep for themselves
+	// beyond, it gets twice the free entries that the CPUs can keep for themselves
 	spec = newSpec()
-	sizeInFlightMaps(spec, 192)
+	sizeInFlightMap(spec, 192)
 	assert.Equal(t, uint32(2*128*192), spec.Maps["disk_rq_start"].MaxEntries)
 	assert.Equal(t, uint32(1<<12), spec.Maps["disk_io_accum"].MaxEntries, "not an in-flight map")
 
 	// a map already scaled beyond it is left alone
 	spec = newSpec()
 	spec.Maps["disk_rq_start"].MaxEntries = 1 << 17
-	sizeInFlightMaps(spec, 192)
+	sizeInFlightMap(spec, 192)
 	assert.Equal(t, uint32(1<<17), spec.Maps["disk_rq_start"].MaxEntries)
 }
 
@@ -365,7 +365,7 @@ func TestShrinkUnusedStorageMaps(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, fixupSpec(spec, storage.programsToDisable()))
 		ebpfconvenience.SetupMapSizes(spec, 2)
-		sizeInFlightMaps(spec, 192)
+		sizeInFlightMap(spec, 192)
 		maxEntries := func() map[string]uint32 {
 			entries := map[string]uint32{}
 			for name, m := range spec.Maps {

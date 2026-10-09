@@ -47,7 +47,7 @@ func TestStorageMapsOfDisabledFeatures(t *testing.T) {
 	require.NoError(t, err)
 	cpus, err := ebpf.PossibleCPU()
 	require.NoError(t, err)
-	sizeInFlightMaps(spec, cpus)
+	sizeInFlightMap(spec, cpus)
 	load := func(features export.Features) map[string]uint32 {
 		fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{})
 		require.NoError(t, err)

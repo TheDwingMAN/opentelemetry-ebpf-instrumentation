@@ -130,7 +130,7 @@ To add a new metric, follow these guidelines:
 
 12. Register the metric in the schema registry: add a `metric.*` entry in [schemas/obi/groups/stats/metrics.yaml](../schemas/obi/groups/stats/metrics.yaml).
 
-A metric that the kernel accumulates in a map instead of sending events through `stats_events`, like `obi.stat.disk.service.duration`, is read by `DiskMapTracer` in [tracer_disk.go](../pkg/internal/statsolly/stats/tracer_disk.go) instead of step 6, and its kernel histogram is exported by `kernelHistogramProducer` (OTEL) and `kernelHistogramVec` (Prometheus) in step 11. The storage features are excluded from `FeatureAll` in step 4 and must be named: their probes fire on every block request. Each storage metric is also listed, in `storageStatMetrics` in [stat_filter.go](../pkg/statsolly/agent/stat_filter.go), with the type of the stats that it reports, so that the `filter.stats` filters on its attributes apply to these stats. Its section starts with `obi.stat.`, as those of all the stat metrics, and a test fails until it is listed.
+A metric that the kernel accumulates in a map instead of sending events through `stats_events`, like `obi.stat.disk.service.duration`, is read by `DiskMapTracer` in [tracer_disk.go](../pkg/internal/statsolly/stats/tracer_disk.go) instead of step 6, and its kernel histogram is exported by `kernelHistogramProducer` (OTEL) and `kernelHistogramVec` (Prometheus) in step 11. The storage features are excluded from `FeatureAll` in step 4 and must be named: their probes fire on every block request. Each storage metric is also listed, in `diskStatSections` in [stat_filter.go](../pkg/statsolly/agent/stat_filter.go), so that the `filter.stats` filters on its attributes apply to the storage stats. Its section starts with `obi.stat.`, as those of all the stat metrics, and a test fails until it is listed.
 
 ### Storage stats
 
@@ -138,7 +138,7 @@ The storage stats are optional, as OBI's optional tracers are: when the probes o
 
 `obi.stat.disk.service.duration` is measured from the last `block_rq_issue` to the final `block_rq_complete` tracepoint of each request, so it is the time the device took to serve it, and a requeue or a retry restarts it: it excludes the time requests wait in the I/O scheduler or in blk-throttle before being issued. The kernel accumulates the latencies in a histogram per device, direction and outcome, which `DiskMapTracer` reads periodically.
 
-The `filter.stats` attribute filters apply to the TCP and the storage stats separately. The TCP stats are matched against every filter but those on the attributes that the storage stat metrics have and the TCP stat metrics don't, such as `system_device`. A storage stat is matched only against the filters on the attributes of its own metrics: a filter on a TCP attribute, such as `dst_port`, doesn't drop the storage stats. The metrics of each type of storage stat are listed in `storageStatMetrics` in [stat_filter.go](../pkg/statsolly/agent/stat_filter.go).
+The `filter.stats` attribute filters apply to the TCP and the storage stats separately. The TCP stats are matched against every filter but those on the attributes that the storage stat metrics have and the TCP stat metrics don't, such as `system_device`. A storage stat is matched only against the filters on the attributes of its own metrics: a filter on a TCP attribute, such as `dst_port`, doesn't drop the storage stats. The storage stat metrics are listed in `diskStatSections` in [stat_filter.go](../pkg/statsolly/agent/stat_filter.go).
 
 #### Storage error types
 

@@ -103,7 +103,7 @@ func TestStorageStatFiltersOnlyApplyToTheStatsWithTheirAttributes(t *testing.T) 
 	filtered := func(config filter.AttributeFamilyConfig) []*ebpf.Stat {
 		matchers, err := newStorageStatMatchers(config, nil)
 		require.NoError(t, err)
-		return matchers.filter([]*ebpf.Stat{nvme, sda})
+		return filterStats(matchers, []*ebpf.Stat{nvme, sda})
 	}
 
 	assert.Equal(t, []*ebpf.Stat{nvme, sda},
@@ -122,20 +122,14 @@ func TestStatFilterOfAnUnknownAttribute(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Every stat metric but the TCP ones is listed with the type of the storage stats that it reports,
-// so that the filters on its attributes apply to these stats
-func TestEveryStorageStatMetricHasItsType(t *testing.T) {
-	listed := map[attributes.Section]bool{}
-	for _, metrics := range storageStatMetrics {
-		for _, metric := range metrics {
-			listed[metric.Section] = true
-		}
-	}
+// Every stat metric but the TCP ones is listed with the disk stat metrics, so that the filters on its
+// attributes apply to the storage stats
+func TestEveryStorageStatMetricIsListed(t *testing.T) {
 	sections := attributes.StatSections()
 	require.Subset(t, sections, tcpStatSections)
 	for _, section := range sections {
 		if !slices.Contains(tcpStatSections, section) {
-			assert.True(t, listed[section], "%s is not in storageStatMetrics", section)
+			assert.Contains(t, diskStatSections, section)
 		}
 	}
 }

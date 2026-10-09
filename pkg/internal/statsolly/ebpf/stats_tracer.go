@@ -41,9 +41,9 @@ type probe struct {
 // (LOCAL_FREE_TARGET in kernel/bpf/bpf_lru_list.c)
 const lruLocalFreeTarget = 128
 
-// inFlightMaps are the LRU maps whose live entries must not be evicted: they hold an entry from the
+// inFlightMap is the LRU map whose live entries must not be evicted: it holds an entry from the
 // issue of each block request until it completes
-var inFlightMaps = []string{"disk_rq_start"}
+const inFlightMap = "disk_rq_start"
 
 // Program names
 const (
@@ -290,17 +290,15 @@ func attachTCPProbes(objects *StatsObjects, features *export.Features, connRoleU
 	return closables, nil
 }
 
-// sizeInFlightMaps gives the in-flight maps room for twice the free entries that the CPUs can keep
+// sizeInFlightMap gives the in-flight map room for twice the free entries that the CPUs can keep
 // for themselves. Before Linux 6.16, except from 6.12.39, 6.6.99, RHEL 9.8 and RHEL 10.2, which
 // have the fix, once those hold most of an LRU map, a CPU that needs an entry evicts a live one
 // instead of taking a free one from another CPU: an evicted request is never counted. It grows the
-// maps of 16384 entries on hosts with more than 64 CPUs.
-func sizeInFlightMaps(spec *ebpf.CollectionSpec, cpus int) {
+// map of 16384 entries on hosts with more than 64 CPUs.
+func sizeInFlightMap(spec *ebpf.CollectionSpec, cpus int) {
 	minEntries := uint32(2 * lruLocalFreeTarget * cpus)
-	for _, name := range inFlightMaps {
-		if m, ok := spec.Maps[name]; ok && m.MaxEntries < minEntries {
-			m.MaxEntries = minEntries
-		}
+	if m, ok := spec.Maps[inFlightMap]; ok && m.MaxEntries < minEntries {
+		m.MaxEntries = minEntries
 	}
 }
 
@@ -344,9 +342,9 @@ func newStatsLoader(objects *StatsObjects, globalScaleFactor int, constants map[
 		}
 		ebpfconvenience.SetupMapSizes(spec, globalScaleFactor)
 		if cpus, err := ebpf.PossibleCPU(); err == nil {
-			sizeInFlightMaps(spec, cpus)
+			sizeInFlightMap(spec, cpus)
 		} else {
-			tlog().Debug("can't size the in-flight maps to the CPUs", "error", err)
+			tlog().Debug("can't size the in-flight map to the CPUs", "error", err)
 		}
 		shrinkUnusedStorageMaps(spec)
 

@@ -88,7 +88,7 @@ func (e ebpfAccum[K, V]) lookupAndDelete(key K) (V, error) {
 
 // DiskMapTracerConfig tells a DiskMapTracer which kernel maps to read, and how to interpret them
 type DiskMapTracerConfig struct {
-	// DiskIOAccum is the accumulation map to read. A nil map is not read.
+	// DiskIOAccum is the accumulation map to read
 	DiskIOAccum *ciliumebpf.Map
 	// DiskStatusIsBlkStatus tells how the kernel reports block request completion statuses
 	// (see disk_status_code)
@@ -99,22 +99,14 @@ type DiskMapTracerConfig struct {
 // DiskMapTracer periodically reads the storage stats that the kernel keeps, and forwards what
 // changed since the previous read as ebpf.Stat records.
 type DiskMapTracer struct {
-	readers  []statReader
+	reader   *diskReader
 	interval time.Duration
 }
 
-type statReader interface {
-	readStats() []*ebpf.Stat
-}
-
 func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
+	accum := ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskIOAccum}
 	devices := &deviceNames{sysRoot: "/sys", procRoot: "/proc"}
-	var readers []statReader
-	if cfg.DiskIOAccum != nil {
-		readers = append(readers, newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskIOAccum},
-			cfg.DiskStatusIsBlkStatus, devices))
-	}
-	return &DiskMapTracer{readers: readers, interval: cfg.Interval}
+	return &DiskMapTracer{reader: newDiskReader(accum, cfg.DiskStatusIsBlkStatus, devices), interval: cfg.Interval}
 }
 
 func (m *DiskMapTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
@@ -127,7 +119,7 @@ func (m *DiskMapTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				stats := m.readStats()
+				stats := m.reader.readStats()
 				if len(stats) > 0 {
 					out.SendCtx(ctx, stats)
 				}
@@ -136,46 +128,36 @@ func (m *DiskMapTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 	}
 }
 
-func (m *DiskMapTracer) readStats() []*ebpf.Stat {
-	var stats []*ebpf.Stat
-	for _, reader := range m.readers {
-		stats = append(stats, reader.readStats()...)
-	}
-	return stats
-}
-
-// accumReader reads a kernel map of cumulative values and forwards, as stats, what grew since
-// the previous read of each entry.
-type accumReader[K comparable, V any] struct {
+// diskReader reads the kernel accumulation map of the disk stats and forwards, as stats, what grew
+// since the previous read of each entry.
+type diskReader struct {
 	log   *slog.Logger
-	accum accumSource[K, V]
-	// toStat returns the stat of what grew between the previous and the current value of the
-	// key, or nil if nothing did
-	toStat func(key K, current, previous V) *ebpf.Stat
+	accum accumSource[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]
+	stats diskStats
 
-	previous  map[K]V
-	idleReads map[K]int
+	previous  map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT
+	idleReads map[ebpf.StatsDiskIoKeyT]int
 	// the map was full at the previous read
 	full bool
 	// the kernel can't look up and delete an entry at once
 	noLookupAndDelete bool
 }
 
-func newAccumReader[K comparable, V any](
-	mapName string,
-	accum accumSource[K, V],
-	toStat func(key K, current, previous V) *ebpf.Stat,
-) *accumReader[K, V] {
-	return &accumReader[K, V]{
-		log:       dtlog().With("map", mapName),
+func newDiskReader(
+	accum accumSource[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT],
+	statusIsBlkStatus bool,
+	devices *deviceNames,
+) *diskReader {
+	return &diskReader{
+		log:       dtlog().With("map", "disk_io_accum"),
 		accum:     accum,
-		toStat:    toStat,
-		previous:  map[K]V{},
-		idleReads: map[K]int{},
+		stats:     diskStats{statusIsBlkStatus: statusIsBlkStatus, devices: devices},
+		previous:  map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{},
+		idleReads: map[ebpf.StatsDiskIoKeyT]int{},
 	}
 }
 
-func (r *accumReader[K, V]) readStats() []*ebpf.Stat {
+func (r *diskReader) readStats() []*ebpf.Stat {
 	entries, err := r.accum.read()
 	full := errors.Is(err, errAccumFull)
 	if full {
@@ -194,7 +176,7 @@ func (r *accumReader[K, V]) readStats() []*ebpf.Stat {
 	}
 	var stats []*ebpf.Stat
 	for key, current := range entries {
-		if stat := r.toStat(key, current, r.previous[key]); stat != nil {
+		if stat := r.stats.stat(key, current, r.previous[key]); stat != nil {
 			stats = append(stats, stat)
 			r.idleReads[key] = 0
 		} else if lastGrowth := r.forgetIfIdle(key, current); lastGrowth != nil {
@@ -213,7 +195,7 @@ func (r *accumReader[K, V]) readStats() []*ebpf.Stat {
 // forgetIfIdle deletes the entry of a key after diskIdleReadsBeforeDelete reads without changes.
 // It returns the stat of what the kernel added to the entry between its read, current, and its
 // deletion, or nil.
-func (r *accumReader[K, V]) forgetIfIdle(key K, current V) *ebpf.Stat {
+func (r *diskReader) forgetIfIdle(key ebpf.StatsDiskIoKeyT, current ebpf.StatsDiskIoAccumT) *ebpf.Stat {
 	r.idleReads[key]++
 	if r.idleReads[key] < diskIdleReadsBeforeDelete {
 		return nil
@@ -228,7 +210,7 @@ func (r *accumReader[K, V]) forgetIfIdle(key K, current V) *ebpf.Stat {
 	if err != nil || !known {
 		return nil
 	}
-	return r.toStat(key, last, current)
+	return r.stats.stat(key, last, current)
 }
 
 // deleteEntry deletes the entry of a key, and returns its last value when the kernel can look it
@@ -236,7 +218,7 @@ func (r *accumReader[K, V]) forgetIfIdle(key K, current V) *ebpf.Stat {
 // deletion is lost. Either way, a probe that found the entry before its deletion can still add to
 // it after. The hash maps are preallocated, so that is lost, or counted once in the entry, of the
 // same key or another, that reuses its element.
-func (r *accumReader[K, V]) deleteEntry(key K) (last V, known bool, err error) {
+func (r *diskReader) deleteEntry(key ebpf.StatsDiskIoKeyT) (last ebpf.StatsDiskIoAccumT, known bool, err error) {
 	if !r.noLookupAndDelete {
 		last, err = r.accum.lookupAndDelete(key)
 		if !errors.Is(err, ciliumebpf.ErrNotSupported) {
@@ -250,25 +232,13 @@ func (r *accumReader[K, V]) deleteEntry(key K) (last V, known bool, err error) {
 }
 
 // forgetEvicted drops what is remembered about entries that are no longer in the map
-func (r *accumReader[K, V]) forgetEvicted(entries map[K]V) {
+func (r *diskReader) forgetEvicted(entries map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT) {
 	for key := range r.previous {
 		if _, ok := entries[key]; !ok {
 			delete(r.previous, key)
 			delete(r.idleReads, key)
 		}
 	}
-}
-
-func newDiskReader(
-	accum accumSource[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT],
-	statusIsBlkStatus bool,
-	devices *deviceNames,
-) *accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT] {
-	d := diskStats{
-		statusIsBlkStatus: statusIsBlkStatus,
-		devices:           devices,
-	}
-	return newAccumReader("disk_io_accum", accum, d.stat)
 }
 
 type diskStats struct {

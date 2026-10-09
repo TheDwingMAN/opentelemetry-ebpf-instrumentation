@@ -5,7 +5,7 @@ package agent // import "go.opentelemetry.io/obi/pkg/statsolly/agent"
 
 import (
 	"context"
-	"fmt"
+	"slices"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
@@ -22,12 +22,8 @@ var tcpStatSections = []attributes.Section{
 	attributes.StatTCPIo.Section, attributes.StatTCPSuccessfulConnections.Section,
 }
 
-// storageStatMetrics are the metrics that report the storage stats of each type
-var storageStatMetrics = map[ebpf.StatType][]attributes.Name{
-	ebpf.StatTypeDiskIO: {
-		attributes.StatDiskServiceDuration,
-	},
-}
+// diskStatSections are the metrics of the disk stats, the storage stats
+var diskStatSections = []attributes.Section{attributes.StatDiskServiceDuration.Section}
 
 // tcpStatFilters returns the stats attribute filters that apply to the TCP stats: all of them but
 // those on the attributes that the storage stat metrics have and the TCP stat metrics don't. A
@@ -47,8 +43,8 @@ func tcpStatFilters(config filter.AttributeFamilyConfig, extraGroupAttributesCfg
 }
 
 // filterStorageStatsByAttribute drops the storage stats that don't match the stats attribute
-// filters. A storage stat is only matched against the filters of the attributes that the metrics
-// of its type have: a filter on an attribute of the TCP metrics doesn't drop any storage stat.
+// filters. A storage stat is only matched against the filters of the attributes that the disk stat
+// metrics have: a filter on an attribute of the TCP metrics doesn't drop any storage stat.
 func filterStorageStatsByAttribute(
 	config filter.AttributeFamilyConfig,
 	extraGroupAttributesCfg map[string][]attr.Name,
@@ -67,7 +63,7 @@ func filterStorageStatsByAttribute(
 		return func(ctx context.Context) {
 			defer output.Close()
 			swarms.ForEachInput(ctx, in, nil, func(stats []*ebpf.Stat) {
-				if stats = matchers.filter(stats); len(stats) > 0 {
+				if stats = filterStats(matchers, stats); len(stats) > 0 {
 					output.SendCtx(ctx, stats)
 				}
 			})
@@ -75,24 +71,11 @@ func filterStorageStatsByAttribute(
 	}
 }
 
-// storageStatMatchers are the attribute matchers of each type of storage stat
-type storageStatMatchers map[ebpf.StatType]filter.MatcherSet[*ebpf.Stat]
-
-func newStorageStatMatchers(config filter.AttributeFamilyConfig, extraGroupAttributesCfg map[string][]attr.Name) (storageStatMatchers, error) {
-	matchers := storageStatMatchers{}
-	for statType, metrics := range storageStatMetrics {
-		sections := make([]attributes.Section, 0, len(metrics))
-		for _, metric := range metrics {
-			sections = append(sections, metric.Section)
-		}
-		typeConfig := configOfAttributes(config, attributes.SectionAttributeNames(extraGroupAttributesCfg, sections...))
-		var err error
-		if matchers[statType], err = filter.NewMatcherSet(typeConfig, nil, extraGroupAttributesCfg,
-			ebpf.StatStringGetters); err != nil {
-			return nil, fmt.Errorf("stats of type %d: %w", statType, err)
-		}
-	}
-	return matchers, nil
+// newStorageStatMatchers returns the matchers of the filters on the attributes of the disk stat
+// metrics
+func newStorageStatMatchers(config filter.AttributeFamilyConfig, extraGroupAttributesCfg map[string][]attr.Name) (filter.MatcherSet[*ebpf.Stat], error) {
+	diskConfig := configOfAttributes(config, attributes.SectionAttributeNames(extraGroupAttributesCfg, diskStatSections...))
+	return filter.NewMatcherSet(diskConfig, nil, extraGroupAttributesCfg, ebpf.StatStringGetters)
 }
 
 // configOfAttributes returns the filters of the given attributes. Filters can name the attributes
@@ -111,15 +94,7 @@ func configOfAttributes(config filter.AttributeFamilyConfig, names map[attr.Name
 	return selected
 }
 
-func (m storageStatMatchers) filter(stats []*ebpf.Stat) []*ebpf.Stat {
-	w := 0
-	for _, stat := range stats {
-		// a type without metrics has no matchers, and is kept
-		if !m[stat.Type].Matches(stat) {
-			continue
-		}
-		stats[w] = stat
-		w++
-	}
-	return stats[:w]
+// filterStats keeps the stats that match
+func filterStats(matchers filter.MatcherSet[*ebpf.Stat], stats []*ebpf.Stat) []*ebpf.Stat {
+	return slices.DeleteFunc(stats, func(stat *ebpf.Stat) bool { return !matchers.Matches(stat) })
 }
