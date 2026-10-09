@@ -57,11 +57,14 @@ static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op,
 // (io_stat_flag, RQF_IO_STAT, in rq_flags), and 0 (unknown) otherwise. From Linux 6.13, the kernel
 // writes the start only when it accounts the request, so a request reused on a device that doesn't
 // keep I/O statistics keeps the start of an earlier use. io_stat_flag is 0 on the kernels that
-// write the time or 0 at every allocation, which need no check.
+// write the time or 0 at every allocation, which need no check. The flush that a flush sequence
+// sends (flush_seq_flag, RQF_FLUSH_SEQ) has no RQF_IO_STAT, but the kernel accounts every such
+// flush, from the start that it writes whenever the sequence sends the flush.
 static __always_inline u64 disk_accounted_start_ns(const u64 start_ns,
                                                    const u32 rq_flags,
-                                                   const u32 io_stat_flag) {
-    if (io_stat_flag != 0 && (rq_flags & io_stat_flag) == 0) {
+                                                   const u32 io_stat_flag,
+                                                   const u32 flush_seq_flag) {
+    if (io_stat_flag != 0 && (rq_flags & (io_stat_flag | flush_seq_flag)) == 0) {
         return 0;
     }
     return start_ns;

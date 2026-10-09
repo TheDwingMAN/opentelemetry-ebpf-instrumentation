@@ -77,7 +77,8 @@ static __always_inline u64 request_start_ns(struct request *rq) {
     if (disk_rqf_io_stat == 0) {
         return start_ns;
     }
-    return disk_accounted_start_ns(start_ns, BPF_CORE_READ(rq, rq_flags), disk_rqf_io_stat);
+    return disk_accounted_start_ns(
+        start_ns, BPF_CORE_READ(rq, rq_flags), disk_rqf_io_stat, disk_rqf_flush_seq);
 }
 
 // in_flush_sequence tells whether a request is a step of a flush sequence: the flush that the
@@ -89,7 +90,8 @@ static __always_inline bool in_flush_sequence(struct request *rq) {
 
 // never_issued tells whether a request completes without having been issued to the device, as
 // the empty flush of an fsync does when the flush machinery completes it after the flush it
-// waited for
+// waited for, and as a request that the driver fails before issuing it, like those of an offline
+// SCSI device
 static __always_inline bool never_issued(struct request *rq) {
     if (!bpf_core_field_exists(rq->state)) {
         return false;
