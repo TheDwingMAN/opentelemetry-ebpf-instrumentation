@@ -43,12 +43,12 @@ func fakeHostDevices(t *testing.T) string {
 
 func TestStackedDevices(t *testing.T) {
 	root := fakeHostDevices(t)
-	names := &deviceNames{sysRoot: root, procRoot: root}
-	assert.False(t, names.stacked(259, 0), "a disk")
-	assert.False(t, names.stacked(8, 16), "a path of a multipath device")
-	assert.True(t, names.stacked(7, 0), "a loop device")
-	assert.True(t, names.stacked(252, 0), "an LVM volume")
-	assert.True(t, names.stacked(252, 1), "a multipath device")
-	assert.True(t, names.stacked(9, 0), "an md RAID volume")
-	assert.False(t, names.stacked(8, 99), "an unknown device")
+	names := &blockDevices{sysRoot: root, procRoot: root}
+	assert.False(t, names.device(259, 0).stacked, "a disk")
+	assert.False(t, names.device(8, 16).stacked, "a path of a multipath device")
+	assert.True(t, names.device(7, 0).stacked, "a loop device")
+	assert.True(t, names.device(252, 0).stacked, "an LVM volume")
+	assert.True(t, names.device(252, 1).stacked, "a multipath device")
+	assert.True(t, names.device(9, 0).stacked, "an md RAID volume")
+	assert.False(t, names.device(8, 99).stacked, "an unknown device")
 }

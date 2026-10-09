@@ -110,7 +110,7 @@ type DiskMapTracer struct {
 
 func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 	accum := ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskIOAccum}
-	devices := &deviceNames{sysRoot: "/sys", procRoot: "/proc"}
+	devices := &blockDevices{sysRoot: "/sys", procRoot: "/proc"}
 	return &DiskMapTracer{
 		reader:   newDiskReader(accum, cfg.DiskStatusIsBlkStatus, devices, cfg.Interval),
 		interval: cfg.Interval,
@@ -156,7 +156,7 @@ type diskReader struct {
 func newDiskReader(
 	accum accumSource[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT],
 	statusIsBlkStatus bool,
-	devices *deviceNames,
+	devices *blockDevices,
 	readInterval time.Duration,
 ) *diskReader {
 	return &diskReader{
@@ -255,7 +255,7 @@ func (r *diskReader) forgetEvicted(entries map[ebpf.StatsDiskIoKeyT]ebpf.StatsDi
 
 type diskStats struct {
 	statusIsBlkStatus bool
-	devices           *deviceNames
+	devices           *blockDevices
 }
 
 // stat returns the block requests that completed since the previous read of the key, or nil
@@ -268,27 +268,23 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 	if operations == 0 {
 		return nil
 	}
+	device := d.devices.device(key.Major, key.Minor)
+	// the paths of a multipath device report no latency: the multipath device reports the latency
+	// of the same I/O, and the histograms of its paths would multiply its series by their number
+	if device.dmMultipathPath {
+		latency = nil
+	}
 	return &ebpf.Stat{
 		Type: ebpf.StatTypeDiskIO,
 		DiskIO: &ebpf.DiskIO{
-			Device:     d.devices.name(key.Major, key.Minor),
-			VolumeName: d.devices.dmName(key.Major, key.Minor),
-			Stacked:    d.devices.stacked(key.Major, key.Minor),
+			Device:     device.name,
+			VolumeName: device.dmName,
+			Stacked:    device.stacked,
 			Op:         ebpf.DiskOpCode(key.Op),
 			ErrorType:  diskErrorType(key.Status, d.statusIsBlkStatus),
-			Latency:    d.latency(key, latency),
+			Latency:    latency,
 		},
 	}
-}
-
-// latency returns the latencies that the latency histograms report for the requests of a key.
-// The paths of a multipath device report none: the multipath device reports the latency of the
-// same I/O, and the histograms of its paths would multiply its series by their number.
-func (d *diskStats) latency(key ebpf.StatsDiskIoKeyT, latency *ebpf.LatencyHistogram) *ebpf.LatencyHistogram {
-	if d.devices.multipathPathOf(key.Major, key.Minor) == dmMultipathPath {
-		return nil
-	}
-	return latency
 }
 
 // latencyDelta returns what a kernel latency histogram counted since a previous read, and how many
@@ -334,109 +330,90 @@ func diskErrorType(status uint8, isBlkStatus bool) string {
 	return errtype.Other
 }
 
-// deviceNamesCachePeriod is how long device names are cached: the kernel gives the numbers of
-// removed devices to new ones, e.g. the minors of detached NVMe volumes or of loop devices
-const deviceNamesCachePeriod = 30 * time.Second
+// blockDevicesCachePeriod is how long what is known of the block devices is cached: the kernel
+// gives the numbers of removed devices to new ones, e.g. the minors of detached NVMe volumes or of
+// loop devices
+const blockDevicesCachePeriod = 30 * time.Second
 
-// deviceNames resolves block device numbers to their kernel names, e.g. 259:0 to nvme0n1
-type deviceNames struct {
+// devNum holds the major and minor numbers of a block device
+type devNum struct {
+	major, minor uint32
+}
+
+// blockDevice is what sysfs and /proc/diskstats tell of a block device
+type blockDevice struct {
+	// name is the kernel name, e.g. nvme0n1, or the "major:minor" numbers when neither sysfs nor
+	// /proc/diskstats names the device
+	name string
+	// dmName is the device mapper name, as /dev/mapper lists it, or empty for other devices
+	dmName string
+	// stacked tells whether the device is built on other block devices (see isStacked)
+	stacked bool
+	// dmMultipathPath tells whether the device is a disk that a measured dm-multipath device holds
+	dmMultipathPath bool
+}
+
+// blockDevices resolves block device numbers to what sysfs and /proc/diskstats tell of the devices
+type blockDevices struct {
 	sysRoot, procRoot string
 	// now returns the current time, time.Now if nil
 	now      func() time.Time
 	cachedAt time.Time
 
-	cache     map[[2]uint32]string
-	stack     map[[2]uint32]bool
-	diskstats map[[2]uint32]string
-	paths     map[[2]uint32]multipathPath
-	dmNames   map[[2]uint32]string
+	cache     map[devNum]blockDevice
+	diskstats map[devNum]string
 }
 
-// expire forgets what is cached once deviceNamesCachePeriod passed since it started caching
-func (d *deviceNames) expire() {
+// expire forgets what is cached once blockDevicesCachePeriod passed since it started caching
+func (d *blockDevices) expire() {
 	now := time.Now()
 	if d.now != nil {
 		now = d.now()
 	}
-	if d.cache != nil && now.Sub(d.cachedAt) < deviceNamesCachePeriod {
+	if d.cache != nil && now.Sub(d.cachedAt) < blockDevicesCachePeriod {
 		return
 	}
 	d.cachedAt = now
-	d.cache = map[[2]uint32]string{}
-	d.stack = map[[2]uint32]bool{}
+	d.cache = map[devNum]blockDevice{}
 	d.diskstats = nil
-	d.paths = map[[2]uint32]multipathPath{}
-	d.dmNames = map[[2]uint32]string{}
 }
 
-// stacked tells whether a block device is built on other block devices (see isStacked)
-func (d *deviceNames) stacked(major, minor uint32) bool {
+// device returns what is known of a block device. Devices without a name are not cached, as
+// their numbers may be given to another device.
+func (d *blockDevices) device(major, minor uint32) blockDevice {
 	d.expire()
-	if stacked, ok := d.stack[[2]uint32{major, minor}]; ok {
-		return stacked
+	numbers := devNum{major: major, minor: minor}
+	if device, ok := d.cache[numbers]; ok {
+		return device
 	}
-	dir := filepath.Join(d.sysRoot, "dev", "block", fmt.Sprintf("%d:%d", major, minor))
-	if !exists(dir) {
-		// e.g. removed since its last I/O: not cached, the numbers may be given to another device
-		return false
-	}
-	stacked := isStacked(dir)
-	d.stack[[2]uint32{major, minor}] = stacked
-	return stacked
-}
 
-// dmName returns the name of a device mapper device, as /dev/mapper names it, or an empty string
-// for the other devices
-func (d *deviceNames) dmName(major, minor uint32) string {
-	d.expire()
-	key := [2]uint32{major, minor}
-	if name, ok := d.dmNames[key]; ok {
-		return name
-	}
+	var device blockDevice
 	dir := filepath.Join(d.sysRoot, "dev", "block", devNumbers(major, minor))
-	if !exists(dir) {
-		// e.g. removed since its last I/O: not cached, the numbers may be given to another device
-		return ""
-	}
-	name := deviceMapperName(dir)
-	d.dmNames[key] = name
-	return name
-}
-
-// multipathPath tells which multipath device, if any, a block device is a path of
-type multipathPath uint8
-
-const (
-	notMultipathPath multipathPath = iota
-	// dmMultipathPath is a disk that a measured dm-multipath device holds
-	dmMultipathPath
-)
-
-// multipathPathOf tells whether a block device is a path of a multipath device that OBI measures
-func (d *deviceNames) multipathPathOf(major, minor uint32) multipathPath {
-	d.expire()
-	key := [2]uint32{major, minor}
-	if path, ok := d.paths[key]; ok {
-		return path
-	}
-	dir := filepath.Join(d.sysRoot, "dev", "block", devNumbers(major, minor))
-	path := notMultipathPath
-	switch {
-	case exists(dir):
-		if d.heldByDMMultipath(dir) {
-			path = dmMultipathPath
+	if exists(dir) {
+		device = blockDevice{
+			name:            devNameFromUevent(filepath.Join(dir, "uevent")),
+			dmName:          deviceMapperName(dir),
+			stacked:         isStacked(dir),
+			dmMultipathPath: heldByDMMultipath(dir),
 		}
-	default:
-		// e.g. removed since its last I/O: not cached, the numbers may be given to another device
-		return notMultipathPath
 	}
-	d.paths[key] = path
-	return path
+	if device.name == "" {
+		// the path devices of NVMe native multipath (nvmeXcYnZ) are hidden: sysfs doesn't link
+		// their numbers, but /proc/diskstats lists them
+		device.name = d.diskstatsName(numbers)
+	}
+	if device.name == "" {
+		// e.g. a device removed since its last I/O
+		device.name = devNumbers(major, minor)
+		return device
+	}
+	d.cache[numbers] = device
+	return device
 }
 
 // heldByDMMultipath tells whether the sysfs directory of a block device is a path that a measured
 // dm-multipath device holds
-func (d *deviceNames) heldByDMMultipath(dir string) bool {
+func heldByDMMultipath(dir string) bool {
 	holders, _ := filepath.Glob(filepath.Join(dir, "holders", "*"))
 	return slices.ContainsFunc(holders, func(holder string) bool {
 		return isDMMultipath(holder) && isMeasured(holder)
@@ -449,51 +426,21 @@ func isMeasured(dir string) bool {
 	return exists(dir) && !isBioBased(dir)
 }
 
-// name returns the name of a block device, or its "major:minor" numbers when neither sysfs nor
-// /proc/diskstats names it
-func (d *deviceNames) name(major, minor uint32) string {
-	if name := d.knownName(major, minor); name != "" {
-		return name
-	}
-	// e.g. a device removed since its last I/O
-	return fmt.Sprintf("%d:%d", major, minor)
-}
-
-// knownName returns the name of a block device from sysfs or /proc/diskstats, or an empty string.
-// Unknown devices are not cached, as their numbers may be given to another device.
-func (d *deviceNames) knownName(major, minor uint32) string {
-	d.expire()
-	if name, ok := d.cache[[2]uint32{major, minor}]; ok {
-		return name
-	}
-	numbers := fmt.Sprintf("%d:%d", major, minor)
-	name := devNameFromUevent(filepath.Join(d.sysRoot, "dev", "block", numbers, "uevent"))
-	if name == "" {
-		// the path devices of NVMe native multipath (nvmeXcYnZ) are hidden: sysfs doesn't link
-		// their numbers, but /proc/diskstats lists them
-		name = d.diskstatsName(major, minor)
-	}
-	if name != "" {
-		d.cache[[2]uint32{major, minor}] = name
-	}
-	return name
-}
-
 // diskstatsName returns the name that /proc/diskstats lists a block device with, or an empty
 // string. It reads /proc/diskstats once per cache period.
-func (d *deviceNames) diskstatsName(major, minor uint32) string {
+func (d *blockDevices) diskstatsName(numbers devNum) string {
 	if d.diskstats == nil {
-		d.diskstats = map[[2]uint32]string{}
+		d.diskstats = map[devNum]string{}
 		diskstats, _ := procDiskstats(d.procRoot, d.sysRoot)
 		for _, stat := range diskstats {
 			// before Linux 6.1, the kernel lists all the hidden NVMe path devices as 0:0
 			if stat.MajorNumber == 0 {
 				continue
 			}
-			d.diskstats[[2]uint32{stat.MajorNumber, stat.MinorNumber}] = stat.DeviceName
+			d.diskstats[devNum{major: stat.MajorNumber, minor: stat.MinorNumber}] = stat.DeviceName
 		}
 	}
-	return d.diskstats[[2]uint32{major, minor}]
+	return d.diskstats[numbers]
 }
 
 func procDiskstats(procRoot, sysRoot string) ([]blockdevice.Diskstats, error) {

@@ -85,7 +85,7 @@ func assertLatency(t *testing.T, latency *ebpf.LatencyHistogram, sumSeconds floa
 }
 
 func newTestDiskReader(src *fakeDiskAccum) *diskReader {
-	return newDiskReader(src, false, &deviceNames{sysRoot: "/nonexistent", procRoot: "/nonexistent"}, time.Second)
+	return newDiskReader(src, false, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"}, time.Second)
 }
 
 func TestDiskReaderReadsFullMaps(t *testing.T) {
@@ -233,22 +233,22 @@ func TestDeviceNames(t *testing.T) {
 		[]byte("MAJOR=259\nMINOR=0\nDEVNAME=nvme0n1\nDEVTYPE=disk\n"), 0o644))
 
 	now := time.Now()
-	names := &deviceNames{sysRoot: root, procRoot: root, now: func() time.Time { return now }}
-	assert.Equal(t, "nvme0n1", names.name(259, 0))
-	assert.Equal(t, "8:0", names.name(8, 0), "falls back to major:minor when sysfs has no name")
+	names := &blockDevices{sysRoot: root, procRoot: root, now: func() time.Time { return now }}
+	assert.Equal(t, "nvme0n1", names.device(259, 0).name)
+	assert.Equal(t, "8:0", names.device(8, 0).name, "falls back to major:minor when sysfs has no name")
 
 	// the device was detached, and its numbers given to another one
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "uevent"),
 		[]byte("MAJOR=259\nMINOR=0\nDEVNAME=nvme1n1\nDEVTYPE=disk\n"), 0o644))
-	assert.Equal(t, "nvme0n1", names.name(259, 0), "cached")
-	now = now.Add(deviceNamesCachePeriod)
-	assert.Equal(t, "nvme1n1", names.name(259, 0), "read again once the cache expired")
+	assert.Equal(t, "nvme0n1", names.device(259, 0).name, "cached")
+	now = now.Add(blockDevicesCachePeriod)
+	assert.Equal(t, "nvme1n1", names.device(259, 0).name, "read again once the cache expired")
 
 	// a device that appears is named at its first I/O, as unknown devices are not cached
 	other := filepath.Join(root, "dev", "block", "8:0")
 	require.NoError(t, os.MkdirAll(other, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(other, "uevent"), []byte("DEVNAME=sda\n"), 0o644))
-	assert.Equal(t, "sda", names.name(8, 0))
+	assert.Equal(t, "sda", names.device(8, 0).name)
 }
 
 func TestDeviceNamesOfHiddenNVMePaths(t *testing.T) {
@@ -261,7 +261,7 @@ func TestDeviceNamesOfHiddenNVMePaths(t *testing.T) {
 	devices.hiddenDisk("0:0", "nvme2c0n1")
 	devices.hiddenDisk("0:0", "nvme2c1n1")
 	now := time.Now()
-	names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot, now: func() time.Time { return now }}
+	names := &blockDevices{sysRoot: devices.sysRoot, procRoot: devices.procRoot, now: func() time.Time { return now }}
 
 	for _, tc := range []struct {
 		name         string
@@ -275,24 +275,24 @@ func TestDeviceNamesOfHiddenNVMePaths(t *testing.T) {
 		{name: "the paths listed without their numbers", major: 0, minor: 0, want: "0:0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, names.name(tc.major, tc.minor))
+			assert.Equal(t, tc.want, names.device(tc.major, tc.minor).name)
 		})
 	}
 
 	// the paths are request-based disks
-	assert.False(t, names.stacked(259, 1))
+	assert.False(t, names.device(259, 1).stacked)
 
 	// /proc/diskstats is read once per cache period: a path that appears or is renamed within it
 	// is named after the period
 	devices.removeAll()
 	devices.hiddenDisk("259:1", "nvme1c2n1")
 	devices.hiddenDisk("259:3", "nvme3c0n1")
-	assert.Equal(t, "nvme1c0n1", names.name(259, 1))
-	assert.Equal(t, "259:3", names.name(259, 3))
+	assert.Equal(t, "nvme1c0n1", names.device(259, 1).name)
+	assert.Equal(t, "259:3", names.device(259, 3).name)
 
-	now = now.Add(deviceNamesCachePeriod)
-	assert.Equal(t, "nvme1c2n1", names.name(259, 1))
-	assert.Equal(t, "nvme3c0n1", names.name(259, 3))
+	now = now.Add(blockDevicesCachePeriod)
+	assert.Equal(t, "nvme1c2n1", names.device(259, 1).name)
+	assert.Equal(t, "nvme3c0n1", names.device(259, 3).name)
 }
 
 // fakeBlockDevices is a /proc and a /sys root with the block devices that the kernel reports
@@ -411,22 +411,22 @@ func TestMultipathPaths(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		major, minor uint32
-		want         multipathPath
+		want         bool
 	}{
-		{name: "a path of a dm-multipath device", major: 8, minor: 16, want: dmMultipathPath},
-		{name: "another path of it", major: 8, minor: 32, want: dmMultipathPath},
-		{name: "a path of a bio-based dm-multipath device", major: 8, minor: 48, want: notMultipathPath},
+		{name: "a path of a dm-multipath device", major: 8, minor: 16, want: true},
+		{name: "another path of it", major: 8, minor: 32, want: true},
+		{name: "a path of a bio-based dm-multipath device", major: 8, minor: 48},
 		{name: "a disk under an LVM volume", major: 8, minor: 64},
 		{name: "a disk", major: 259, minor: 0},
 		{name: "a dm-multipath device", major: 253, minor: 1},
-		{name: "a path of an NVMe multipath head", major: 259, minor: 1, want: notMultipathPath},
+		{name: "a path of an NVMe multipath head", major: 259, minor: 1},
 		{name: "an NVMe multipath head", major: 259, minor: 2},
 		{name: "a path whose head is gone", major: 259, minor: 9},
 		{name: "an unknown device", major: 8, minor: 99},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot}
-			assert.Equal(t, tc.want, names.multipathPathOf(tc.major, tc.minor))
+			names := &blockDevices{sysRoot: devices.sysRoot, procRoot: devices.procRoot}
+			assert.Equal(t, tc.want, names.device(tc.major, tc.minor).dmMultipathPath)
 		})
 	}
 }
@@ -434,14 +434,14 @@ func TestMultipathPaths(t *testing.T) {
 func TestMultipathPathsAreRefreshedWithTheDeviceNames(t *testing.T) {
 	devices := fakeMultipathHost(t)
 	now := time.Now()
-	names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot, now: func() time.Time { return now }}
-	require.Equal(t, dmMultipathPath, names.multipathPathOf(8, 16))
+	names := &blockDevices{sysRoot: devices.sysRoot, procRoot: devices.procRoot, now: func() time.Time { return now }}
+	require.True(t, names.device(8, 16).dmMultipathPath)
 
 	// multipathd removed the multipath device
 	require.NoError(t, os.Remove(filepath.Join(devices.sysRoot, "block", "sdb", "holders", "dm-1")))
-	assert.Equal(t, dmMultipathPath, names.multipathPathOf(8, 16), "cached for the cache period")
-	now = now.Add(deviceNamesCachePeriod)
-	assert.Equal(t, notMultipathPath, names.multipathPathOf(8, 16))
+	assert.True(t, names.device(8, 16).dmMultipathPath, "cached for the cache period")
+	now = now.Add(blockDevicesCachePeriod)
+	assert.False(t, names.device(8, 16).dmMultipathPath)
 }
 
 func TestDiskReaderReportsNoLatencyOfMultipathPaths(t *testing.T) {
@@ -456,7 +456,7 @@ func TestDiskReaderReportsNoLatencyOfMultipathPaths(t *testing.T) {
 		device string
 		op     ebpf.DiskOpCode
 	}
-	names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot}
+	names := &blockDevices{sysRoot: devices.sysRoot, procRoot: devices.procRoot}
 	r := newDiskReader(&fakeDiskAccum{entries: entries}, true, names, time.Second)
 	stats := map[deviceOp]*ebpf.DiskIO{}
 	for _, stat := range r.readStats() {
@@ -475,7 +475,7 @@ func TestDeviceMapperNames(t *testing.T) {
 	devices.sysFile("dm-0", "dm/name", "vg0-data")
 	devices.sysFile("dm-1", "dm/name", "mpatha")
 	now := time.Now()
-	names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot, now: func() time.Time { return now }}
+	names := &blockDevices{sysRoot: devices.sysRoot, procRoot: devices.procRoot, now: func() time.Time { return now }}
 
 	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
 		writeKey(253, 0): accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}), // dm-0, an LVM volume
@@ -488,26 +488,26 @@ func TestDeviceMapperNames(t *testing.T) {
 		volumeNames[stat.DiskIO.Device] = stat.DiskIO.VolumeName
 	}
 	assert.Equal(t, map[string]string{"dm-0": "vg0-data", "dm-1": "mpatha", "sdb": ""}, volumeNames)
-	assert.Empty(t, names.dmName(8, 99), "an unknown device")
+	assert.Empty(t, names.device(8, 99).dmName, "an unknown device")
 
 	// the multipath device was renamed
 	devices.sysFile("dm-1", "dm/name", "data")
-	assert.Equal(t, "mpatha", names.dmName(253, 1), "cached for the cache period")
-	now = now.Add(deviceNamesCachePeriod)
-	assert.Equal(t, "data", names.dmName(253, 1))
+	assert.Equal(t, "mpatha", names.device(253, 1).dmName, "cached for the cache period")
+	now = now.Add(blockDevicesCachePeriod)
+	assert.Equal(t, "data", names.device(253, 1).dmName)
 }
 
 func TestDeviceMapperNameOfANewDevice(t *testing.T) {
 	devices := newFakeBlockDevices(t)
 	now := time.Now()
-	names := &deviceNames{sysRoot: devices.sysRoot, procRoot: devices.procRoot, now: func() time.Time { return now }}
-	assert.Empty(t, names.dmName(253, 3), "no device has these numbers yet")
+	names := &blockDevices{sysRoot: devices.sysRoot, procRoot: devices.procRoot, now: func() time.Time { return now }}
+	assert.Empty(t, names.device(253, 3).dmName, "no device has these numbers yet")
 
 	// a volume is created with the numbers: they were not cached, so it is named within the cache
 	// period
 	devices.disk("253:3", "dm-3")
 	devices.sysFile("dm-3", "dm/name", "vg0-new")
-	assert.Equal(t, "vg0-new", names.dmName(253, 3))
+	assert.Equal(t, "vg0-new", names.device(253, 3).dmName)
 }
 
 func TestDiskErrorType(t *testing.T) {
