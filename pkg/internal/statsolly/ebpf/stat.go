@@ -135,8 +135,8 @@ type TCPIo struct {
 	Bytes     uint32 `json:"bytes"`
 }
 
-// DiskIO is the block I/O completed on a device, with an operation and an outcome, since the
-// previous read of the kernel accumulation map.
+// DiskIO is the block I/O completed on a device, with an operation and an outcome, and charged to a
+// cgroup, since the previous read of the kernel accumulation map.
 type DiskIO struct {
 	Device string
 	// VolumeName is the device mapper name of Device, e.g. mpatha. Empty for other devices.
@@ -146,6 +146,8 @@ type DiskIO struct {
 	Op      DiskOpCode
 	// ErrorType is empty for successful requests
 	ErrorType string
+	// ContainerID of the cgroup the I/O is charged to. Empty for I/O charged to no container.
+	ContainerID string
 
 	// Operations is the number of completed requests
 	Operations uint64
@@ -157,6 +159,15 @@ type DiskIO struct {
 	// Latency of the completed requests. Nil on the paths of a multipath device, which reports the
 	// latency of the same I/O.
 	Latency *LatencyHistogram
+}
+
+// ContainerID returns the container that a block I/O stat is charged to, or an empty string for any
+// other stat
+func (s *Stat) ContainerID() string {
+	if s.DiskIO != nil {
+		return s.DiskIO.ContainerID
+	}
+	return ""
 }
 
 // LatencyHistogram counts requests in the buckets of export.DiskLatencyBounds

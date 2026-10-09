@@ -101,7 +101,7 @@ func testStatMetricsTCPIoGo(t *testing.T) {
 // diskStatLabels are the Prometheus labels of all the attributes that the disk stat metrics can have
 var diskStatLabels = []string{
 	"system_device", "obi_disk_stacked", "obi_disk_volume_name", "disk_io_direction", "error_type",
-	"obi_ip",
+	"container_id", "obi_ip",
 }
 
 var (
@@ -120,14 +120,15 @@ func assertDiskStatLabels(t assert.TestingT, series map[string]string, expected 
 	assert.Empty(t, promtest.LabelMismatches(series, diskStatLabels, expected), series)
 }
 
-// diskIOLabels are the expected attributes of the successful block I/O of the node, with the device
-// and direction of the I/O
-func diskIOLabels(direction string) map[string]*regexp.Regexp {
+// diskIOLabels are the expected attributes of the successful block I/O of a container, with the
+// device and direction of the I/O: all the attributes are selected
+func diskIOLabels(containerID, direction string) map[string]*regexp.Regexp {
 	return map[string]*regexp.Regexp{
 		"system_device":        blockDevicePattern,
 		"obi_disk_stacked":     stackedPattern,
 		"obi_disk_volume_name": optionalVolumeNamePattern,
 		"disk_io_direction":    regexp.MustCompile("^" + direction + "$"),
+		"container_id":         regexp.MustCompile("^" + containerID + "$"),
 		"obi_ip":               ipPattern,
 	}
 }
@@ -143,19 +144,18 @@ func assertHistogramBounds(t require.TestingT, buckets []promtest.Result, bounds
 	}
 }
 
-// testStatMetricsDiskServiceDuration checks the latency histogram of the successful block I/O of
-// the node, which the O_DIRECT I/O of the disk-io container keeps going: its attributes and its
-// buckets
-func testStatMetricsDiskServiceDuration(t *testing.T) {
+// testStatMetricsDiskServiceDuration checks the latency histogram of the successful O_DIRECT I/O of
+// the disk-io container: its attributes and its buckets
+func testStatMetricsDiskServiceDuration(t *testing.T, containerID string) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
 	for _, direction := range []string{"read", "write"} {
-		selector := `{disk_io_direction="` + direction + `",error_type=""}`
+		selector := `{container_id="` + containerID + `",disk_io_direction="` + direction + `",error_type=""}`
 		require.EventuallyWithT(t, func(ct *assert.CollectT) {
 			counts, err := pq.Query(`obi_stat_disk_service_duration_seconds_count` + selector + ` > 0`)
 			require.NoError(ct, err)
 			enoughPromResults(ct, counts)
 			for _, res := range counts {
-				assertDiskStatLabels(ct, res.Metric, diskIOLabels(direction))
+				assertDiskStatLabels(ct, res.Metric, diskIOLabels(containerID, direction))
 			}
 
 			sums, err := pq.Query(`obi_stat_disk_service_duration_seconds_sum` + selector + ` > 0`)
@@ -169,13 +169,13 @@ func testStatMetricsDiskServiceDuration(t *testing.T) {
 	}
 }
 
-// testStatMetricsDiskCounters checks the counters of the successful block I/O of the node: their
-// attributes, and that the operations and their service time are the count and the sum of the
-// latency histogram
-func testStatMetricsDiskCounters(t *testing.T) {
+// testStatMetricsDiskCounters checks the counters of the successful O_DIRECT I/O of the disk-io
+// container: their attributes, and that the operations and their service time are the count and
+// the sum of the latency histogram
+func testStatMetricsDiskCounters(t *testing.T, containerID string) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
 	for _, direction := range []string{"read", "write"} {
-		selector := `{disk_io_direction="` + direction + `",error_type=""}`
+		selector := `{container_id="` + containerID + `",disk_io_direction="` + direction + `",error_type=""}`
 		require.EventuallyWithT(t, func(ct *assert.CollectT) {
 			for _, counter := range []string{
 				"obi_stat_disk_operations_total", "obi_stat_disk_service_time_seconds_total", "obi_stat_disk_io_bytes_total",
@@ -184,7 +184,7 @@ func testStatMetricsDiskCounters(t *testing.T) {
 				require.NoError(ct, err)
 				enoughPromResults(ct, results)
 				for _, res := range results {
-					assertDiskStatLabels(ct, res.Metric, diskIOLabels(direction))
+					assertDiskStatLabels(ct, res.Metric, diskIOLabels(containerID, direction))
 				}
 			}
 

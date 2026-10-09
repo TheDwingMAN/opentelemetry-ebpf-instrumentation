@@ -78,7 +78,7 @@ const (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -94,10 +94,13 @@ func tlog() *slog.Logger {
 	return slog.With("component", "ebpf.StatFetcher")
 }
 
-// NewStatsFetcher loads and attaches the stat probes of the enabled features. The TCP probes are
+// NewStatsFetcher loads and attaches the stat probes of the enabled features. The storage probes
+// read the attributes that the reported attributes need, and the ones in reads. The TCP probes are
 // required, while the storage ones are optional: a storage feature whose probes can't be loaded or
 // attached is disabled, and listed by DisabledStorageFeatures, and the other stats keep working.
-func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig) (*StatsFetcher, error) {
+func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig,
+	reads ProbeReads,
+) (*StatsFetcher, error) {
 	tlog := tlog()
 	if err := rlimit.RemoveMemlock(); err != nil {
 		tlog.Warn("can't remove mem lock. The agent could not be able to start eBPF programs",
@@ -139,9 +142,14 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	}
 
 	storage := planStorageProbes(tlog, features)
+	diskReads := diskAttributeReads(features, attrSel, reads.Filtered)
+	var unreadMaps []string
+	if !diskReads.cgroup {
+		unreadMaps = diskCgroupMaps
+	}
 
 	objects := StatsObjects{}
-	load := newStatsLoader(&objects, cfg.MapsConfig.GlobalScaleFactor, map[string]any{
+	load := newStatsLoader(&objects, cfg.MapsConfig.GlobalScaleFactor, unreadMaps, map[string]any{
 		"g_bpf_debug":               cfg.BpfDebug,
 		"stats_wakeup_data_bytes":   uint32(cfg.StatsWakeupDataBytes),
 		"disk_latency_bounds_ns":    diskLatencyBoundsNs(),
@@ -149,6 +157,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		"disk_rqf_flush_seq":        storage.layout.flushSeqFlag,
 		"disk_req_op_zone_append":   storage.layout.zoneAppendOp,
 		"disk_rqf_io_stat":          storage.layout.ioStatFlag,
+		"disk_read_cgroup":          diskReads.cgroup,
 	})
 	if err := storage.loadOrDisable(load, tcpToDisable); err != nil {
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
@@ -318,14 +327,19 @@ func sizeInFlightMap(spec *ebpf.CollectionSpec, cpus int) {
 // storageMapPrefix starts the names of the maps of the storage features
 const storageMapPrefix = "disk_"
 
+// diskCgroupMaps are the maps where the disk probes record the names of the cgroups, which they
+// only use when they read the cgroup of the requests
+var diskCgroupMaps = []string{StatsMapDiskCgroupNames, StatsMapDiskCgroupNameInitStorage}
+
 func isStorageMap(name string) bool {
 	return strings.HasPrefix(name, storageMapPrefix)
 }
 
 // shrinkUnusedStorageMaps gives a single entry to the storage maps that no program of the spec uses:
-// those of the disabled storage features, whose programs are stubs. StatsObjects holds every map, so
+// those of the disabled storage features, whose programs are stubs, and the unread ones, which the
+// programs only use in the code that their constants turn off. StatsObjects holds every map, so
 // they are created anyway, and would take their full size of kernel memory.
-func shrinkUnusedStorageMaps(spec *ebpf.CollectionSpec) {
+func shrinkUnusedStorageMaps(spec *ebpf.CollectionSpec, unread []string) {
 	used := map[string]bool{}
 	for _, program := range spec.Programs {
 		for _, ins := range program.Instructions {
@@ -335,7 +349,7 @@ func shrinkUnusedStorageMaps(spec *ebpf.CollectionSpec) {
 		}
 	}
 	for name, m := range spec.Maps {
-		if isStorageMap(name) && !used[name] {
+		if isStorageMap(name) && (!used[name] || slices.Contains(unread, name)) {
 			m.MaxEntries = 1
 		}
 	}
@@ -343,8 +357,11 @@ func shrinkUnusedStorageMaps(spec *ebpf.CollectionSpec) {
 
 // newStatsLoader returns the function that loads the stats programs, but those to disable, into
 // objects. Each load creates its own maps, sized for the programs it loads, and closes them if it
-// fails: a load without the storage programs gets their maps with a single entry.
-func newStatsLoader(objects *StatsObjects, globalScaleFactor int, constants map[string]any) func(toDisable []string) error {
+// fails: a load without the storage programs gets their maps with a single entry, as do the unread
+// storage maps.
+func newStatsLoader(objects *StatsObjects, globalScaleFactor int, unread []string,
+	constants map[string]any,
+) func(toDisable []string) error {
 	return func(toDisable []string) error {
 		spec, err := LoadStats()
 		if err != nil {
@@ -359,7 +376,7 @@ func newStatsLoader(objects *StatsObjects, globalScaleFactor int, constants map[
 		} else {
 			tlog().Debug("can't size the in-flight map to the CPUs", "error", err)
 		}
-		shrinkUnusedStorageMaps(spec)
+		shrinkUnusedStorageMaps(spec, unread)
 
 		sharedMaps := map[string]*ebpf.Map{}
 		var mu sync.Mutex
@@ -411,6 +428,15 @@ func (m *StatsFetcher) DiskIOAccumMap() *ebpf.Map {
 		return nil
 	}
 	return m.objects.DiskIoAccum
+}
+
+// DiskCgroupNamesMap returns the map where the kernel records the names of the cgroups that block
+// I/O is charged to, or nil if the disk probes are not attached.
+func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
+	if !m.diskAttached {
+		return nil
+	}
+	return m.objects.DiskCgroupNames
 }
 
 // DisabledStorageFeatures returns the enabled storage features whose probes can't be loaded or

@@ -117,6 +117,17 @@ func TestStorageStatFiltersOnlyApplyToTheStatsWithTheirAttributes(t *testing.T) 
 		"each stat is matched against all the filters of its attributes")
 }
 
+// The storage probes read only the attributes of the filters that apply to the storage stats
+func TestStorageProbesReadTheAttributesOfTheStorageStatFilters(t *testing.T) {
+	filters := filter.AttributeFamilyConfig{
+		"dst.port":      {Equals: new(443)},
+		"container_id":  {Match: "a1*"},
+		"system.device": {Match: "nvme*"},
+	}
+	assert.ElementsMatch(t, []attr.Name{"container_id", "system.device"},
+		filteredAttributes(storageStatFilters(filters, nil)))
+}
+
 func TestStatFilterOfAnUnknownAttribute(t *testing.T) {
 	_, err := tcpStatFilters(filter.AttributeFamilyConfig{"not.an.attribute": {Match: "*"}}, nil)
 	require.Error(t, err)

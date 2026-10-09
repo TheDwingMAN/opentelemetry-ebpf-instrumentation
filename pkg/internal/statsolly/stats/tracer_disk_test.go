@@ -59,6 +59,14 @@ func (f *fakeDiskAccum) growBeforeDelete(key ebpf.StatsDiskIoKeyT) {
 	}
 }
 
+// fakeCgroupNames are the names that the kernel recorded of the cgroups, by their ID
+type fakeCgroupNames map[uint64]cgroupName
+
+func (f fakeCgroupNames) name(cgroupID uint64) (cgroupName, bool) {
+	name, ok := f[cgroupID]
+	return name, ok
+}
+
 func writeKey(major, minor uint32) ebpf.StatsDiskIoKeyT {
 	return ebpf.StatsDiskIoKeyT{Major: major, Minor: minor, Op: ebpf.StatsDiskOpDiskOpWrite}
 }
@@ -85,7 +93,8 @@ func assertLatency(t *testing.T, latency *ebpf.LatencyHistogram, sumSeconds floa
 }
 
 func newTestDiskReader(src *fakeDiskAccum) *diskReader {
-	return newDiskReader(src, false, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"}, time.Second)
+	return newDiskReader(src, false, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"},
+		newCgroupContainers(fakeCgroupNames{}), time.Second)
 }
 
 func TestDiskReaderReadsFullMaps(t *testing.T) {
@@ -162,7 +171,8 @@ func TestDiskReaderForwardsFailedRequestsWithoutBytes(t *testing.T) {
 	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
 		failed: accum([]uint64{0, 0, 2}, []uint64{0, 0, 30_000_000}),
 	}}
-	r := newDiskReader(src, true, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"}, time.Second)
+	r := newDiskReader(src, true, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"},
+		newCgroupContainers(fakeCgroupNames{}), time.Second)
 
 	stats := r.readStats()
 	require.Len(t, stats, 1)
@@ -196,6 +206,51 @@ func TestDiskReaderForwardsWhatGrewBeforeTheCount(t *testing.T) {
 	assert.Equal(t, uint64(1), stats[0].DiskIO.Operations)
 	assert.Equal(t, uint64(8192), stats[0].DiskIO.Bytes)
 	assert.InDelta(t, 0.0002, stats[0].DiskIO.Time, 1e-12)
+}
+
+// The I/O charged to a container cgroup, or to a child cgroup of a container's, reports the
+// container, from the names that the kernel recorded of the cgroup and its parent, and the I/O
+// charged to any other cgroup reports none
+func TestDiskReaderResolvesContainers(t *testing.T) {
+	const (
+		containerID      = "40c03570b6f4c30bc8d69923d37ee698f5cfcced92c7b7df1c47f6f7887378a9"
+		crunContainerID  = "264c1e319d1f6080a48a9fabcf9ac8fd9afd9a5930cf35e8d0eeb03b258c3152"
+		laterContainerID = "d36686f9785534531160dc936aec9d711a26eb37f4fc7752a2ae27d0a24345c1"
+	)
+	charged := func(cgroupID uint64) ebpf.StatsDiskIoKeyT {
+		key := writeKey(8, 0)
+		key.CgroupId = cgroupID
+		return key
+	}
+	written := accum([]uint64{1, 0, 0}, []uint64{500_000, 0, 0})
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
+		charged(0):  written, // not read, or charged to no cgroup
+		charged(10): written, // a container
+		charged(11): written, // a systemd service
+		charged(12): written, // a cgroup whose name the kernel didn't record yet
+		charged(13): written, // the child cgroup that crun runs a container in
+	}}
+	names := fakeCgroupNames{
+		10: {name: "cri-containerd-" + containerID + ".scope", parent: "kubepods-besteffort.slice"},
+		11: {name: "sshd.service", parent: "system.slice"},
+		13: {name: "container", parent: "libpod-" + crunContainerID + ".scope"},
+	}
+	r := newDiskReader(src, false, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"},
+		newCgroupContainers(names), time.Second)
+
+	containers := func() map[string]int {
+		charged := map[string]int{}
+		for _, stat := range r.readStats() {
+			charged[stat.DiskIO.ContainerID]++
+		}
+		return charged
+	}
+	assert.Equal(t, map[string]int{"": 3, containerID: 1, crunContainerID: 1}, containers())
+
+	// an unknown cgroup is looked up again: the kernel records its name at its next I/O
+	names[12] = cgroupName{name: "docker-" + laterContainerID + ".scope", parent: "system.slice"}
+	src.entries[charged(12)] = accum([]uint64{2, 0, 0}, []uint64{500_000, 0, 0})
+	assert.Equal(t, map[string]int{laterContainerID: 1}, containers())
 }
 
 func TestDiskReaderRestartsWhenTheEntryIsRecreated(t *testing.T) {
@@ -572,7 +627,7 @@ func TestDiskReaderReportsNoLatencyOfMultipathPaths(t *testing.T) {
 		op     ebpf.DiskOpCode
 	}
 	names := &blockDevices{sysRoot: devices.sysRoot, procRoot: devices.procRoot}
-	r := newDiskReader(&fakeDiskAccum{entries: entries}, true, names, time.Second)
+	r := newDiskReader(&fakeDiskAccum{entries: entries}, true, names, newCgroupContainers(fakeCgroupNames{}), time.Second)
 	stats := map[deviceOp]*ebpf.DiskIO{}
 	for _, stat := range r.readStats() {
 		stats[deviceOp{device: stat.DiskIO.Device, op: stat.DiskIO.Op}] = stat.DiskIO
@@ -600,7 +655,7 @@ func TestDeviceMapperNames(t *testing.T) {
 		writeKey(253, 1): accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}), // dm-1, a multipath device
 		writeKey(8, 16):  accum([]uint64{1, 0, 0}, []uint64{100_000, 0, 0}), // sdb, a path of dm-1
 	}}
-	r := newDiskReader(src, true, names, time.Second)
+	r := newDiskReader(src, true, names, newCgroupContainers(fakeCgroupNames{}), time.Second)
 	volumeNames := map[string]string{}
 	for _, stat := range r.readStats() {
 		volumeNames[stat.DiskIO.Device] = stat.DiskIO.VolumeName

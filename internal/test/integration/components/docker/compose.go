@@ -198,6 +198,19 @@ func (c *Compose) ServiceRunning(service string) (bool, error) {
 	return strings.TrimSpace(string(output)) == service, nil
 }
 
+// ContainerID returns the full ID of the container of a service.
+func (c *Compose) ContainerID(service string) (string, error) {
+	cmdArgs := []string{"compose", "--ansi", "never", "-f", c.Path, "ps", "--quiet", "--no-trunc", service}
+	cmd := exec.Command("docker", cmdArgs...)
+	cmd.Env = c.Env
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
 func (c *Compose) Stop() error {
 	return c.command("stop", "--timeout", stopTimeout)
 }

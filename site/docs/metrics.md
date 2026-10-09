@@ -1339,6 +1339,7 @@ Bytes of the block reads and writes that completed successfully, as they were is
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
 | `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
 | `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass their I/O down to the devices below them, which report it too. To count the I/O once on the disk counters, add up the devices where it is `false`; on `obi.stat.disk.service.duration`, add those and the dm-multipath devices, whose paths don't report it. |  |
@@ -1356,6 +1357,7 @@ Completed block reads and writes, those of `obi.stat.disk.service.duration`, per
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
 | `error.type` | string | `conditionally_required`: if the block I/O request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
@@ -1374,6 +1376,7 @@ Device service time of the block reads and writes: each request is timed from it
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
 | `error.type` | string | `conditionally_required`: if the block I/O request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
@@ -1392,6 +1395,7 @@ Sum of the device service times of the completed block reads and writes, as `obi
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
 | `error.type` | string | `conditionally_required`: if the block I/O request failed: the errno name of its status, e.g. `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target), `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ` (protection), or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |

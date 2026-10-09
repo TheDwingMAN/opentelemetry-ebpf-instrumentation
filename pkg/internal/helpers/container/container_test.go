@@ -141,3 +141,62 @@ func TestContainerID(t *testing.T) {
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrContainerNotFound)
 }
+
+func TestIDFromCgroupName(t *testing.T) {
+	for _, name := range []string{
+		"cri-containerd-" + fixtureContainerID + ".scope",
+		"crio-" + fixtureContainerID + ".scope",
+		"docker-" + fixtureContainerID + ".scope",
+		"libpod-" + fixtureContainerID + ".scope",
+		// cgroupfs driver, e.g. /docker/<id> or /kubepods/burstable/pod<uid>/<id>
+		fixtureContainerID,
+	} {
+		t.Run(name, func(t *testing.T) {
+			id, ok := idFromCgroupName(name)
+			require.True(t, ok)
+			assert.Equal(t, fixtureContainerID, id)
+		})
+	}
+	for _, name := range []string{
+		"",
+		"system.slice",
+		"kubepods-besteffort-pod7260904b_bd08_e72e_4dff_95d9fccd2ee8.slice",
+		"session-3.scope",
+		fixtureContainerID[1:],
+		"docker-" + fixtureContainerID + ".scope.old",
+	} {
+		t.Run("not a container: "+name, func(t *testing.T) {
+			_, ok := idFromCgroupName(name)
+			assert.False(t, ok)
+		})
+	}
+}
+
+func TestIDFromCgroupNames(t *testing.T) {
+	const otherContainerID = "d36686f9785534531160dc936aec9d711a26eb37f4fc7752a2ae27d0a24345c1"
+	for _, tc := range []struct{ name, parent, want string }{
+		{name: "cri-containerd-" + fixtureContainerID + ".scope", parent: "kubepods-besteffort.slice", want: fixtureContainerID},
+		// crun on cgroup v2 with the systemd driver, and systemd in a container
+		{name: "container", parent: "libpod-" + fixtureContainerID + ".scope", want: fixtureContainerID},
+		{name: "init.scope", parent: "cri-containerd-" + fixtureContainerID + ".scope", want: fixtureContainerID},
+		// the innermost container, e.g. a container of a kind node
+		{name: fixtureContainerID, parent: "docker-" + otherContainerID + ".scope", want: fixtureContainerID},
+	} {
+		t.Run(tc.name+" in "+tc.parent, func(t *testing.T) {
+			id, ok := IDFromCgroupNames(tc.name, tc.parent)
+			require.True(t, ok)
+			assert.Equal(t, tc.want, id)
+		})
+	}
+	for _, tc := range []struct{ name, parent string }{
+		{name: "sshd.service", parent: "system.slice"},
+		{name: "kubepods-besteffort.slice", parent: "kubepods.slice"},
+		{name: "system.slice", parent: ""},
+		{name: "", parent: ""},
+	} {
+		t.Run("not a container: "+tc.name+" in "+tc.parent, func(t *testing.T) {
+			_, ok := IDFromCgroupNames(tc.name, tc.parent)
+			assert.False(t, ok)
+		})
+	}
+}

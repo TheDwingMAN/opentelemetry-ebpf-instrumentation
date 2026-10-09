@@ -323,10 +323,12 @@ func TestBPFVerifierWithConstants(t *testing.T) {
 		{"g_bpf_debug", []any{true, false}},
 		{"stats_wakeup_data_bytes", []any{uint32(0), uint32(1 << 20)}},
 	})
-	// the probes read the request flags only where the kernel numbers them with an enum: the
-	// verifier skips the code of the reads left off
+	// the probes read the request flags only where the kernel numbers them with an enum, and the
+	// cgroup of the requests only when an attribute of an enabled metric needs it: the verifier
+	// skips the code of the reads left off
 	forEachCombination(t, "statsolly/Stats", statsolly.LoadStats, []constOption{
 		{"g_bpf_debug", []any{true, false}},
 		{"disk_rqf_io_stat", []any{uint32(0), uint32(1 << 8)}},
+		{"disk_read_cgroup", []any{true}},
 	})
 }

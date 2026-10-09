@@ -139,6 +139,7 @@ func getDefinitions(
 			attr.DiskVolumeName:  true,
 			attr.DiskStacked:     true,
 			attr.DiskIODirection: true,
+			attr.ContainerID:     false,
 		},
 		nil,
 	)

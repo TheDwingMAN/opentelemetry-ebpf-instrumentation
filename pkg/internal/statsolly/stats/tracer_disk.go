@@ -18,10 +18,12 @@ import (
 	"time"
 
 	ciliumebpf "github.com/cilium/ebpf"
+	"github.com/hashicorp/golang-lru/v2/simplelru"
 	"github.com/prometheus/procfs/blockdevice"
 	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/obi/pkg/internal/errtype"
+	"go.opentelemetry.io/obi/pkg/internal/helpers/container"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
@@ -36,6 +38,9 @@ const diskIdleDeleteAfter = time.Minute
 func idleReadsBeforeDelete(readInterval time.Duration) int {
 	return max(1, int((diskIdleDeleteAfter+readInterval-1)/readInterval))
 }
+
+// cgroupContainersCacheLen matches the size of the disk_cgroup_names eBPF map
+const cgroupContainersCacheLen = 1 << 13
 
 func dtlog() *slog.Logger {
 	return slog.With("component", "stat.DiskMapTracer")
@@ -91,10 +96,34 @@ func (e ebpfAccum[K, V]) lookupAndDelete(key K) (V, error) {
 	return last, err
 }
 
+// cgroupNameSource abstracts the disk_cgroup_names eBPF map, for testing
+type cgroupNameSource interface {
+	name(cgroupID uint64) (cgroupName, bool)
+}
+
+// cgroupName is the name of a cgroup and of its parent, as the kernel recorded them
+type cgroupName struct {
+	name, parent string
+}
+
+type ebpfCgroupNames struct {
+	names *ciliumebpf.Map
+}
+
+func (e ebpfCgroupNames) name(cgroupID uint64) (cgroupName, bool) {
+	var name ebpf.StatsDiskCgroupNameT
+	if err := e.names.Lookup(cgroupID, &name); err != nil {
+		return cgroupName{}, false
+	}
+	return cgroupName{name: unix.ByteSliceToString(name.Name[:]), parent: unix.ByteSliceToString(name.Parent[:])}, true
+}
+
 // DiskMapTracerConfig tells a DiskMapTracer which kernel maps to read, and how to interpret them
 type DiskMapTracerConfig struct {
 	// DiskIOAccum is the accumulation map to read
 	DiskIOAccum *ciliumebpf.Map
+	// CgroupNames are the names of the cgroups that the kernel charges the I/O to
+	CgroupNames *ciliumebpf.Map
 	// DiskStatusIsBlkStatus tells how the kernel reports block request completion statuses
 	// (see disk_status_code)
 	DiskStatusIsBlkStatus bool
@@ -111,8 +140,9 @@ type DiskMapTracer struct {
 func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 	accum := ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: cfg.DiskIOAccum}
 	devices := &blockDevices{sysRoot: "/sys", procRoot: "/proc"}
+	containers := newCgroupContainers(ebpfCgroupNames{names: cfg.CgroupNames})
 	return &DiskMapTracer{
-		reader:   newDiskReader(accum, cfg.DiskStatusIsBlkStatus, devices, cfg.Interval),
+		reader:   newDiskReader(accum, cfg.DiskStatusIsBlkStatus, devices, containers, cfg.Interval),
 		interval: cfg.Interval,
 	}
 }
@@ -157,12 +187,13 @@ func newDiskReader(
 	accum accumSource[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT],
 	statusIsBlkStatus bool,
 	devices *blockDevices,
+	containers *cgroupContainers,
 	readInterval time.Duration,
 ) *diskReader {
 	return &diskReader{
 		log:                   dtlog().With("map", "disk_io_accum"),
 		accum:                 accum,
-		stats:                 diskStats{statusIsBlkStatus: statusIsBlkStatus, devices: devices},
+		stats:                 diskStats{statusIsBlkStatus: statusIsBlkStatus, devices: devices, containers: containers},
 		previous:              map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{},
 		idleReads:             map[ebpf.StatsDiskIoKeyT]int{},
 		idleReadsBeforeDelete: idleReadsBeforeDelete(readInterval),
@@ -176,7 +207,7 @@ func (r *diskReader) readStats() []*ebpf.Stat {
 		// the kernel doesn't add new keys to a full map: they are dropped until idle ones are
 		// deleted
 		if !r.full {
-			r.log.Warn("the kernel map is full: the I/O of new devices is not measured "+
+			r.log.Warn("the kernel map is full: the I/O of new workloads and devices is not measured "+
 				"until the entries of idle ones are deleted", "entries", len(entries))
 		}
 		err = nil
@@ -258,6 +289,7 @@ func (r *diskReader) forgetEvicted(entries map[ebpf.StatsDiskIoKeyT]ebpf.StatsDi
 type diskStats struct {
 	statusIsBlkStatus bool
 	devices           *blockDevices
+	containers        *cgroupContainers
 }
 
 // stat returns the block requests that completed since the previous read of the key, or nil
@@ -282,15 +314,16 @@ func (d *diskStats) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsD
 	return &ebpf.Stat{
 		Type: ebpf.StatTypeDiskIO,
 		DiskIO: &ebpf.DiskIO{
-			Device:     device.name,
-			VolumeName: device.dmName,
-			Stacked:    device.stacked,
-			Op:         ebpf.DiskOpCode(key.Op),
-			ErrorType:  diskErrorType(key.Status, d.statusIsBlkStatus),
-			Operations: operations,
-			Time:       serviceTime,
-			Bytes:      current.Bytes - previous.Bytes,
-			Latency:    latency,
+			Device:      device.name,
+			VolumeName:  device.dmName,
+			Stacked:     device.stacked,
+			Op:          ebpf.DiskOpCode(key.Op),
+			ErrorType:   diskErrorType(key.Status, d.statusIsBlkStatus),
+			ContainerID: d.containers.containerID(key.CgroupId),
+			Operations:  operations,
+			Time:        serviceTime,
+			Bytes:       current.Bytes - previous.Bytes,
+			Latency:     latency,
 		},
 	}
 }
@@ -336,6 +369,38 @@ func diskErrorType(status uint8, isBlkStatus bool) string {
 		return name
 	}
 	return errtype.Other
+}
+
+// cgroupContainers resolves the cgroups that block I/O is charged to into the ID of their
+// container, from the cgroup names that the kernel recorded
+type cgroupContainers struct {
+	names cgroupNameSource
+	cache *simplelru.LRU[uint64, string]
+}
+
+func newCgroupContainers(names cgroupNameSource) *cgroupContainers {
+	// the size is a constant known to be valid
+	cache, _ := simplelru.NewLRU[uint64, string](cgroupContainersCacheLen, nil)
+	return &cgroupContainers{names: names, cache: cache}
+}
+
+// containerID returns the ID of the container of the cgroup, or an empty string if the cgroup is
+// not a container, or is unknown
+func (c *cgroupContainers) containerID(cgroupID uint64) string {
+	if cgroupID == 0 {
+		return ""
+	}
+	if id, ok := c.cache.Get(cgroupID); ok {
+		return id
+	}
+	name, ok := c.names.name(cgroupID)
+	if !ok {
+		// not cached: the kernel may record the name later
+		return ""
+	}
+	id, _ := container.IDFromCgroupNames(name.name, name.parent)
+	c.cache.Add(cgroupID, id)
+	return id
 }
 
 // blockDevicesCachePeriod is how long what is known of the block devices is cached: the kernel

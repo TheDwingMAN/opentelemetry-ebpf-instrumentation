@@ -15,6 +15,8 @@ import (
 	"github.com/cilium/ebpf/link"
 
 	"go.opentelemetry.io/obi/pkg/export"
+	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 )
 
 // featureDisk names the disk stats features in a DisabledFeature
@@ -104,4 +106,42 @@ func attachRawTracepoints(probes []probe) ([]io.Closer, error) {
 		closables = append(closables, l)
 	}
 	return closables, nil
+}
+
+// diskReads tells which attributes of the block I/O the disk probes read: the cgroup the I/O is
+// charged to, for the container attribute
+type diskReads struct {
+	cgroup bool
+}
+
+// diskAttributeReads returns the attributes of the block I/O that the enabled disk metrics report
+// or that the filters match
+func diskAttributeReads(features *export.Features, attrSel *attributes.AttrSelector, filtered []attr.Name) diskReads {
+	metrics := []struct {
+		enabled bool
+		name    attributes.Name
+	}{
+		{enabled: features.StatsDiskServiceDuration(), name: attributes.StatDiskServiceDuration},
+		{enabled: features.StatsDiskIO(), name: attributes.StatDiskIO},
+		{enabled: features.StatsDiskOperations(), name: attributes.StatDiskOperations},
+		{enabled: features.StatsDiskServiceTime(), name: attributes.StatDiskServiceTime},
+	}
+	var reads diskReads
+	for _, metric := range metrics {
+		if metric.enabled && slices.ContainsFunc(slices.Concat(attrSel.For(metric.name), filtered), reportsWorkload) {
+			reads.cgroup = true
+		}
+	}
+	return reads
+}
+
+// reportsWorkload tells whether an attribute describes the workload that the kernel charges an
+// operation to, which the probes find from its cgroup
+func reportsWorkload(name attr.Name) bool {
+	return sameAttribute(name, attr.ContainerID)
+}
+
+// sameAttribute tells whether two attribute names, with dots or underscores, are the same
+func sameAttribute(name, other attr.Name) bool {
+	return name.Prom() == other.Prom()
 }
