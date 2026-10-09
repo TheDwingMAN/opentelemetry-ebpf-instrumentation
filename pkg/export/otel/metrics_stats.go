@@ -101,6 +101,7 @@ type statMetricsExporter struct {
 	diskIO                   *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskOperations           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskServiceTime          *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
+	fsSyncDuration           *kernelHistogram
 	kernelHistograms         *kernelHistogramProducer
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
@@ -289,6 +290,12 @@ func newStatMetricsExporter(
 		nme.diskServiceTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, diskServiceTime, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StatsFsSyncDuration() {
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatFsSyncDuration))
+		nme.fsSyncDuration = kernelHistograms.histogram(attributes.StatFsSyncDuration,
+			export.FsSyncLatencyBounds, attrs)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -330,6 +337,9 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if me.diskServiceTime != nil && v.DiskIO != nil {
 				diskServiceTime, attrs := me.diskServiceTime.ForRecord(v)
 				diskServiceTime.Add(ctx, v.DiskIO.Time, metric2.WithAttributeSet(attrs))
+			}
+			if me.fsSyncDuration != nil && v.FsSync != nil {
+				me.kernelHistograms.record(me.fsSyncDuration, v, v.FsSync.Latency)
 			}
 		}
 	}

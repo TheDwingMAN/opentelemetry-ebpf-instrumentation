@@ -20,6 +20,7 @@ const (
 	StatTypeTCPIo                   = StatType(StatsStatTypeK_statTypeTcpIo)
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
 	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
+	StatTypeFsSync                  = StatType(StatsStatTypeK_statTypeFsSync)
 )
 
 type TCPFailReasonType string
@@ -98,6 +99,18 @@ const (
 	CodeDiskOpWrite = DiskOpCode(StatsDiskOpDiskOpWrite)
 )
 
+// FsSyncTypeCode aliases the bpf2go-generated constants derived from enum fs_sync_type in
+// bpf/statsolly/types.h.
+type FsSyncTypeCode uint8
+
+const (
+	CodeFsSyncFsync         = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeFsync)
+	CodeFsSyncFdatasync     = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeFdatasync)
+	CodeFsSyncSync          = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeSync)
+	CodeFsSyncSyncfs        = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeSyncfs)
+	CodeFsSyncSyncFileRange = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeSyncFileRange)
+)
+
 // Stat contains accumulated metrics from a stat, with extra metadata
 // that is added from the user space
 // REMINDER: any attribute here must be also added to the functions StatGetters
@@ -111,6 +124,7 @@ type Stat struct {
 	TCPRetransmit           bool                     `json:"-"`
 	TCPIo                   *TCPIo                   `json:"-"`
 	DiskIO                  *DiskIO                  `json:"-"`
+	FsSync                  *FsSync                  `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -161,20 +175,42 @@ type DiskIO struct {
 	Latency *LatencyHistogram
 }
 
-// ContainerID returns the container that a block I/O stat is charged to, or an empty string for any
-// other stat
+// FsSync is the file syncs of a type that completed with an outcome and were charged to a cgroup,
+// since the previous read of the kernel accumulation map.
+type FsSync struct {
+	Type FsSyncTypeCode
+	// ErrorType is empty for successful syncs
+	ErrorType string
+	// ContainerID of the cgroup of the thread that synced. Empty for syncs charged to no container.
+	ContainerID string
+
+	// Operations is the number of syncs
+	Operations uint64
+	// Time is the sum of the durations of the syncs, in seconds, as the sum of their latency
+	// histogram
+	Time float64
+	// Latency of the syncs
+	Latency *LatencyHistogram
+}
+
+// ContainerID returns the container that a block I/O or file sync stat is charged to, or an empty
+// string for any other stat
 func (s *Stat) ContainerID() string {
-	if s.DiskIO != nil {
+	switch {
+	case s.DiskIO != nil:
 		return s.DiskIO.ContainerID
+	case s.FsSync != nil:
+		return s.FsSync.ContainerID
 	}
 	return ""
 }
 
-// LatencyHistogram counts requests in the buckets of export.DiskLatencyBounds
+// LatencyHistogram counts operations, block requests or file syncs, in the buckets of the bounds of
+// their metric, export.DiskLatencyBounds or export.FsSyncLatencyBounds
 type LatencyHistogram struct {
-	// BucketCounts counts the requests of each bucket: one per bound, then the overflow bucket
+	// BucketCounts counts the operations of each bucket: one per bound, then the overflow bucket
 	BucketCounts []uint64
-	// Sum of the latencies of the requests, in seconds
+	// Sum of the latencies of the operations, in seconds
 	Sum float64
 }
 

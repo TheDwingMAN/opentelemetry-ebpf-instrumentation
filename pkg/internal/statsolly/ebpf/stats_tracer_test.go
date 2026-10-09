@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/obi/pkg/export"
 	ebpfconvenience "go.opentelemetry.io/obi/pkg/internal/ebpf/convenience"
 )
 
@@ -213,11 +214,13 @@ func TestDiskProgramsToDisable(t *testing.T) {
 		"older kernels load the (q, rq) block_rq_issue program")
 }
 
-func TestDiskLatencyBoundsNs(t *testing.T) {
-	boundsNs := diskLatencyBoundsNs()
-	assert.Equal(t, uint64(100_000), boundsNs[0])
-	assert.Equal(t, uint64(60_000_000_000), boundsNs[len(boundsNs)-1])
-	assert.IsIncreasing(t, boundsNs[:], "the kernel needs them in increasing order, at the nanosecond")
+func TestLatencyBoundsNs(t *testing.T) {
+	for _, bounds := range [][]float64{export.DiskLatencyBounds, export.FsSyncLatencyBounds} {
+		boundsNs := latencyBoundsNs(bounds)
+		assert.Equal(t, uint64(100_000), boundsNs[0])
+		assert.Equal(t, uint64(60_000_000_000), boundsNs[len(boundsNs)-1])
+		assert.IsIncreasing(t, boundsNs[:], "the kernel needs them in increasing order, at the nanosecond")
+	}
 }
 
 func TestBlockTracepointLayoutFromBTF(t *testing.T) {
@@ -327,29 +330,32 @@ func TestRequestIOStatFlag(t *testing.T) {
 	}
 }
 
-func TestSizeInFlightMap(t *testing.T) {
+func TestSizeInFlightMaps(t *testing.T) {
 	newSpec := func() *ebpf.CollectionSpec {
 		return &ebpf.CollectionSpec{Maps: map[string]*ebpf.MapSpec{
 			"disk_rq_start": {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
+			"fs_sync_start": {Type: ebpf.LRUHash, MaxEntries: 1 << 14},
 			"disk_io_accum": {Type: ebpf.Hash, MaxEntries: 1 << 12},
 		}}
 	}
 
-	// up to 64 CPUs, the map of 16384 entries keeps its size
+	// up to 64 CPUs, the maps of 16384 entries keep their size
 	spec := newSpec()
-	sizeInFlightMap(spec, 64)
+	sizeInFlightMaps(spec, 64)
 	assert.Equal(t, uint32(1<<14), spec.Maps["disk_rq_start"].MaxEntries)
+	assert.Equal(t, uint32(1<<14), spec.Maps["fs_sync_start"].MaxEntries)
 
-	// beyond, it gets twice the free entries that the CPUs can keep for themselves
+	// beyond, they get twice the free entries that the CPUs can keep for themselves
 	spec = newSpec()
-	sizeInFlightMap(spec, 192)
+	sizeInFlightMaps(spec, 192)
 	assert.Equal(t, uint32(2*128*192), spec.Maps["disk_rq_start"].MaxEntries)
+	assert.Equal(t, uint32(2*128*192), spec.Maps["fs_sync_start"].MaxEntries)
 	assert.Equal(t, uint32(1<<12), spec.Maps["disk_io_accum"].MaxEntries, "not an in-flight map")
 
 	// a map already scaled beyond it is left alone
 	spec = newSpec()
 	spec.Maps["disk_rq_start"].MaxEntries = 1 << 17
-	sizeInFlightMap(spec, 192)
+	sizeInFlightMaps(spec, 192)
 	assert.Equal(t, uint32(1<<17), spec.Maps["disk_rq_start"].MaxEntries)
 }
 
@@ -363,7 +369,7 @@ func TestShrinkUnusedStorageMaps(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, fixupSpec(spec, storage.programsToDisable()))
 		ebpfconvenience.SetupMapSizes(spec, 2)
-		sizeInFlightMap(spec, 192)
+		sizeInFlightMaps(spec, 192)
 		maxEntries := func() map[string]uint32 {
 			entries := map[string]uint32{}
 			for name, m := range spec.Maps {
@@ -390,8 +396,19 @@ func TestShrinkUnusedStorageMaps(t *testing.T) {
 			"disk_io_accum", "disk_io_accum_init_storage", "disk_rq_start", "disk_cgroup_names",
 			"disk_cgroup_name_init_storage",
 		}},
-		{"block requests without their cgroups", storageProbes{disk: true}, diskCgroupMaps, []string{
+		{"block requests without their cgroups", storageProbes{disk: true}, cgroupNameMaps, []string{
 			"disk_io_accum", "disk_io_accum_init_storage", "disk_rq_start",
+		}},
+		{"file syncs", storageProbes{fsSync: true}, nil, []string{
+			"fs_sync_accum", "fs_sync_accum_init_storage", "fs_sync_start", "disk_cgroup_names",
+			"disk_cgroup_name_init_storage",
+		}},
+		{"file syncs with fentry and fexit programs", storageProbes{fsSync: true, fsSyncTracing: allFsSyncHooks()}, nil, []string{
+			"fs_sync_accum", "fs_sync_accum_init_storage", "fs_sync_start", "disk_cgroup_names",
+			"disk_cgroup_name_init_storage",
+		}},
+		{"file syncs without their cgroups", storageProbes{fsSync: true}, cgroupNameMaps, []string{
+			"fs_sync_accum", "fs_sync_accum_init_storage", "fs_sync_start",
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -405,4 +422,13 @@ func TestShrinkUnusedStorageMaps(t *testing.T) {
 			}
 		})
 	}
+}
+
+// allFsSyncHooks puts every file sync hook on fentry and fexit programs
+func allFsSyncHooks() map[string]bool {
+	tracing := map[string]bool{}
+	for _, hook := range fsSyncHooks {
+		tracing[hook.function] = true
+	}
+	return tracing
 }

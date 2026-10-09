@@ -42,6 +42,10 @@ func (m *StatsFetcher) DiskIOAccumMap() *ciliumebpf.Map {
 	return nil
 }
 
+func (m *StatsFetcher) FsSyncAccumMap() *ciliumebpf.Map {
+	return nil
+}
+
 func (m *StatsFetcher) DiskCgroupNamesMap() *ciliumebpf.Map {
 	return nil
 }

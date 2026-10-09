@@ -99,3 +99,42 @@ static __always_inline u8 disk_status_code(const u64 raw_error, const bool is_bl
     }
     return errno_status((u32)(-(s32)raw_error));
 }
+
+// The errnos that a sync fails with before it syncs anything
+enum {
+    k_errno_ebadf = 9,
+    k_errno_einval = 22,
+    k_errno_espipe = 29,
+};
+
+// fs_sync_attempted tells whether a sync that returned ret synced anything. It fails with EBADF
+// when the file descriptor is invalid, and with EINVAL when the file can't be synced, such as a
+// pipe, a socket or a terminal (as a logger syncing its standard output does), or when
+// sync_file_range(2) gets invalid flags or offsets. sync_file_range(2) fails with ESPIPE instead
+// on a pipe, a socket or a terminal. These are not syncs.
+static __always_inline bool fs_sync_attempted(const s32 ret) {
+    return ret != -k_errno_ebadf && ret != -k_errno_einval && ret != -k_errno_espipe;
+}
+
+// The flags of sync_file_range(2), from include/uapi/linux/fs.h. They are preprocessor constants:
+// the kernel BTF doesn't have them.
+enum {
+    k_sync_file_range_wait_before = 1,
+    k_sync_file_range_write = 2,
+    k_sync_file_range_wait_after = 4,
+};
+
+// sync_file_range(2) only waits for the writeback with SYNC_FILE_RANGE_WAIT_BEFORE or
+// SYNC_FILE_RANGE_WAIT_AFTER. SYNC_FILE_RANGE_WRITE alone, as the flush hints of PostgreSQL and
+// RocksDB do, starts the writeback and returns: it is not a sync.
+static __always_inline bool sync_file_range_waits(const u32 flags) {
+    return (flags & (k_sync_file_range_wait_before | k_sync_file_range_wait_after)) != 0;
+}
+
+// The status of a sync that returned ret, 0 or a negative errno: the errno, 0 on success
+static __always_inline u8 fs_sync_status(const s32 ret) {
+    if (ret >= 0) {
+        return 0;
+    }
+    return errno_status((u32)(-ret));
+}

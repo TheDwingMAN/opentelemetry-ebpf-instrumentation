@@ -15,6 +15,7 @@ enum stat_type : u8 {
     k_stat_type_tcp_io = 4,
     k_stat_type_tcp_successful_connection = 5,
     k_stat_type_disk_io = 6,
+    k_stat_type_fs_sync = 7,
 };
 
 // batch size used in tcp io metric
@@ -48,6 +49,16 @@ enum disk_op : u8 {
     disk_op_unknown = 0,
     disk_op_read = 1,
     disk_op_write = 2,
+};
+
+// The call that synced files
+enum fs_sync_type : u8 {
+    fs_sync_type_unknown = 0,
+    fs_sync_type_fsync = 1,
+    fs_sync_type_fdatasync = 2,
+    fs_sync_type_sync = 3,
+    fs_sync_type_syncfs = 4,
+    fs_sync_type_sync_file_range = 5,
 };
 
 // The latency histogram has fixed bounds, which userspace injects at load (DiskLatencyBounds in

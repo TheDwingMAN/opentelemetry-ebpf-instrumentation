@@ -297,6 +297,39 @@ func TestStatDiskWorkloadAttributesAreOptIn(t *testing.T) {
 	}, p.For(StatDiskServiceDuration))
 }
 
+func TestDefault_StatFsSyncDuration(t *testing.T) {
+	// in Kubernetes, the histogram reports the cluster but not the workload by default
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.FsSyncType,
+	}, p.For(StatFsSyncDuration))
+
+	p, err = NewAttrSelector(0, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{attr.ErrorType, attr.FsSyncType}, p.For(StatFsSyncDuration), "outside Kubernetes")
+
+	// the workload and the node are opt-in
+	p, err = NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: Selection{
+		StatFsSyncDuration.Section: InclusionLists{Include: []string{"*"}},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ContainerID,
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.K8sContainerName,
+		attr.K8sKind,
+		attr.K8sNamespaceName,
+		attr.K8sOwnerName,
+		attr.K8sPodName,
+		attr.FsSyncType,
+		attr.OBIIP,
+	}, p.For(StatFsSyncDuration))
+}
+
 // The selection key of the service time counter has its underscore replaced by a dot, as the
 // keys of attributes.select are normalized, whichever notation it is written in
 func TestStatDiskServiceTimeSelection(t *testing.T) {

@@ -1424,6 +1424,27 @@ Sum of the device service times of the completed block reads and writes, as `obi
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
+## `obi.stat.fs.sync.duration`
+
+Time that threads wait for file syncs to make their data durable, per sync type and outcome: the fsync, fdatasync, sync, syncfs and sync_file_range (when it waits) system calls from their entry to their return, and the syncs that the kernel does within other calls (O_SYNC and O_DSYNC writes, msync with MS_SYNC, io_uring fsync). It includes all that a sync waits for, such as the writeback of the dirty pages, the journal commit, the block I/O and the cache flushes, or the COMMIT RPCs on NFS, but not the writeback that the kernel does in the background. The calls that sync nothing, on an invalid file descriptor (EBADF) or on a file that can't be synced, such as a pipe, a socket or a terminal (EINVAL, or ESPIPE for sync_file_range), are not counted. The syncs of kernel threads, such as those of the NFS server and of the loop devices that sync their backing file, are counted without workload attributes. Its workload attributes are opt-in.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the file sync failed: its errno name, e.g. `EIO` or `ENOSPC`, or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.fs.sync.type` | enum | `recommended` | development | How the files were synced: the system call (`fsync`, `fdatasync`, `sync`, `syncfs` or `sync_file_range`) or, for the syncs that the kernel does within other calls (O_SYNC and O_DSYNC writes, msync, io_uring), `fsync` or `fdatasync`, depending on whether the metadata is synced too. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+
 ## `obi.stat.tcp.failed.connections`
 
 Count of TCP connections that failed to establish, broken down by `reason`.

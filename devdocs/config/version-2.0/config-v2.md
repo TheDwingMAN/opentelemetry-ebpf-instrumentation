@@ -562,11 +562,11 @@ This section is the primary user control for defining how OBI captures and proce
 The current shape separates packet/flow capture from TCP stats capture:
 
 - `capture.network.capture` controls network flow capture and flow-derived telemetry.
-- `capture.network.stats` controls TCP and block I/O (disk) stats telemetry. `enabled` is the stats master switch, and `features` lists enabled stats families: `tcp_rtt`, `tcp_failed_connections`, `tcp_successful_connections`, `tcp_retransmits`, `tcp_io`, `disk_service_duration`, `disk_io`, `disk_operations`, and `disk_service_time`.
+- `capture.network.stats` controls TCP, block I/O (disk) and file sync stats telemetry. `enabled` is the stats master switch, and `features` lists enabled stats families: `tcp_rtt`, `tcp_failed_connections`, `tcp_successful_connections`, `tcp_retransmits`, `tcp_io`, `disk_service_duration`, `disk_io`, `disk_operations`, `disk_service_time`, and `fs_sync_duration`.
 
 `tcp_io` can produce substantially more events than the other stats families, so users should opt into it deliberately when they need per-send/per-receive I/O stats.
 
-The `disk_*` families probe every block I/O request, so they are never enabled by `enabled: true` alone: list them in `features` to opt in. They have no Config v1 equivalent.
+The `disk_*` families probe every block I/O request, and the `fs_sync_*` families every file sync, so they are never enabled by `enabled: true` alone: list them in `features` to opt in. They have no Config v1 equivalent.
 
 ### `capture.engine` Section
 
