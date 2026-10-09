@@ -124,20 +124,26 @@ static void test_zone_append(void) {
 
 static void test_accounted_start_ns(void) {
     const u32 io_stat = 0x100;
-    assert_true(disk_accounted_start_ns(1000, 0x20, 0) == 1000,
+    const u32 flush_seq = 0x2;
+    assert_true(disk_accounted_start_ns(1000, 0x20, 0, flush_seq) == 1000,
                 "a kernel that writes the start at every allocation needs no flag");
-    assert_true(disk_accounted_start_ns(0, 0, 0) == 0,
+    assert_true(disk_accounted_start_ns(0, 0, 0, flush_seq) == 0,
                 "a start the kernel didn't record stays unknown without a flag");
-    assert_true(disk_accounted_start_ns(1000, io_stat, io_stat) == 1000,
+    assert_true(disk_accounted_start_ns(1000, io_stat, io_stat, flush_seq) == 1000,
                 "the start of an accounted request");
-    assert_true(disk_accounted_start_ns(1000, io_stat | 0x2, io_stat) == 1000,
+    assert_true(disk_accounted_start_ns(1000, io_stat | flush_seq, io_stat, flush_seq) == 1000,
                 "the start of an accounted request in a flush sequence");
-    assert_true(disk_accounted_start_ns(1000, 0x20, io_stat) == 0,
+    assert_true(disk_accounted_start_ns(1000, 0x20, io_stat, flush_seq) == 0,
                 "the start of a request that is not accounted may be left by an earlier use");
-    assert_true(disk_accounted_start_ns(1000, 0, io_stat) == 0,
+    assert_true(disk_accounted_start_ns(1000, 0, io_stat, flush_seq) == 0,
                 "a request without flags is not accounted");
-    assert_true(disk_accounted_start_ns(0, io_stat, io_stat) == 0,
+    assert_true(disk_accounted_start_ns(0, io_stat, io_stat, flush_seq) == 0,
                 "an accounted request without a start stays unknown");
+    assert_true(disk_accounted_start_ns(1000, flush_seq, io_stat, flush_seq) == 1000,
+                "the flush that a flush sequence sends is accounted without the flag, from the "
+                "start that the sequence writes when it sends the flush");
+    assert_true(disk_accounted_start_ns(1000, flush_seq, io_stat, 0) == 0,
+                "without the flush sequence flag, a flush is only accounted with the flag");
 }
 
 int main(void) {

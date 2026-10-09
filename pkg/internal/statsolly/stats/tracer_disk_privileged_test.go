@@ -839,6 +839,52 @@ func TestDiskPassthroughCommands(t *testing.T) {
 	}, operations)
 }
 
+// TestDiskFlushesThatFailBeforeTheirIssue syncs a scsi_debug disk, which has a volatile write cache,
+// while it is offline: the SCSI layer fails the flush before issuing it to the device. The flush
+// must be counted with its error, as /proc/diskstats counts it, and timed from the kernel's start of
+// the flush. From Linux 6.11, and on RHEL 9.6, a flush has no RQF_IO_STAT flag, which the start of
+// the other requests that were never issued is checked against.
+func TestDiskFlushesThatFailBeforeTheirIssue(t *testing.T) {
+	device := scsiDebugDisk(t)
+	if cache := readQueueAttribute(t, device, "write_cache"); cache != "write back" {
+		t.Skipf("the scsi_debug disk has no volatile write cache: %s", cache)
+	}
+	disk, err := os.OpenFile(deviceNode(t, device), os.O_RDWR, 0)
+	require.NoError(t, err)
+	defer disk.Close()
+	reader := attachDiskReader(t)
+
+	// older kernels only take a state that ends with a newline, as echo writes it
+	state := filepath.Join("/sys/block", device, "device", "state")
+	require.NoError(t, os.WriteFile(state, []byte("offline\n"), 0o644))
+	t.Cleanup(func() { _ = os.WriteFile(state, []byte("running\n"), 0o644) })
+	before := readKernelDiskStats(t, device)
+	require.Error(t, disk.Sync(), "the flush of an offline disk fails")
+	after := readKernelDiskStats(t, device)
+
+	var flushes, failed uint64
+	var flushTime float64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != device || stat.DiskIO.Op != ebpf.CodeDiskOpFlush {
+			continue
+		}
+		flushes += requests(stat.DiskIO.Latency)
+		flushTime += stat.DiskIO.Time
+		if stat.DiskIO.ErrorType != "" {
+			assert.Equal(t, "EIO", stat.DiskIO.ErrorType)
+			failed += stat.DiskIO.Operations
+		}
+	}
+	require.Positive(t, failed, "the failed flush is counted")
+	if !after.hasFlushes {
+		t.Log("/proc/diskstats has no flush fields on this kernel")
+		return
+	}
+	assert.Equal(t, after.flushes-before.flushes, flushes)
+	// both are timed from the kernel's start of the flush; the kernel counts whole milliseconds
+	assert.LessOrEqual(t, flushTime, (after.flushTime - before.flushTime + time.Millisecond).Seconds())
+}
+
 // scsiDebugDisk loads scsi_debug with one disk and returns the name of the disk, once udev, if it
 // runs, has probed it. It skips the test if scsi_debug can't be loaded or creates no disk.
 func scsiDebugDisk(t *testing.T) string {
