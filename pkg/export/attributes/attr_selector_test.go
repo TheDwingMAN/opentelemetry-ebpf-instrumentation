@@ -313,6 +313,45 @@ func TestStatDiskServiceTimeSelection(t *testing.T) {
 	}
 }
 
+// A cache flush is reported per device: it has no direction, and the block layer issues it
+// without charging it to any cgroup
+func TestDefault_StatDiskFlushDuration(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.DiskStacked,
+		attr.DiskVolumeName,
+		attr.SystemDevice,
+	}, p.For(StatDiskFlushDuration), "the cluster name, as the other disk metrics have it")
+
+	p, err = NewAttrSelector(0, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ErrorType,
+		attr.DiskStacked,
+		attr.DiskVolumeName,
+		attr.SystemDevice,
+	}, p.For(StatDiskFlushDuration), "outside Kubernetes")
+}
+
+// The cache flushes offer no attribute that they would always report empty
+func TestStatDiskFlushDurationOffersNoWorkloadAttribute(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: Selection{
+		"*": InclusionLists{Include: []string{"*"}},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ErrorType,
+		attr.K8sClusterName,
+		attr.DiskStacked,
+		attr.DiskVolumeName,
+		attr.OBIIP,
+		attr.SystemDevice,
+	}, p.For(StatDiskFlushDuration))
+}
+
 func TestDefault_HTTPServerMetrics(t *testing.T) {
 	p, err := NewAttrSelector(0, &SelectorConfig{})
 	require.NoError(t, err)

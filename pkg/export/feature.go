@@ -64,11 +64,13 @@ const (
 	FeatureStatsDiskIO
 	FeatureStatsDiskOperations
 	FeatureStatsDiskServiceTime
+	FeatureStatsDiskFlush
 	FeatureAll = Features(^uint(0)) &^ FeatureStatsDisk
 )
 
 // FeatureStatsDisk groups the disk stat features, whose metrics the same block probes measure
-const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskServiceTime
+const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations |
+	FeatureStatsDiskServiceTime | FeatureStatsDiskFlush
 
 // FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -109,6 +111,7 @@ var v2OnlyFeatures = map[string]Features{
 	"disk_io":               FeatureStatsDiskIO,
 	"disk_operations":       FeatureStatsDiskOperations,
 	"disk_service_time":     FeatureStatsDiskServiceTime,
+	"disk_flush":            FeatureStatsDiskFlush,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -438,6 +441,10 @@ func (f Features) StatsDiskOperations() bool {
 
 func (f Features) StatsDiskServiceTime() bool {
 	return f.any(FeatureStatsDiskServiceTime)
+}
+
+func (f Features) StatsDiskFlush() bool {
+	return f.any(FeatureStatsDiskFlush)
 }
 
 // StatsDisk tells whether any disk stat feature is enabled

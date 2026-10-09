@@ -128,6 +128,7 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		Filtered:  filteredAttributes(storageStatFilters(cfg.Filters.Stats, cfg.Attributes.ExtraGroupAttributes)),
 	}
 	warnPerPodHistograms(&features, ctxInfo.MetricAttributeGroups, selectorCfg)
+	warnUnselectableFlushes(&features, ctxInfo.DynamicSelector != nil)
 	statsFetcher, err = newFetcher(&cfg.EBPF, &features, ctxInfo.MetricAttributeGroups, selectorCfg, reads)
 	if err != nil {
 		return nil, err
@@ -161,6 +162,16 @@ func warnDisabledStorage(disabled []ebpf.DisabledFeature) {
 	for _, d := range disabled {
 		alog().Warn("storage metrics disabled on this node: their probes can't be loaded. The other metrics keep working",
 			"metrics", d.Feature, "reason", d.Reason)
+	}
+}
+
+// warnUnselectableFlushes warns that the disk cache flushes are not reported under dynamic
+// application selection, which keeps the block I/O of the containers of the selected applications:
+// the block layer issues the flushes itself, charged to no container
+func warnUnselectableFlushes(features *export.Features, dynamicSelection bool) {
+	if dynamicSelection && features.StatsDiskFlush() {
+		alog().Warn("the disk cache flushes are not reported under dynamic application selection: they are "+
+			"charged to no application", "metric", attributes.StatDiskFlushDuration.OTEL)
 	}
 }
 

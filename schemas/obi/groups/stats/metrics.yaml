@@ -398,9 +398,10 @@ groups:
       evicted from its map of requests in flight, or issued while the issue
       probe was already running on the CPU), from the kernel's issue time where
       the queue records it, or else from the kernel's start of the request. A
-      request that the kernel didn't time either is not counted. Cache flushes,
-      discards and the I/O of bio-based devices (LVM, md RAID, NVMe native
-      multipath heads) are not measured. It is not reported on the paths of dm-multipath devices: the
+      request that the kernel didn't time either is not counted. Cache flushes
+      have their own histogram, `obi.stat.disk.flush.duration`; discards and
+      the I/O of bio-based devices (LVM, md RAID, NVMe native multipath heads)
+      are not measured. It is not reported on the paths of dm-multipath devices: the
       multipath device reports the same I/O. Its workload attributes are opt-in:
       `obi.stat.disk.service_time` and `obi.stat.disk.operations` give the mean per workload.
     attributes:
@@ -587,3 +588,45 @@ groups:
         requirement_level: opt_in
       - ref: k8s.container.name
         requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.disk.flush.duration
+    type: metric
+    metric_name: obi.stat.disk.flush.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Duration of the cache flushes (`REQ_OP_FLUSH`) that block devices are
+      sent, from their last issue to the device until their completion, per
+      block device and outcome: a flush that is requeued or retried is timed
+      from its last issue. The kernel sends a device with a volatile write
+      cache one flush for all the file syncs, journal commits and writes with
+      a cache flush that are pending when it issues the flush, so a flush can
+      serve several of them. It excludes the wait of the flush for its
+      dispatch, which the flush time of /proc/diskstats includes. A flush
+      whose issue OBI didn't record is timed as the reads and writes are (see
+      `obi.stat.disk.service.duration`). Devices without a volatile write
+      cache, or whose `queue/write_cache` is `write through`, are sent no
+      flush. Bio-based devices (LVM, md RAID, NVMe native multipath heads)
+      report none: their flushes are reported on the devices below them. It is
+      not reported on the paths of dm-multipath devices: the multipath device
+      reports the same flushes.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.volume.name
+        requirement_level:
+          conditionally_required: if the block device is a device mapper device
+      - ref: obi.disk.stacked
+        requirement_level: recommended
+      - ref: error.type
+        requirement_level:
+          conditionally_required: >
+            if the cache flush failed: the errno name of its status, e.g.
+            `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target)
+            or `_OTHER`
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled

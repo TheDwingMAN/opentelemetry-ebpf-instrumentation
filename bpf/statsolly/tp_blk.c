@@ -208,8 +208,8 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         return 0;
     }
 
-    // the operations that OBI doesn't measure (flush, discard, passthrough, zone management) must
-    // not reach the maps: from Linux 6.8 the kernel doesn't time passthrough commands, and their
+    // the operations that OBI doesn't measure (discard, passthrough, zone management) must not
+    // reach the maps: from Linux 6.8 the kernel doesn't time passthrough commands, and their
     // completion would stop the timing of the queue
     const enum disk_op op = request_op(rq);
     if (op == disk_op_unknown) {
@@ -217,8 +217,9 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     }
 
     // the kernel completes a write with a cache flush before or after it again at the end of its
-    // flush sequence, and only counts it then
-    if (in_flush_sequence(rq)) {
+    // flush sequence, and only counts it then. The flush that the sequence issues to the device is
+    // measured once, whatever the number of sequences it serves.
+    if (in_flush_sequence(rq) && op != disk_op_flush) {
         return 0;
     }
 

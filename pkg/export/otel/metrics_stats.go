@@ -101,6 +101,7 @@ type statMetricsExporter struct {
 	diskIO                   *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskOperations           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskServiceTime          *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
+	diskFlushDuration        *kernelHistogram
 	kernelHistograms         *kernelHistogramProducer
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
@@ -289,6 +290,12 @@ func newStatMetricsExporter(
 		nme.diskServiceTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, diskServiceTime, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskFlush() {
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskFlushDuration))
+		nme.diskFlushDuration = kernelHistograms.histogram(attributes.StatDiskFlushDuration,
+			export.DiskLatencyBounds, attrs)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -316,21 +323,40 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				tcpIo, attrs := me.tcpIo.ForRecord(v)
 				tcpIo.Add(ctx, int64(v.TCPIo.Bytes), metric2.WithAttributeSet(attrs))
 			}
-			if me.diskServiceDuration != nil && v.DiskIO != nil {
-				me.kernelHistograms.record(me.diskServiceDuration, v, v.DiskIO.Latency)
-			}
-			if me.diskIO != nil && v.DiskIO != nil && v.DiskIO.Bytes > 0 {
-				diskIO, attrs := me.diskIO.ForRecord(v)
-				diskIO.Add(ctx, int64(v.DiskIO.Bytes), metric2.WithAttributeSet(attrs))
-			}
-			if me.diskOperations != nil && v.DiskIO != nil {
-				diskOperations, attrs := me.diskOperations.ForRecord(v)
-				diskOperations.Add(ctx, int64(v.DiskIO.Operations), metric2.WithAttributeSet(attrs))
-			}
-			if me.diskServiceTime != nil && v.DiskIO != nil {
-				diskServiceTime, attrs := me.diskServiceTime.ForRecord(v)
-				diskServiceTime.Add(ctx, v.DiskIO.Time, metric2.WithAttributeSet(attrs))
+			if v.DiskIO != nil {
+				me.recordDiskIO(ctx, v)
 			}
 		}
+	}
+}
+
+// recordDiskIO records the block requests of a stat in the metrics of their operation: the reads
+// and writes in the metrics of the transfers, the cache flushes in their own histogram
+func (me *statMetricsExporter) recordDiskIO(ctx context.Context, v *ebpf.Stat) {
+	switch v.DiskIO.Op {
+	case ebpf.CodeDiskOpRead, ebpf.CodeDiskOpWrite:
+		me.recordDiskTransfers(ctx, v)
+	case ebpf.CodeDiskOpFlush:
+		if me.diskFlushDuration != nil {
+			me.kernelHistograms.record(me.diskFlushDuration, v, v.DiskIO.Latency)
+		}
+	}
+}
+
+func (me *statMetricsExporter) recordDiskTransfers(ctx context.Context, v *ebpf.Stat) {
+	if me.diskServiceDuration != nil {
+		me.kernelHistograms.record(me.diskServiceDuration, v, v.DiskIO.Latency)
+	}
+	if me.diskIO != nil && v.DiskIO.Bytes > 0 {
+		diskIO, attrs := me.diskIO.ForRecord(v)
+		diskIO.Add(ctx, int64(v.DiskIO.Bytes), metric2.WithAttributeSet(attrs))
+	}
+	if me.diskOperations != nil {
+		diskOperations, attrs := me.diskOperations.ForRecord(v)
+		diskOperations.Add(ctx, int64(v.DiskIO.Operations), metric2.WithAttributeSet(attrs))
+	}
+	if me.diskServiceTime != nil {
+		diskServiceTime, attrs := me.diskServiceTime.ForRecord(v)
+		diskServiceTime.Add(ctx, v.DiskIO.Time, metric2.WithAttributeSet(attrs))
 	}
 }

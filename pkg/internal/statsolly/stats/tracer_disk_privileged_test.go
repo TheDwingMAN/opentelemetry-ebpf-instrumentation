@@ -445,10 +445,50 @@ func TestAccumLookupAndDeleteUnsupported(t *testing.T) {
 	assert.Equal(t, uint64(42), value, "the entry is kept")
 }
 
+// TestDiskFlushes syncs a loop device, which has a volatile write cache: the kernel writes the dirty
+// pages of the device back, then flushes the cache of the device for an empty write that waits for
+// the flush without being issued. The flush is reported apart from the writes, without bytes, and
+// both are counted as in /proc/diskstats.
+func TestDiskFlushes(t *testing.T) {
+	loopDev := attachLoopDevice(t)
+	device := filepath.Base(loopDev)
+	reader := attachDiskReader(t)
+
+	disk, err := os.OpenFile(loopDev, os.O_RDWR, 0)
+	require.NoError(t, err)
+	defer disk.Close()
+	before := readKernelDiskStats(t, device)
+	_, err = disk.WriteAt(alignedBuffer(t), 0)
+	require.NoError(t, err)
+	require.NoError(t, disk.Sync())
+
+	var writes, flushes, flushedBytes uint64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device != device {
+			continue
+		}
+		switch stat.DiskIO.Op {
+		case ebpf.CodeDiskOpWrite:
+			writes += stat.DiskIO.Operations
+		case ebpf.CodeDiskOpFlush:
+			flushes += requests(stat.DiskIO.Latency)
+			flushedBytes += stat.DiskIO.Bytes
+		}
+	}
+	after := readKernelDiskStatsOnceWritten(t, device, before, int(writes))
+	assert.Equal(t, after.writes-before.writes, writes, "the empty flush write is a write")
+	assert.Zero(t, flushedBytes, "flushes transfer no data")
+	require.Positive(t, flushes, "fsync flushes the write back cache of the device")
+	if after.hasFlushes {
+		assert.Equal(t, after.flushes-before.flushes, flushes)
+	}
+}
+
 // TestDiskFileSyncsAreCountedLikeTheKernel syncs the files of an ext4 filesystem. The kernel
 // completes the journal writes that have a cache flush before or after them twice, and completes
-// the empty flushes of files that didn't change without issuing them: writes must be counted as in
-// /proc/diskstats.
+// the empty flushes of files that didn't change without issuing them: writes and cache flushes must
+// be counted as in /proc/diskstats. The flushes are timed from their issue, which the flush time of
+// /proc/diskstats precedes with their wait for the dispatch.
 func TestDiskFileSyncsAreCountedLikeTheKernel(t *testing.T) {
 	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
 		t.Skip("needs mkfs.ext4")
@@ -470,16 +510,23 @@ func TestDiskFileSyncsAreCountedLikeTheKernel(t *testing.T) {
 		syncFile(t, filepath.Join(mountPoint, "changed"), []byte("data"))
 	}
 
-	var writes, operations, written uint64
-	var writeTime float64
+	var writes, operations, written, flushes uint64
+	var writeTime, flushTime float64
 	for _, stat := range reader.readStats() {
-		if stat.DiskIO.Device != device || stat.DiskIO.Op != ebpf.CodeDiskOpWrite {
+		if stat.DiskIO.Device != device {
 			continue
 		}
-		writes += requests(stat.DiskIO.Latency)
-		operations += stat.DiskIO.Operations
-		written += stat.DiskIO.Bytes
-		writeTime += stat.DiskIO.Time
+		switch stat.DiskIO.Op {
+		case ebpf.CodeDiskOpWrite:
+			writes += requests(stat.DiskIO.Latency)
+			operations += stat.DiskIO.Operations
+			written += stat.DiskIO.Bytes
+			writeTime += stat.DiskIO.Time
+		case ebpf.CodeDiskOpFlush:
+			flushes += requests(stat.DiskIO.Latency)
+			flushTime += stat.DiskIO.Time
+			assert.Zero(t, stat.DiskIO.Bytes, "flushes transfer no data")
+		}
 	}
 	// OBI counts a write before the kernel accounts it in /proc/diskstats
 	after := readKernelDiskStatsOnceWritten(t, device, before, int(writes))
@@ -487,6 +534,16 @@ func TestDiskFileSyncsAreCountedLikeTheKernel(t *testing.T) {
 	assert.Equal(t, writes, operations)
 	assert.Equal(t, (after.sectorsWritten-before.sectorsWritten)*kernelSectorSize, written)
 	assert.Less(t, writeTime, float64(writes), "each write took less than a second on average")
+
+	require.Positive(t, flushes, "the loop device has a volatile write cache, which the file syncs flush")
+	if !after.hasFlushes {
+		t.Log("/proc/diskstats has no flush fields on this kernel")
+		return
+	}
+	// the kernel accounts a flush before it ends the file syncs that wait for it
+	assert.Equal(t, after.flushes-before.flushes, flushes)
+	// the kernel counts whole milliseconds, so its time can be up to a millisecond short
+	assert.LessOrEqual(t, flushTime, (after.flushTime - before.flushTime + time.Millisecond).Seconds())
 }
 
 // TestDiskWriteZeroesAreCountedLikeTheKernel zeroes a range of a loop device, which the loop
@@ -679,9 +736,15 @@ type kernelDiskStats struct {
 	reads, writes, sectorsRead, sectorsWritten uint64
 	// writeTime adds up the durations of the writes, from the kernel's start of each
 	writeTime time.Duration
+	// flushes counts the cache flushes, and flushTime adds up their durations, from the kick of their
+	// flush sequence. The kernel reports them from Linux 5.5 (hasFlushes), but not on RHEL 8.
+	flushes    uint64
+	flushTime  time.Duration
+	hasFlushes bool
 }
 
-// readKernelDiskStats reads the completed reads and writes of a device in /proc/diskstats
+// readKernelDiskStats reads the completed reads, writes and cache flushes of a device in
+// /proc/diskstats
 func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 	t.Helper()
 	const (
@@ -690,6 +753,8 @@ func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 		writesField         = 7
 		sectorsWrittenField = 9
 		writeTimeField      = 10
+		flushesField        = 18
+		flushTimeField      = 19
 	)
 	content, err := os.ReadFile("/proc/diskstats")
 	require.NoError(t, err)
@@ -703,13 +768,19 @@ func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 			require.NoError(t, err)
 			return value
 		}
-		return kernelDiskStats{
+		stats := kernelDiskStats{
 			reads:          field(readsField),
 			writes:         field(writesField),
 			sectorsRead:    field(sectorsReadField),
 			sectorsWritten: field(sectorsWrittenField),
 			writeTime:      time.Duration(field(writeTimeField)) * time.Millisecond,
 		}
+		if len(fields) > flushTimeField {
+			stats.flushes = field(flushesField)
+			stats.flushTime = time.Duration(field(flushTimeField)) * time.Millisecond
+			stats.hasFlushes = true
+		}
+		return stats
 	}
 	require.Failf(t, "device not found", "%s is not in /proc/diskstats", device)
 	return kernelDiskStats{}
@@ -948,7 +1019,8 @@ func syncFile(t *testing.T, path string, data []byte) {
 // TestDiskMultipathRequestsAreCountedLikeTheKernel writes to and reads from a dm-multipath volume,
 // which is request-based: device mapper completes the bytes of each of its requests when the clone
 // of the request completes on the path, and ends the request again afterwards, without bytes. Each
-// read and write must be counted once, as in /proc/diskstats, on the volume and on its path.
+// read and write must be counted once, as in /proc/diskstats, on the volume and on its path. The
+// volume sends each of its cache flushes to the path, which reports none of them: the volume does.
 func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 	const blocks = 32
 	loopDev := attachLoopDevice(t)
@@ -983,9 +1055,12 @@ func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 		after = readKernelDiskStats(t, dmName)
 	}
-	pathAfter := readKernelDiskStats(t, path)
+	require.Equal(t, uint64(blocks), after.writes-before.writes, "the kernel completes one request per write")
+	// the volume inherits the volatile write cache of the loop device
+	require.NoError(t, f.Sync())
 
 	counted := map[string]kernelDiskStats{}
+	flushes := map[string]uint64{}
 	for _, stat := range reader.readStats() {
 		if stat.DiskIO.Device != dmName && stat.DiskIO.Device != path {
 			continue
@@ -998,15 +1073,30 @@ func TestDiskMultipathRequestsAreCountedLikeTheKernel(t *testing.T) {
 		case ebpf.CodeDiskOpWrite:
 			device.writes += stat.DiskIO.Operations
 			device.sectorsWritten += stat.DiskIO.Bytes / kernelSectorSize
+		case ebpf.CodeDiskOpFlush:
+			flushes[stat.DiskIO.Device] += stat.DiskIO.Operations
+			if stat.DiskIO.Device == path {
+				assert.Nil(t, stat.DiskIO.Latency, "the volume reports the flushes of its path")
+			}
 		}
 		if stat.DiskIO.Device == dmName {
 			assert.Equal(t, requests(stat.DiskIO.Latency), stat.DiskIO.Operations)
 		}
 		counted[stat.DiskIO.Device] = device
 	}
-	require.Equal(t, uint64(blocks), after.writes-before.writes, "the kernel completes one request per write")
+	// the kernel accounts the empty flush write of the sync after it returned it
+	after = readKernelDiskStatsOnceWritten(t, dmName, before, int(counted[dmName].writes))
+	pathAfter := readKernelDiskStats(t, path)
 	assert.Equal(t, kernelDiskStatsDelta(before, after), counted[dmName], "the volume")
-	assert.Equal(t, kernelDiskStatsDelta(pathBefore, pathAfter), counted[path], "the path keeps its counters")
+	require.Positive(t, flushes[dmName], "the volume flushes its cache")
+	if after.hasFlushes {
+		assert.Equal(t, after.flushes-before.flushes, flushes[dmName], "the flushes of the volume")
+	}
+	assert.Equal(t, flushes[dmName], flushes[path], "the volume sends each of its flushes to its path")
+	// /proc/diskstats counts the flushes that the volume sends the path as reads of the path
+	pathCounted := counted[path]
+	pathCounted.reads += flushes[path]
+	assert.Equal(t, kernelDiskStatsDelta(pathBefore, pathAfter), pathCounted, "the path keeps its counters")
 }
 
 // kernelDiskStatsDelta returns the reads, writes and sectors that /proc/diskstats counted between
@@ -1126,18 +1216,21 @@ func attachDiskReaderOf(t *testing.T, features export.Features) *diskReader {
 }
 
 // multipathVolume creates a dm-multipath volume with a single path, the device, as multipathd does
-// for a SAN LUN, and returns its name. It skips the test if dm-multipath can't be loaded.
+// for a SAN LUN, with a UUID that starts with "mpath-", and returns its name. It skips the test if
+// dm-multipath can't be loaded.
 func multipathVolume(t *testing.T, device string) string {
 	t.Helper()
 	if out, err := exec.Command("modprobe", "-a", "dm_multipath", "dm_round_robin").CombinedOutput(); err != nil {
 		t.Skipf("dm-multipath can't be loaded: %v: %s", err, out)
 	}
-	return deviceMapperVolume(t, device, fmt.Sprintf("multipath 0 0 1 1 round-robin 0 1 1 %s 1", device))
+	return deviceMapperVolume(t, device, dmMultipathUUIDPrefix,
+		fmt.Sprintf("multipath 0 0 1 1 round-robin 0 1 1 %s 1", device))
 }
 
 // deviceMapperVolume creates a device mapper volume over a whole device, with the given target and
-// its arguments, and returns its name. It skips the test if dmsetup is not installed.
-func deviceMapperVolume(t *testing.T, device, target string) string {
+// its arguments, and a UUID made of the given prefix and the name of the volume, and returns its
+// name. It skips the test if dmsetup is not installed.
+func deviceMapperVolume(t *testing.T, device, uuidPrefix, target string) string {
 	t.Helper()
 	dmsetup, err := exec.LookPath("dmsetup")
 	if err != nil {
@@ -1148,7 +1241,7 @@ func deviceMapperVolume(t *testing.T, device, target string) string {
 	require.NoError(t, err)
 
 	volume := fmt.Sprintf("obi-test-%d-%d", os.Getpid(), time.Now().UnixNano())
-	create := exec.Command(dmsetup, "create", volume, "--table",
+	create := exec.Command(dmsetup, "create", volume, "--uuid", uuidPrefix+volume, "--table",
 		fmt.Sprintf("0 %s %s", strings.TrimSpace(string(sectors)), target))
 	// without udev, dmsetup creates the device nodes itself
 	create.Env = append(os.Environ(), "DM_DISABLE_UDEV=1")

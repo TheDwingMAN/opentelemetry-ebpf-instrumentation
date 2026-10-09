@@ -384,6 +384,7 @@ const (
 	statsFeatureDiskIO                   = "disk_io"
 	statsFeatureDiskOperations           = "disk_operations"
 	statsFeatureDiskServiceTime          = "disk_service_time"
+	statsFeatureDiskFlush                = "disk_flush"
 )
 
 func statsFeatures(features featureexport.Features) []string {
@@ -414,6 +415,9 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsDiskServiceTime() {
 		out = append(out, statsFeatureDiskServiceTime)
+	}
+	if features.StatsDiskFlush() {
+		out = append(out, statsFeatureDiskFlush)
 	}
 	return out
 }

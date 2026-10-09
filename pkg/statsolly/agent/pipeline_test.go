@@ -313,6 +313,57 @@ func TestDiskCounters(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// The cache flushes are reported per device and outcome in their own histogram, without a
+// direction, and none of the metrics of the reads and writes counts them. The paths of a multipath
+// device report no flush: the multipath device reports the same flushes.
+func TestDiskFlushes(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDisk)
+
+	written := fakeDiskRecord("sda", ebpf.CodeDiskOpWrite, "", fakeLatency(0.0005))
+	written.DiskIO.Bytes = 4096
+	multipath := fakeDiskRecord("dm-1", ebpf.CodeDiskOpFlush, "", fakeLatency(0.004, 0.004))
+	multipath.DiskIO.VolumeName, multipath.DiskIO.Stacked = "mpatha", true
+	path := fakeDiskRecord("sdb", ebpf.CodeDiskOpFlush, "", nil)
+	path.DiskIO.Operations, path.DiskIO.Time = 2, 0.008
+	diskEvents <- []*ebpf.Stat{
+		written,
+		fakeDiskRecord("sda", ebpf.CodeDiskOpFlush, "", fakeLatency(0.004)),
+		fakeDiskRecord("sda", ebpf.CodeDiskOpFlush, "EIO", fakeLatency(0.02)),
+		multipath,
+		path,
+	}
+
+	flushes := func(device, volume, stacked, errorType string) map[string]string {
+		return map[string]string{
+			"obi_disk_stacked": stacked, "obi_disk_volume_name": volume, "system_device": device, "error_type": errorType,
+		}
+	}
+	okWrite := flushes("sda", "", "false", "")
+	okWrite["disk_io_direction"] = "write"
+	okWrittenBytes := maps.Clone(okWrite)
+	delete(okWrittenBytes, "error_type")
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_flush_duration_seconds_count", Value: 1, Labels: flushes("sda", "", "false", "")},
+			{Name: "obi_stat_disk_flush_duration_seconds_count", Value: 1, Labels: flushes("sda", "", "false", "EIO")},
+			{Name: "obi_stat_disk_flush_duration_seconds_count", Value: 2, Labels: flushes("dm-1", "mpatha", "true", "")},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_flush_duration_seconds_count"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_service_duration_seconds_count", Value: 1, Labels: okWrite},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_service_duration_seconds_count"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_operations_total", Value: 1, Labels: okWrite},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operations"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_service_time_seconds_total", Value: 0.0005, Labels: okWrite},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_service_time"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_io_bytes_total", Value: 4096, Labels: okWrittenBytes},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_disk_io"))
+	}, timeout, 100*time.Millisecond)
+}
+
 // The disk probes couldn't be loaded: the agent has no disk tracer, and the TCP stats go on without
 // the storage branch
 func TestDiskStatsWithoutDiskProbes(t *testing.T) {

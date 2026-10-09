@@ -58,9 +58,9 @@ static void test_completed_before(void) {
                 "device mapper ends a request after its bytes completed, with no bio left");
     assert_true(!disk_rq_completed_before(4096, true, true),
                 "the completion of the bytes is counted");
-    assert_true(
-        !disk_rq_completed_before(0, false, false),
-        "a request whose bios NVMe multipath took to retry them on another path is counted");
+    assert_true(!disk_rq_completed_before(0, false, false),
+                "a request whose bios NVMe multipath took to retry them on another path is "
+                "counted, and a flush, which has neither bio nor biotail");
     assert_true(!disk_rq_completed_before(0, true, true),
                 "an empty write keeps its bio: the empty flush of an fsync, or the end of a flush "
                 "sequence, is counted");
@@ -80,7 +80,7 @@ static void test_status_code(void) {
 static void test_op_from_req_op(void) {
     assert_true(disk_op_from_req_op(0, 0) == disk_op_read, "REQ_OP_READ is a read");
     assert_true(disk_op_from_req_op(1, 0) == disk_op_write, "REQ_OP_WRITE is a write");
-    assert_true(disk_op_from_req_op(2, 0) == disk_op_unknown, "REQ_OP_FLUSH is not measured");
+    assert_true(disk_op_from_req_op(2, 0) == disk_op_flush, "REQ_OP_FLUSH is a flush");
     assert_true(disk_op_from_req_op(3, 0) == disk_op_unknown, "REQ_OP_DISCARD is not measured");
     assert_true(disk_op_from_req_op(5, 0) == disk_op_unknown,
                 "REQ_OP_SECURE_ERASE is not measured");

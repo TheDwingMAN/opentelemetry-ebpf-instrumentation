@@ -48,6 +48,7 @@ enum disk_op : u8 {
     disk_op_unknown = 0,
     disk_op_read = 1,
     disk_op_write = 2,
+    disk_op_flush = 3,
 };
 
 // The latency histogram has fixed bounds, which userspace injects at load (DiskLatencyBounds in

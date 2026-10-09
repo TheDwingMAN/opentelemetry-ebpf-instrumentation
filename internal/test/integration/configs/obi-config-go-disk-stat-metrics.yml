@@ -24,7 +24,7 @@ extensions:
         default_action: exclude
       network:
         stats:
-          features: [disk_service_duration, disk_io, disk_operations, disk_service_time]
+          features: [disk_service_duration, disk_io, disk_operations, disk_service_time, disk_flush]
       engine:
         batching:
           batch_timeout: 10ms

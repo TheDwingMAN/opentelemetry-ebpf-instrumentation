@@ -128,16 +128,26 @@ func getDefinitions(
 		extraGroupAttributes[GroupStats],
 	)
 
-	// block I/O stat metrics attributes. Unlike the other stat metrics, they
-	// are not reported per connection, so they don't include statsAttributes
-	statsDiskAttributes := NewAttrReportGroup(
+	// the block device of the block I/O stat metrics. Unlike the other stat metrics, they are not
+	// reported per connection, so they don't include statsAttributes
+	statsDiskDeviceAttributes := NewAttrReportGroup(
 		false,
 		nil,
 		map[attr.Name]Default{
-			attr.OBIIP:           false,
-			attr.SystemDevice:    true,
-			attr.DiskVolumeName:  true,
-			attr.DiskStacked:     true,
+			attr.OBIIP:          false,
+			attr.SystemDevice:   true,
+			attr.DiskVolumeName: true,
+			attr.DiskStacked:    true,
+		},
+		nil,
+	)
+
+	// block I/O stat metrics attributes: the device, the direction of the I/O and the container
+	// that it is charged to
+	statsDiskAttributes := NewAttrReportGroup(
+		false,
+		[]*AttrReportGroup{&statsDiskDeviceAttributes},
+		map[attr.Name]Default{
 			attr.DiskIODirection: true,
 			attr.ContainerID:     false,
 		},
@@ -173,6 +183,17 @@ func getDefinitions(
 			attr.K8sKind:          false,
 			attr.K8sPodName:       false,
 			attr.K8sContainerName: false,
+		},
+		nil,
+	)
+
+	// the cluster, the only Kubernetes attribute of the block I/O that is charged to no cgroup, such
+	// as the cache flushes, which the block layer issues itself
+	statsDiskNodeKubeAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sClusterName: true,
 		},
 		nil,
 	)
@@ -985,6 +1006,12 @@ func getDefinitions(
 		},
 		StatDiskServiceTime.Section: {
 			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskFlushDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes, &statsDiskNodeKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},

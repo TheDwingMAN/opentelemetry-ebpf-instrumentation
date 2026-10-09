@@ -2098,11 +2098,12 @@
                   "disk_service_duration",
                   "disk_io",
                   "disk_operations",
-                  "disk_service_time"
+                  "disk_service_time",
+                  "disk_flush"
                 ]
               },
               "default": [],
-              "description": "Enabled stats families: the TCP ones and the block I/O (disk) ones, disk_service_duration, disk_io, disk_operations and disk_service_time.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones and the block I/O (disk) ones, disk_service_duration, disk_io, disk_operations, disk_service_time and disk_flush.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",

@@ -46,6 +46,7 @@ type statMetricsReporter struct {
 	diskIO                   *Expirer[prometheus.Counter]
 	diskOperations           *Expirer[prometheus.Counter]
 	diskServiceTime          *Expirer[prometheus.Counter]
+	diskFlushDuration        *kernelHistogramVec
 
 	promConnect *connector.PrometheusManager
 
@@ -58,6 +59,7 @@ type statMetricsReporter struct {
 	diskIOAttrs                   []attributes.Field[*ebpf.Stat, string]
 	diskOperationsAttrs           []attributes.Field[*ebpf.Stat, string]
 	diskServiceTimeAttrs          []attributes.Field[*ebpf.Stat, string]
+	diskFlushDurationAttrs        []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -240,6 +242,19 @@ func newStatsReporter(
 		register = append(register, mr.diskServiceTime)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskFlush() {
+		log.Debug("registering stat disk flush duration metric")
+
+		mr.diskFlushDurationAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskFlushDuration))
+
+		mr.diskFlushDuration = newKernelHistogramVec(attributes.StatDiskFlushDuration.Prom,
+			"measures the duration of the cache flushes of block devices, from their last issue to the device until their completion, in seconds",
+			export.DiskLatencyBounds, labelNames(mr.diskFlushDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.diskFlushDuration)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -263,10 +278,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPSuccessfulConnections(stat)
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
-			r.observeDiskServiceDuration(stat)
-			r.observeDiskIO(stat)
-			r.observeDiskOperations(stat)
-			r.observeDiskServiceTime(stat)
+			r.observeDisk(stat)
 		}
 	}
 }
@@ -311,15 +323,32 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 		Metric.Add(float64(stat.TCPIo.Bytes))
 }
 
+// observeDisk observes the block requests of a stat in the metrics of their operation: the reads
+// and writes in the metrics of the transfers, the cache flushes in their own histogram
+func (r *statMetricsReporter) observeDisk(stat *ebpf.Stat) {
+	if stat.DiskIO == nil {
+		return
+	}
+	switch stat.DiskIO.Op {
+	case ebpf.CodeDiskOpRead, ebpf.CodeDiskOpWrite:
+		r.observeDiskServiceDuration(stat)
+		r.observeDiskIO(stat)
+		r.observeDiskOperations(stat)
+		r.observeDiskServiceTime(stat)
+	case ebpf.CodeDiskOpFlush:
+		r.observeDiskFlushDuration(stat)
+	}
+}
+
 func (r *statMetricsReporter) observeDiskServiceDuration(stat *ebpf.Stat) {
-	if r.diskServiceDuration == nil || stat.DiskIO == nil || stat.DiskIO.Latency == nil {
+	if r.diskServiceDuration == nil || stat.DiskIO.Latency == nil {
 		return
 	}
 	r.diskServiceDuration.observe(labelValues(stat, r.diskServiceDurationAttrs), stat.DiskIO.Latency)
 }
 
 func (r *statMetricsReporter) observeDiskIO(stat *ebpf.Stat) {
-	if r.diskIO == nil || stat.DiskIO == nil || stat.DiskIO.Bytes == 0 {
+	if r.diskIO == nil || stat.DiskIO.Bytes == 0 {
 		return
 	}
 	r.diskIO.WithLabelValues(labelValues(stat, r.diskIOAttrs)...).
@@ -327,7 +356,7 @@ func (r *statMetricsReporter) observeDiskIO(stat *ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observeDiskOperations(stat *ebpf.Stat) {
-	if r.diskOperations == nil || stat.DiskIO == nil {
+	if r.diskOperations == nil {
 		return
 	}
 	r.diskOperations.WithLabelValues(labelValues(stat, r.diskOperationsAttrs)...).
@@ -335,9 +364,16 @@ func (r *statMetricsReporter) observeDiskOperations(stat *ebpf.Stat) {
 }
 
 func (r *statMetricsReporter) observeDiskServiceTime(stat *ebpf.Stat) {
-	if r.diskServiceTime == nil || stat.DiskIO == nil {
+	if r.diskServiceTime == nil {
 		return
 	}
 	r.diskServiceTime.WithLabelValues(labelValues(stat, r.diskServiceTimeAttrs)...).
 		Metric.Add(stat.DiskIO.Time)
+}
+
+func (r *statMetricsReporter) observeDiskFlushDuration(stat *ebpf.Stat) {
+	if r.diskFlushDuration == nil || stat.DiskIO.Latency == nil {
+		return
+	}
+	r.diskFlushDuration.observe(labelValues(stat, r.diskFlushDurationAttrs), stat.DiskIO.Latency)
 }

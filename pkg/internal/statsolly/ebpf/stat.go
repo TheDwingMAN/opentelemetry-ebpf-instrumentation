@@ -96,6 +96,7 @@ type DiskOpCode uint8
 const (
 	CodeDiskOpRead  = DiskOpCode(StatsDiskOpDiskOpRead)
 	CodeDiskOpWrite = DiskOpCode(StatsDiskOpDiskOpWrite)
+	CodeDiskOpFlush = DiskOpCode(StatsDiskOpDiskOpFlush)
 )
 
 // Stat contains accumulated metrics from a stat, with extra metadata

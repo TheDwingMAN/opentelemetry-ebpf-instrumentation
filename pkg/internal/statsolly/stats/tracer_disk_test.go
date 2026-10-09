@@ -164,6 +164,22 @@ func TestDiskReaderForwardsCounters(t *testing.T) {
 	assert.Equal(t, uint64(2*65536), stats[0].DiskIO.Bytes)
 }
 
+// The cache flushes are forwarded as their own operation, without bytes
+func TestDiskReaderForwardsFlushes(t *testing.T) {
+	flushKey := ebpf.StatsDiskIoKeyT{Major: 8, Minor: 0, Op: ebpf.StatsDiskOpDiskOpFlush}
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
+		flushKey: accum([]uint64{0, 0, 2}, []uint64{0, 0, 30_000_000}),
+	}}
+	r := newTestDiskReader(src)
+
+	stats := r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, ebpf.CodeDiskOpFlush, stats[0].DiskIO.Op)
+	assert.Equal(t, uint64(2), stats[0].DiskIO.Operations)
+	assertLatency(t, stats[0].DiskIO.Latency, 0.06, 0, 0, 2)
+	assert.Zero(t, stats[0].DiskIO.Bytes)
+}
+
 // Failed requests are counted and timed, but transferred no bytes
 func TestDiskReaderForwardsFailedRequestsWithoutBytes(t *testing.T) {
 	failed := writeKey(8, 0)
@@ -617,10 +633,16 @@ func TestMultipathPathsAreRefreshedWithTheDeviceNames(t *testing.T) {
 func TestDiskReaderReportsNoLatencyOfMultipathPaths(t *testing.T) {
 	devices := fakeMultipathHost(t)
 	written := accum([]uint64{2, 1, 0}, []uint64{500_000, 5_000_000, 0})
+	flushed := accum([]uint64{0, 1, 0}, []uint64{0, 5_000_000, 0})
+	flushKey := func(major, minor uint32) ebpf.StatsDiskIoKeyT {
+		return ebpf.StatsDiskIoKeyT{Major: major, Minor: minor, Op: ebpf.StatsDiskOpDiskOpFlush}
+	}
 	entries := map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
 		writeKey(8, 16):  written, // sdb, a path of dm-1
 		writeKey(253, 1): written, // dm-1
 		writeKey(259, 1): written, // nvme1c0n1, a path of nvme1n1
+		flushKey(8, 16):  flushed, // the clone of a flush of dm-1 on sdb
+		flushKey(253, 1): flushed,
 	}
 	type deviceOp struct {
 		device string
@@ -641,6 +663,8 @@ func TestDiskReaderReportsNoLatencyOfMultipathPaths(t *testing.T) {
 	assert.InDelta(t, 2*0.0005+0.005, stats[deviceOp{"sdb", ebpf.CodeDiskOpWrite}].Time, 1e-12)
 	assert.NotNil(t, stats[deviceOp{"dm-1", ebpf.CodeDiskOpWrite}].Latency)
 	assert.NotNil(t, stats[deviceOp{"nvme1c0n1", ebpf.CodeDiskOpWrite}].Latency, "the bios of the head are not measured")
+	assert.Nil(t, stats[deviceOp{"sdb", ebpf.CodeDiskOpFlush}].Latency, "the multipath device reports the same flushes")
+	assert.NotNil(t, stats[deviceOp{"dm-1", ebpf.CodeDiskOpFlush}].Latency)
 }
 
 func TestDeviceMapperNames(t *testing.T) {
