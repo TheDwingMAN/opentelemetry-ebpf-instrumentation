@@ -77,28 +77,21 @@ func (s *storageProbes) loadOrDisable(load func(toDisable []string) error, tcpTo
 	return nil
 }
 
-// attach attaches the loaded storage probes, and disables the features whose probes can't be
-// attached.
-func (s *storageProbes) attach(objects *StatsObjects) []io.Closer {
-	var closables []io.Closer
-	if s.disk {
-		// the completions are attached before the issues, so that no request is timed without
-		// its completion being measured
-		issue := objects.ObiStatsRawTpBlockRqIssue
-		if s.layout.issueHasQueueArg {
-			issue = objects.ObiStatsRawTpBlockRqIssueLegacy
-		}
-		links, err := attachRawTracepoints([]probe{
-			{name: RawTracepointBlockRqComplete, program: objects.ObiStatsRawTpBlockRqComplete},
-			{name: RawTracepointBlockRqIssue, program: issue},
-		})
-		if err != nil {
-			s.disk = false
-			s.disable(featureDiskRequests, err)
-		}
-		closables = append(closables, links...)
+// attach attaches the loaded storage probes, or none of them
+func (s *storageProbes) attach(objects *StatsObjects) ([]io.Closer, error) {
+	if !s.disk {
+		return nil, nil
 	}
-	return closables
+	// the completions are attached before the issues, so that no request is timed without its
+	// completion being measured
+	issue := objects.ObiStatsRawTpBlockRqIssue
+	if s.layout.issueHasQueueArg {
+		issue = objects.ObiStatsRawTpBlockRqIssueLegacy
+	}
+	return attachRawTracepoints([]probe{
+		{name: RawTracepointBlockRqComplete, program: objects.ObiStatsRawTpBlockRqComplete},
+		{name: RawTracepointBlockRqIssue, program: issue},
+	})
 }
 
 // attachRawTracepoints attaches raw tracepoint programs, in order, or none of them

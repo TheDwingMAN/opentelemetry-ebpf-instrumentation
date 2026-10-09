@@ -154,11 +154,23 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
 
+	storageLinks, err := storage.attach(&objects)
+	if err != nil {
+		// as when they can't be loaded, the stats programs are loaded again without the storage
+		// ones, so that a disabled feature doesn't keep its programs and full-size maps
+		storage.disableAll(err)
+		objects.Close()
+		if err := load(slices.Concat(tcpToDisable, storage.programsToDisable())); err != nil {
+			return nil, fmt.Errorf("loading stats eBPF spec without the storage programs: %w", err)
+		}
+	}
+
 	closables, err := attachTCPProbes(&objects, features, connRoleUsed)
 	if err != nil {
+		closeAll(storageLinks)
 		return nil, err
 	}
-	closables = append(closables, storage.attach(&objects)...)
+	closables = append(closables, storageLinks...)
 
 	return &StatsFetcher{
 		log:                   tlog,
