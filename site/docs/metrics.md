@@ -1329,9 +1329,9 @@ Ratio [0-1] between the unread messages of an internal Go channel and its total 
 | --- | --- | --- | --- | --- | --- |
 | `subscriber` | string | `required` | development | Name of the pipeline stage consuming the internal queue, as given to msg.SubscriberName when the stage subscribed. Subscribers that do not provide a name fall back to the name of the queue they subscribed to. | discover.CriteriaMatcher; traceAttacher |
 
-## `obi.stat.disk.operation.duration`
+## `obi.stat.disk.service.duration`
 
-Device service time of the block reads and writes: from the issue of each request to the device until its completion, per block device, direction and outcome. It excludes the wait in the I/O scheduler. Two cases are timed otherwise: a write with a cache flush (a journal commit) until the end of its flush sequence, and the empty flush write of a file sync, which is never issued, from its allocation. Cache flushes, discards and the I/O of bio-based devices (LVM, md RAID, NVMe native multipath heads) are not measured. It is not reported on the paths of dm-multipath devices: the multipath device reports the same I/O.
+Device service time of the block reads and writes: each request is timed from its last issue to the device until its final completion, so requeues and retries restart it, per block device, direction and outcome. It excludes the wait in the I/O scheduler. Two cases are timed otherwise: a write with a cache flush (a journal commit) until the end of its flush sequence, and the empty flush write of a file sync, which is never issued, from its allocation. Cache flushes, discards and the I/O of bio-based devices (LVM, md RAID, NVMe native multipath heads) are not measured. It is not reported on the paths of dm-multipath devices: the multipath device reports the same I/O.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |

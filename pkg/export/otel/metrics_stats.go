@@ -97,7 +97,7 @@ type statMetricsExporter struct {
 	tcpRetransmits           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	tcpIo                    *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	tcpSuccessfulConnections *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
-	diskOperationDuration    *kernelHistogram
+	diskServiceDuration      *kernelHistogram
 	kernelHistograms         *kernelHistogramProducer
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
@@ -239,9 +239,9 @@ func newStatMetricsExporter(
 		nme.tcpSuccessfulConnections = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, tcpSuccessfulConnections, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
-	if cfg.CommonCfg.Features.StatsDiskOperationDuration() {
-		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskOperationDuration))
-		nme.diskOperationDuration = kernelHistograms.histogram(attributes.StatDiskOperationDuration,
+	if cfg.CommonCfg.Features.StatsDiskServiceDuration() {
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskServiceDuration))
+		nme.diskServiceDuration = kernelHistograms.histogram(attributes.StatDiskServiceDuration,
 			export.DiskLatencyBounds, attrs)
 	}
 
@@ -273,7 +273,7 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				tcpIo.Add(ctx, int64(v.TCPIo.Bytes), metric2.WithAttributeSet(attrs))
 			}
 			if v.DiskIO != nil {
-				me.kernelHistograms.record(me.diskOperationDuration, v, v.DiskIO.Latency)
+				me.kernelHistograms.record(me.diskServiceDuration, v, v.DiskIO.Latency)
 			}
 		}
 	}

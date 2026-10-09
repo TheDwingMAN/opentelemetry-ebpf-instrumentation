@@ -42,7 +42,7 @@ type statMetricsReporter struct {
 	tcpRetransmits           *Expirer[prometheus.Counter]
 	tcpIo                    *Expirer[prometheus.Counter]
 	tcpSuccessfulConnections *Expirer[prometheus.Counter]
-	diskOperationDuration    *kernelHistogramVec
+	diskServiceDuration      *kernelHistogramVec
 
 	promConnect *connector.PrometheusManager
 
@@ -51,7 +51,7 @@ type statMetricsReporter struct {
 	tcpRetransmitsAttrs           []attributes.Field[*ebpf.Stat, string]
 	tcpIoAttrs                    []attributes.Field[*ebpf.Stat, string]
 	tcpSuccessfulConnectionsAttrs []attributes.Field[*ebpf.Stat, string]
-	diskOperationDurationAttrs    []attributes.Field[*ebpf.Stat, string]
+	diskServiceDurationAttrs      []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -179,17 +179,17 @@ func newStatsReporter(
 		register = append(register, mr.tcpSuccessfulConnections)
 	}
 
-	if cfg.CommonCfg.Features.StatsDiskOperationDuration() {
-		log.Debug("registering stat disk operation duration metric")
+	if cfg.CommonCfg.Features.StatsDiskServiceDuration() {
+		log.Debug("registering stat disk service duration metric")
 
-		mr.diskOperationDurationAttrs = attributes.PrometheusGetters(
+		mr.diskServiceDurationAttrs = attributes.PrometheusGetters(
 			ebpf.StatStringGetters,
-			provider.For(attributes.StatDiskOperationDuration))
+			provider.For(attributes.StatDiskServiceDuration))
 
-		mr.diskOperationDuration = newKernelHistogramVec(attributes.StatDiskOperationDuration.Prom,
-			"measures the duration of block I/O requests, from their issue to the device until their completion, in seconds",
-			export.DiskLatencyBounds, labelNames(mr.diskOperationDurationAttrs), cfg.Config.TTL)
-		register = append(register, mr.diskOperationDuration)
+		mr.diskServiceDuration = newKernelHistogramVec(attributes.StatDiskServiceDuration.Prom,
+			"measures the service time of block I/O requests, from their last issue to the device until their final completion, in seconds",
+			export.DiskLatencyBounds, labelNames(mr.diskServiceDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.diskServiceDuration)
 	}
 
 	if cfg.Config.Registry != nil {
@@ -215,7 +215,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPSuccessfulConnections(stat)
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
-			r.observeDiskOperationDuration(stat)
+			r.observeDiskServiceDuration(stat)
 		}
 	}
 }
@@ -260,11 +260,11 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 		Metric.Add(float64(stat.TCPIo.Bytes))
 }
 
-func (r *statMetricsReporter) observeDiskOperationDuration(stat *ebpf.Stat) {
+func (r *statMetricsReporter) observeDiskServiceDuration(stat *ebpf.Stat) {
 	if stat.DiskIO == nil {
 		return
 	}
-	observeLatencyIn(r.diskOperationDuration, r.diskOperationDurationAttrs, stat, stat.DiskIO.Latency)
+	observeLatencyIn(r.diskServiceDuration, r.diskServiceDurationAttrs, stat, stat.DiskIO.Latency)
 }
 
 func observeLatencyIn(histogram *kernelHistogramVec, attrs []attributes.Field[*ebpf.Stat, string], stat *ebpf.Stat, latency *ebpf.LatencyHistogram) {

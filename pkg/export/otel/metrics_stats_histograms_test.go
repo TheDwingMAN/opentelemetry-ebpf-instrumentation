@@ -57,7 +57,7 @@ func produceHistograms(t *testing.T, p *kernelHistogramProducer) []metricdata.Hi
 func TestKernelHistogramProducerAddsTheRequestsOfEachBucketAtOnce(t *testing.T) {
 	fixedClock(t)
 	p := newKernelHistogramProducer(metricdata.CumulativeTemporality, time.Hour)
-	h := p.histogram(attributes.StatDiskOperationDuration, []float64{0.001, 0.01}, deviceAttribute)
+	h := p.histogram(attributes.StatDiskServiceDuration, []float64{0.001, 0.01}, deviceAttribute)
 
 	p.record(h, diskStat("sda"), latency(0.0005*3+0.001*2+0.5*1000, 5, 0, 1000))
 	p.record(h, diskStat("sda"), latency(0.005*4, 0, 4, 0))
@@ -69,7 +69,7 @@ func TestKernelHistogramProducerAddsTheRequestsOfEachBucketAtOnce(t *testing.T) 
 	require.Len(t, scopes, 1)
 	assert.Equal(t, statScopeName, scopes[0].Scope.Name)
 	metric := scopes[0].Metrics[0]
-	assert.Equal(t, attributes.StatDiskOperationDuration.OTEL, metric.Name)
+	assert.Equal(t, attributes.StatDiskServiceDuration.OTEL, metric.Name)
 	assert.Equal(t, "s", metric.Unit)
 
 	points := produceHistograms(t, p)
@@ -94,7 +94,7 @@ func TestKernelHistogramProducerTemporality(t *testing.T) {
 		{metricdata.DeltaTemporality, []uint64{1, 0}, start.Add(time.Minute)},
 	} {
 		p := newKernelHistogramProducer(tc.temporality, time.Hour)
-		h := p.histogram(attributes.StatDiskOperationDuration, []float64{0.001}, deviceAttribute)
+		h := p.histogram(attributes.StatDiskServiceDuration, []float64{0.001}, deviceAttribute)
 		p.record(h, diskStat("sda"), latency(0.001, 2, 0))
 		advance(time.Minute)
 		require.Len(t, produceHistograms(t, p), 1)
@@ -119,7 +119,7 @@ func TestKernelHistogramProducerTemporality(t *testing.T) {
 func TestKernelHistogramProducerDropsTheSeriesNotUpdatedDuringTheTTL(t *testing.T) {
 	advance := fixedClock(t)
 	p := newKernelHistogramProducer(metricdata.CumulativeTemporality, time.Minute)
-	h := p.histogram(attributes.StatDiskOperationDuration, []float64{0.001}, deviceAttribute)
+	h := p.histogram(attributes.StatDiskServiceDuration, []float64{0.001}, deviceAttribute)
 	p.record(h, diskStat("sda"), latency(0.0005, 1, 0))
 	p.record(h, diskStat("sdb"), latency(0.0005, 1, 0))
 	require.Len(t, produceHistograms(t, p), 2)
@@ -144,7 +144,7 @@ func TestKernelHistogramProducerOmitsTheErrorTypeOfSuccessfulRequests(t *testing
 		fields = append(fields, attributes.Field[*ebpf.Stat, attribute.KeyValue]{ExposedName: string(name.OTEL()), Get: get})
 	}
 	p := newKernelHistogramProducer(metricdata.CumulativeTemporality, time.Hour)
-	h := p.histogram(attributes.StatDiskOperationDuration, []float64{0.001}, fields)
+	h := p.histogram(attributes.StatDiskServiceDuration, []float64{0.001}, fields)
 
 	failed := diskStat("sda")
 	failed.DiskIO.ErrorType = "EIO"

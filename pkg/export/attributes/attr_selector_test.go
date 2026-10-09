@@ -224,7 +224,7 @@ func TestDefault_DBServerDuration(t *testing.T) {
 	}, p.For(DBServerDuration))
 }
 
-func TestDefault_StatDiskOperationDuration(t *testing.T) {
+func TestDefault_StatDiskServiceDuration(t *testing.T) {
 	// block I/O stats have no connection endpoints, so no src/dst attributes even with k8s enabled
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)
@@ -235,18 +235,18 @@ func TestDefault_StatDiskOperationDuration(t *testing.T) {
 		attr.DiskStacked,
 		attr.DiskVolumeName,
 		attr.SystemDevice,
-	}, p.For(StatDiskOperationDuration), "the cluster name, as the TCP stats have it")
+	}, p.For(StatDiskServiceDuration), "the cluster name, as the TCP stats have it")
 
 	p, err = NewAttrSelector(0, &SelectorConfig{})
 	require.NoError(t, err)
-	assert.NotContains(t, p.For(StatDiskOperationDuration), attr.K8sClusterName, "outside Kubernetes")
+	assert.NotContains(t, p.For(StatDiskServiceDuration), attr.K8sClusterName, "outside Kubernetes")
 }
 
 func TestStatDiskMetricsNameTheDeviceMapperDevices(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)
 	for _, metric := range []Name{
-		StatDiskOperationDuration,
+		StatDiskServiceDuration,
 	} {
 		assert.Contains(t, p.For(metric), attr.DiskVolumeName, metric.OTEL)
 	}

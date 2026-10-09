@@ -56,7 +56,7 @@ const (
 	FeatureGraph
 	FeatureApplicationRuntime
 	FeatureEBPF
-	FeatureStatsDiskOperationDuration
+	FeatureStatsDiskServiceDuration
 	// FeatureAll enables all the features but the storage stat ones, which must be named
 	FeatureAll = Features(^uint(0)) &^ featureStatsStorage
 )
@@ -69,11 +69,11 @@ const FeatureStats = FeatureStatsTCPRtt | FeatureStatsTCPFailedConnections | Fea
 
 // FeatureStatsDisk groups the block I/O stat metrics. They are not part of the `stats` aggregate:
 // the block probes fire on every block request, so they have to be enabled explicitly.
-const FeatureStatsDisk = FeatureStatsDiskOperationDuration
+const FeatureStatsDisk = FeatureStatsDiskServiceDuration
 
 // featureStatsDiskRequests are the block I/O stat metrics that the block probes measure, on every
 // block request
-const featureStatsDiskRequests = FeatureStatsDiskOperationDuration
+const featureStatsDiskRequests = FeatureStatsDiskServiceDuration
 
 // featureStatsStorage are the storage stat features, which `all` and `*` don't enable: their probes
 // fire on every block request, so they have to be named.
@@ -88,7 +88,7 @@ var FeatureMapper = map[string]Features{
 	"stats_tcp_retransmits":            FeatureStatsTCPRetransmits,
 	"stats_tcp_io":                     FeatureStatsTCPIo,
 	"stats_tcp_successful_connections": FeatureStatsTCPSuccessfulConnections,
-	"stats_disk_operation_duration":    FeatureStatsDiskOperationDuration,
+	"stats_disk_service_duration":      FeatureStatsDiskServiceDuration,
 	"network":                          FeatureNetwork,
 	"network_inter_zone":               FeatureNetworkInterZone,
 	"network_flow_packets":             FeatureNetworkFlowPackets,
@@ -418,8 +418,8 @@ func (f Features) StatsDisk() bool {
 	return f.any(featureStatsDiskRequests)
 }
 
-func (f Features) StatsDiskOperationDuration() bool {
-	return f.any(FeatureStatsDiskOperationDuration)
+func (f Features) StatsDiskServiceDuration() bool {
+	return f.any(FeatureStatsDiskServiceDuration)
 }
 
 func (f Features) NetworkInterZone() bool {

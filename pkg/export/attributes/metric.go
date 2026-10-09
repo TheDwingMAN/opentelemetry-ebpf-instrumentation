@@ -678,9 +678,9 @@ var (
 		OTEL:    "obi.stat.tcp.successful.connections",
 		Type:    InstrumentCounter,
 	})
-	StatDiskOperationDuration = metric(Name{
-		Section: "obi.stat.disk.operation.duration",
-		OTEL:    "obi.stat.disk.operation.duration",
+	StatDiskServiceDuration = metric(Name{
+		Section: "obi.stat.disk.service.duration",
+		OTEL:    "obi.stat.disk.service.duration",
 		Unit:    "s",
 		Type:    InstrumentHistogram,
 	})

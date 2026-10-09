@@ -2515,8 +2515,8 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsTCPRetransmits
 		case statsFeatureTCPIo:
 			out |= export.FeatureStatsTCPIo
-		case statsFeatureDiskOperationDuration:
-			out |= export.FeatureStatsDiskOperationDuration
+		case statsFeatureDiskServiceDuration:
+			out |= export.FeatureStatsDiskServiceDuration
 		}
 	}
 	return out

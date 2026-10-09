@@ -32,7 +32,7 @@ func TestStat_GoDiskStatMetrics(t *testing.T) {
 	compose.Env = append(compose.Env, `OTEL_EBPF_CONFIG_SUFFIX=-go-stat-metrics`, `PROM_CONFIG_SUFFIX=-promscrape-otel`)
 	require.NoError(t, err)
 	require.NoError(t, compose.Up())
-	t.Run("Go Stat Metrics disk operation duration tests", testStatMetricsDiskOperationDuration)
+	t.Run("Go Stat Metrics disk service duration tests", testStatMetricsDiskServiceDuration)
 	runWeaverValidation(t)
 	require.NoError(t, compose.Close())
 }

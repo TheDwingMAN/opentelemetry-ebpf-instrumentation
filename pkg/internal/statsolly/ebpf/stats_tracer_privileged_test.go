@@ -77,7 +77,7 @@ func TestStorageMapsOfDisabledFeatures(t *testing.T) {
 		assert.Equal(t, want, entries, "TCP only: %s", name)
 	}
 
-	for name, entries := range load(export.FeatureStatsDiskOperationDuration) {
+	for name, entries := range load(export.FeatureStatsDiskServiceDuration) {
 		want := spec.Maps[name].MaxEntries
 		assert.Equal(t, want, entries, "disk: %s", name)
 	}

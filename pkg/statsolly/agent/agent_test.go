@@ -17,7 +17,7 @@ import (
 func TestProbedFeatures(t *testing.T) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	features := export.FeatureStatsTCPRtt | export.FeatureStatsDiskOperationDuration
+	features := export.FeatureStatsTCPRtt | export.FeatureStatsDiskServiceDuration
 
 	assert.Equal(t, features, probedFeatures(log, features, false))
 	assert.Equal(t, export.FeatureStatsTCPRtt, probedFeatures(log, export.FeatureStatsTCPRtt, true))

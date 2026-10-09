@@ -1113,19 +1113,19 @@ discovery:
   instrument:
     - exe_path: "/srv/*"
 metrics:
-  features: [application, stats_disk_operation_duration]
+  features: [application, stats_disk_service_duration]
 prometheus_export:
   port: 9090
 `))
 	require.NoError(t, err)
 	doc, ext, err := schema.ParseStandaloneYAML(output)
 	require.NoError(t, err)
-	require.Contains(t, ext.Capture.Network.Stats.Features, "disk_operation_duration")
+	require.Contains(t, ext.Capture.Network.Stats.Features, "disk_service_duration")
 
 	roundTripped, err := convert.DocumentToRuntime(doc)
 	require.NoError(t, err)
 	features := roundTripped.Metrics.Features
-	require.True(t, features.StatsDiskOperationDuration())
+	require.True(t, features.StatsDiskServiceDuration())
 }
 
 func TestMigrateConfigExpandsGlobalRoutes(t *testing.T) {

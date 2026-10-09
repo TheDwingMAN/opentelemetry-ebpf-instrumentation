@@ -219,7 +219,7 @@ func fakeIoRecord(srcPort, dstPort uint16, direction uint8, bytes uint32) *ebpf.
 }
 
 func TestDiskStats(t *testing.T) {
-	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskOperationDuration)
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsDiskServiceDuration)
 
 	diskEvents <- []*ebpf.Stat{
 		fakeDiskRecord("nvme0n1", ebpf.CodeDiskOpWrite, "", fakeLatency(0.0005, 0.0005, 0.0005, 0.004, 0.004)),
@@ -250,18 +250,18 @@ func TestDiskStats(t *testing.T) {
 	}
 
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		disk := someBuckets(scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_duration_seconds"))
+		disk := someBuckets(scrapeDiskMetrics(ct, promURL, "obi_stat_disk_service_duration_seconds"))
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
-			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 4, Labels: withLe(okWrite, "0.001")},
-			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 6, Labels: withLe(okWrite, "0.01")},
-			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 6, Labels: withLe(okWrite, "+Inf")},
-			{Name: "obi_stat_disk_operation_duration_seconds_count", Value: 6, Labels: okWrite},
-			{Name: "obi_stat_disk_operation_duration_seconds_sum", Value: 0.0005*4 + 0.004*2, Labels: okWrite},
-			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 0, Labels: withLe(failedWrite, "0.001")},
-			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 0, Labels: withLe(failedWrite, "0.01")},
-			{Name: "obi_stat_disk_operation_duration_seconds_bucket", Value: 1, Labels: withLe(failedWrite, "+Inf")},
-			{Name: "obi_stat_disk_operation_duration_seconds_count", Value: 1, Labels: failedWrite},
-			{Name: "obi_stat_disk_operation_duration_seconds_sum", Value: 0.02, Labels: failedWrite},
+			{Name: "obi_stat_disk_service_duration_seconds_bucket", Value: 4, Labels: withLe(okWrite, "0.001")},
+			{Name: "obi_stat_disk_service_duration_seconds_bucket", Value: 6, Labels: withLe(okWrite, "0.01")},
+			{Name: "obi_stat_disk_service_duration_seconds_bucket", Value: 6, Labels: withLe(okWrite, "+Inf")},
+			{Name: "obi_stat_disk_service_duration_seconds_count", Value: 6, Labels: okWrite},
+			{Name: "obi_stat_disk_service_duration_seconds_sum", Value: 0.0005*4 + 0.004*2, Labels: okWrite},
+			{Name: "obi_stat_disk_service_duration_seconds_bucket", Value: 0, Labels: withLe(failedWrite, "0.001")},
+			{Name: "obi_stat_disk_service_duration_seconds_bucket", Value: 0, Labels: withLe(failedWrite, "0.01")},
+			{Name: "obi_stat_disk_service_duration_seconds_bucket", Value: 1, Labels: withLe(failedWrite, "+Inf")},
+			{Name: "obi_stat_disk_service_duration_seconds_count", Value: 1, Labels: failedWrite},
+			{Name: "obi_stat_disk_service_duration_seconds_sum", Value: 0.02, Labels: failedWrite},
 		}, disk)
 	}, timeout, 100*time.Millisecond)
 }
@@ -279,7 +279,7 @@ func TestDiskStatsWithoutDiskProbes(t *testing.T) {
 		},
 		cfg: &obi.Config{
 			Prometheus: prom.PrometheusConfig{Registry: registry, Path: "/metrics", TTL: time.Hour},
-			Metrics:    perapp.GlobalMetricsConfig{Features: export.FeatureStatsTCPRtt | export.FeatureStatsDiskOperationDuration},
+			Metrics:    perapp.GlobalMetricsConfig{Features: export.FeatureStatsTCPRtt | export.FeatureStatsDiskServiceDuration},
 		},
 	}
 
@@ -337,7 +337,7 @@ func TestStorageStatsUnderDynamicSelection(t *testing.T) {
 				},
 				cfg: &obi.Config{
 					Prometheus: prom.PrometheusConfig{Registry: prometheus.NewRegistry(), Path: "/metrics", TTL: time.Hour},
-					Metrics:    perapp.GlobalMetricsConfig{Features: export.FeatureStatsTCPRtt | export.FeatureStatsDiskOperationDuration},
+					Metrics:    perapp.GlobalMetricsConfig{Features: export.FeatureStatsTCPRtt | export.FeatureStatsDiskServiceDuration},
 				},
 			}
 
@@ -471,7 +471,7 @@ func fakeDiskRecord(device string, op ebpf.DiskOpCode, errorType string, latency
 // of the other
 func TestStatFiltersOfBothFamilies(t *testing.T) {
 	ringBuf, diskEvents, promURL := startStatsPipeline(t,
-		export.FeatureStatsTCPRtt|export.FeatureStatsTCPFailedConnections|export.FeatureStatsDiskOperationDuration,
+		export.FeatureStatsTCPRtt|export.FeatureStatsTCPFailedConnections|export.FeatureStatsDiskServiceDuration,
 		func(s *Stats) {
 			s.cfg.Filters.Stats = filter.AttributeFamilyConfig{
 				"reason":        {NotMatch: "unknown"},
@@ -492,7 +492,7 @@ func TestStatFiltersOfBothFamilies(t *testing.T) {
 		// the RTT stats have no reason, so a filter on it drops them
 		assert.Empty(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_tcp_rtt"))
 		assert.Len(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_tcp_failed_connections_total"), 1)
-		operations := scrapeDiskMetrics(ct, promURL, "obi_stat_disk_operation_duration_seconds_count")
+		operations := scrapeDiskMetrics(ct, promURL, "obi_stat_disk_service_duration_seconds_count")
 		if assert.Len(ct, operations, 1) {
 			assert.Equal(ct, "sda", operations[0].Labels["system_device"])
 		}

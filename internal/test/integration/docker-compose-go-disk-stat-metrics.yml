@@ -33,7 +33,7 @@ services:
       OTEL_EBPF_LOG_LEVEL: "DEBUG"
       OTEL_EBPF_BPF_DEBUG: "TRUE"
       OTEL_EBPF_HOSTNAME: "obi"
-      OTEL_EBPF_METRICS_FEATURES: "stats_disk_operation_duration"
+      OTEL_EBPF_METRICS_FEATURES: "stats_disk_service_duration"
     depends_on:
       otelcol:
         condition: service_started

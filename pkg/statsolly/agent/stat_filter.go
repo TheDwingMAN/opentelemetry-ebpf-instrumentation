@@ -25,7 +25,7 @@ var tcpStatSections = []attributes.Section{
 // storageStatMetrics are the metrics that report the storage stats of each type
 var storageStatMetrics = map[ebpf.StatType][]attributes.Name{
 	ebpf.StatTypeDiskIO: {
-		attributes.StatDiskOperationDuration,
+		attributes.StatDiskServiceDuration,
 	},
 }
 

@@ -143,26 +143,26 @@ func assertHistogramBounds(t require.TestingT, buckets []promtest.Result, bounds
 	}
 }
 
-// testStatMetricsDiskOperationDuration checks the latency histogram of the successful block I/O of
+// testStatMetricsDiskServiceDuration checks the latency histogram of the successful block I/O of
 // the node, which the O_DIRECT I/O of the disk-io container keeps going: its attributes and its
 // buckets
-func testStatMetricsDiskOperationDuration(t *testing.T) {
+func testStatMetricsDiskServiceDuration(t *testing.T) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
 	for _, direction := range []string{"read", "write"} {
 		selector := `{disk_io_direction="` + direction + `",error_type=""}`
 		require.EventuallyWithT(t, func(ct *assert.CollectT) {
-			counts, err := pq.Query(`obi_stat_disk_operation_duration_seconds_count` + selector + ` > 0`)
+			counts, err := pq.Query(`obi_stat_disk_service_duration_seconds_count` + selector + ` > 0`)
 			require.NoError(ct, err)
 			enoughPromResults(ct, counts)
 			for _, res := range counts {
 				assertDiskStatLabels(ct, res.Metric, diskIOLabels(direction))
 			}
 
-			sums, err := pq.Query(`obi_stat_disk_operation_duration_seconds_sum` + selector + ` > 0`)
+			sums, err := pq.Query(`obi_stat_disk_service_duration_seconds_sum` + selector + ` > 0`)
 			require.NoError(ct, err)
 			enoughPromResults(ct, sums)
 
-			buckets, err := pq.Query(`obi_stat_disk_operation_duration_seconds_bucket` + selector)
+			buckets, err := pq.Query(`obi_stat_disk_service_duration_seconds_bucket` + selector)
 			require.NoError(ct, err)
 			assertHistogramBounds(ct, buckets, export.DiskLatencyBounds)
 		}, testTimeout, 100*time.Millisecond)

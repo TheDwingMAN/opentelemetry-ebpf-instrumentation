@@ -1058,7 +1058,7 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 
 		require.ElementsMatch(t, []string{
 			"tcp_rtt",
-			"disk_operation_duration",
+			"disk_service_duration",
 		}, value(t, ext.Capture.Network, "stats", "features"))
 	})
 

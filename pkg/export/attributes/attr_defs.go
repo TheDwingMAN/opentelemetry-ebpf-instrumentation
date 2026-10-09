@@ -943,7 +943,7 @@ func getDefinitions(
 				attr.NetworkTCPHandshakeRole: false,
 			},
 		},
-		StatDiskOperationDuration.Section: {
+		StatDiskServiceDuration.Section: {
 			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskNodeKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,

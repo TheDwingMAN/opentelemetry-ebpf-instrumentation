@@ -58,11 +58,11 @@ func TestFeatureEnv_NetworkFlowPackets(t *testing.T) {
 func TestFeatureStatsDiskIsOptIn(t *testing.T) {
 	stats, err := LoadFeatures([]string{"stats"})
 	require.NoError(t, err)
-	assert.False(t, stats.StatsDiskOperationDuration(), "the stats aggregate must not enable disk stats")
+	assert.False(t, stats.StatsDiskServiceDuration(), "the stats aggregate must not enable disk stats")
 
-	disk, err := LoadFeatures([]string{"stats_disk_operation_duration"})
+	disk, err := LoadFeatures([]string{"stats_disk_service_duration"})
 	require.NoError(t, err)
-	assert.True(t, disk.StatsDiskOperationDuration())
+	assert.True(t, disk.StatsDiskServiceDuration())
 	assert.False(t, disk.StatsTCPRtt())
 	assert.True(t, disk.StatMetrics(), "a disk-only selection must still enable the stats pipeline")
 }
@@ -76,9 +76,9 @@ func TestFeatureAllDoesntEnableStorageStats(t *testing.T) {
 		assert.False(t, all.StatsDisk(), name)
 	}
 
-	allAndDisk, err := LoadFeatures([]string{"all", "stats_disk_operation_duration"})
+	allAndDisk, err := LoadFeatures([]string{"all", "stats_disk_service_duration"})
 	require.NoError(t, err)
-	assert.True(t, allAndDisk.StatsDiskOperationDuration(), "they can be named along with all")
+	assert.True(t, allAndDisk.StatsDiskServiceDuration(), "they can be named along with all")
 }
 
 func TestFeatureEnv_Separator(t *testing.T) {
@@ -376,8 +376,8 @@ func TestFeatureMarshalYAML(t *testing.T) {
 		},
 		{
 			name:     "disk stats are listed apart from the stats aggregate",
-			features: FeatureStats | FeatureStatsDiskOperationDuration,
-			expected: "features:\n    - stats\n    - stats_disk_operation_duration\n",
+			features: FeatureStats | FeatureStatsDiskServiceDuration,
+			expected: "features:\n    - stats\n    - stats_disk_service_duration\n",
 		},
 		{name: "all features", features: FeatureAll, expected: "features:\n    - all\n"},
 	} {
