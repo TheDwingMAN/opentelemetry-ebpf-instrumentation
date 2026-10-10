@@ -55,6 +55,41 @@ func TestFeatureEnv_NetworkFlowPackets(t *testing.T) {
 	assert.False(t, doc.Features.has(FeatureAll))
 }
 
+func TestFeatureStatsDiskIsOptIn(t *testing.T) {
+	stats, err := LoadFeatures([]string{"stats"})
+	require.NoError(t, err)
+	assert.False(t, stats.StatsDiskServiceDuration(), "the stats aggregate must not enable disk stats")
+
+	disk := FeatureStatsDiskServiceDuration
+	assert.False(t, disk.StatsTCPRtt())
+	assert.True(t, disk.StatMetrics(), "a disk-only selection must still enable the stats pipeline")
+}
+
+// The storage stats must be named: their probes fire on every block request
+func TestFeatureAllDoesntEnableStorageStats(t *testing.T) {
+	for _, name := range []string{"all", "*"} {
+		all, err := LoadFeatures([]string{name})
+		require.NoError(t, err)
+		assert.True(t, all.StatsTCPIo(), "%s enables the TCP stats", name)
+		assert.False(t, all.StatsDiskServiceDuration(), name)
+	}
+}
+
+// Config v1 is frozen: only Config v2 enables the disk stats, and a logged configuration shows
+// them with their Config v2 name
+func TestFeatureStatsDiskHasNoV1Name(t *testing.T) {
+	for _, name := range []string{"stats_disk_service_duration", "disk_service_duration"} {
+		_, err := LoadFeatures([]string{name})
+		require.ErrorContains(t, err, "unknown metrics feature", name)
+	}
+
+	out, err := yaml.Marshal(struct {
+		Features Features `yaml:"features"`
+	}{Features: FeatureStats | FeatureStatsDiskServiceDuration})
+	require.NoError(t, err)
+	assert.Equal(t, "features:\n    - stats\n    - disk_service_duration\n", string(out))
+}
+
 func TestFeatureEnv_Separator(t *testing.T) {
 	doc := struct {
 		Features Features `env:"FOO" envSeparator:","`

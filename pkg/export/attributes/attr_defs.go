@@ -5,6 +5,7 @@ package attributes // import "go.opentelemetry.io/obi/pkg/export/attributes"
 
 import (
 	"maps"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -125,6 +126,31 @@ func getDefinitions(
 			attr.DstZone:    false,
 		},
 		extraGroupAttributes[GroupStats],
+	)
+
+	// block I/O stat metrics attributes. Unlike the other stat metrics, they
+	// are not reported per connection, so they don't include statsAttributes
+	statsDiskAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:           false,
+			attr.SystemDevice:    true,
+			attr.DiskVolumeName:  true,
+			attr.DiskStacked:     true,
+			attr.DiskIODirection: true,
+		},
+		nil,
+	)
+
+	// the cluster of the node, for the stats of the devices, which are charged to no workload
+	statsDiskNodeKubeAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sClusterName: true,
+		},
+		nil,
 	)
 
 	// attributes to be reported exclusively for network metrics when
@@ -917,6 +943,12 @@ func getDefinitions(
 				attr.NetworkTCPHandshakeRole: false,
 			},
 		},
+		StatDiskServiceDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsDiskNodeKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
 
 		// span and service graph metrics don't yet implement attribute selection,
 		// but their values can still be filtered, so we list them here just to
@@ -970,6 +1002,35 @@ func AllAttributeNames(
 		}
 	}
 	return names
+}
+
+// SectionAttributeNames returns a set with all the attribute names that the metrics of the given
+// sections can report
+func SectionAttributeNames(
+	extraGroupAttributesCfg map[string][]attr.Name,
+	sections ...Section,
+) map[attr.Name]struct{} {
+	// -1 to enable all the metric group flags
+	definitions := getDefinitions(-1, NewGroupAttributes(extraGroupAttributesCfg))
+	names := map[attr.Name]struct{}{}
+	for _, section := range sections {
+		if definition, ok := definitions[section]; ok {
+			maps.Copy(names, definition.All())
+		}
+	}
+	return names
+}
+
+// StatSections returns the sections of the stat metrics, whose names start with obi.stat.
+func StatSections() []Section {
+	var sections []Section
+	// -1 to enable all the metric group flags
+	for section := range getDefinitions(-1, NewGroupAttributes(nil)) {
+		if strings.HasPrefix(string(section), "obi.stat.") {
+			sections = append(sections, section)
+		}
+	}
+	return sections
 }
 
 // DBResponseErrorAttr returns a database response error attribute if the attribute is selected, nil otherwise.

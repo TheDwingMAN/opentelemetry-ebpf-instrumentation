@@ -21,6 +21,15 @@ OBI's own meta-telemetry: the `target.info` / `host.info` family of per-target m
 | `obi.version` | string | development | OBI build version, e.g. the release tag the instrumenter was built from. Carried as a resource attribute on every signal. | v0.42.0 |
 | `source` | string | development | Identifier of the vendor / SDK that produced the metric. OBI sets this to `obi`. Used by the spanmetrics and service-graph emissions to disambiguate from collector-contrib connector output. | obi |
 
+## `registry.obi.disk`
+
+Attributes of OBI's block I/O (disk) statistics that the semantic conventions don't define.
+
+| Attribute | Type | Stability | Description | Examples |
+| --- | --- | --- | --- | --- |
+| `obi.disk.stacked` | boolean | development | Whether the block device (`system.device`) is built on other block devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop devices pass their I/O down to the devices below them, which report it too. To count the I/O once, add up the devices where it is `false`, and the dm-multipath devices, whose paths don't report their I/O. |  |
+| `obi.disk.volume.name` | string | development | Name of the device mapper device, as `/dev/mapper` and `dmsetup ls` list it, of `system.device` on the block I/O metrics. Omitted for the other devices, such as disks, md RAID and loop devices. OBI refreshes it every 30 seconds, so a new volume that the kernel gives the numbers of a removed one can carry the name of the removed one for up to 30 seconds. | mpatha |
+
 ## `registry.obi.exception`
 
 Exception attributes OBI's Go SDK tracer sets on relayed manual spans.

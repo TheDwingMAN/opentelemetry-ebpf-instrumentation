@@ -378,3 +378,49 @@ groups:
         requirement_level: opt_in
       - ref: service.peer.namespace
         requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.disk.service.duration
+    type: metric
+    metric_name: obi.stat.disk.service.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Device service time of the block reads and writes: each request is timed
+      from its last issue to the device until its final completion, so
+      requeues and retries restart it, per block device, direction and
+      outcome. It excludes the wait in the I/O scheduler. A write with a cache
+      flush (a journal commit) is timed until the end of its flush sequence. So
+      that the counts match /proc/diskstats, two kinds of requests are timed on
+      the kernel's clock instead of OBI's: the empty flush write of a file sync,
+      which is never issued, from the kernel's start of the request; and the
+      requests whose issue OBI didn't record (issued before OBI started,
+      evicted from its map of requests in flight, or issued while the issue
+      probe was already running on the CPU), from the kernel's issue time where
+      the queue records it, or else from the kernel's start of the request. A
+      request that the kernel didn't time either is not counted. Cache flushes,
+      discards and the I/O of bio-based devices (LVM, md RAID, NVMe native
+      multipath heads) are not measured. It is not reported on the paths of dm-multipath devices: the
+      multipath device reports the same I/O.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.volume.name
+        requirement_level:
+          conditionally_required: if the block device is a device mapper device
+      - ref: obi.disk.stacked
+        requirement_level: recommended
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: error.type
+        requirement_level:
+          conditionally_required: >
+            if the block I/O request failed: the errno name of its status, e.g.
+            `EIO`, `ETIMEDOUT`, `ENOLINK` (transport), `EREMOTEIO` (target),
+            `ENODATA` (medium), `EBADE` (reservation conflict) or `EILSEQ`
+            (protection), or `_OTHER`
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
