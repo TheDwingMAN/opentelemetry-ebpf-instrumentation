@@ -10,6 +10,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/connector"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
@@ -41,6 +42,7 @@ type statMetricsReporter struct {
 	tcpRetransmits           *Expirer[prometheus.Counter]
 	tcpIo                    *Expirer[prometheus.Counter]
 	tcpSuccessfulConnections *Expirer[prometheus.Counter]
+	diskServiceDuration      *kernelHistogramVec
 
 	promConnect *connector.PrometheusManager
 
@@ -49,6 +51,7 @@ type statMetricsReporter struct {
 	tcpRetransmitsAttrs           []attributes.Field[*ebpf.Stat, string]
 	tcpIoAttrs                    []attributes.Field[*ebpf.Stat, string]
 	tcpSuccessfulConnectionsAttrs []attributes.Field[*ebpf.Stat, string]
+	diskServiceDurationAttrs      []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -176,6 +179,19 @@ func newStatsReporter(
 		register = append(register, mr.tcpSuccessfulConnections)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskServiceDuration() {
+		log.Debug("registering stat disk service duration metric")
+
+		mr.diskServiceDurationAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskServiceDuration))
+
+		mr.diskServiceDuration = newKernelHistogramVec(attributes.StatDiskServiceDuration.Prom,
+			"measures the service time of block I/O requests, from their last issue to the device until their final completion, in seconds",
+			export.DiskLatencyBounds, labelNames(mr.diskServiceDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.diskServiceDuration)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -199,6 +215,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPSuccessfulConnections(stat)
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
+			r.observeDiskServiceDuration(stat)
 		}
 	}
 }
@@ -241,4 +258,11 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 	}
 	r.tcpIo.WithLabelValues(labelValues(stat, r.tcpIoAttrs)...).
 		Metric.Add(float64(stat.TCPIo.Bytes))
+}
+
+func (r *statMetricsReporter) observeDiskServiceDuration(stat *ebpf.Stat) {
+	if r.diskServiceDuration == nil || stat.DiskIO == nil || stat.DiskIO.Latency == nil {
+		return
+	}
+	r.diskServiceDuration.observe(labelValues(stat, r.diskServiceDurationAttrs), stat.DiskIO.Latency)
 }

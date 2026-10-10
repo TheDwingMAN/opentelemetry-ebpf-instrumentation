@@ -15,6 +15,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 
 	"go.opentelemetry.io/obi/pkg/buildinfo"
+	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	"go.opentelemetry.io/obi/pkg/export/otel/metric"
@@ -67,7 +68,11 @@ func createFilteredStatsResource(hostID string, attrSelector attributes.Selectio
 	return resource.NewWithAttributes(attr.OBISchemaURL, attrs...)
 }
 
-func newStatMeterProvider(res *resource.Resource, exporter *sdkmetric.Exporter, interval time.Duration, cfg *otelcfg.MetricsConfig) *metric.MeterProvider {
+// newStatMeterProvider creates the meter provider of the stat metrics. The latency histograms that
+// the kernel accumulates come from kernelHistograms, with explicit buckets.
+func newStatMeterProvider(res *resource.Resource, exporter *sdkmetric.Exporter, interval time.Duration, cfg *otelcfg.MetricsConfig,
+	kernelHistograms *kernelHistogramProducer,
+) *metric.MeterProvider {
 	isExponential := cfg.HistogramAggregation == otelcfg.HistogramAggregationExponential
 	if !isExponential && cfg.HistogramAggregation != otelcfg.HistogramAggregationExplicit {
 		smlog().Warn("invalid value for histogram aggregation. Accepted values are: "+
@@ -76,7 +81,8 @@ func newStatMeterProvider(res *resource.Resource, exporter *sdkmetric.Exporter, 
 	}
 	return metric.NewMeterProvider(
 		metric.WithResource(res),
-		metric.WithReader(metric.NewPeriodicReader(*exporter, metric.WithInterval(interval))),
+		metric.WithReader(metric.NewPeriodicReader(*exporter, metric.WithInterval(interval),
+			metric.WithProducer(kernelHistograms))),
 		metric.WithView(statHistogramView(attributes.StatTCPRtt.OTEL, cfg.Buckets.StatTCPRttHistogram, isExponential, cfg.ExponentialHistogram)),
 	)
 }
@@ -91,6 +97,8 @@ type statMetricsExporter struct {
 	tcpRetransmits           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	tcpIo                    *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	tcpSuccessfulConnections *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	diskServiceDuration      *kernelHistogram
+	kernelHistograms         *kernelHistogramProducer
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
 }
@@ -132,7 +140,8 @@ func newStatMetricsExporter(
 	exporter = instrumentMetricsExporter(ctxInfo.Metrics, exporter)
 
 	resource := createFilteredStatsResource(ctxInfo.NodeMeta.HostID, cfg.SelectorCfg.SelectionCfg)
-	provider := newStatMeterProvider(resource, &exporter, cfg.Metrics.Interval, cfg.Metrics)
+	kernelHistograms := newKernelHistogramProducer(exporter.Temporality(sdkmetric.InstrumentKindHistogram), cfg.Metrics.TTL)
+	provider := newStatMeterProvider(resource, &exporter, cfg.Metrics.Interval, cfg.Metrics, kernelHistograms)
 
 	attrProv, err := attributes.NewAttrSelector(ctxInfo.MetricAttributeGroups, cfg.SelectorCfg)
 	if err != nil {
@@ -142,7 +151,8 @@ func newStatMetricsExporter(
 	ebpfEvents := provider.Meter(statScopeName)
 
 	nme := &statMetricsExporter{
-		expireTTL: cfg.Metrics.TTL,
+		kernelHistograms: kernelHistograms,
+		expireTTL:        cfg.Metrics.TTL,
 	}
 
 	if cfg.CommonCfg.Features.StatsTCPRtt() {
@@ -229,6 +239,12 @@ func newStatMetricsExporter(
 		nme.tcpSuccessfulConnections = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, tcpSuccessfulConnections, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskServiceDuration() {
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskServiceDuration))
+		nme.diskServiceDuration = kernelHistograms.histogram(attributes.StatDiskServiceDuration,
+			export.DiskLatencyBounds, attrs)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -255,6 +271,9 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if me.tcpIo != nil && v.TCPIo != nil {
 				tcpIo, attrs := me.tcpIo.ForRecord(v)
 				tcpIo.Add(ctx, int64(v.TCPIo.Bytes), metric2.WithAttributeSet(attrs))
+			}
+			if me.diskServiceDuration != nil && v.DiskIO != nil {
+				me.kernelHistograms.record(me.diskServiceDuration, v, v.DiskIO.Latency)
 			}
 		}
 	}
