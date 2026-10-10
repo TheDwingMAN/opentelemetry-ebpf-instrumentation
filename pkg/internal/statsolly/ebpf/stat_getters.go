@@ -71,6 +71,46 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.NetworkIoDirection), networkIoDirectionStr(NetworkIoDirectionCode(direction)))
 		}
+	case attr.SystemDevice:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.DiskIO != nil && s.DiskIO.Device != "" {
+				return attribute.String(string(attr.SystemDevice), s.DiskIO.Device)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.DiskStacked:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.DiskIO != nil {
+				return attribute.Bool(string(attr.DiskStacked), s.DiskIO.Stacked)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.DiskVolumeName:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.DiskIO != nil && s.DiskIO.VolumeName != "" {
+				return attribute.String(string(attr.DiskVolumeName), s.DiskIO.VolumeName)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.DiskIODirection:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.DiskIO == nil {
+				return attribute.KeyValue{}
+			}
+			if direction := diskIODirectionStr(s.DiskIO.Op); direction != "" {
+				return attribute.String(string(attr.DiskIODirection), direction)
+			}
+			return attribute.KeyValue{}
+		}
+	case attr.ErrorType:
+		getter = func(s *Stat) attribute.KeyValue {
+			// error.type only applies to failed operations: return an invalid
+			// KeyValue so the attribute is omitted instead of emitted empty.
+			if s.DiskIO != nil && s.DiskIO.ErrorType != "" {
+				return attribute.String(string(attr.ErrorType), s.DiskIO.ErrorType)
+			}
+			return attribute.KeyValue{}
+		}
 
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
@@ -121,6 +161,17 @@ func networkIoDirectionStr(d NetworkIoDirectionCode) string {
 		return string(DirectionTransmit)
 	case CodeDirectionReceive:
 		return string(DirectionReceive)
+	}
+	return ""
+}
+
+// diskIODirectionStr is the disk.io.direction of reads and writes, empty for other operations
+func diskIODirectionStr(op DiskOpCode) string {
+	switch op {
+	case CodeDiskOpRead:
+		return string(DiskDirectionRead)
+	case CodeDiskOpWrite:
+		return string(DiskDirectionWrite)
 	}
 	return ""
 }

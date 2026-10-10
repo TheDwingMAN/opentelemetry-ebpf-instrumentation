@@ -60,3 +60,31 @@ groups:
         brief: >
           Role of the local endpoint in the TCP three-way handshake
           (`client` initiated the SYN, `server` was awaiting it).
+
+  - id: registry.obi.disk
+    type: attribute_group
+    display_name: OBI Disk Stats
+    brief: >
+      Attributes of OBI's block I/O (disk) statistics that the semantic
+      conventions don't define.
+    attributes:
+      - id: obi.disk.stacked
+        type: boolean
+        stability: development
+        brief: >
+          Whether the block device (`system.device`) is built on other block
+          devices: device mapper (LVM, dm-crypt, multipath), md RAID and loop
+          devices pass their I/O down to the devices below them, which report it
+          too. To count the I/O once, add up the devices where it is `false`,
+          and the dm-multipath devices, whose paths don't report their I/O.
+      - id: obi.disk.volume.name
+        type: string
+        stability: development
+        brief: >
+          Name of the device mapper device, as `/dev/mapper` and `dmsetup ls`
+          list it, of `system.device` on the block I/O metrics. Omitted for the
+          other devices, such as disks, md RAID and loop devices. OBI refreshes
+          it every 30 seconds, so a new volume that the kernel gives the numbers
+          of a removed one can carry the name of the removed one for up to 30
+          seconds.
+        examples: ["mpatha"]

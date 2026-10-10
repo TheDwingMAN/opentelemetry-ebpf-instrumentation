@@ -40,3 +40,9 @@ var DefaultBuckets = Buckets{
 	// https://opentelemetry.io/docs/specs/semconv/runtime/jvm-metrics/#metric-jvmgcduration
 	JVMGCDurationHistogram: []float64{0.01, 0.1, 1, 10},
 }
+
+// DiskLatencyBounds are the bucket boundaries, in seconds, of the block request durations. They are
+// fixed: the kernel buckets the durations with them, and both exporters export those buckets. They
+// go from NVMe reads (100 microseconds and less) to stalls: SCSI and NVMe devices time out a
+// command after 30 seconds by default.
+var DiskLatencyBounds = []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 5, 30, 60}

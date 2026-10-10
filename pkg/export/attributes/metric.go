@@ -678,6 +678,12 @@ var (
 		OTEL:    "obi.stat.tcp.successful.connections",
 		Type:    InstrumentCounter,
 	})
+	StatDiskServiceDuration = metric(Name{
+		Section: "obi.stat.disk.service.duration",
+		OTEL:    "obi.stat.disk.service.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
 )
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.

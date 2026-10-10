@@ -22,6 +22,17 @@ func TestStat_GoStatMetrics(t *testing.T) {
 	t.Run("Go Stat Metrics TCP Successful Connection tests", testStatMetricsTCPSuccessfulConnectionsGo)
 	t.Run("Go Stat Metrics TCP Retransmits tests", testStatMetricsTCPRetransmitsGo)
 	t.Run("Go Stat Metrics TCP IO tests", testStatMetricsTCPIoGo)
+	t.Run("Go Stat Metrics exclude disk stats", testStatMetricsNoDiskStats)
+	runWeaverValidation(t)
+	require.NoError(t, compose.Close())
+}
+
+func TestStat_GoDiskStatMetrics(t *testing.T) {
+	compose, err := docker.ComposeSuite("docker-compose-go-disk-stat-metrics.yml", path.Join(pathOutput, "test-suite-go-disk-stat-metrics.log"))
+	compose.Env = append(compose.Env, `OTEL_EBPF_CONFIG_SUFFIX=-go-disk-stat-metrics`, `PROM_CONFIG_SUFFIX=-promscrape-otel`)
+	require.NoError(t, err)
+	require.NoError(t, compose.Up())
+	t.Run("Go Stat Metrics disk service duration tests", testStatMetricsDiskServiceDuration)
 	runWeaverValidation(t)
 	require.NoError(t, compose.Close())
 }

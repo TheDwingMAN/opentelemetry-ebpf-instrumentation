@@ -23,7 +23,8 @@ func TestV2ToRuntimeNetworkCaptureAndStatsRoundTrip(t *testing.T) {
 	cfg.Metrics.Features = export.FeatureNetwork |
 		export.FeatureStatsTCPFailedConnections |
 		export.FeatureStatsTCPIo |
-		export.FeatureStatsTCPSuccessfulConnections
+		export.FeatureStatsTCPSuccessfulConnections |
+		export.FeatureStatsDiskServiceDuration
 
 	cfg.NetworkFlows.Enable = true
 	cfg.NetworkFlows.Source = obi.EbpfSourceTC
@@ -102,7 +103,27 @@ func TestV2ToRuntimeNetworkCaptureAndStatsRoundTrip(t *testing.T) {
 	require.Equal(t, 83, got.Stats.ReverseDNS.CacheLen)
 	require.Equal(t, 84*time.Second, got.Stats.ReverseDNS.CacheTTL)
 	require.True(t, got.Stats.Print)
-	require.Equal(t, export.FeatureNetwork|export.FeatureStatsTCPFailedConnections|export.FeatureStatsTCPIo|export.FeatureStatsTCPSuccessfulConnections, got.Metrics.Features)
+	require.Equal(t, export.FeatureNetwork|export.FeatureStatsTCPFailedConnections|export.FeatureStatsTCPIo|export.FeatureStatsTCPSuccessfulConnections|export.FeatureStatsDiskServiceDuration, got.Metrics.Features)
+}
+
+// The stats features replace every feature that capture.network.stats controls, the disk one too
+func TestV2StatsFeaturesReplaceTheDiskFeature(t *testing.T) {
+	t.Parallel()
+
+	for _, stats := range []schema.NetworkStats{
+		{Enabled: true, Features: []string{statsFeatureTCPRtt}},
+		{Enabled: false, Features: []string{}},
+	} {
+		cfg := obi.DefaultConfig
+		cfg.Metrics.Features = export.FeatureNetwork | export.FeatureStatsDiskServiceDuration
+		applyV2MetricsEnablement(&cfg, &schema.Extension{
+			Capture: schema.Capture{Network: schema.CaptureNetwork{Stats: stats}},
+		}, false)
+
+		require.False(t, cfg.Metrics.Features.StatsDiskServiceDuration(), "features %v", stats.Features)
+		require.Equal(t, len(stats.Features) > 0, cfg.Metrics.Features.StatsTCPRtt(), "features %v", stats.Features)
+		require.True(t, cfg.Metrics.Features.NetworkBytes(), "the network features are not the stats section's")
+	}
 }
 
 func TestV2ToRuntimePartialNetworkCapturePreservesMissingMetadataDefaults(t *testing.T) {
