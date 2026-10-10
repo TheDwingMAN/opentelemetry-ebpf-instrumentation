@@ -22,10 +22,12 @@ import (
 )
 
 const (
+	progObiStatsRawTpRPCTaskBegin     = "obi_stats_raw_tp_rpc_task_begin"
 	progObiStatsRawTpRPCStatsLatency  = "obi_stats_raw_tp_rpc_stats_latency"
 	progObiStatsRawTpNFSReadpageDone  = "obi_stats_raw_tp_nfs_readpage_done"
 	progObiStatsRawTpNFSWritebackDone = "obi_stats_raw_tp_nfs_writeback_done"
 
+	RawTracepointRPCTaskBegin     = "rpc_task_begin"
 	RawTracepointRPCStatsLatency  = "rpc_stats_latency"
 	RawTracepointNFSReadpageDone  = "nfs_readpage_done"
 	RawTracepointNFSWritebackDone = "nfs_writeback_done"
@@ -54,7 +56,7 @@ const (
 
 // nfsProbes tells which NFS client probes the kernel can load
 type nfsProbes struct {
-	// rpc_stats_latency, which needs the sunrpc types
+	// rpc_task_begin and rpc_stats_latency, which need the sunrpc types
 	rpc error
 	// nfs_readpage_done and nfs_writeback_done, which need the sunrpc and nfs types
 	pgio error
@@ -167,13 +169,16 @@ func checkTracepoint(types nfsTypes, module, tracepoint string, params int, know
 
 // nfsLoad tells which NFS client programs to load, for the enabled features
 type nfsLoad struct {
-	statsLatency, pgio bool
+	taskBegin, statsLatency, pgio bool
 }
 
-func nfsLoadFor(features *export.Features, probes nfsProbes) nfsLoad {
+func nfsLoadFor(features *export.Features, probes nfsProbes, readCgroup bool) nfsLoad {
 	procedures := features.StatsNFSClientProcedures() && probes.rpc == nil
 	bytes := features.StatsNFSClientIO() && probes.pgio == nil
 	return nfsLoad{
+		// charges both the RPCs and their bytes to the thread that started them: only the
+		// attributes of the workload need its cgroup, which is all that the program reads
+		taskBegin:    (procedures || bytes) && readCgroup,
 		statsLatency: procedures,
 		pgio:         bytes,
 	}
@@ -181,6 +186,9 @@ func nfsLoadFor(features *export.Features, probes nfsProbes) nfsLoad {
 
 func (l nfsLoad) programsToDisable() []string {
 	var toDisable []string
+	if !l.taskBegin {
+		toDisable = append(toDisable, progObiStatsRawTpRPCTaskBegin)
+	}
 	if !l.statsLatency {
 		toDisable = append(toDisable, progObiStatsRawTpRPCStatsLatency)
 	}
@@ -216,6 +224,12 @@ func attachNFS(log *slog.Logger, objects *StatsObjects, state *nfsState) []io.Cl
 		}
 	}
 
+	if state.pending.taskBegin {
+		state.attached.taskBegin, state.pending.taskBegin = attach(RawTracepointRPCTaskBegin, objects.ObiStatsRawTpRpcTaskBegin)
+		if !state.attached.taskBegin && !state.pending.taskBegin {
+			log.Warn("NFS client stats are not charged to workloads")
+		}
+	}
 	if state.pending.statsLatency {
 		state.attached.statsLatency, state.pending.statsLatency = attach(RawTracepointRPCStatsLatency, objects.ObiStatsRawTpRpcStatsLatency)
 	}
@@ -249,6 +263,10 @@ func (s *nfsState) stopUnsupported(log *slog.Logger, probes nfsProbes) {
 	if probes.pgio != nil && s.pending.pgio {
 		log.Warn("NFS client probes disabled", "metrics", featureNFSIO, "error", probes.pgio)
 		s.pending.pgio = false
+	}
+	// rpc_task_begin alone would record the cgroups of RPCs that no metric reports
+	if !s.pending.statsLatency && !s.pending.pgio && !s.attached.statsLatency && !s.attached.pgio {
+		s.pending.taskBegin = false
 	}
 }
 

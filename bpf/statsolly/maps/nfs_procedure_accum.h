@@ -11,6 +11,8 @@
 #include <statsolly/types.h>
 
 typedef struct nfs_procedure_key {
+    // id of the io controller cgroup of the thread that started the RPC, 0 if unknown
+    u64 cgroup_id;
     // name of the NFS server, as its first mount on the node names it (see read_server)
     unsigned char server[k_nfs_server_max_len];
     // name of the procedure, as the NFS client names it

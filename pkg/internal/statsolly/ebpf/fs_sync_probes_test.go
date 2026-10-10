@@ -310,7 +310,7 @@ func TestStorageProbesOfTheFileSyncsAlone(t *testing.T) {
 		t.Skipf("no kernel BTF: %v", err)
 	}
 	features := export.FeatureStatsFsSyncDuration
-	storage := planStorageProbes(slog.Default(), &features)
+	storage := planStorageProbes(slog.Default(), &features, false)
 	assert.False(t, storage.disk)
 	assert.True(t, storage.fsSync)
 	assert.Equal(t, fsSyncTracingHooks(kernel), storage.fsSyncTracing)

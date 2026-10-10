@@ -10,10 +10,12 @@
 
 #include <common/scratch_mem.h>
 
+#include <statsolly/cgroup_names.h>
 #include <statsolly/disk_io.h>
 #include <statsolly/types.h>
 #include <statsolly/maps/nfs_io_accum.h>
 #include <statsolly/maps/nfs_procedure_accum.h>
+#include <statsolly/maps/nfs_task_cgroup.h>
 
 // The latency histogram boundaries of the NFS RPCs. To be injected from userspace during eBPF
 // program load & initialization.
@@ -42,6 +44,12 @@ static __always_inline bool has_pgio_types(void) {
 
 static __always_inline bool is_nfs_task(const struct rpc_task *task) {
     return BPF_CORE_READ(task, tk_client, cl_prog) == k_nfs_program;
+}
+
+static __always_inline u64 nfs_task_cgroup_id(const struct rpc_task *task) {
+    const u64 task_addr = (u64)task;
+    const u64 *cgroup_id = bpf_map_lookup_elem(&nfs_task_cgroup, &task_addr);
+    return cgroup_id ? *cgroup_id : 0;
 }
 
 // The server as its first mount on the node names it: the NFS client names its transport after the
@@ -77,6 +85,28 @@ lookup_or_init_nfs_procedure_accum(const nfs_procedure_key_t *key) {
     return bpf_map_lookup_elem(&nfs_procedure_accum, key);
 }
 
+// rpc_task_begin(task, action) fires when a thread starts running an RPC task: the thread that
+// the RPC is charged to.
+SEC("raw_tracepoint/rpc_task_begin")
+int obi_stats_raw_tp_rpc_task_begin(struct bpf_raw_tracepoint_args *ctx) {
+    if (!has_rpc_types()) {
+        return 0;
+    }
+    const struct rpc_task *task = (const struct rpc_task *)ctx->args[0];
+    if (!is_nfs_task(task)) {
+        return 0;
+    }
+    struct cgroup *cgrp = current_io_cgroup();
+    if (!cgrp) {
+        return 0;
+    }
+    const u64 id = cgroup_id_of(cgrp);
+    const u64 task_addr = (u64)task;
+    bpf_map_update_elem(&nfs_task_cgroup, &task_addr, &id, BPF_ANY);
+    record_cgroup_name(id, cgrp);
+    return 0;
+}
+
 // rpc_stats_latency(task, backlog, rtt, execute) fires when an RPC task completes. execute is the
 // time from the start of the task to its completion, as the NFS client counts it in
 // /proc/self/mountstats.
@@ -95,6 +125,7 @@ int obi_stats_raw_tp_rpc_stats_latency(struct bpf_raw_tracepoint_args *ctx) {
     }
 
     nfs_procedure_key_t key = {
+        .cgroup_id = nfs_task_cgroup_id(task),
         .version = BPF_CORE_READ(task, tk_client, cl_vers),
         .status = nfs_status(BPF_CORE_READ(task, tk_status)),
     };
@@ -137,6 +168,7 @@ static __always_inline void nfs_io_done(const struct rpc_task *task,
         return;
     }
     nfs_io_key_t key = {
+        .cgroup_id = nfs_task_cgroup_id(task),
         .direction = direction,
     };
     read_server(key.server, task);

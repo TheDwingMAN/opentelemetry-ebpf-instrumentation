@@ -42,8 +42,8 @@ type probe struct {
 const lruLocalFreeTarget = 128
 
 // inFlightMaps are the LRU maps whose live entries must not be evicted: they hold an entry from the
-// issue of each block request, or the start of each file sync, until it completes
-var inFlightMaps = []string{StatsMapDiskRqStart, StatsMapFsSyncStart}
+// issue of each block request, or the start of each file sync or NFS task, until it completes
+var inFlightMaps = []string{StatsMapDiskRqStart, StatsMapFsSyncStart, StatsMapNfsTaskCgroup}
 
 // Program names
 const (
@@ -147,11 +147,12 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 		tcpToDisable = append(tcpToDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 
-	storage := planStorageProbes(tlog, features)
+	nfsCgroup := nfsReadsCgroup(features, attrSel, reads)
+	storage := planStorageProbes(tlog, features, nfsCgroup)
 	diskReads := diskAttributeReads(features, attrSel, reads)
 	fsSyncReads := fsSyncAttributeReads(features, attrSel, reads)
 	var unreadMaps []string
-	if !diskReads.cgroup && !fsSyncReads.cgroup {
+	if !diskReads.cgroup && !fsSyncReads.cgroup && !nfsCgroup {
 		unreadMaps = cgroupNameMaps
 	}
 
@@ -327,8 +328,9 @@ func attachTCPProbes(objects *StatsObjects, features *export.Features, connRoleU
 // for themselves. Before Linux 6.16, except from 6.12.39, 6.6.99, RHEL 9.8 and RHEL 10.2, which
 // have the fix, once those hold most of an LRU map, a CPU that needs an entry evicts a live one
 // instead of taking a free one from another CPU: an evicted request is timed on the kernel's clock,
-// or not counted when the kernel didn't time it, and an evicted file sync is not counted. It grows
-// the maps of 16384 entries on hosts with more than 64 CPUs.
+// or not counted when the kernel didn't time it, an evicted file sync is not counted, and the RPCs
+// of an evicted NFS task are counted without their workload. It grows the maps of 16384 entries on
+// hosts with more than 64 CPUs.
 func sizeInFlightMaps(spec *ebpf.CollectionSpec, cpus int) {
 	minEntries := uint32(2 * lruLocalFreeTarget * cpus)
 	for _, name := range inFlightMaps {
@@ -341,8 +343,8 @@ func sizeInFlightMaps(spec *ebpf.CollectionSpec, cpus int) {
 // storageMapPrefixes start the names of the maps of the storage features
 var storageMapPrefixes = []string{"disk_", "fs_sync_", "nfs_"}
 
-// cgroupNameMaps are the maps where the disk and file sync probes record the names of the cgroups,
-// which they only use when they read the cgroup of the operations
+// cgroupNameMaps are the maps where the disk, file sync and NFS client probes record the names of
+// the cgroups, which they only use when they read the cgroup of the operations
 var cgroupNameMaps = []string{StatsMapDiskCgroupNames, StatsMapDiskCgroupNameInitStorage}
 
 func isStorageMap(name string) bool {
@@ -458,10 +460,10 @@ func (m *StatsFetcher) FsSyncAccumMap() *ebpf.Map {
 }
 
 // DiskCgroupNamesMap returns the map where the kernel records the names of the cgroups that block
-// I/O and file syncs are charged to, or nil if neither the disk nor the file sync probes are
-// attached.
+// I/O, file syncs and NFS RPCs are charged to, or nil if none of their probes are attached, or
+// loaded for the NFS ones, which may be attached later.
 func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
-	if !m.diskAttached && !m.fsSyncAttached {
+	if !m.diskAttached && !m.fsSyncAttached && !m.nfs.loaded.statsLatency && !m.nfs.loaded.pgio {
 		return nil
 	}
 	return m.objects.DiskCgroupNames

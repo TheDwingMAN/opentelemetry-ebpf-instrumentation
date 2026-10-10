@@ -63,7 +63,8 @@ static __always_inline u64 cgroup_id_of(struct cgroup *cgrp) {
     return BPF_CORE_READ(old, id.id);
 }
 
-// Records the name of the cgroup, and of its parent, the first time I/O or a sync is charged to it
+// Records the name of the cgroup, and of its parent, the first time I/O, a sync or an NFS RPC is
+// charged to it
 static __always_inline void record_cgroup_name(const u64 cgroup_id, struct cgroup *cgrp) {
     if (bpf_map_lookup_elem(&disk_cgroup_names, &cgroup_id)) {
         return;

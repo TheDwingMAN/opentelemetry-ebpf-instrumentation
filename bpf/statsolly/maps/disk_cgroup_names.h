@@ -19,12 +19,13 @@ typedef struct disk_cgroup_name {
     unsigned char parent[k_disk_cgroup_name_max_len];
 } disk_cgroup_name_t;
 
-// Name of the cgroups that block I/O or file syncs are charged to, and of their parent, keyed by
-// cgroup id. The kernel records them when it starts accumulating I/O or syncs for a cgroup, so that
-// userspace can tell the container from the names even when the cgroup is not visible from its
-// cgroup namespace, or already gone. An LRU map evicts entries once more than max_entries / 128
-// CPUs have added some (before Linux 6.16, except from 6.12.39, 6.6.99, RHEL 9.8 and RHEL 10.2,
-// which have the fix): the kernel records the names again at the next I/O or sync of the cgroup.
+// Name of the cgroups that block I/O, file syncs or NFS RPCs are charged to, and of their parent,
+// keyed by cgroup id. The kernel records them when it starts accumulating I/O, syncs or RPCs for a
+// cgroup, so that userspace can tell the container from the names even when the cgroup is not
+// visible from its cgroup namespace, or already gone. An LRU map evicts entries once more than
+// max_entries / 128 CPUs have added some (before Linux 6.16, except from 6.12.39, 6.6.99, RHEL 9.8
+// and RHEL 10.2, which have the fix): the kernel records the names again at the next I/O, sync or
+// RPC of the cgroup.
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1 << 13);

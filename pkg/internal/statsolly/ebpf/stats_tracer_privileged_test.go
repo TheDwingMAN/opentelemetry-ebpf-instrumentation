@@ -145,7 +145,7 @@ func TestStatsLoadWithoutStorageAfterAFailedLoad(t *testing.T) {
 func attachPlannedFsSyncProbes(t *testing.T) storageProbes {
 	t.Helper()
 	features := export.FeatureStatsFsSyncDuration
-	storage := planStorageProbes(slog.Default(), &features)
+	storage := planStorageProbes(slog.Default(), &features, false)
 	var objects StatsObjects
 	load := newStatsLoader(&objects, 0, nil, map[string]any{
 		"fs_sync_latency_bounds_ns": latencyBoundsNs(export.FsSyncLatencyBounds),

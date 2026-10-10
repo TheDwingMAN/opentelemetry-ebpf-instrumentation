@@ -42,7 +42,8 @@ type storageProbes struct {
 }
 
 // planStorageProbes returns the storage probes of the enabled features that the kernel can load.
-func planStorageProbes(log *slog.Logger, features *export.Features) storageProbes {
+// nfsCgroup tells whether the NFS client probes read the cgroup that each RPC is charged to.
+func planStorageProbes(log *slog.Logger, features *export.Features, nfsCgroup bool) storageProbes {
 	var s storageProbes
 	if features.StatsDisk() {
 		var err error
@@ -64,7 +65,7 @@ func planStorageProbes(log *slog.Logger, features *export.Features) storageProbe
 		if features.StatsNFSClientIO() && probes.pgio != nil {
 			s.disable(featureNFSIO, probes.pgio)
 		}
-		s.nfs = nfsLoadFor(features, probes)
+		s.nfs = nfsLoadFor(features, probes, nfsCgroup)
 	}
 	return s
 }
@@ -252,6 +253,18 @@ func fsSyncAttributeReads(features *export.Features, attrSel *attributes.AttrSel
 		{enabled: features.StatsFsSyncOperations(), name: attributes.StatFsSyncOperations},
 		{enabled: features.StatsFsSyncTime(), name: attributes.StatFsSyncTime},
 	}, attrSel, reads)}
+}
+
+// nfsReadsCgroup tells whether the NFS client probes read the cgroup of the thread that starts each
+// RPC: when an enabled NFS client metric reports, or a filter matches, an attribute of the
+// workload, or when reads asks for the workload of every RPC
+func nfsReadsCgroup(features *export.Features, attrSel *attributes.AttrSelector, reads ProbeReads) bool {
+	return readsWorkload([]storageMetric{
+		{enabled: features.StatsNFSClientProcedureDuration(), name: attributes.StatNFSClientProcedureDuration},
+		{enabled: features.StatsNFSClientProcedureCount(), name: attributes.StatNFSClientProcedureCount},
+		{enabled: features.StatsNFSClientProcedureTime(), name: attributes.StatNFSClientProcedureTime},
+		{enabled: features.StatsNFSClientIO(), name: attributes.StatNFSClientIO},
+	}, attrSel, reads)
 }
 
 // storageMetric is a storage stat metric, and whether it is enabled
