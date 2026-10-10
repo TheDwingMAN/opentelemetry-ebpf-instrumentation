@@ -4,6 +4,9 @@
 package integration // import "go.opentelemetry.io/obi/internal/test/integration"
 
 import (
+	"math"
+	"regexp"
+	"slices"
 	"testing"
 	"time"
 
@@ -11,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/obi/internal/test/integration/components/promtest"
+	"go.opentelemetry.io/obi/pkg/export"
 )
 
 func testStatMetricsTCPRtt(t *testing.T, port string) {
@@ -92,4 +96,83 @@ func testStatMetricsTCPIoGo(t *testing.T) {
 			}, testTimeout, 100*time.Millisecond)
 		})
 	}
+}
+
+// diskStatLabels are the Prometheus labels of all the attributes that the disk stat metrics can have
+var diskStatLabels = []string{
+	"system_device", "obi_disk_stacked", "obi_disk_volume_name", "disk_io_direction", "error_type",
+	"obi_ip",
+}
+
+var (
+	blockDevicePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	ipPattern          = regexp.MustCompile(`^[0-9a-fA-F.:]+$`)
+	// the host may keep the docker volumes on an LVM volume, reported with its disk
+	stackedPattern = regexp.MustCompile(`^(true|false)$`)
+
+	// the device mapper name of such a volume, only there on device mapper devices
+	optionalVolumeNamePattern = regexp.MustCompile(`^([A-Za-z0-9_.+-]+)?$`)
+)
+
+// assertDiskStatLabels checks that a series of a disk stat metric has exactly the expected
+// attributes, given as patterns of their values, and none of the others
+func assertDiskStatLabels(t assert.TestingT, series map[string]string, expected map[string]*regexp.Regexp) {
+	assert.Empty(t, promtest.LabelMismatches(series, diskStatLabels, expected), series)
+}
+
+// diskIOLabels are the expected attributes of the successful block I/O of the node, with the device
+// and direction of the I/O
+func diskIOLabels(direction string) map[string]*regexp.Regexp {
+	return map[string]*regexp.Regexp{
+		"system_device":        blockDevicePattern,
+		"obi_disk_stacked":     stackedPattern,
+		"obi_disk_volume_name": optionalVolumeNamePattern,
+		"disk_io_direction":    regexp.MustCompile("^" + direction + "$"),
+		"obi_ip":               ipPattern,
+	}
+}
+
+// assertHistogramBounds checks that the histograms of the given _bucket series have the given
+// bucket boundaries
+func assertHistogramBounds(t require.TestingT, buckets []promtest.Result, bounds []float64) {
+	histograms, err := promtest.BucketBounds(buckets)
+	require.NoError(t, err)
+	require.NotEmpty(t, histograms)
+	for histogram, les := range histograms {
+		assert.Equal(t, append(slices.Clone(bounds), math.Inf(1)), les, histogram)
+	}
+}
+
+// testStatMetricsDiskServiceDuration checks the latency histogram of the successful block I/O of
+// the node, which the O_DIRECT I/O of the disk-io container keeps going: its attributes and its
+// buckets
+func testStatMetricsDiskServiceDuration(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		selector := `{disk_io_direction="` + direction + `",error_type=""}`
+		require.EventuallyWithT(t, func(ct *assert.CollectT) {
+			counts, err := pq.Query(`obi_stat_disk_service_duration_seconds_count` + selector + ` > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, counts)
+			for _, res := range counts {
+				assertDiskStatLabels(ct, res.Metric, diskIOLabels(direction))
+			}
+
+			sums, err := pq.Query(`obi_stat_disk_service_duration_seconds_sum` + selector + ` > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, sums)
+
+			buckets, err := pq.Query(`obi_stat_disk_service_duration_seconds_bucket` + selector)
+			require.NoError(ct, err)
+			assertHistogramBounds(ct, buckets, export.DiskLatencyBounds)
+		}, testTimeout, 100*time.Millisecond)
+	}
+}
+
+// testStatMetricsNoDiskStats checks that the stats aggregate feature doesn't enable the disk stats
+func testStatMetricsNoDiskStats(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	results, err := pq.Query(`{__name__=~"obi_stat_disk_.*"}`)
+	require.NoError(t, err)
+	assert.Empty(t, results)
 }
