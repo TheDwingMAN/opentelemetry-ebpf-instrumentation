@@ -380,6 +380,7 @@ const (
 	statsFeatureTCPSuccessfulConnections = "tcp_successful_connections"
 	statsFeatureTCPRetransmits           = "tcp_retransmits"
 	statsFeatureTCPIo                    = "tcp_io"
+	statsFeatureDiskServiceDuration      = "disk_service_duration"
 )
 
 func statsFeatures(features featureexport.Features) []string {
@@ -398,6 +399,9 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsTCPIo() {
 		out = append(out, statsFeatureTCPIo)
+	}
+	if features.StatsDiskServiceDuration() {
+		out = append(out, statsFeatureDiskServiceDuration)
 	}
 	return out
 }
