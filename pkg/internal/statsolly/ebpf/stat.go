@@ -19,6 +19,7 @@ const (
 	StatTypeTCPRetransmit           = StatType(StatsStatTypeK_statTypeTcpRetransmit)
 	StatTypeTCPIo                   = StatType(StatsStatTypeK_statTypeTcpIo)
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
+	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
 )
 
 type TCPFailReasonType string
@@ -81,6 +82,22 @@ const (
 	CodeDirectionTransmit = NetworkIoDirectionCode(StatsNetworkIoDirectionDirectionTransmit)
 )
 
+type DiskIODirectionType string
+
+const (
+	DiskDirectionRead  DiskIODirectionType = "read"
+	DiskDirectionWrite DiskIODirectionType = "write"
+)
+
+// DiskOpCode aliases the bpf2go-generated constants derived from enum disk_op in
+// bpf/statsolly/types.h.
+type DiskOpCode uint8
+
+const (
+	CodeDiskOpRead  = DiskOpCode(StatsDiskOpDiskOpRead)
+	CodeDiskOpWrite = DiskOpCode(StatsDiskOpDiskOpWrite)
+)
+
 // Stat contains accumulated metrics from a stat, with extra metadata
 // that is added from the user space
 // REMINDER: any attribute here must be also added to the functions StatGetters
@@ -93,6 +110,7 @@ type Stat struct {
 	TCPSuccessfulConnection *TCPSuccessfulConnection `json:"-"`
 	TCPRetransmit           bool                     `json:"-"`
 	TCPIo                   *TCPIo                   `json:"-"`
+	DiskIO                  *DiskIO                  `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -115,6 +133,31 @@ type TCPSuccessfulConnection struct {
 type TCPIo struct {
 	Direction uint8  `json:"direction"`
 	Bytes     uint32 `json:"bytes"`
+}
+
+// DiskIO is the block I/O completed on a device, with an operation and an outcome, since the
+// previous read of the kernel accumulation map.
+type DiskIO struct {
+	Device string
+	// VolumeName is the device mapper name of Device, e.g. mpatha. Empty for other devices.
+	VolumeName string
+	// Stacked devices are built on other block devices, which report the same I/O too
+	Stacked bool
+	Op      DiskOpCode
+	// ErrorType is empty for successful requests
+	ErrorType string
+
+	// Latency of the completed requests. Nil on the paths of a multipath device, which reports the
+	// latency of the same I/O.
+	Latency *LatencyHistogram
+}
+
+// LatencyHistogram counts requests in the buckets of export.DiskLatencyBounds
+type LatencyHistogram struct {
+	// BucketCounts counts the requests of each bucket: one per bound, then the overflow bucket
+	BucketCounts []uint64
+	// Sum of the latencies of the requests, in seconds
+	Sum float64
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.

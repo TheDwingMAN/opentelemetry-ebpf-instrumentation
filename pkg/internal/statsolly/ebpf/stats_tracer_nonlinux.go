@@ -24,10 +24,22 @@ func (m *StatsFetcher) Close() error {
 	return nil
 }
 
+func (m *StatsFetcher) DisabledStorageFeatures() []DisabledFeature {
+	return nil
+}
+
 func (m *StatsFetcher) StatsEventsMap() *ciliumebpf.Map {
 	return nil
 }
 
 func (m *StatsFetcher) DebugEventsMap() *ciliumebpf.Map {
 	return nil
+}
+
+func (m *StatsFetcher) DiskIOAccumMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) DiskStatusIsBlkStatus() bool {
+	return false
 }
