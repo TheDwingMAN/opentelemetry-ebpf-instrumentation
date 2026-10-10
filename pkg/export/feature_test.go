@@ -84,7 +84,23 @@ func TestFeatureStatsFsSyncIsOptIn(t *testing.T) {
 	assert.True(t, FeatureStatsFsSync.StatsFsSyncTime())
 }
 
-// The storage stats must be named: their probes fire on every block request or file sync
+func TestFeatureStatsNFSIsOptIn(t *testing.T) {
+	stats, err := LoadFeatures([]string{"stats"})
+	require.NoError(t, err)
+	assert.False(t, stats.StatsNFS(), "the stats aggregate must not enable the NFS client stats")
+
+	assert.True(t, FeatureStatsNFS.StatsNFSClientProcedureDuration())
+	assert.True(t, FeatureStatsNFS.StatsNFSClientIO())
+	assert.True(t, FeatureStatsNFS.StatMetrics(), "an NFS only selection must still enable the stats pipeline")
+	assert.False(t, FeatureStatsNFS.StatsDisk())
+
+	io := FeatureStatsNFSClientIO
+	assert.True(t, io.StatsNFS())
+	assert.False(t, io.StatsNFSClientProcedureDuration())
+	assert.False(t, io.StatsNFSClientProcedures(), "the I/O metric doesn't need the RPC probes")
+}
+
+// The storage stats must be named: their probes fire on every block request, file sync or NFS RPC
 func TestFeatureAllDoesntEnableStorageStats(t *testing.T) {
 	for _, name := range []string{"all", "*"} {
 		all, err := LoadFeatures([]string{name})
@@ -92,7 +108,26 @@ func TestFeatureAllDoesntEnableStorageStats(t *testing.T) {
 		assert.True(t, all.StatsTCPIo(), "%s enables the TCP stats", name)
 		assert.False(t, all.StatsDisk(), name)
 		assert.False(t, all.StatsFsSync(), name)
+		assert.False(t, all.StatsNFS(), name)
 	}
+}
+
+// Config v1 is frozen: only Config v2 enables the NFS client stats, and a logged configuration shows
+// them with their Config v2 name
+func TestFeatureStatsNFSHasNoV1Name(t *testing.T) {
+	for _, name := range []string{
+		"stats_nfs", "stats_nfs_client_procedure_duration", "stats_nfs_client_io", "nfs_client_procedure_duration",
+		"nfs_client_io",
+	} {
+		_, err := LoadFeatures([]string{name})
+		require.ErrorContains(t, err, "unknown metrics feature", name)
+	}
+
+	out, err := yaml.Marshal(struct {
+		Features Features `yaml:"features"`
+	}{Features: FeatureStatsTCPRtt | FeatureStatsNFS})
+	require.NoError(t, err)
+	assert.Equal(t, "features:\n    - stats_tcp_rtt\n    - nfs_client_procedure_duration\n    - nfs_client_io\n", string(out))
 }
 
 // Config v1 is frozen: only Config v2 enables the file sync stats, and a logged configuration shows

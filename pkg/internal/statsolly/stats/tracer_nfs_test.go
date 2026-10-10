@@ -1,0 +1,150 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package stats
+
+import (
+	"maps"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
+
+	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
+)
+
+type fakeAccum[K comparable, V any] struct {
+	entries map[K]V
+}
+
+func (f *fakeAccum[K, V]) read() (map[K]V, error) {
+	return maps.Clone(f.entries), nil
+}
+
+func (f *fakeAccum[K, V]) delete(key K) error {
+	delete(f.entries, key)
+	return nil
+}
+
+func (f *fakeAccum[K, V]) lookupAndDelete(key K) (V, error) {
+	last := f.entries[key]
+	return last, f.delete(key)
+}
+
+func nfsProcedureKey(server, procedure string, version uint32, status uint16) ebpf.StatsNfsProcedureKeyT {
+	key := ebpf.StatsNfsProcedureKeyT{Version: version, Status: status}
+	copy(key.Server[:], server)
+	copy(key.Procedure[:], procedure)
+	return key
+}
+
+func nfsIOKey(server string, direction ebpf.StatsNetworkIoDirection) ebpf.StatsNfsIoKeyT {
+	key := ebpf.StatsNfsIoKeyT{Direction: direction}
+	copy(key.Server[:], server)
+	return key
+}
+
+func TestNFSProcedureReader(t *testing.T) {
+	// the server as the mount names it
+	const server = "fs-0123456789abcdef0.efs.us-east-1.amazonaws.com"
+	read := nfsProcedureKey(server, "READ", 4, 0)
+	stale := nfsProcedureKey(server, "GETATTR", 3, uint16(unix.ESTALE))
+	rpcs := func(count, latencyNs uint64) ebpf.StatsNfsProcedureAccumT {
+		// 2 ms falls in the bucket of the 2.5 ms bound
+		var a ebpf.StatsNfsProcedureAccumT
+		a.LatencyCount[4], a.LatencySumNs = count, count*latencyNs
+		return a
+	}
+	src := &fakeAccum[ebpf.StatsNfsProcedureKeyT, ebpf.StatsNfsProcedureAccumT]{
+		entries: map[ebpf.StatsNfsProcedureKeyT]ebpf.StatsNfsProcedureAccumT{
+			read:  rpcs(4, 2_000_000),
+			stale: rpcs(1, 2_000_000),
+		},
+	}
+	r := newNFSProcedureReader(src, time.Second)
+
+	stats := r.readStats()
+	require.Len(t, stats, 2)
+	byProcedure := map[string]*ebpf.NFSProcedure{}
+	for _, stat := range stats {
+		assert.Equal(t, ebpf.StatTypeNFSProcedure, stat.Type)
+		assert.Equal(t, server, stat.NFSProcedure.Server)
+		byProcedure[stat.NFSProcedure.Procedure] = stat.NFSProcedure
+	}
+	assert.Equal(t, uint32(4), byProcedure["READ"].Version)
+	assert.Empty(t, byProcedure["READ"].ErrorType)
+	assertLatency(t, byProcedure["READ"].Latency, 0.008, 0, 0, 0, 0, 4)
+	assert.Equal(t, uint32(3), byProcedure["GETATTR"].Version)
+	assert.Equal(t, "ESTALE", byProcedure["GETATTR"].ErrorType)
+
+	src.entries[read] = rpcs(6, 2_000_000)
+	stats = r.readStats()
+	require.Len(t, stats, 1)
+	assertLatency(t, stats[0].NFSProcedure.Latency, 0.004, 0, 0, 0, 0, 2)
+}
+
+func TestNFSIOReader(t *testing.T) {
+	// a mount that names the server by its address
+	reads := nfsIOKey("fd00::5", ebpf.StatsNetworkIoDirectionDirectionReceive)
+	writes := nfsIOKey("fd00::5", ebpf.StatsNetworkIoDirectionDirectionTransmit)
+	src := &fakeAccum[ebpf.StatsNfsIoKeyT, uint64]{entries: map[ebpf.StatsNfsIoKeyT]uint64{
+		reads:  1 << 20,
+		writes: 4096,
+	}}
+	r := newNFSIOReader(src, time.Second)
+
+	stats := r.readStats()
+	require.Len(t, stats, 2)
+	bytes := map[uint8]uint64{}
+	for _, stat := range stats {
+		assert.Equal(t, ebpf.StatTypeNFSIO, stat.Type)
+		assert.Equal(t, "fd00::5", stat.NFSIO.Server)
+		bytes[stat.NFSIO.Direction] = stat.NFSIO.Bytes
+	}
+	assert.Equal(t, map[uint8]uint64{
+		uint8(ebpf.CodeDirectionReceive):  1 << 20,
+		uint8(ebpf.CodeDirectionTransmit): 4096,
+	}, bytes)
+
+	src.entries[writes] = 3 * 4096
+	stats = r.readStats()
+	require.Len(t, stats, 1, "only what grew is reported")
+	assert.Equal(t, uint64(2*4096), stats[0].NFSIO.Bytes)
+
+	// the entry was deleted and re-created: its counter restarted from zero
+	src.entries[writes] = 512
+	stats = r.readStats()
+	require.Len(t, stats, 1)
+	assert.Equal(t, uint64(512), stats[0].NFSIO.Bytes)
+}
+
+func TestNFSErrorType(t *testing.T) {
+	tests := []struct {
+		name   string
+		status uint16
+		want   string
+	}{
+		{name: "success", status: 0, want: ""},
+		{name: "uapi errno", status: uint16(unix.EIO), want: "EIO"},
+		{name: "first kernel-internal errno", status: 512, want: "ERESTARTSYS"},
+		{name: "NFSv3 not supported", status: 524, want: "ENOTSUPP"},
+		{name: "NFSv3 retry later", status: 528, want: "EJUKEBOX"},
+		{name: "last kernel-internal errno", status: 531, want: "ENOGRACE"},
+		{name: "first NFSv4 status", status: 10001, want: "NFS4ERR_BADHANDLE"},
+		{name: "NFSv4 retry later", status: 10008, want: "NFS4ERR_DELAY"},
+		{name: "NFSv4 grace period", status: 10013, want: "NFS4ERR_GRACE"},
+		{name: "last NFSv4 status", status: 10096, want: "NFS4ERR_XATTR2BIG"},
+		{name: "unassigned kernel-internal errno", status: 520, want: "_OTHER"},
+		{name: "unassigned NFSv4 status", status: 10073, want: "_OTHER"},
+		{name: "past the NFSv4 statuses", status: 10097, want: "_OTHER"},
+		{name: "internal pNFS status", status: 12001, want: "_OTHER"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, nfsErrorType(tt.status))
+		})
+	}
+}

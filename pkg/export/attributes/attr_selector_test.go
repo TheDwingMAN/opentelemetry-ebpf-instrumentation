@@ -353,6 +353,21 @@ func TestDefault_StatFsSyncCounters(t *testing.T) {
 	}
 }
 
+func TestDefault_StatNFSClient(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	assert.Equal(t, []attr.Name{
+		attr.ErrorType,
+		attr.OncRPCProcedureName,
+		attr.OncRPCVersion,
+		attr.ServerAddr,
+	}, p.For(StatNFSClientProcedureDuration))
+	assert.Equal(t, []attr.Name{
+		attr.NetworkIoDirection,
+		attr.ServerAddr,
+	}, p.For(StatNFSClientIO))
+}
+
 // The selection key of the service time counter has its underscore replaced by a dot, as the
 // keys of attributes.select are normalized, whichever notation it is written in
 func TestStatDiskServiceTimeSelection(t *testing.T) {

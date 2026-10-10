@@ -157,6 +157,31 @@ func getDefinitions(
 		nil,
 	)
 
+	// NFS client RPC metrics attributes
+	statsNFSProcedureAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:               false,
+			attr.ServerAddr:          true,
+			attr.OncRPCProcedureName: true,
+			attr.OncRPCVersion:       true,
+		},
+		nil,
+	)
+
+	// NFS client transferred bytes attributes
+	statsNFSIOAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:              false,
+			attr.ServerAddr:         true,
+			attr.NetworkIoDirection: true,
+		},
+		nil,
+	)
+
 	// the cluster, and the pod and the workload that the block I/O or the file sync is charged to,
 	// when Kubernetes metadata is enabled. A series per workload, but not per pod, by default.
 	statsStorageKubeAttributes := NewAttrReportGroup(
@@ -1019,6 +1044,16 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
+		},
+		StatNFSClientProcedureDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatNFSClientIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsNFSIOAttributes},
+			Attributes: map[attr.Name]Default{},
 		},
 
 		// span and service graph metrics don't yet implement attribute selection,

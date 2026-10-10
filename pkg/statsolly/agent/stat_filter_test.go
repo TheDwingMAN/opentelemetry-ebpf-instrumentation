@@ -103,28 +103,32 @@ func TestStorageStatFiltersOnlyApplyToTheStatsWithTheirAttributes(t *testing.T) 
 	sda := &ebpf.Stat{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{Device: "sda"}}
 	fsync := &ebpf.Stat{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{Type: ebpf.CodeFsSyncFsync}}
 	failedSync := &ebpf.Stat{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{Type: ebpf.CodeFsSyncSyncfs, ErrorType: "EIO"}}
+	nfsWrites := &ebpf.Stat{Type: ebpf.StatTypeNFSIO, NFSIO: &ebpf.NFSIO{Server: "nfs1", Direction: uint8(ebpf.CodeDirectionTransmit)}}
 
 	filtered := func(config filter.AttributeFamilyConfig) []*ebpf.Stat {
 		matchers, err := newStorageStatMatchers(config, nil)
 		require.NoError(t, err)
-		return filterStats(matchers, []*ebpf.Stat{nvme, sda, fsync, failedSync})
+		return filterStats(matchers, []*ebpf.Stat{nvme, sda, fsync, failedSync, nfsWrites})
 	}
 
-	assert.Equal(t, []*ebpf.Stat{nvme, sda, fsync, failedSync},
+	assert.Equal(t, []*ebpf.Stat{nvme, sda, fsync, failedSync, nfsWrites},
 		filtered(filter.AttributeFamilyConfig{"dst.port": {Equals: new(443)}}),
 		"a filter on a TCP attribute keeps the storage stats")
-	assert.Equal(t, []*ebpf.Stat{nvme, fsync, failedSync},
+	assert.Equal(t, []*ebpf.Stat{nvme, fsync, failedSync, nfsWrites},
 		filtered(filter.AttributeFamilyConfig{"system.device": {Match: "nvme*"}}),
 		"a filter on a disk attribute applies to the disk stats only")
-	assert.Equal(t, []*ebpf.Stat{nvme, fsync, failedSync},
+	assert.Equal(t, []*ebpf.Stat{nvme, fsync, failedSync, nfsWrites},
 		filtered(filter.AttributeFamilyConfig{"dst.port": {Equals: new(443)}, "system.device": {Match: "nvme*"}}),
 		"each stat is matched against all the filters of its attributes")
-	assert.Equal(t, []*ebpf.Stat{nvme, sda, fsync},
+	assert.Equal(t, []*ebpf.Stat{nvme, sda, fsync, nfsWrites},
 		filtered(filter.AttributeFamilyConfig{"obi_fs_sync_type": {Match: "fsync"}}),
 		"a filter on a file sync attribute applies to the file sync stats only")
-	assert.Equal(t, []*ebpf.Stat{failedSync},
+	assert.Equal(t, []*ebpf.Stat{failedSync, nfsWrites},
 		filtered(filter.AttributeFamilyConfig{"error.type": {Match: "EIO"}}),
-		"a filter on an attribute of both applies to both")
+		"a filter on an attribute of both applies to both, not to the NFS I/O, which has none")
+	assert.Equal(t, []*ebpf.Stat{nvme, sda, fsync, failedSync},
+		filtered(filter.AttributeFamilyConfig{"network.io.direction": {Match: "receive"}}),
+		"the NFS I/O shares network.io.direction with the TCP I/O")
 }
 
 // The storage probes read only the attributes of the filters that apply to the storage stats

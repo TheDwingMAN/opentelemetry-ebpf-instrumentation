@@ -49,6 +49,8 @@ type statMetricsReporter struct {
 	fsSyncDuration           *kernelHistogramVec
 	fsSyncOperations         *Expirer[prometheus.Counter]
 	fsSyncTime               *Expirer[prometheus.Counter]
+	nfsProcedureDuration     *kernelHistogramVec
+	nfsIO                    *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -64,6 +66,8 @@ type statMetricsReporter struct {
 	fsSyncDurationAttrs           []attributes.Field[*ebpf.Stat, string]
 	fsSyncOperationsAttrs         []attributes.Field[*ebpf.Stat, string]
 	fsSyncTimeAttrs               []attributes.Field[*ebpf.Stat, string]
+	nfsProcedureDurationAttrs     []attributes.Field[*ebpf.Stat, string]
+	nfsIOAttrs                    []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -287,6 +291,33 @@ func newStatsReporter(
 		register = append(register, mr.fsSyncTime)
 	}
 
+	if cfg.CommonCfg.Features.StatsNFSClientProcedureDuration() {
+		log.Debug("registering stat NFS client procedure duration metric")
+
+		mr.nfsProcedureDurationAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatNFSClientProcedureDuration))
+
+		mr.nfsProcedureDuration = newKernelHistogramVec(attributes.StatNFSClientProcedureDuration.Prom,
+			"measures the duration of the RPCs of the NFS client, in seconds",
+			export.NFSLatencyBounds, labelNames(mr.nfsProcedureDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.nfsProcedureDuration)
+	}
+
+	if cfg.CommonCfg.Features.StatsNFSClientIO() {
+		log.Debug("registering stat NFS client io metric")
+
+		mr.nfsIOAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatNFSClientIO))
+
+		mr.nfsIO = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatNFSClientIO.Prom,
+			Help: "bytes that the NFS client read from and wrote to servers",
+		}, labelNames(mr.nfsIOAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.nfsIO)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -317,6 +348,8 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeFsSyncDuration(stat)
 			r.observeFsSyncOperations(stat)
 			r.observeFsSyncTime(stat)
+			r.observeNFSProcedureDuration(stat)
+			r.observeNFSIO(stat)
 		}
 	}
 }
@@ -413,4 +446,18 @@ func (r *statMetricsReporter) observeFsSyncTime(stat *ebpf.Stat) {
 	}
 	r.fsSyncTime.WithLabelValues(labelValues(stat, r.fsSyncTimeAttrs)...).
 		Metric.Add(stat.FsSync.Time)
+}
+
+func (r *statMetricsReporter) observeNFSProcedureDuration(stat *ebpf.Stat) {
+	if r.nfsProcedureDuration == nil || stat.NFSProcedure == nil {
+		return
+	}
+	r.nfsProcedureDuration.observe(labelValues(stat, r.nfsProcedureDurationAttrs), stat.NFSProcedure.Latency)
+}
+
+func (r *statMetricsReporter) observeNFSIO(stat *ebpf.Stat) {
+	if r.nfsIO == nil || stat.NFSIO == nil {
+		return
+	}
+	r.nfsIO.WithLabelValues(labelValues(stat, r.nfsIOAttrs)...).Metric.Add(float64(stat.NFSIO.Bytes))
 }

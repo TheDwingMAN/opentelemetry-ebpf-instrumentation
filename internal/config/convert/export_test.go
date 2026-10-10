@@ -1081,6 +1081,21 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 		}, value(t, ext.Capture.Network, "stats", "features"))
 	})
 
+	t.Run("NFS client stat families are listed apart from the stats aggregate", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := defaultRuntimeConfig()
+		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsNFS
+
+		_, ext := RuntimeToV2(&cfg)
+
+		require.ElementsMatch(t, []string{
+			"tcp_rtt",
+			"nfs_client_procedure_duration",
+			"nfs_client_io",
+		}, value(t, ext.Capture.Network, "stats", "features"))
+	})
+
 	t.Run("preserves individual stat families", func(t *testing.T) {
 		t.Parallel()
 

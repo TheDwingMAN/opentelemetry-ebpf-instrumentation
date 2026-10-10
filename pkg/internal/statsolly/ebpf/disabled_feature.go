@@ -4,11 +4,11 @@
 package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 // DisabledFeature is an enabled storage stat feature whose probes can't be loaded or attached on
-// this node. The stats agent runs without it, as OBI runs without an optional tracer that can't be
-// loaded.
+// this node, or wait for a kernel module. The stats agent runs without it, as OBI runs without an
+// optional tracer that can't be loaded.
 type DisabledFeature struct {
 	// Feature names the metrics and the features that enable them
 	Feature string
-	// Reason is why their probes can't be loaded or attached
+	// Reason is why their probes can't be loaded or attached, or wait for a kernel module
 	Reason string
 }

@@ -721,6 +721,18 @@ var (
 		Unit:    "s",
 		Type:    InstrumentCounter,
 	})
+	StatNFSClientProcedureDuration = metric(Name{
+		Section: "obi.stat.nfs.client.procedure.duration",
+		OTEL:    "obi.stat.nfs.client.procedure.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatNFSClientIO = metric(Name{
+		Section: "obi.stat.nfs.client.io",
+		OTEL:    "obi.stat.nfs.client.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
 )
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.

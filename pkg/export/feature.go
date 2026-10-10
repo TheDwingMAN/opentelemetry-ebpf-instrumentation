@@ -57,10 +57,10 @@ const (
 	FeatureGraph
 	FeatureApplicationRuntime
 	FeatureEBPF
-	// The disk and file sync stat features are not part of the `stats` aggregate, nor of `all`: the
-	// block probes fire on every block request, and the file sync probes on every sync, so they
-	// have to be enabled explicitly. Config v1 is frozen, so only the Config v2 stats features (see
-	// v2OnlyFeatures) enable them.
+	// The disk, file sync and NFS client stat features are not part of the `stats` aggregate, nor of
+	// `all`: the block probes fire on every block request, the file sync probes on every sync, and
+	// the NFS client probes on every NFS RPC, so they have to be enabled explicitly. Config v1 is
+	// frozen, so only the Config v2 stats features (see v2OnlyFeatures) enable them.
 	FeatureStatsDiskServiceDuration
 	FeatureStatsDiskIO
 	FeatureStatsDiskOperations
@@ -68,6 +68,8 @@ const (
 	FeatureStatsFsSyncDuration
 	FeatureStatsFsSyncOperations
 	FeatureStatsFsSyncTime
+	FeatureStatsNFSClientProcedureDuration
+	FeatureStatsNFSClientIO
 	FeatureAll = Features(^uint(0)) &^ featureStatsStorage
 )
 
@@ -78,8 +80,14 @@ const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | 
 // measure
 const FeatureStatsFsSync = FeatureStatsFsSyncDuration | FeatureStatsFsSyncOperations | FeatureStatsFsSyncTime
 
+// FeatureStatsNFS groups the NFS client stat metrics. They are not part of the `stats` aggregate.
+const FeatureStatsNFS = FeatureStatsNFSClientProcedureDuration | FeatureStatsNFSClientIO
+
+// featureStatsNFSProcedures are the NFS client stat metrics that the RPC probes measure
+const featureStatsNFSProcedures = FeatureStatsNFSClientProcedureDuration
+
 // featureStatsStorage groups the storage stat features
-const featureStatsStorage = FeatureStatsDisk | FeatureStatsFsSync
+const featureStatsStorage = FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFS
 
 // FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -116,13 +124,15 @@ var FeatureMapper = map[string]Features{
 // Config v1 is frozen, so LoadFeatures doesn't accept these names: they only show the features
 // in a logged configuration.
 var v2OnlyFeatures = map[string]Features{
-	"disk_service_duration": FeatureStatsDiskServiceDuration,
-	"disk_io":               FeatureStatsDiskIO,
-	"disk_operations":       FeatureStatsDiskOperations,
-	"disk_service_time":     FeatureStatsDiskServiceTime,
-	"fs_sync_duration":      FeatureStatsFsSyncDuration,
-	"fs_sync_operations":    FeatureStatsFsSyncOperations,
-	"fs_sync_time":          FeatureStatsFsSyncTime,
+	"disk_service_duration":         FeatureStatsDiskServiceDuration,
+	"disk_io":                       FeatureStatsDiskIO,
+	"disk_operations":               FeatureStatsDiskOperations,
+	"disk_service_time":             FeatureStatsDiskServiceTime,
+	"fs_sync_duration":              FeatureStatsFsSyncDuration,
+	"fs_sync_operations":            FeatureStatsFsSyncOperations,
+	"fs_sync_time":                  FeatureStatsFsSyncTime,
+	"nfs_client_procedure_duration": FeatureStatsNFSClientProcedureDuration,
+	"nfs_client_io":                 FeatureStatsNFSClientIO,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -474,6 +484,24 @@ func (f Features) StatsFsSyncTime() bool {
 // StatsFsSync tells whether any file sync stat feature is enabled
 func (f Features) StatsFsSync() bool {
 	return f.any(FeatureStatsFsSync)
+}
+
+// StatsNFS reports whether any NFS client stat metric is enabled
+func (f Features) StatsNFS() bool {
+	return f.any(FeatureStatsNFS)
+}
+
+// StatsNFSClientProcedures reports whether any NFS client stat metric of the RPCs is enabled
+func (f Features) StatsNFSClientProcedures() bool {
+	return f.any(featureStatsNFSProcedures)
+}
+
+func (f Features) StatsNFSClientProcedureDuration() bool {
+	return f.any(FeatureStatsNFSClientProcedureDuration)
+}
+
+func (f Features) StatsNFSClientIO() bool {
+	return f.any(FeatureStatsNFSClientIO)
 }
 
 func (f Features) NetworkInterZone() bool {

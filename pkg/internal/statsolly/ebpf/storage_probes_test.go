@@ -19,22 +19,54 @@ import (
 
 // When the storage programs can't be loaded, the stats go on without any of them
 func TestStorageProbesDisableAll(t *testing.T) {
-	storage := storageProbes{disk: true}
+	storage := storageProbes{
+		disk: true,
+		nfs:  nfsLoad{statsLatency: true, pgio: true},
+	}
 	assert.True(t, storage.disk)
 	assert.NotContains(t, storage.programsToDisable(), progObiStatsRawTpBlockRqComplete)
+	assert.NotContains(t, storage.programsToDisable(), progObiStatsRawTpRPCStatsLatency)
 
 	storage.disableAll(errors.New("verifier error"))
 
 	assert.False(t, storage.disk)
+	assert.Equal(t, nfsLoad{}, storage.nfs)
 	assert.Equal(t, []DisabledFeature{
 		{Feature: featureDisk, Reason: "verifier error"},
+		{Feature: featureNFSProcedures, Reason: "verifier error"},
+		{Feature: featureNFSIO, Reason: "verifier error"},
 	}, storage.disabled)
 	toDisable := storage.programsToDisable()
 	for _, program := range []string{
 		progObiStatsRawTpBlockRqIssue, progObiStatsRawTpBlockRqIssueLegacy, progObiStatsRawTpBlockRqComplete,
+		progObiStatsRawTpRPCStatsLatency, progObiStatsRawTpNFSReadpageDone, progObiStatsRawTpNFSWritebackDone,
 	} {
 		assert.Contains(t, toDisable, program)
 	}
+}
+
+// An NFS client program that the kernel can't load disables the NFS client stats only
+func TestStorageProbesDisableTheNFSStatsWhenTheirProgramsCantBeLoaded(t *testing.T) {
+	storage := storageProbes{disk: true, nfs: nfsLoad{statsLatency: true, pgio: true}}
+	failure := "program " + progObiStatsRawTpNFSWritebackDone + ": load program: invalid argument"
+	var loads [][]string
+	err := storage.loadOrDisable(func(toDisable []string) error {
+		loads = append(loads, toDisable)
+		if len(loads) == 1 {
+			return errors.New(failure)
+		}
+		return nil
+	}, nil)
+
+	require.NoError(t, err)
+	require.Len(t, loads, 2)
+	assert.True(t, storage.disk)
+	assert.NotContains(t, loads[1], progObiStatsRawTpBlockRqComplete)
+	assert.Subset(t, loads[1], nfsLoad{}.programsToDisable())
+	assert.Equal(t, []DisabledFeature{
+		{Feature: featureNFSProcedures, Reason: "can't load their BPF programs: " + failure},
+		{Feature: featureNFSIO, Reason: "can't load their BPF programs: " + failure},
+	}, storage.disabled)
 }
 
 // When the storage programs can't be loaded, the stats programs are loaded again without them

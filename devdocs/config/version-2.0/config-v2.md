@@ -562,11 +562,11 @@ This section is the primary user control for defining how OBI captures and proce
 The current shape separates packet/flow capture from TCP stats capture:
 
 - `capture.network.capture` controls network flow capture and flow-derived telemetry.
-- `capture.network.stats` controls TCP, block I/O (disk) and file sync stats telemetry. `enabled` is the stats master switch, and `features` lists enabled stats families: `tcp_rtt`, `tcp_failed_connections`, `tcp_successful_connections`, `tcp_retransmits`, `tcp_io`, `disk_service_duration`, `disk_io`, `disk_operations`, `disk_service_time`, `fs_sync_duration`, `fs_sync_operations`, and `fs_sync_time`.
+- `capture.network.stats` controls TCP, block I/O (disk), file sync and NFS client stats telemetry. `enabled` is the stats master switch, and `features` lists enabled stats families: `tcp_rtt`, `tcp_failed_connections`, `tcp_successful_connections`, `tcp_retransmits`, `tcp_io`, `disk_service_duration`, `disk_io`, `disk_operations`, `disk_service_time`, `fs_sync_duration`, `fs_sync_operations`, `fs_sync_time`, `nfs_client_procedure_duration`, and `nfs_client_io`.
 
 `tcp_io` can produce substantially more events than the other stats families, so users should opt into it deliberately when they need per-send/per-receive I/O stats.
 
-The `disk_*` families probe every block I/O request, and the `fs_sync_*` families every file sync, so they are never enabled by `enabled: true` alone: list them in `features` to opt in. They have no Config v1 equivalent.
+The `disk_*` families probe every block I/O request, the `fs_sync_*` families every file sync, and the `nfs_client_*` families every NFS RPC, so they are never enabled by `enabled: true` alone: list them in `features` to opt in. They have no Config v1 equivalent.
 
 ### `capture.engine` Section
 

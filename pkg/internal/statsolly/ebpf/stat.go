@@ -21,6 +21,8 @@ const (
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
 	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
 	StatTypeFsSync                  = StatType(StatsStatTypeK_statTypeFsSync)
+	StatTypeNFSProcedure            = StatType(StatsStatTypeK_statTypeNfsProcedure)
+	StatTypeNFSIO                   = StatType(StatsStatTypeK_statTypeNfsIo)
 )
 
 type TCPFailReasonType string
@@ -125,6 +127,8 @@ type Stat struct {
 	TCPIo                   *TCPIo                   `json:"-"`
 	DiskIO                  *DiskIO                  `json:"-"`
 	FsSync                  *FsSync                  `json:"-"`
+	NFSProcedure            *NFSProcedure            `json:"-"`
+	NFSIO                   *NFSIO                   `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -193,6 +197,31 @@ type FsSync struct {
 	Latency *LatencyHistogram
 }
 
+// NFSProcedure is the NFS client RPCs of a procedure that completed with an outcome, since the
+// previous read of the kernel accumulation map.
+type NFSProcedure struct {
+	// Server is the server as its first mount on the node names it: a name or an address
+	Server string
+	// Procedure is the name of the procedure, as the NFS client names it
+	Procedure string
+	// Version of the NFS protocol
+	Version uint32
+	// ErrorType is empty for successful RPCs
+	ErrorType string
+
+	// Latency of the RPCs
+	Latency *LatencyHistogram
+}
+
+// NFSIO is the bytes that the NFS client read from or wrote to a server, since the previous read of
+// the kernel accumulation map.
+type NFSIO struct {
+	Server string
+	// Direction is receive for reads, transmit for writes
+	Direction uint8
+	Bytes     uint64
+}
+
 // ContainerID returns the container that a block I/O or file sync stat is charged to, or an empty
 // string for any other stat
 func (s *Stat) ContainerID() string {
@@ -205,8 +234,9 @@ func (s *Stat) ContainerID() string {
 	return ""
 }
 
-// LatencyHistogram counts operations, block requests or file syncs, in the buckets of the bounds of
-// their metric, export.DiskLatencyBounds or export.FsSyncLatencyBounds
+// LatencyHistogram counts operations, block requests, file syncs or NFS RPCs, in the buckets of the
+// bounds of their metric, export.DiskLatencyBounds, export.FsSyncLatencyBounds or
+// export.NFSLatencyBounds
 type LatencyHistogram struct {
 	// BucketCounts counts the operations of each bucket: one per bound, then the overflow bucket
 	BucketCounts []uint64

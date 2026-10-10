@@ -87,7 +87,7 @@ func TestStorageMapsOfDisabledFeatures(t *testing.T) {
 
 	for name, entries := range load(export.FeatureStatsDisk, &attributes.SelectorConfig{}) {
 		want := spec.Maps[name].MaxEntries
-		if slices.Contains(cgroupNameMaps, name) || strings.HasPrefix(name, "fs_sync_") {
+		if slices.Contains(cgroupNameMaps, name) || strings.HasPrefix(name, "fs_sync_") || strings.HasPrefix(name, "nfs_") {
 			want = 1
 		}
 		assert.Equal(t, want, entries, "disk without the cgroups: %s", name)
@@ -98,7 +98,7 @@ func TestStorageMapsOfDisabledFeatures(t *testing.T) {
 	}}
 	for name, entries := range load(export.FeatureStatsDisk, withContainers) {
 		want := spec.Maps[name].MaxEntries
-		if strings.HasPrefix(name, "fs_sync_") {
+		if strings.HasPrefix(name, "fs_sync_") || strings.HasPrefix(name, "nfs_") {
 			want = 1
 		}
 		assert.Equal(t, want, entries, "disk: %s", name)

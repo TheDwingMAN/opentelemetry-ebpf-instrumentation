@@ -410,6 +410,10 @@ func TestShrinkUnusedStorageMaps(t *testing.T) {
 		{"file syncs without their cgroups", storageProbes{fsSync: true}, cgroupNameMaps, []string{
 			"fs_sync_accum", "fs_sync_accum_init_storage", "fs_sync_start",
 		}},
+		{"NFS procedures", storageProbes{nfs: nfsLoad{statsLatency: true}}, nil, []string{
+			"nfs_procedure_accum", "nfs_procedure_accum_init_storage",
+		}},
+		{"NFS I/O", storageProbes{nfs: nfsLoad{pgio: true}}, nil, []string{"nfs_io_accum"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before, after := sizes(t, tc.storage, tc.unread)

@@ -24,17 +24,21 @@ const featureDisk = "the block I/O metrics (the disk_* stats features)"
 
 // storageProbes tells which storage probes are loaded and attached. The storage features are
 // optional: an enabled one whose probes can't be loaded or attached is disabled, with the reason,
-// and the other stats keep working.
+// and the other stats keep working. The NFS client probes whose tracepoints don't exist yet wait
+// for their kernel modules.
 type storageProbes struct {
 	layout blockTracepointLayout
 	disk   bool
 	fsSync bool
+	nfs    nfsLoad
 	// fsSyncTracing are the file sync hooks, by function, whose fentry and fexit programs are
 	// loaded: the kprobes of the others are attached instead
 	fsSyncTracing map[string]bool
 	// fsSyncMechanisms are the probe mechanisms of the attached file sync hooks, by function
 	fsSyncMechanisms map[string]string
-	disabled         []DisabledFeature
+	// nfsState tells which NFS probes are attached, and which wait for their tracepoints
+	nfsState nfsState
+	disabled []DisabledFeature
 }
 
 // planStorageProbes returns the storage probes of the enabled features that the kernel can load.
@@ -52,6 +56,16 @@ func planStorageProbes(log *slog.Logger, features *export.Features) storageProbe
 		s.fsSync = true
 		s.fsSyncTracing = kernelFsSyncTracingHooks(log)
 	}
+	if features.StatsNFS() {
+		probes := kernelNFSProbes()
+		if features.StatsNFSClientProcedures() && probes.rpc != nil {
+			s.disable(featureNFSProcedures, probes.rpc)
+		}
+		if features.StatsNFSClientIO() && probes.pgio != nil {
+			s.disable(featureNFSIO, probes.pgio)
+		}
+		s.nfs = nfsLoadFor(features, probes)
+	}
 	return s
 }
 
@@ -61,7 +75,7 @@ func (s *storageProbes) disable(feature string, reason error) {
 
 // any tells whether any storage feature has programs to load
 func (s *storageProbes) any() bool {
-	return s.disk || s.fsSync
+	return s.disk || s.fsSync || s.nfs != nfsLoad{}
 }
 
 // disableAll disables every storage feature that has programs to load
@@ -72,16 +86,30 @@ func (s *storageProbes) disableAll(reason error) {
 	if s.fsSync {
 		s.disable(featureFsSync, reason)
 	}
+	s.disableNFS(reason)
 	s.disk, s.fsSync = false, false
+}
+
+// disableNFS disables the NFS client features that have programs to load
+func (s *storageProbes) disableNFS(reason error) {
+	if s.nfs.statsLatency {
+		s.disable(featureNFSProcedures, reason)
+	}
+	if s.nfs.pgio {
+		s.disable(featureNFSIO, reason)
+	}
+	s.nfs = nfsLoad{}
 }
 
 // programsToDisable returns the storage programs that must not be loaded
 func (s *storageProbes) programsToDisable() []string {
 	toDisable := diskProgramsToDisable(s.disk, s.layout)
-	if !s.fsSync {
-		return append(toDisable, fsSyncProgramNames()...)
+	if s.fsSync {
+		toDisable = append(toDisable, fsSyncTracingProgramsToDisable(s.fsSyncTracing)...)
+	} else {
+		toDisable = append(toDisable, fsSyncProgramNames()...)
 	}
-	return append(toDisable, fsSyncTracingProgramsToDisable(s.fsSyncTracing)...)
+	return append(toDisable, s.nfs.programsToDisable()...)
 }
 
 // loadOrDisable loads the stats programs with the storage ones. A file sync hook whose fentry or
@@ -126,12 +154,18 @@ func (s *storageProbes) dropProgramsOf(err error) bool {
 		s.disable(featureDisk, reason)
 		return true
 	}
+	if s.nfs != (nfsLoad{}) && loadErrorNamesAny(err, nfsLoad{}.programsToDisable()) {
+		s.disableNFS(reason)
+		return true
+	}
 	return false
 }
 
 // attach attaches the probes of the loaded storage features. A feature whose probes can't be
 // attached is disabled, and the error tells to load the stats programs again without its programs:
-// then no storage probe is attached.
+// then no storage probe is attached. The NFS client probes are attached last: those whose
+// tracepoints don't exist yet wait for them, and those that can't be attached disable their metric
+// only.
 func (s *storageProbes) attach(log *slog.Logger, objects *StatsObjects) ([]io.Closer, error) {
 	var closables []io.Closer
 	if s.disk {
@@ -155,7 +189,8 @@ func (s *storageProbes) attach(log *slog.Logger, objects *StatsObjects) ([]io.Cl
 		s.fsSyncMechanisms = mechanisms
 		logFsSyncMechanisms(log, mechanisms)
 	}
-	return closables, nil
+	s.nfsState = nfsState{loaded: s.nfs, pending: s.nfs}
+	return append(closables, attachNFS(log, objects, &s.nfsState)...), nil
 }
 
 // attachDisk attaches the disk probes, or none of them

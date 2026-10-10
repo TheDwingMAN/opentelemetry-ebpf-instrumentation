@@ -717,3 +717,55 @@ groups:
         requirement_level: opt_in
       - ref: k8s.container.name
         requirement_level: opt_in
+
+  - id: metric.obi.obi.stat.nfs.client.procedure.duration
+    type: metric
+    metric_name: obi.stat.nfs.client.procedure.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    brief: >
+      Time that each RPC of the kernel NFS client takes, from the start of its
+      RPC task to its completion, per server, procedure, NFS version and
+      outcome: the wait for a transport slot, the transmissions, the
+      retransmissions and the server's reply. It is the execute time of
+      /proc/self/mountstats (nfsiostat's avg exe), which includes the
+      round-trip time, not the round-trip time alone. For NFSv4,
+      `onc_rpc.procedure.name` is the name that the kernel client gives to
+      each kind of COMPOUND request, after its main operation, e.g. `READ` or
+      `OPEN`.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: server.address
+        requirement_level: recommended
+      - ref: onc_rpc.procedure.name
+        requirement_level: recommended
+      - ref: onc_rpc.version
+        requirement_level: recommended
+      - ref: error.type
+        requirement_level:
+          conditionally_required: >
+            if the RPC failed: its errno name, e.g. `EIO`, `ENOENT` (no such
+            file) or `EJUKEBOX`, the name of its NFSv4 status, e.g.
+            `NFS4ERR_DELAY`, or `_OTHER`
+
+  - id: metric.obi.obi.stat.nfs.client.io
+    type: metric
+    metric_name: obi.stat.nfs.client.io
+    instrument: counter
+    unit: "By"
+    stability: development
+    brief: >
+      File data that the READ and WRITE RPCs of the kernel NFS client
+      transferred, per server and direction (`receive`: read from the server,
+      `transmit`: written to it): the bytes that the server read and wrote, as
+      /proc/self/mountstats counts them, without the RPC headers and the other
+      procedures.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: server.address
+        requirement_level: recommended
+      - ref: network.io.direction
+        requirement_level: recommended

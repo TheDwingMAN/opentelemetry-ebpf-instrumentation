@@ -78,7 +78,7 @@ const (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type fs_sync_type -type fs_sync_key_t -type fs_sync_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type fs_sync_type -type fs_sync_key_t -type fs_sync_accum_t -type nfs_procedure_key_t -type nfs_procedure_accum_t -type nfs_io_key_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -88,7 +88,12 @@ type StatsFetcher struct {
 	diskAttached          bool
 	diskStatusIsBlkStatus bool
 	fsSyncAttached        bool
+	nfs                   nfsState
 	disabled              []DisabledFeature
+
+	// mu guards closables, closed and nfs, except nfs.loaded, which never changes, against RefreshNFSProbes
+	mu     sync.Mutex
+	closed bool
 }
 
 func tlog() *slog.Logger {
@@ -98,7 +103,8 @@ func tlog() *slog.Logger {
 // NewStatsFetcher loads and attaches the stat probes of the enabled features. The storage probes
 // read the attributes that the reported attributes need, and the ones in reads. The TCP probes are
 // required, while the storage ones are optional: a storage feature whose probes can't be loaded or
-// attached is disabled, and listed by DisabledStorageFeatures, and the other stats keep working.
+// attached, or wait for a kernel module, is disabled, and listed by DisabledStorageFeatures, and
+// the other stats keep working.
 func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGroups attributes.AttrGroups,
 	selectorCfg *attributes.SelectorConfig, reads ProbeReads,
 ) (*StatsFetcher, error) {
@@ -161,6 +167,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 		"disk_read_cgroup":          diskReads.cgroup,
 		"fs_sync_latency_bounds_ns": latencyBoundsNs(export.FsSyncLatencyBounds),
 		"fs_sync_read_cgroup":       fsSyncReads.cgroup,
+		"nfs_latency_bounds_ns":     latencyBoundsNs(export.NFSLatencyBounds),
 	})
 	if err := storage.loadOrDisable(load, tcpToDisable); err != nil {
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
@@ -191,6 +198,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, attrGrou
 		diskAttached:          storage.disk,
 		diskStatusIsBlkStatus: storage.layout.completeReportsBlkStatus,
 		fsSyncAttached:        storage.fsSync,
+		nfs:                   storage.nfsState,
 		disabled:              storage.disabled,
 	}, nil
 }
@@ -331,7 +339,7 @@ func sizeInFlightMaps(spec *ebpf.CollectionSpec, cpus int) {
 }
 
 // storageMapPrefixes start the names of the maps of the storage features
-var storageMapPrefixes = []string{"disk_", "fs_sync_"}
+var storageMapPrefixes = []string{"disk_", "fs_sync_", "nfs_"}
 
 // cgroupNameMaps are the maps where the disk and file sync probes record the names of the cgroups,
 // which they only use when they read the cgroup of the operations
@@ -409,6 +417,9 @@ func closeAll(closables []io.Closer) {
 func (m *StatsFetcher) Close() error {
 	m.log.Debug("unregistering eBPF objects")
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closed = true
 	var errs []error
 	for _, c := range m.closables {
 		if c != nil {
@@ -457,9 +468,11 @@ func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
 }
 
 // DisabledStorageFeatures returns the enabled storage features whose probes can't be loaded or
-// attached on this node
+// attached on this node, or wait for a kernel module
 func (m *StatsFetcher) DisabledStorageFeatures() []DisabledFeature {
-	return m.disabled
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Concat(m.disabled, m.nfs.disabled())
 }
 
 // DiskStatusIsBlkStatus tells whether the kernel reports block request completion statuses as

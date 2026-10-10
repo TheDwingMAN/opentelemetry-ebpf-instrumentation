@@ -30,6 +30,8 @@ func (m *StatsFetcher) DisabledStorageFeatures() []DisabledFeature {
 	return nil
 }
 
+func (m *StatsFetcher) RefreshNFSProbes() {}
+
 func (m *StatsFetcher) StatsEventsMap() *ciliumebpf.Map {
 	return nil
 }
@@ -43,6 +45,14 @@ func (m *StatsFetcher) DiskIOAccumMap() *ciliumebpf.Map {
 }
 
 func (m *StatsFetcher) FsSyncAccumMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) NFSProcedureAccumMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) NFSIOAccumMap() *ciliumebpf.Map {
 	return nil
 }
 

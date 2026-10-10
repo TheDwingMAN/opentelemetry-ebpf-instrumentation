@@ -1487,6 +1487,36 @@ Sum of the durations of the file syncs that `obi.stat.fs.sync.duration` measures
 | `obi.fs.sync.type` | enum | `recommended` | development | How the files were synced: the system call (`fsync`, `fdatasync`, `sync`, `syncfs` or `sync_file_range`) or, for the syncs that the kernel does within other calls (O_SYNC and O_DSYNC writes, msync, io_uring), `fsync` or `fdatasync`, depending on whether the metadata is synced too. | fsync; fdatasync; sync; syncfs; sync_file_range; unknown |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 
+## `obi.stat.nfs.client.io`
+
+File data that the READ and WRITE RPCs of the kernel NFS client transferred, per server and direction (`receive`: read from the server, `transmit`: written to it): the bytes that the server read and wrote, as /proc/self/mountstats counts them, without the RPC headers and the other procedures.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | By | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `network.io.direction` | enum | `recommended` | development | The network IO operation direction. | transmit |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
+## `obi.stat.nfs.client.procedure.duration`
+
+Time that each RPC of the kernel NFS client takes, from the start of its RPC task to its completion, per server, procedure, NFS version and outcome: the wait for a transport slot, the transmissions, the retransmissions and the server's reply. It is the execute time of /proc/self/mountstats (nfsiostat's avg exe), which includes the round-trip time, not the round-trip time alone. For NFSv4, `onc_rpc.procedure.name` is the name that the kernel client gives to each kind of COMPOUND request, after its main operation, e.g. `READ` or `OPEN`.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `conditionally_required`: if the RPC failed: its errno name, e.g. `EIO`, `ENOENT` (no such file) or `EJUKEBOX`, the name of its NFSv4 status, e.g. `NFS4ERR_DELAY`, or `_OTHER` | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `onc_rpc.procedure.name` | string | `recommended` | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
 ## `obi.stat.tcp.failed.connections`
 
 Count of TCP connections that failed to establish, broken down by `reason`.

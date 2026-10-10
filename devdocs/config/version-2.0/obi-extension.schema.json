@@ -2077,7 +2077,7 @@
         },
         "stats": {
           "type": "object",
-          "description": "TCP, block I/O (disk) and file sync stats capture controls.",
+          "description": "TCP, block I/O (disk), file sync and NFS client stats capture controls.",
           "additionalProperties": true,
           "properties": {
             "enabled": {
@@ -2101,11 +2101,13 @@
                   "disk_service_time",
                   "fs_sync_duration",
                   "fs_sync_operations",
-                  "fs_sync_time"
+                  "fs_sync_time",
+                  "nfs_client_procedure_duration",
+                  "nfs_client_io"
                 ]
               },
               "default": [],
-              "description": "Enabled stats families: the TCP ones, the block I/O (disk) ones, disk_service_duration, disk_io, disk_operations and disk_service_time, and the file sync ones, fs_sync_duration, fs_sync_operations and fs_sync_time.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones, the block I/O (disk) ones, disk_service_duration, disk_io, disk_operations and disk_service_time, and the file sync ones, fs_sync_duration, fs_sync_operations and fs_sync_time, and the NFS client ones, nfs_client_procedure_duration and nfs_client_io.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",

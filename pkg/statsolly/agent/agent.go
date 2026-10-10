@@ -64,6 +64,10 @@ func (s Status) String() string {
 
 var errShutdownTimeout = errors.New("graceful shutdown has timed out while waiting for eBPF statsolly to finish")
 
+// nfsProbesRefresh is how often the NFS client probes that wait for their kernel modules are
+// attached, if the modules are loaded
+const nfsProbesRefresh = 30 * time.Second
+
 // defaultDiskReadInterval is how often the storage accumulation maps are read when
 // ebpf.batch_timeout doesn't set a period
 const defaultDiskReadInterval = time.Second
@@ -94,9 +98,12 @@ type ebpFetcher interface {
 	DebugEventsMap() *ciliumebpf.Map
 	DiskIOAccumMap() *ciliumebpf.Map
 	FsSyncAccumMap() *ciliumebpf.Map
+	NFSProcedureAccumMap() *ciliumebpf.Map
+	NFSIOAccumMap() *ciliumebpf.Map
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
 	DisabledStorageFeatures() []ebpf.DisabledFeature
+	RefreshNFSProbes()
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -135,7 +142,7 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	}
 	if disabled := statsFetcher.DisabledStorageFeatures(); len(disabled) > 0 {
 		warnDisabledStorage(disabled)
-	} else if features.StatsDisk() || features.StatsFsSync() {
+	} else if features.StatsDisk() || features.StatsFsSync() || features.StatsNFS() {
 		alog.Info("the probes of the enabled storage metrics are loaded")
 	}
 
@@ -165,6 +172,20 @@ func warnDisabledStorage(disabled []ebpf.DisabledFeature) {
 	}
 }
 
+// refreshNFSProbes attaches the NFS client probes that wait for their kernel modules, periodically
+func refreshNFSProbes(ctx context.Context, fetcher ebpFetcher) {
+	ticker := time.NewTicker(nfsProbesRefresh)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fetcher.RefreshNFSProbes()
+		}
+	}
+}
+
 // statsAgent is a private constructor with injectable dependencies, usable for tests
 func statsAgent(
 	ctxInfo *global.ContextInfo,
@@ -175,7 +196,8 @@ func statsAgent(
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
 	var diskTracer *stats.DiskMapTracer
-	if statsFetcher.DiskIOAccumMap() != nil || statsFetcher.FsSyncAccumMap() != nil {
+	if statsFetcher.DiskIOAccumMap() != nil || statsFetcher.FsSyncAccumMap() != nil ||
+		statsFetcher.NFSProcedureAccumMap() != nil || statsFetcher.NFSIOAccumMap() != nil {
 		interval := cfg.EBPF.BatchTimeout
 		if interval <= 0 {
 			interval = defaultDiskReadInterval
@@ -183,6 +205,8 @@ func statsAgent(
 		diskTracer = stats.NewDiskMapTracer(&stats.DiskMapTracerConfig{
 			DiskIOAccum:           statsFetcher.DiskIOAccumMap(),
 			FsSyncAccum:           statsFetcher.FsSyncAccumMap(),
+			NFSProcedureAccum:     statsFetcher.NFSProcedureAccumMap(),
+			NFSIOAccum:            statsFetcher.NFSIOAccumMap(),
 			CgroupNames:           statsFetcher.DiskCgroupNamesMap(),
 			DiskStatusIsBlkStatus: statsFetcher.DiskStatusIsBlkStatus(),
 			Interval:              interval,
@@ -212,6 +236,10 @@ func (s *Stats) Run(ctx context.Context) error {
 	if s.cfg.EBPF.BpfDebug {
 		go logger.ReadDebugEventsMap(runCtx, s.fetcher.DebugEventsMap(),
 			slog.With("component", "statsolly.BPFDebug"))
+	}
+	// the NFS client probes that wait for their kernel modules are listed as disabled
+	if len(s.fetcher.DisabledStorageFeatures()) > 0 {
+		go refreshNFSProbes(runCtx, s.fetcher)
 	}
 
 	graph, err := s.buildPipeline(ctx)

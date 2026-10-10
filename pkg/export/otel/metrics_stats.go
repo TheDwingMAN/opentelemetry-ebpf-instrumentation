@@ -104,6 +104,8 @@ type statMetricsExporter struct {
 	fsSyncDuration           *kernelHistogram
 	fsSyncOperations         *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	fsSyncTime               *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
+	nfsProcedureDuration     *kernelHistogram
+	nfsIO                    *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	kernelHistograms         *kernelHistogramProducer
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
@@ -326,6 +328,26 @@ func newStatMetricsExporter(
 		nme.fsSyncTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, fsSyncTime, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StatsNFSClientProcedureDuration() {
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatNFSClientProcedureDuration))
+		nme.nfsProcedureDuration = kernelHistograms.histogram(attributes.StatNFSClientProcedureDuration,
+			export.NFSLatencyBounds, attrs)
+	}
+
+	if cfg.CommonCfg.Features.StatsNFSClientIO() {
+		log := log.With("metricFamily", "StatsNFSClientIO")
+
+		nfsIO, err := ebpfEvents.Int64Counter(attributes.StatNFSClientIO.OTEL,
+			metric2.WithUnit(attributes.StatNFSClientIO.Unit))
+		if err != nil {
+			log.Error("creating stats NFS client io counter", "error", err)
+			return nil, err
+		}
+
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatNFSClientIO))
+		nme.nfsIO = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, nfsIO, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -378,6 +400,13 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if me.fsSyncTime != nil && v.FsSync != nil {
 				fsSyncTime, attrs := me.fsSyncTime.ForRecord(v)
 				fsSyncTime.Add(ctx, v.FsSync.Time, metric2.WithAttributeSet(attrs))
+			}
+			if me.nfsProcedureDuration != nil && v.NFSProcedure != nil {
+				me.kernelHistograms.record(me.nfsProcedureDuration, v, v.NFSProcedure.Latency)
+			}
+			if me.nfsIO != nil && v.NFSIO != nil {
+				nfsIO, attrs := me.nfsIO.ForRecord(v)
+				nfsIO.Add(ctx, int64(v.NFSIO.Bytes), metric2.WithAttributeSet(attrs))
 			}
 		}
 	}

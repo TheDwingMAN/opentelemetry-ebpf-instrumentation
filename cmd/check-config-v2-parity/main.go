@@ -427,6 +427,12 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsFsSyncTime() {
 		want = append(want, "fs_sync_time")
 	}
+	if features.StatsNFSClientProcedureDuration() {
+		want = append(want, "nfs_client_procedure_duration")
+	}
+	if features.StatsNFSClientIO() {
+		want = append(want, "nfs_client_io")
+	}
 
 	got := toStringSlice(featuresValue)
 	if !sameStringSet(got, want) {

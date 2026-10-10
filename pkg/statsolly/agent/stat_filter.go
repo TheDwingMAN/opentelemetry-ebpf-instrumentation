@@ -31,6 +31,8 @@ var storageStatSections = map[ebpf.StatType][]attributes.Section{
 	ebpf.StatTypeFsSync: {
 		attributes.StatFsSyncDuration.Section, attributes.StatFsSyncOperations.Section, attributes.StatFsSyncTime.Section,
 	},
+	ebpf.StatTypeNFSProcedure: {attributes.StatNFSClientProcedureDuration.Section},
+	ebpf.StatTypeNFSIO:        {attributes.StatNFSClientIO.Section},
 }
 
 // tcpStatFilters returns the stats attribute filters that apply to the TCP stats: all of them but
@@ -52,8 +54,8 @@ func tcpStatFilters(config filter.AttributeFamilyConfig, extraGroupAttributesCfg
 
 // filterStorageStatsByAttribute drops the storage stats that don't match the stats attribute
 // filters. A storage stat is only matched against the filters of the attributes that the metrics of
-// its type have: a filter on an attribute of the disk metrics doesn't drop the file sync stats, nor
-// a filter on an attribute of the TCP metrics any storage stat.
+// its type have: a filter on an attribute of the disk metrics doesn't drop the file sync or NFS
+// stats, nor a filter on an attribute of the TCP metrics any storage stat.
 func filterStorageStatsByAttribute(
 	config filter.AttributeFamilyConfig,
 	extraGroupAttributesCfg map[string][]attr.Name,

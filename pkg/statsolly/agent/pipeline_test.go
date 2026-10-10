@@ -370,6 +370,44 @@ func TestFsSyncCounters(t *testing.T) {
 
 // The disk probes couldn't be loaded: the agent has no disk tracer, and the TCP stats go on without
 // the storage branch
+func TestNFSStats(t *testing.T) {
+	diskEvents, promURL := startDiskPipeline(t, export.FeatureStatsNFS)
+
+	diskEvents <- []*ebpf.Stat{
+		{Type: ebpf.StatTypeNFSProcedure, NFSProcedure: &ebpf.NFSProcedure{
+			Server: "10.0.0.5", Procedure: "READ", Version: 4, Latency: fakeLatency(0.004, 0.004, 0.004),
+		}},
+		{Type: ebpf.StatTypeNFSProcedure, NFSProcedure: &ebpf.NFSProcedure{
+			Server: "10.0.0.5", Procedure: "GETATTR", Version: 4, ErrorType: "ESTALE", Latency: fakeLatency(0.02),
+		}},
+		{Type: ebpf.StatTypeNFSIO, NFSIO: &ebpf.NFSIO{
+			Server: "10.0.0.5", Direction: uint8(ebpf.CodeDirectionReceive), Bytes: 1 << 20,
+		}},
+		{Type: ebpf.StatTypeNFSIO, NFSIO: &ebpf.NFSIO{
+			Server: "10.0.0.5", Direction: uint8(ebpf.CodeDirectionTransmit), Bytes: 4096,
+		}},
+	}
+
+	read := map[string]string{"server_address": "10.0.0.5", "onc_rpc_procedure_name": "READ", "onc_rpc_version": "4", "error_type": ""}
+	stale := map[string]string{"server_address": "10.0.0.5", "onc_rpc_procedure_name": "GETATTR", "onc_rpc_version": "4", "error_type": "ESTALE"}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_nfs_client_procedure_duration_seconds_count", Value: 3, Labels: read},
+			{Name: "obi_stat_nfs_client_procedure_duration_seconds_count", Value: 1, Labels: stale},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_nfs_client_procedure_duration_seconds_count"))
+		assert.Len(ct, scrapeDiskMetrics(ct, promURL, "obi_stat_nfs_client_procedure_duration_seconds_bucket"),
+			2*(len(export.NFSLatencyBounds)+1))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_nfs_client_io_bytes_total", Value: 1 << 20, Labels: map[string]string{
+				"server_address": "10.0.0.5", "network_io_direction": "receive",
+			}},
+			{Name: "obi_stat_nfs_client_io_bytes_total", Value: 4096, Labels: map[string]string{
+				"server_address": "10.0.0.5", "network_io_direction": "transmit",
+			}},
+		}, scrapeDiskMetrics(ct, promURL, "obi_stat_nfs_client_io_bytes_total"))
+	}, timeout, 100*time.Millisecond)
+}
+
 func TestDiskStatsWithoutDiskProbes(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	promServer := httptest.NewServer(promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry}))

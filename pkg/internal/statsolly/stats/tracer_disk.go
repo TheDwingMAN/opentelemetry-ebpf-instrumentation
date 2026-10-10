@@ -125,6 +125,9 @@ type DiskMapTracerConfig struct {
 	// FsSyncAccum is the accumulation map of the file syncs, nil if the file sync probes are not
 	// attached
 	FsSyncAccum *ciliumebpf.Map
+	// NFSProcedureAccum and NFSIOAccum are the accumulation maps of the NFS client. A nil map is
+	// not read.
+	NFSProcedureAccum, NFSIOAccum *ciliumebpf.Map
 	// CgroupNames are the names of the cgroups that the kernel charges the I/O and the syncs to
 	CgroupNames *ciliumebpf.Map
 	// DiskStatusIsBlkStatus tells how the kernel reports block request completion statuses
@@ -157,6 +160,14 @@ func NewDiskMapTracer(cfg *DiskMapTracerConfig) *DiskMapTracer {
 	if cfg.FsSyncAccum != nil {
 		accum := ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: cfg.FsSyncAccum}
 		readers = append(readers, newFsSyncReader(accum, containers, cfg.Interval))
+	}
+	if cfg.NFSProcedureAccum != nil {
+		accum := ebpfAccum[ebpf.StatsNfsProcedureKeyT, ebpf.StatsNfsProcedureAccumT]{accum: cfg.NFSProcedureAccum}
+		readers = append(readers, newNFSProcedureReader(accum, cfg.Interval))
+	}
+	if cfg.NFSIOAccum != nil {
+		accum := ebpfAccum[ebpf.StatsNfsIoKeyT, uint64]{accum: cfg.NFSIOAccum}
+		readers = append(readers, newNFSIOReader(accum, cfg.Interval))
 	}
 	return &DiskMapTracer{readers: readers, interval: cfg.Interval}
 }

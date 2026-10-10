@@ -22,3 +22,9 @@ func TestFsSyncLatencyBoundsFitTheKernelHistogram(t *testing.T) {
 	assert.Len(t, export.FsSyncLatencyBounds, diskLatencyBuckets-1, "a kernel bucket per bound, then the overflow bucket")
 	assert.IsIncreasing(t, export.FsSyncLatencyBounds)
 }
+
+func TestNFSLatencyBoundsFitTheKernelHistogram(t *testing.T) {
+	assert.Len(t, StatsNfsProcedureAccumT{}.LatencyCount, diskLatencyBuckets, "the NFS RPCs have the buckets of the block requests")
+	assert.Len(t, export.NFSLatencyBounds, diskLatencyBuckets-1, "a kernel bucket per bound, then the overflow bucket")
+	assert.IsIncreasing(t, export.NFSLatencyBounds)
+}

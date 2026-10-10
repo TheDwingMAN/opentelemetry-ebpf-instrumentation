@@ -51,3 +51,8 @@ var DiskLatencyBounds = []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005,
 // the block requests, whose writes and cache flushes a sync waits for. They are fixed, as
 // DiskLatencyBounds.
 var FsSyncLatencyBounds = DiskLatencyBounds
+
+// NFSLatencyBounds are the bucket boundaries, in seconds, of the NFS client RPC durations, from
+// RPCs to a server on the same network (hundreds of microseconds) to server stalls: NFS over TCP
+// retransmits after 60 seconds by default. They are fixed, as DiskLatencyBounds.
+var NFSLatencyBounds = DiskLatencyBounds
