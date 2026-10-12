@@ -55,6 +55,30 @@ func TestFeatureEnv_NetworkFlowPackets(t *testing.T) {
 	assert.False(t, doc.Features.has(FeatureAll))
 }
 
+func TestFeatureStatsDiskServiceDuration(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		load    func([]string) (Features, error)
+		want    bool
+		wantErr bool
+	}{
+		{name: "stats", load: LoadFeatures},
+		{name: "all", load: LoadFeatures},
+		{name: "*", load: LoadFeatures},
+		{name: "stats_disk_service_duration", load: LoadFeatures, wantErr: true},
+		{name: "disk_service_duration", load: LoadFeatures, wantErr: true},
+	} {
+		features, err := tc.load([]string{tc.name})
+		if tc.wantErr {
+			require.ErrorContains(t, err, "unknown metrics feature", tc.name)
+			continue
+		}
+		require.NoError(t, err, tc.name)
+		assert.Equal(t, tc.want, features.StatsDiskServiceDuration(), tc.name)
+	}
+	assert.True(t, FeatureStatsDiskServiceDuration.StatMetrics(), "it enables the stats pipeline on its own")
+}
+
 func TestFeatureEnv_Separator(t *testing.T) {
 	doc := struct {
 		Features Features `env:"FOO" envSeparator:","`

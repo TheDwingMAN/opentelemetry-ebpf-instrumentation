@@ -56,10 +56,13 @@ const (
 	FeatureGraph
 	FeatureApplicationRuntime
 	FeatureEBPF
-	FeatureAll = Features(^uint(0)) // all bits to 1
+	// FeatureStatsDiskServiceDuration is in neither `stats` nor `all`, as its probes fire on every
+	// block request: it must be named. Config v1 is frozen and has no name for it.
+	FeatureStatsDiskServiceDuration
+	FeatureAll = Features(^uint(0)) &^ FeatureStatsDiskServiceDuration
 )
 
-// FeatureStats enables all stat metrics, including TCP IO.
+// FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
 // higher event volume than the other stat metrics (which fire on close, failure, or retransmit).
 // If overhead is a concern, enable the lower-frequency metrics individually and opt into stats_tcp_io explicitly.
@@ -375,7 +378,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats)
+	return f.any(FeatureStats | FeatureStatsDiskServiceDuration)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -396,6 +399,10 @@ func (f Features) StatsTCPRetransmits() bool {
 
 func (f Features) StatsTCPIo() bool {
 	return f.any(FeatureStatsTCPIo)
+}
+
+func (f Features) StatsDiskServiceDuration() bool {
+	return f.any(FeatureStatsDiskServiceDuration)
 }
 
 func (f Features) NetworkInterZone() bool {
