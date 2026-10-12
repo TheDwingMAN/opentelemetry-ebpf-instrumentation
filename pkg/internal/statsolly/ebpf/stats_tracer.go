@@ -44,6 +44,9 @@ const (
 	progObiStatsKprobeTCPSendmsg                          = "obi_stats_kprobe_tcp_sendmsg"
 	progObiStatsKretprobeTCPSendmsg                       = "obi_stats_kretprobe_tcp_sendmsg"
 	progObiStatsKprobeTCPCleanupRbuf                      = "obi_stats_kprobe_tcp_cleanup_rbuf"
+	progObiStatsRawTpBlockRqIssue                         = "obi_stats_raw_tp_block_rq_issue"
+	progObiStatsRawTpBlockRqIssueLegacy                   = "obi_stats_raw_tp_block_rq_issue_legacy"
+	progObiStatsRawTpBlockRqComplete                      = "obi_stats_raw_tp_block_rq_complete"
 )
 
 // Hook point names, grouped by attach type.
@@ -58,10 +61,12 @@ const (
 
 	// Raw tracepoints: name only (no group prefix).
 	RawTracepointTCPRetransmitSkb = "tcp_retransmit_skb"
+	RawTracepointBlockRqIssue     = "block_rq_issue"
+	RawTracepointBlockRqComplete  = "block_rq_complete"
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -120,17 +125,30 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 
+	diskEnabled := features.StatsDiskServiceDuration()
+	var issueHasQueueArg bool
+	if diskEnabled {
+		if issueHasQueueArg, err = kernelBlockRqIssueHasQueueArg(); err != nil {
+			return nil, fmt.Errorf("reading the block_rq_issue prototype in the kernel BTF: %w", err)
+		}
+	}
+	toDisable = append(toDisable, diskProgramsToDisable(diskEnabled, issueHasQueueArg)...)
+
 	if err := fixupSpec(spec, toDisable); err != nil {
 		return nil, fmt.Errorf("fixing up BPF spec: %w", err)
 	}
 
 	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
+	// without the number of CPUs, the in-flight map keeps its size
+	cpus, _ := ebpf.PossibleCPU()
+	sizeDiskMaps(spec, diskEnabled, cpus)
 
 	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
 	if err := ebpfconvenience.LoadSpec(spec, &objects, map[string]any{
 		"g_bpf_debug":             cfg.BpfDebug,
 		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
+		"disk_latency_bounds_ns":  diskLatencyBoundsNs(),
 	}, sharedMaps, &mu, "", nil); err != nil {
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
@@ -229,11 +247,23 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	}
 
 	// raw tracepoints
+	// The block request completion is attached before the issue, so that no request is recorded
+	// without its completion being seen.
 	for _, t := range []probe{
 		{
 			name:    RawTracepointTCPRetransmitSkb,
 			program: objects.ObiStatsRawTpTcpRetransmitSkb,
 			enabled: features.StatsTCPRetransmits(),
+		},
+		{
+			name:    RawTracepointBlockRqComplete,
+			program: objects.ObiStatsRawTpBlockRqComplete,
+			enabled: diskEnabled,
+		},
+		{
+			name:    RawTracepointBlockRqIssue,
+			program: diskIssueProgram(&objects, issueHasQueueArg),
+			enabled: diskEnabled,
 		},
 	} {
 		if !t.enabled {
@@ -286,6 +316,11 @@ func (m *StatsFetcher) StatsEventsMap() *ebpf.Map {
 
 func (m *StatsFetcher) DebugEventsMap() *ebpf.Map {
 	return m.objects.DebugEvents
+}
+
+// DiskIOAccumMap returns the map where the kernel accumulates the block request durations
+func (m *StatsFetcher) DiskIOAccumMap() *ebpf.Map {
+	return m.objects.DiskIoAccum
 }
 
 // fixupSpec replaces disabled programs with no-op stubs before loading,
