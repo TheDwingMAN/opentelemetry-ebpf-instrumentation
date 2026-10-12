@@ -19,6 +19,7 @@ const (
 	StatTypeTCPRetransmit           = StatType(StatsStatTypeK_statTypeTcpRetransmit)
 	StatTypeTCPIo                   = StatType(StatsStatTypeK_statTypeTcpIo)
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
+	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
 )
 
 type TCPFailReasonType string
@@ -81,6 +82,15 @@ const (
 	CodeDirectionTransmit = NetworkIoDirectionCode(StatsNetworkIoDirectionDirectionTransmit)
 )
 
+// DiskOpCode aliases the bpf2go-generated constants derived from enum disk_op in
+// bpf/statsolly/types.h.
+type DiskOpCode uint8
+
+const (
+	CodeDiskOpRead  = DiskOpCode(StatsDiskOpDiskOpRead)
+	CodeDiskOpWrite = DiskOpCode(StatsDiskOpDiskOpWrite)
+)
+
 // Stat contains accumulated metrics from a stat, with extra metadata
 // that is added from the user space
 // REMINDER: any attribute here must be also added to the functions StatGetters
@@ -93,6 +103,7 @@ type Stat struct {
 	TCPSuccessfulConnection *TCPSuccessfulConnection `json:"-"`
 	TCPRetransmit           bool                     `json:"-"`
 	TCPIo                   *TCPIo                   `json:"-"`
+	DiskIO                  *DiskIO                  `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -115,6 +126,22 @@ type TCPSuccessfulConnection struct {
 type TCPIo struct {
 	Direction uint8  `json:"direction"`
 	Bytes     uint32 `json:"bytes"`
+}
+
+// DiskIO is the block I/O that completed on a device in one direction since the previous read of
+// the kernel map
+type DiskIO struct {
+	Device  string
+	Op      DiskOpCode
+	Latency LatencyHistogram
+}
+
+// LatencyHistogram counts requests in the buckets of export.DiskLatencyBounds
+type LatencyHistogram struct {
+	// BucketCounts has a count per bound, then the count of the overflow bucket
+	BucketCounts []uint64
+	// Sum of the latencies, in seconds
+	Sum float64
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.
