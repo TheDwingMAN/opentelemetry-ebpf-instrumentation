@@ -560,16 +560,18 @@ supported by the current adapter; use capture rules for workload selection.
 The `capture.network` section defines how network observability is configured, including endpoint identity, selection criteria, flow lifecycle controls, interface discovery behavior, enrichment options, and diagnostics.
 This section is the primary user control for defining how OBI captures and processes network telemetry.
 
-The current shape separates packet/flow capture from TCP stats capture:
+The current shape separates packet/flow capture from TCP and block I/O (disk) stats capture:
 
 - `capture.network.capture` controls network flow capture and flow-derived telemetry.
-- `capture.network.stats` controls TCP stats telemetry. `enabled` is the stats master switch, and `features` lists enabled stats families: `tcp_rtt`, `tcp_failed_connections`, `tcp_successful_connections`, `tcp_retransmits`, and `tcp_io`.
+- `capture.network.stats` controls TCP and block I/O (disk) stats telemetry. `enabled` is the stats master switch, and `features` lists enabled stats families: `tcp_rtt`, `tcp_failed_connections`, `tcp_successful_connections`, `tcp_retransmits`, `tcp_io`, and `disk_service_duration`.
 
 `tcp_io` can produce substantially more events than the other stats families, so users should opt into it deliberately when they need per-send/per-receive I/O stats.
 
+The `disk_service_duration` family probes every block I/O request, so it is never enabled by `enabled: true` alone: list it in `features` to opt in. It has no Config v1 equivalent. In `capture.metrics.features`, which replaces these stats features when it is set, it is named `stats_disk_service_duration`, which `stats`, `all`, and `*` don't include.
+
 ### `capture.metrics.features`
 
-Select metric families with the same names as Config v1. For standalone OBI:
+Select metric families with the same names as Config v1, plus `stats_disk_service_duration`, which only Config v2 enables. For standalone OBI:
 
 ```yaml
 extensions:
