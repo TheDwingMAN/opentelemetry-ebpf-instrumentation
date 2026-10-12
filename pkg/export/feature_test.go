@@ -67,6 +67,10 @@ func TestFeatureStatsDiskServiceDuration(t *testing.T) {
 		{name: "*", load: LoadFeatures},
 		{name: "stats_disk_service_duration", load: LoadFeatures, wantErr: true},
 		{name: "disk_service_duration", load: LoadFeatures, wantErr: true},
+		{name: "stats", load: LoadV2Features},
+		{name: "all", load: LoadV2Features},
+		{name: "stats_disk_service_duration", load: LoadV2Features, want: true},
+		{name: "disk_service_duration", load: LoadV2Features, wantErr: true},
 	} {
 		features, err := tc.load([]string{tc.name})
 		if tc.wantErr {
@@ -77,6 +81,11 @@ func TestFeatureStatsDiskServiceDuration(t *testing.T) {
 		assert.Equal(t, tc.want, features.StatsDiskServiceDuration(), tc.name)
 	}
 	assert.True(t, FeatureStatsDiskServiceDuration.StatMetrics(), "it enables the stats pipeline on its own")
+
+	features := FeatureAll | FeatureStatsDiskServiceDuration
+	loaded, err := LoadV2Features(features.Names())
+	require.NoError(t, err)
+	assert.Equal(t, features, loaded, "Config v2 loads the names that it renders")
 }
 
 func TestFeatureEnv_Separator(t *testing.T) {
