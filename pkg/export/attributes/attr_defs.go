@@ -918,6 +918,14 @@ func getDefinitions(
 				attr.NetworkTCPHandshakeRole: false,
 			},
 		},
+		// block devices have no connection endpoints, so the disk stats don't have statsAttributes
+		StatDiskServiceDuration.Section: {
+			Attributes: map[attr.Name]Default{
+				attr.OBIIP:           false,
+				attr.SystemDevice:    true,
+				attr.DiskIODirection: true,
+			},
+		},
 
 		// span and service graph metrics don't yet implement attribute selection,
 		// but their values can still be filtered, so we list them here just to
