@@ -253,6 +253,7 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 		"disk_read_cgroup":          reads.Disk,
 		"disk_rqf_io_stat":          storage.rqfIOStat,
 		"disk_rqf_flush_seq":        storage.rqfFlushSeq,
+		"disk_req_op_zone_append":   storage.zoneAppendOp,
 		"fs_sync_read_cgroup":       reads.FsSync,
 	}, sharedMaps, &mu, "", nil); err != nil {
 		err = fmt.Errorf("loading stats eBPF spec: %w", err)

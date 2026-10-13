@@ -27,6 +27,10 @@ volatile const bool disk_read_cgroup;
 volatile const u32 disk_rqf_io_stat;
 volatile const u32 disk_rqf_flush_seq;
 
+// REQ_OP_ZONE_APPEND, which userspace finds in the kernel BTF: its value depends on the kernel
+// version
+volatile const u32 disk_req_op_zone_append;
+
 // Force structs into the ELF for automatic creation of Golang struct
 const disk_io_key_t *unused_disk_io_key __attribute__((unused));
 const disk_io_accum_t *unused_disk_io_accum __attribute__((unused));
@@ -38,7 +42,7 @@ SCRATCH_MEM_TYPED(disk_io_accum_init, disk_io_accum_t)
 enum { k_op_mask = (1U << __REQ_FAILFAST_DEV) - 1 };
 
 static __always_inline enum disk_op request_op(struct request *rq) {
-    return disk_op_from_req_op(BPF_CORE_READ(rq, cmd_flags) & k_op_mask);
+    return disk_op_from_req_op(BPF_CORE_READ(rq, cmd_flags) & k_op_mask, disk_req_op_zone_append);
 }
 
 static __always_inline struct gendisk *request_disk(struct request *rq) {
