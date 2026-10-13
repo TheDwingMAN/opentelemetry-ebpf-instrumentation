@@ -1367,6 +1367,8 @@ Service time of the block reads and writes, per disk and direction, from their l
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices, as device mapper, md RAID and loop devices are, which also report its I/O. To count the I/O once, add up the devices where it is `false`. | true |
+| `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Device mapper name of the block device (`system.device`), as `/dev/mapper` lists it. Absent for the other devices. | mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 

@@ -24,8 +24,8 @@ import (
 // defaultDiskReadInterval is how often the kernel map is read when ebpf.batch_timeout is 0
 const defaultDiskReadInterval = time.Second
 
-// blockDevicesCachePeriod is how long the names of the block devices are cached: the kernel gives
-// the numbers of removed devices to new ones
+// blockDevicesCachePeriod is how long what sysfs tells of the block devices is cached: the kernel
+// gives the numbers of removed devices to new ones
 const blockDevicesCachePeriod = 30 * time.Second
 
 var timeNow = time.Now
@@ -137,6 +137,7 @@ func (r *diskReader) readStats() []*ebpf.Stat {
 // stat returns the requests that completed on the device and in the direction of a key since the
 // previous read
 func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsDiskIoAccumT) *ebpf.Stat {
+	device := r.devices.device(key.Major, key.Minor)
 	latency := ebpf.LatencyHistogram{
 		BucketCounts: make([]uint64, len(current.LatencyCount)),
 		Sum:          float64(current.LatencySumNs-previous.LatencySumNs) / float64(time.Second),
@@ -147,9 +148,11 @@ func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.Stats
 	return &ebpf.Stat{
 		Type: ebpf.StatTypeDiskIO,
 		DiskIO: &ebpf.DiskIO{
-			Device:  r.devices.name(key.Major, key.Minor),
-			Op:      ebpf.DiskOpCode(key.Op),
-			Latency: latency,
+			Device:     device.name,
+			VolumeName: device.volumeName,
+			Stacked:    device.stacked,
+			Op:         ebpf.DiskOpCode(key.Op),
+			Latency:    latency,
 		},
 	}
 }
@@ -158,31 +161,42 @@ type devNum struct {
 	major, minor uint32
 }
 
+type blockDevice struct {
+	name       string
+	volumeName string
+	stacked    bool
+}
+
 type blockDevices struct {
 	sysRoot  string
 	cachedAt time.Time
-	names    map[devNum]string
+	devices  map[devNum]blockDevice
 }
 
-// name returns the kernel name of a block device, e.g. nvme0n1, or its "major:minor" numbers when
-// sysfs doesn't know them, as for a device removed since its I/O. The numbers are not cached, as
-// the kernel can give them to a new device.
-func (d *blockDevices) name(major, minor uint32) string {
+// device returns what sysfs tells of a block device. A device that sysfs doesn't know, as one
+// removed since its I/O, is named by its "major:minor" numbers, which are not cached, as the kernel
+// can give them to a new device.
+func (d *blockDevices) device(major, minor uint32) blockDevice {
 	if now := timeNow(); now.Sub(d.cachedAt) >= blockDevicesCachePeriod {
 		d.cachedAt = now
-		d.names = map[devNum]string{}
+		d.devices = map[devNum]blockDevice{}
 	}
 	numbers := devNum{major: major, minor: minor}
-	if name, ok := d.names[numbers]; ok {
-		return name
+	if device, ok := d.devices[numbers]; ok {
+		return device
 	}
 	devNumbers := fmt.Sprintf("%d:%d", major, minor)
-	name := ueventDevName(filepath.Join(d.sysRoot, "dev", "block", devNumbers, "uevent"))
-	if name == "" {
-		return devNumbers
+	dir := filepath.Join(d.sysRoot, "dev", "block", devNumbers)
+	device := blockDevice{
+		name:       ueventDevName(filepath.Join(dir, "uevent")),
+		volumeName: deviceMapperName(dir),
+		stacked:    isStacked(dir),
 	}
-	d.names[numbers] = name
-	return name
+	if device.name == "" {
+		return blockDevice{name: devNumbers}
+	}
+	d.devices[numbers] = device
+	return device
 }
 
 func ueventDevName(path string) string {
