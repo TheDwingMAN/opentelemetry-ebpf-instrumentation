@@ -126,10 +126,10 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	}
 
 	diskEnabled := features.StatsDiskServiceDuration()
-	var issueHasQueueArg bool
+	var issueHasQueueArg, completeReportsBlkStatus bool
 	if diskEnabled {
-		if issueHasQueueArg, err = kernelBlockRqIssueHasQueueArg(); err != nil {
-			return nil, fmt.Errorf("reading the block_rq_issue prototype in the kernel BTF: %w", err)
+		if issueHasQueueArg, completeReportsBlkStatus, err = kernelBlockTracepoints(); err != nil {
+			return nil, fmt.Errorf("reading the block tracepoint prototypes in the kernel BTF: %w", err)
 		}
 	}
 	toDisable = append(toDisable, diskProgramsToDisable(diskEnabled, issueHasQueueArg)...)
@@ -146,9 +146,10 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
 	if err := ebpfconvenience.LoadSpec(spec, &objects, map[string]any{
-		"g_bpf_debug":             cfg.BpfDebug,
-		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
-		"disk_latency_bounds_ns":  diskLatencyBoundsNs(),
+		"g_bpf_debug":               cfg.BpfDebug,
+		"stats_wakeup_data_bytes":   uint32(cfg.StatsWakeupDataBytes),
+		"disk_latency_bounds_ns":    diskLatencyBoundsNs(),
+		"disk_status_is_blk_status": completeReportsBlkStatus,
 	}, sharedMaps, &mu, "", nil); err != nil {
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
