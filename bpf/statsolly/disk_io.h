@@ -34,8 +34,11 @@ enum {
     k_req_op_write_zeroes = 9,
 };
 
-// Writing zeroes counts as a write, as in /proc/diskstats
-static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op) {
+// Writing zeroes and appending to a zone count as writes, as in /proc/diskstats. zone_append_op is
+// REQ_OP_ZONE_APPEND, whose value depends on the kernel version, or 0 when the kernel has none: reads
+// are classified first, so 0 matches nothing.
+static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op,
+                                                        const u32 zone_append_op) {
     switch (req_op) {
     case k_req_op_read:
         return disk_op_read;
@@ -45,7 +48,7 @@ static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op) {
     case k_req_op_flush:
         return disk_op_flush;
     default:
-        return disk_op_unknown;
+        return req_op == zone_append_op ? disk_op_write : disk_op_unknown;
     }
 }
 
