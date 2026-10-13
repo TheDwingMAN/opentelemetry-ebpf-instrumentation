@@ -1358,7 +1358,7 @@ Ratio [0-1] between the unread messages of an internal Go channel and its total 
 
 ## `obi.stat.disk.service.duration`
 
-Service time of the block reads and writes, per disk and direction, from their last issue to the device until their final completion. Only the requests whose issue OBI recorded are counted, so the counts differ from /proc/diskstats, and the I/O of bio-based devices (LVM, dm-crypt, md RAID, NVMe native multipath heads) is not measured.
+Service time of the block reads and writes, per disk and direction, from their last issue to the device until their final completion. Only the requests whose issue OBI recorded are counted, so the counts differ from /proc/diskstats, and the I/O of bio-based devices (LVM, dm-crypt, md RAID, NVMe native multipath heads) is not measured. The paths of dm-multipath devices report nothing: the multipath device reports the same requests.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1367,7 +1367,7 @@ Service time of the block reads and writes, per disk and direction, from their l
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
 | `disk.io.direction` | enum | `recommended` | development | The disk IO operation direction. | read |
-| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices, as device mapper, md RAID and loop devices are, which also report its I/O. To count the I/O once, add up the devices where it is `false`. | true |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID and loop devices are. A dm-multipath device is not, as its paths report nothing. To count the I/O once, add up the devices where it is `false`. | true |
 | `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Device mapper name of the block device (`system.device`), as `/dev/mapper` lists it. Absent for the other devices. | mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |

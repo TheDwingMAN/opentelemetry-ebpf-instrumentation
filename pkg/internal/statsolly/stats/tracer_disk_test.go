@@ -195,3 +195,47 @@ func TestStackedDevices(t *testing.T) {
 		"8:99":    {},
 	}, devices)
 }
+
+// The paths of a measured dm-multipath device report nothing, as the multipath device reports the
+// same requests, so the multipath device is not stacked
+func TestDiskReaderLeavesOutTheMultipathPaths(t *testing.T) {
+	fake := newFakeBlockDevices(t)
+	fake.add("8:16", "sdb")
+	fake.add("8:32", "sdc")
+	fake.add("8:48", "sdd")
+	fake.add("8:64", "sde")
+	// a blk-mq dm-multipath device over sdb
+	fake.add("253:1", "dm-1")
+	fake.file("dm-1", "dm/uuid", "mpath-3600a098038303053453f463045727a51")
+	fake.file("dm-1", "mq/0/nr_tags", "256")
+	fake.stack("dm-1", "sdb")
+	// a request-based one of an older kernel, without blk-mq, over sdc
+	fake.add("253:3", "dm-3")
+	fake.file("dm-3", "dm/uuid", "mpath-3600a098038303053453f463045727a53")
+	fake.file("dm-3", "queue/scheduler", "noop deadline [cfq]")
+	fake.stack("dm-3", "sdc")
+	// a bio-based one over sdd
+	fake.add("253:2", "dm-2")
+	fake.file("dm-2", "dm/uuid", "mpath-3600a098038303053453f463045727a52")
+	fake.file("dm-2", "queue/scheduler", "none")
+	fake.stack("dm-2", "sdd")
+	// an LVM volume over sde
+	fake.add("253:0", "dm-0")
+	fake.file("dm-0", "dm/uuid", "LVM-Jx5HfWYhjVTJlsk1Bm5uXPejJ6Np1HMpbTzX1bz9tJw0ZDhIrb3nG5zhpzbBgJpQ")
+	fake.stack("dm-0", "sde")
+
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{}}
+	for _, numbers := range []devNum{{8, 16}, {8, 32}, {8, 48}, {8, 64}, {253, 0}, {253, 1}, {253, 2}, {253, 3}} {
+		src.entries[writeKey(numbers.major, numbers.minor)] = accum([]uint64{1}, []uint64{100_000})
+	}
+	r := newDiskReader(src.read, fake.blockDevices())
+	stacked := map[string]bool{}
+	for _, stat := range r.readStats() {
+		stacked[stat.DiskIO.Device] = stat.DiskIO.Stacked
+	}
+	assert.Equal(t, map[string]bool{
+		"sdd": false, "sde": false, "dm-1": false, "dm-3": false,
+		"dm-0": true, "dm-2": true,
+	}, stacked, "the paths of dm-1 and dm-3 report nothing")
+	assert.Equal(t, src.entries, r.previous, "a path reports none of the requests it served while it was one")
+}

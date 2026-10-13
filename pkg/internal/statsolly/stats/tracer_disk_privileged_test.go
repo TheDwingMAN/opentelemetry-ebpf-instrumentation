@@ -118,6 +118,46 @@ func TestDiskStackedDevicesInSysfs(t *testing.T) {
 	assert.Equal(t, blockDevice{name: dm, volumeName: volume, stacked: true}, devices.device(deviceNumbers(t, dm)))
 }
 
+// TestDiskMultipathPathsReportNothing writes to a dm-multipath volume over a loop device, its only
+// path, as multipathd sets one up over a LUN: the volume reports the writes, and the path, which
+// serves the same requests, reports nothing
+func TestDiskMultipathPathsReportNothing(t *testing.T) {
+	if out, err := exec.Command("modprobe", "-a", "dm_multipath", "dm_round_robin").CombinedOutput(); err != nil {
+		t.Skipf("needs dm-multipath: %v: %s", err, out)
+	}
+	loopPath := attachLoopDevice(t, t.TempDir())
+	target := "multipath 0 0 1 1 round-robin 0 1 1 " + loopPath + " 1"
+	// multipathd takes over a new volume whose UUID is "mpath-" followed by at least one character, and
+	// would remove this one, as it blacklists its only path, a loop device: it ignores the bare prefix,
+	// which OBI still matches
+	volume, dm := deviceMapperVolume(t, loopPath, dmMultipathUUIDPrefix, target)
+	if !exists(filepath.Join("/sys/block", dm, "mq")) {
+		t.Skipf("the multipath volume %s is not request-based on this kernel", dm)
+	}
+	reader := attachDiskReader(t)
+
+	f, err := os.OpenFile(deviceNode(t, dm), os.O_WRONLY|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	block := alignedBuffer(t)
+	for i := range directIOBlocks {
+		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+	}
+
+	var written *ebpf.DiskIO
+	for _, stat := range reader.readStats() {
+		assert.NotEqual(t, filepath.Base(loopPath), stat.DiskIO.Device, "the path reports nothing")
+		if stat.DiskIO.Device == dm && stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
+			written = stat.DiskIO
+		}
+	}
+	require.NotNil(t, written)
+	assert.Equal(t, volume, written.VolumeName)
+	assert.False(t, written.Stacked, "its path reports nothing")
+	assert.InDelta(t, directIOBlocks, requests(written.Latency), float64(diskProgramMisses(t)))
+}
+
 func attachDiskReader(t *testing.T) *diskReader {
 	t.Helper()
 	features := export.FeatureStatsDiskServiceDuration
@@ -240,6 +280,16 @@ func deviceNumbers(t *testing.T, name string) (major, minor uint32) {
 	_, err := fmt.Sscanf(readSysFile(t, filepath.Join("/sys/class/block", name, "dev")), "%d:%d", &major, &minor)
 	require.NoError(t, err)
 	return major, minor
+}
+
+// deviceNode creates a node of a block device in a temporary directory, as /dev isn't populated
+// without udev
+func deviceNode(t *testing.T, name string) string {
+	t.Helper()
+	major, minor := deviceNumbers(t, name)
+	node := filepath.Join(t.TempDir(), name)
+	require.NoError(t, unix.Mknod(node, unix.S_IFBLK|0o600, int(unix.Mkdev(major, minor))))
+	return node
 }
 
 func mountExt4(t *testing.T) string {
