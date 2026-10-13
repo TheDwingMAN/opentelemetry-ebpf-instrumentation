@@ -116,6 +116,11 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating attr selector: %w", err)
 	}
+	if perPod := perPodHistogramAttributes(cfg.Metrics.Features, attrSel); len(perPod) > 0 {
+		alog.Warn("the disk latency histogram is reported per pod or container, at a series per bucket for each: "+
+			"the operations and service time counters give their mean service time at a series each",
+			"metric", attributes.StatDiskServiceDuration.OTEL, "attributes", perPod)
+	}
 	readsCgroup := diskReadsCgroup(cfg.Metrics.Features, attrSel, cfg.Filters.Stats)
 	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, readsCgroup)
 	if err != nil {

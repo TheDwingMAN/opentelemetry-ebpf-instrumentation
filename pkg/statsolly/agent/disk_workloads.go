@@ -13,8 +13,13 @@ import (
 )
 
 // workloadAttributes are the attributes of the disk stats that come from the cgroup that the kernel
-// charges the I/O to
-var workloadAttributes = []attr.Name{attr.ContainerID}
+// charges the I/O to. The cluster is the same for every workload.
+var workloadAttributes = []attr.Name{
+	attr.ContainerID, attr.K8sNamespaceName, attr.K8sOwnerName, attr.K8sKind, attr.K8sPodName, attr.K8sContainerName,
+}
+
+// perPodAttributes are the workload attributes that make a series per pod or container
+var perPodAttributes = []attr.Name{attr.ContainerID, attr.K8sPodName, attr.K8sContainerName}
 
 // diskReadsCgroup tells whether the disk probes read the cgroup of the I/O: when an enabled disk
 // metric reports, or a stats filter matches, an attribute of the workload that it is charged to
@@ -42,4 +47,15 @@ func diskReadsCgroup(features export.Features, attrSel *attributes.AttrSelector,
 // isWorkloadAttribute tells whether an attribute, named with dots or underscores, is a workload one
 func isWorkloadAttribute(name attr.Name) bool {
 	return slices.ContainsFunc(workloadAttributes, func(workload attr.Name) bool { return workload.Prom() == name.Prom() })
+}
+
+// perPodHistogramAttributes returns the attributes that report the latency histogram per pod or
+// container, at a series per bucket for each
+func perPodHistogramAttributes(features export.Features, attrSel *attributes.AttrSelector) []attr.Name {
+	if !features.StatsDiskServiceDuration() {
+		return nil
+	}
+	return slices.DeleteFunc(attrSel.For(attributes.StatDiskServiceDuration), func(name attr.Name) bool {
+		return !slices.Contains(perPodAttributes, name)
+	})
 }

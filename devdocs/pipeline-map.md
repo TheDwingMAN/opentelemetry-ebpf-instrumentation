@@ -110,7 +110,9 @@ flowchart TD
     RDNS(Reverse DNS):::optional --> GeoIP
     GeoIP(Geo IP Provider):::optional --> CIDRS
     CIDRS(CIDRs<br/>redecorator):::optional --> MRG
-    DMT(eBPF Disk<br/>Map Tracer):::optional --> MRG
+    DMT(eBPF Disk<br/>Map Tracer):::optional --> DK8S
+    KSTORE --> DK8S
+    DK8S(Kubernetes decorator<br/>by container ID):::optional --> MRG
     MRG(Stats<br/>merger):::optional --> FLTR
     FLTR(Attributes<br/>filter):::optional --> OTEL(OpenTelemetry<br/>metrics<br/>export):::optional
     FLTR --> PROM(Prometheus<br/>metrics<br/>export):::optional

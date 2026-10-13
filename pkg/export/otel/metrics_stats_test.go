@@ -4,6 +4,8 @@
 package otel
 
 import (
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"go.opentelemetry.io/obi/internal/test/collector"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	otelmetric "go.opentelemetry.io/obi/pkg/export/otel/metric"
 	"go.opentelemetry.io/obi/pkg/export/otel/otelcfg"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
@@ -59,7 +62,7 @@ func TestStatHistogramView_ExplicitUsesBuckets(t *testing.T) {
 // The disk counters split the requests and their time by outcome, as the histogram does, and count
 // the requests of the paths of dm-multipath devices, which the histogram leaves out
 func TestStatMetricsExporter_DiskCounters(t *testing.T) {
-	stats, records := startStatExporter(t, export.FeatureStatsDisk)
+	stats, records := startStatExporter(t, export.FeatureStatsDisk, attributes.UndefinedGroup)
 	succeeded, failed, path := diskStat("vda"), diskStat("vda"), diskStat("sdb")
 	succeeded.DiskIO.Latency, succeeded.DiskIO.Bytes = *latency(0.0002, 2), 2*4096
 	failed.DiskIO.Latency, failed.DiskIO.ErrorType = *latency(30, 0, 1), "ETIMEDOUT"
@@ -88,9 +91,41 @@ func TestStatMetricsExporter_DiskCounters(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// Over OTLP, the disk stats leave out the Kubernetes metadata of the I/O charged to no pod, instead
+// of exporting it empty
+func TestStatMetricsExporter_DiskStatsOmitAbsentKubernetesMetadata(t *testing.T) {
+	stats, records := startStatExporter(t, export.FeatureStatsDiskOperations, attributes.GroupKubernetes)
+	inPod, outOfPods := diskStat("vda"), diskStat("vda")
+	inPod.DiskIO.Latency, outOfPods.DiskIO.Latency = *latency(0.001, 1), *latency(0.001, 1)
+	inPod.CommonAttrs.Metadata = map[attr.Name]string{
+		attr.K8sClusterName: "c", attr.K8sNamespaceName: "ns", attr.K8sOwnerName: "db", attr.K8sKind: "StatefulSet",
+	}
+	outOfPods.CommonAttrs.Metadata = map[attr.Name]string{attr.K8sClusterName: "c"}
+	stats.Send([]*ebpf.Stat{inPod, outOfPods})
+
+	want := []map[string]string{
+		{"system.device": "vda", "obi.disk.stacked": "false", "disk.io.direction": "read", "k8s.cluster.name": "c"},
+		{
+			"system.device": "vda", "obi.disk.stacked": "false", "disk.io.direction": "read", "k8s.cluster.name": "c",
+			"k8s.namespace.name": "ns", "k8s.owner.name": "db", "k8s.kind": "StatefulSet",
+		},
+	}
+	var got []map[string]string
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		receive(records, func(record collector.MetricRecord) {
+			if record.Name == attributes.StatDiskOperations.OTEL &&
+				!slices.ContainsFunc(got, func(attrs map[string]string) bool { return maps.Equal(attrs, record.Attributes) }) {
+				got = append(got, record.Attributes)
+			}
+		})
+		assert.ElementsMatch(ct, want, got)
+	}, timeout, 100*time.Millisecond)
+}
+
 // startStatExporter starts an OTLP stats exporter of the given features, with the default
 // attributes, which exports to a test collector
-func startStatExporter(t *testing.T, features export.Features) (*msg.Queue[[]*ebpf.Stat], <-chan collector.MetricRecord) {
+func startStatExporter(t *testing.T, features export.Features, groups attributes.AttrGroups,
+) (*msg.Queue[[]*ebpf.Stat], <-chan collector.MetricRecord) {
 	t.Cleanup(otelcfg.RestoreEnvAfterExecution())
 	otlp, err := collector.Start(t.Context())
 	require.NoError(t, err)
@@ -102,7 +137,7 @@ func startStatExporter(t *testing.T, features export.Features) (*msg.Queue[[]*eb
 		TTL:             time.Hour,
 	}
 	exporter, err := StatMetricsExporterProvider(
-		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: cfg}},
+		&global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: cfg}, MetricAttributeGroups: groups},
 		&StatMetricsConfig{
 			Metrics:     cfg,
 			SelectorCfg: &attributes.SelectorConfig{},
