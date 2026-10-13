@@ -393,5 +393,7 @@ const (
 	NetworkTCPHandshakeRole   = Name("network.tcp.handshake.role")
 	NetworkIoDirection        = Name(semconv.NetworkIODirectionKey)
 	SystemDevice              = Name(semconv.SystemDeviceKey)
+	DiskStacked               = Name("obi.disk.stacked")
+	DiskVolumeName            = Name("obi.disk.volume.name")
 	DiskIODirection           = Name(semconv.DiskIODirectionKey)
 )

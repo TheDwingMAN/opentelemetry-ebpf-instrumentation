@@ -923,6 +923,8 @@ func getDefinitions(
 			Attributes: map[attr.Name]Default{
 				attr.OBIIP:           false,
 				attr.SystemDevice:    true,
+				attr.DiskStacked:     true,
+				attr.DiskVolumeName:  true,
 				attr.DiskIODirection: true,
 			},
 		},

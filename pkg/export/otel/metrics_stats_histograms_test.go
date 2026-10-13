@@ -13,6 +13,7 @@ import (
 	metricdata "go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
+	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 )
 
@@ -123,4 +124,27 @@ func TestKernelHistogramProducerDropsTheSeriesNotUpdatedDuringTheTTL(t *testing.
 	device, _ := points[0].Attributes.Value("system.device")
 	assert.Equal(t, "sdb", device.AsString())
 	assert.Equal(t, uint64(2), points[0].Count)
+}
+
+// The devices that aren't device mapper volumes don't export obi.disk.volume.name, rather than an
+// empty one
+func TestKernelHistogramProducerOmitsAbsentAttributes(t *testing.T) {
+	fixedClock(t)
+	p := newKernelHistogramProducer(metricdata.CumulativeTemporality, time.Hour)
+	h := p.histogram(attributes.StatDiskServiceDuration, []float64{0.001},
+		attributes.OpenTelemetryGetters(ebpf.StatGetters, []attr.Name{attr.SystemDevice, attr.DiskVolumeName}))
+	volume := diskStat("dm-0")
+	volume.DiskIO.VolumeName = "vg0-data"
+	p.record(h, diskStat("sda"), latency(0.001, 2, 0))
+	p.record(h, volume, latency(0.0005, 1, 0))
+
+	exported := map[string][]attribute.KeyValue{}
+	for _, point := range produceHistograms(t, p) {
+		device, _ := point.Attributes.Value("system.device")
+		exported[device.AsString()] = point.Attributes.ToSlice()
+	}
+	assert.Equal(t, map[string][]attribute.KeyValue{
+		"sda":  {attribute.String("system.device", "sda")},
+		"dm-0": {attribute.String("obi.disk.volume.name", "vg0-data"), attribute.String("system.device", "dm-0")},
+	}, exported)
 }

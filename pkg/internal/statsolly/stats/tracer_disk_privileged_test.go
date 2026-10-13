@@ -106,6 +106,18 @@ func TestDiskRequestsAreTimedFromTheirIssue(t *testing.T) {
 	assert.InDelta(t, held, requestsWithin(latency, hold.Seconds()), misses, "the held writes are timed from their issue")
 }
 
+// TestDiskStackedDevicesInSysfs checks what OBI reads in sysfs of a loop device, and of a device
+// mapper volume over it
+func TestDiskStackedDevicesInSysfs(t *testing.T) {
+	loopPath := attachLoopDevice(t, t.TempDir())
+	loop := filepath.Base(loopPath)
+	devices := &blockDevices{sysRoot: "/sys"}
+	assert.Equal(t, blockDevice{name: loop, stacked: true}, devices.device(deviceNumbers(t, loop)))
+
+	volume, dm := deviceMapperVolume(t, loopPath, "", "linear "+loopPath+" 0")
+	assert.Equal(t, blockDevice{name: dm, volumeName: volume, stacked: true}, devices.device(deviceNumbers(t, dm)))
+}
+
 func attachDiskReader(t *testing.T) *diskReader {
 	t.Helper()
 	features := export.FeatureStatsDiskServiceDuration
@@ -192,6 +204,42 @@ func attachLoopDevice(t *testing.T, dir string) string {
 		loop.Close()
 	})
 	return path
+}
+
+// deviceMapperVolume creates a device mapper volume over a whole device, with the given target and
+// its arguments, and returns its name and its kernel name. Its UUID is its name after uuidPrefix.
+func deviceMapperVolume(t *testing.T, devPath, uuidPrefix, target string) (volume, name string) {
+	t.Helper()
+	path, err := exec.LookPath("dmsetup")
+	if err != nil {
+		t.Skip("needs dmsetup")
+	}
+	_ = exec.Command("modprobe", "dm_mod").Run()
+	if misc, _ := os.ReadFile("/proc/misc"); !strings.Contains(string(misc), "device-mapper") {
+		t.Skip("needs device mapper")
+	}
+	dmsetup := func(args ...string) *exec.Cmd {
+		cmd := exec.Command(path, args...)
+		// without udev, dmsetup creates and removes the device nodes itself
+		cmd.Env = append(os.Environ(), "DM_DISABLE_UDEV=1")
+		return cmd
+	}
+	sectors := readSysFile(t, filepath.Join("/sys/class/block", filepath.Base(devPath), "size"))
+	volume = fmt.Sprintf("obi-test-%d", time.Now().UnixNano())
+	out, err := dmsetup("create", volume, "--uuid", uuidPrefix+volume,
+		"--table", fmt.Sprintf("0 %s %s", sectors, target)).CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	t.Cleanup(func() { _ = dmsetup("remove", volume).Run() })
+	out, err = dmsetup("info", "-c", "--noheadings", "-o", "blkdevname", volume).Output()
+	require.NoError(t, err)
+	return volume, strings.TrimSpace(string(out))
+}
+
+func deviceNumbers(t *testing.T, name string) (major, minor uint32) {
+	t.Helper()
+	_, err := fmt.Sscanf(readSysFile(t, filepath.Join("/sys/class/block", name, "dev")), "%d:%d", &major, &minor)
+	require.NoError(t, err)
+	return major, minor
 }
 
 func mountExt4(t *testing.T) string {

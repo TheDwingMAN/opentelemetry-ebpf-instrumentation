@@ -1040,8 +1040,12 @@ func attributeSet[T any](
 
 	for _, field := range fields {
 		kv := sanitizeKeyValue(field.Get(record))
-		keyVals = append(keyVals, kv)
+		// an invalid KeyValue is an absent attribute: it is not exported, but keeps its position
+		// in the values, so that records with different absent attributes stay apart
 		vals = append(vals, kv.Value.Emit())
+		if kv.Valid() {
+			keyVals = append(keyVals, kv)
+		}
 	}
 
 	return attribute.NewSet(keyVals...), vals
