@@ -64,21 +64,26 @@ func TestBlockRqCompleteReportsBlkStatus(t *testing.T) {
 	require.Error(t, err)
 }
 
-// The request flags were macros, then an enum, which some kernels leave anonymous (6.12, RHEL 9.6)
+// The request flags were macros, then an enum, which some kernels leave anonymous (6.12, RHEL 9.6),
+// and REQ_OP_ZONE_APPEND changed its value
 func TestBlockLayoutEnums(t *testing.T) {
 	flags := []btf.EnumValue{{Name: "__RQF_STARTED", Value: 0}, {Name: "__RQF_FLUSH_SEQ", Value: 1}, {Name: "__RQF_IO_STAT", Value: 8}}
 	enumFlags := blockLayout{rqfIOStat: 1 << 8, rqfFlushSeq: 1 << 1}
 	for _, tc := range []struct {
-		name string
-		typ  btf.Type
-		want blockLayout
+		name         string
+		typ          btf.Type
+		zoneAppendOp uint32
+		want         blockLayout
 	}{
-		{name: "macros", typ: &btf.Int{Name: "int", Size: 4}},
-		{name: "anonymous enum", typ: &btf.Enum{Size: 4, Values: flags}, want: enumFlags},
-		{name: "named enum", typ: &btf.Enum{Name: "rqf_flags", Size: 4, Values: flags}, want: enumFlags},
+		{name: "macros", typ: &btf.Int{Name: "int", Size: 4}, zoneAppendOp: 13},
+		{name: "anonymous enum", typ: &btf.Enum{Size: 4, Values: flags}, zoneAppendOp: 7, want: enumFlags},
+		{name: "named enum", typ: &btf.Enum{Name: "rqf_flags", Size: 4, Values: flags}, zoneAppendOp: 7, want: enumFlags},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			builder, err := btf.NewBuilder([]btf.Type{tc.typ}, nil)
+			reqOp := &btf.Enum{Name: "req_op", Size: 4, Values: []btf.EnumValue{
+				{Name: "REQ_OP_ZONE_APPEND", Value: uint64(tc.zoneAppendOp)},
+			}}
+			builder, err := btf.NewBuilder([]btf.Type{tc.typ, reqOp}, nil)
 			require.NoError(t, err)
 			raw, err := builder.Marshal(nil, nil)
 			require.NoError(t, err)
@@ -86,7 +91,9 @@ func TestBlockLayoutEnums(t *testing.T) {
 			require.NoError(t, err)
 			var layout blockLayout
 			require.NoError(t, layout.readEnums(spec))
-			assert.Equal(t, tc.want, layout)
+			want := tc.want
+			want.zoneAppendOp = tc.zoneAppendOp
+			assert.Equal(t, want, layout)
 		})
 	}
 }

@@ -44,11 +44,14 @@ type blockLayout struct {
 	completeReportsBlkStatus bool
 	// the RQF_IO_STAT and RQF_FLUSH_SEQ request flags, 0 where the kernel numbers them with macros
 	rqfIOStat, rqfFlushSeq uint32
+	// REQ_OP_ZONE_APPEND
+	zoneAppendOp uint32
 }
 
-// kernelBlockLayout reads the prototypes of the block tracepoints and the request flags in the
-// kernel BTF. The kernel version can't tell: 5.10.137 and RHEL 8.6 backported the block_rq_issue
-// change of 5.11, and RHEL 9.6 numbers the request flags with the enum of 6.11.
+// kernelBlockLayout reads the prototypes of the block tracepoints, the request flags and the zone
+// append operation in the kernel BTF. The kernel version can't tell: 5.10.137 and RHEL 8.6
+// backported the block_rq_issue change of 5.11, and RHEL 9.6 numbers the request flags with the
+// enum of 6.11.
 func kernelBlockLayout() (blockLayout, error) {
 	var layout blockLayout
 	spec, err := btf.LoadKernelSpec()
@@ -88,6 +91,8 @@ func (l *blockLayout) readEnums(spec *btf.Spec) error {
 				l.rqfIOStat = 1 << value.Value
 			case "__RQF_FLUSH_SEQ":
 				l.rqfFlushSeq = 1 << value.Value
+			case "REQ_OP_ZONE_APPEND":
+				l.zoneAppendOp = uint32(value.Value)
 			}
 		}
 	}
