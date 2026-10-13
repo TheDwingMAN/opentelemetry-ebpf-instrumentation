@@ -262,16 +262,45 @@ func TestDiskStats(t *testing.T) {
 
 // Under dynamic application selection, the disk stats are those of the containers of the selected
 // applications: none while nothing is selected
+func TestFsSyncStats(t *testing.T) {
+	syncs, promURL := startDiskPipeline(t, func(s *Stats) { s.cfg.Metrics.Features = export.FeatureStatsFsSync })
+	failed := fakeFsSyncRecord(ebpf.CodeFsSyncFdatasync, 1)
+	failed.FsSync.ErrorType = "EIO"
+	syncs <- []*ebpf.Stat{fakeFsSyncRecord(ebpf.CodeFsSyncFsync, 3), failed}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		allMetrics, err := promtest.Scrape(promURL)
+		require.NoError(ct, err)
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{
+				Name: "obi_stat_fs_sync_duration_seconds_count", Value: 3,
+				Labels: map[string]string{"obi_fs_sync_type": "fsync", "error_type": ""},
+			},
+			{
+				Name: "obi_stat_fs_sync_duration_seconds_count", Value: 1,
+				Labels: map[string]string{"obi_fs_sync_type": "fdatasync", "error_type": "EIO"},
+			},
+		}, slices.DeleteFunc(allMetrics, func(m promtest.ScrapedMetric) bool {
+			return m.Name != "obi_stat_fs_sync_duration_seconds_count"
+		}))
+	}, timeout, 100*time.Millisecond)
+}
+
 func TestDiskStatsUnderDynamicSelection(t *testing.T) {
-	disk, promURL := startDiskPipeline(t, func(s *Stats) { s.ctxInfo.DynamicSelector = discover.NewDynamicSelector() })
+	disk, promURL := startDiskPipeline(t, func(s *Stats) {
+		s.ctxInfo.DynamicSelector = discover.NewDynamicSelector()
+		s.cfg.Metrics.Features = export.FeatureStatsDisk | export.FeatureStatsFsSync
+	})
 	inContainer := fakeDiskRecord("vda", 1)
 	inContainer.DiskIO.ContainerID = "0123abcd"
-	disk <- []*ebpf.Stat{inContainer, fakeDiskRecord("vda", 1)}
+	syncInContainer := fakeFsSyncRecord(ebpf.CodeFsSyncFsync, 1)
+	syncInContainer.FsSync.ContainerID = "0123abcd"
+	disk <- []*ebpf.Stat{inContainer, fakeDiskRecord("vda", 1), syncInContainer}
 
 	assert.Never(t, func() bool {
 		allMetrics, err := promtest.Scrape(promURL)
 		return err == nil && slices.ContainsFunc(allMetrics, func(m promtest.ScrapedMetric) bool {
-			return strings.HasPrefix(m.Name, "obi_stat_disk_")
+			return strings.HasPrefix(m.Name, "obi_stat_")
 		})
 	}, time.Second, 100*time.Millisecond)
 }
@@ -326,4 +355,10 @@ func fakeDiskRecord(device string, writes uint64) *ebpf.Stat {
 	return &ebpf.Stat{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{
 		Device: device, Op: ebpf.CodeDiskOpWrite, Latency: latency, Bytes: writes * 4096,
 	}}
+}
+
+func fakeFsSyncRecord(syncType ebpf.FsSyncTypeCode, syncs uint64) *ebpf.Stat {
+	latency := ebpf.LatencyHistogram{BucketCounts: make([]uint64, len(export.DiskLatencyBounds)+1)}
+	latency.BucketCounts[0] = syncs
+	return &ebpf.Stat{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{Type: syncType, Latency: latency}}
 }

@@ -397,4 +397,5 @@ const (
 	DiskStacked               = Name("obi.disk.stacked")
 	DiskVolumeName            = Name("obi.disk.volume.name")
 	DiskIODirection           = Name(semconv.DiskIODirectionKey)
+	FsSyncType                = Name("obi.fs.sync.type")
 )

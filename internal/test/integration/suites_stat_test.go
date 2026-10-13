@@ -23,7 +23,7 @@ func TestStat_GoStatMetrics(t *testing.T) {
 	t.Run("Go Stat Metrics TCP Successful Connection tests", testStatMetricsTCPSuccessfulConnectionsGo)
 	t.Run("Go Stat Metrics TCP Retransmits tests", testStatMetricsTCPRetransmitsGo)
 	t.Run("Go Stat Metrics TCP IO tests", testStatMetricsTCPIoGo)
-	t.Run("Go Stat Metrics exclude disk stats", testStatMetricsNoDiskStats)
+	t.Run("Go Stat Metrics exclude storage stats", testStatMetricsNoStorageStats)
 	runWeaverValidation(t)
 	require.NoError(t, compose.Close())
 }
@@ -40,6 +40,7 @@ func TestStat_GoDiskStatMetrics(t *testing.T) {
 	containerID := testContainerID(t, cl, "hatest-go-disk-io")
 	require.Len(t, containerID, 64)
 	t.Run("Go Stat Metrics disk counters tests", func(t *testing.T) { testStatMetricsDiskCounters(t, containerID) })
+	t.Run("Go Stat Metrics file sync duration tests", func(t *testing.T) { testStatMetricsFsSyncDuration(t, containerID) })
 	runWeaverValidation(t)
 	require.NoError(t, compose.Close())
 }

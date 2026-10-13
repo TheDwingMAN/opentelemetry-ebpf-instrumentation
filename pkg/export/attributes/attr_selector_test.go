@@ -269,7 +269,7 @@ func TestDefault_MessagingSubscription(t *testing.T) {
 	assert.Contains(t, p.For(MessagingProcessDuration), attr.MessagingSubscription)
 }
 
-func TestDefault_StatDisk(t *testing.T) {
+func TestDefault_StatStorage(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)
 	device := []attr.Name{attr.DiskIODirection, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice}
@@ -280,7 +280,8 @@ func TestDefault_StatDisk(t *testing.T) {
 		StatDiskOperations:      slices.Concat(device, workload, []attr.Name{attr.ErrorType}),
 		StatDiskServiceTime:     slices.Concat(device, workload, []attr.Name{attr.ErrorType}),
 		// the failed requests transfer no bytes
-		StatDiskIO: slices.Concat(device, workload),
+		StatDiskIO:         slices.Concat(device, workload),
+		StatFsSyncDuration: {attr.ErrorType, attr.FsSyncType, attr.K8sClusterName},
 	} {
 		assert.ElementsMatch(t, want, p.For(metric), metric.OTEL)
 	}

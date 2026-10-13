@@ -171,8 +171,20 @@ func getDefinitions(
 		nil,
 	)
 
-	// the Kubernetes workload that the block I/O is charged to, and the cluster, which is the same on
-	// every series of a node: a series per workload by default, not per pod
+	// file syncs have no connection endpoints either
+	statsFsSyncAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:       false,
+			attr.FsSyncType:  true,
+			attr.ContainerID: false,
+		},
+		nil,
+	)
+
+	// the Kubernetes workload that the block I/O or the sync is charged to, and the cluster, which is
+	// the same on every series of a node: a series per workload by default, not per pod
 	statsStorageKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
 		nil,
@@ -995,6 +1007,12 @@ func getDefinitions(
 		},
 		StatDiskServiceTime.Section: {
 			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatFsSyncDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsStorageKubeOptInAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
