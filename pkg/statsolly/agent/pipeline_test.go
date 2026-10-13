@@ -272,7 +272,7 @@ func TestDiskStats(t *testing.T) {
 	labels := func(device, errorType string) map[string]string {
 		return map[string]string{
 			"obi_ip": "1.2.3.4", "system_device": device, "obi_disk_stacked": "false", "obi_disk_volume_name": "",
-			"disk_io_direction": "write", "error_type": errorType,
+			"disk_io_direction": "write", "error_type": errorType, "container_id": "",
 		}
 	}
 	ioLabels := func(device string) map[string]string {

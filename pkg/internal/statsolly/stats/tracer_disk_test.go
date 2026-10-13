@@ -161,6 +161,47 @@ func TestDiskReaderDeletesIdleEntries(t *testing.T) {
 	}
 }
 
+// The reader names the container of the cgroup that I/O is charged to, from the names that the kernel
+// recorded, once it recorded them
+func TestDiskReaderNamesTheContainers(t *testing.T) {
+	const (
+		containerID      = "8e5e2d4ef4e0ec0ee80e1b7f86c2b8dbdc5a6e1db8c3d2d1b0a19f8e7d6c5b4a"
+		otherContainerID = "d36686f9785534531160dc936aec9d711a26eb37f4fc7752a2ae27d0a24345c1"
+	)
+	chargedTo := func(cgroupID uint64) ebpf.StatsDiskIoKeyT {
+		key := writeKey(8, 0)
+		key.CgroupId = cgroupID
+		return key
+	}
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{}}
+	for _, cgroupID := range []uint64{0, 10, 11, 12} {
+		src.entries[chargedTo(cgroupID)] = accum([]uint64{1}, []uint64{100_000})
+	}
+	names := map[uint64][2]string{10: {"docker-" + containerID + ".scope", "system.slice"}, 11: {"user.slice", ""}}
+	lookups := 0
+	r := newTestDiskReader(src)
+	r.containers = newCgroupContainers(func(cgroupID uint64) (string, string, bool) {
+		lookups++
+		name, ok := names[cgroupID]
+		return name[0], name[1], ok
+	}, 16)
+	containers := func() []string {
+		var ids []string
+		for _, stat := range r.readStats() {
+			ids = append(ids, stat.DiskIO.ContainerID)
+		}
+		return ids
+	}
+
+	assert.ElementsMatch(t, []string{"", containerID, "", ""}, containers(),
+		"no cgroup, the containers of 10, of 11 which isn't a container, and of 12 whose names aren't recorded yet")
+	names[12] = [2]string{otherContainerID, "docker"}
+	src.entries[chargedTo(10)] = accum([]uint64{2}, []uint64{100_000})
+	src.entries[chargedTo(12)] = accum([]uint64{2}, []uint64{100_000})
+	assert.ElementsMatch(t, []string{containerID, otherContainerID}, containers())
+	assert.Equal(t, 4, lookups, "the names of a cgroup are looked up until they are recorded")
+}
+
 // fakeBlockDevices is a fake sysfs, with block devices linked from /sys/dev/block by their numbers,
 // and a fake /proc/diskstats
 type fakeBlockDevices struct {
