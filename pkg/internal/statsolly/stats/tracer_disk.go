@@ -127,17 +127,22 @@ func (r *diskReader) readStats() []*ebpf.Stat {
 	var stats []*ebpf.Stat
 	for key, current := range entries {
 		if previous := r.previous[key]; current != previous {
-			stats = append(stats, r.stat(key, current, previous))
 			r.previous[key] = current
+			if stat := r.stat(key, current, previous); stat != nil {
+				stats = append(stats, stat)
+			}
 		}
 	}
 	return stats
 }
 
 // stat returns the requests that completed on the device and in the direction of a key since the
-// previous read
+// previous read, or nil on a path of a measured dm-multipath device, which reports the same requests
 func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsDiskIoAccumT) *ebpf.Stat {
 	device := r.devices.device(key.Major, key.Minor)
+	if device.dmMultipathPath {
+		return nil
+	}
 	latency := ebpf.LatencyHistogram{
 		BucketCounts: make([]uint64, len(current.LatencyCount)),
 		Sum:          float64(current.LatencySumNs-previous.LatencySumNs) / float64(time.Second),
@@ -165,6 +170,8 @@ type blockDevice struct {
 	name       string
 	volumeName string
 	stacked    bool
+	// the histograms of the paths of a dm-multipath device would multiply its series
+	dmMultipathPath bool
 }
 
 type blockDevices struct {
@@ -188,9 +195,10 @@ func (d *blockDevices) device(major, minor uint32) blockDevice {
 	devNumbers := fmt.Sprintf("%d:%d", major, minor)
 	dir := filepath.Join(d.sysRoot, "dev", "block", devNumbers)
 	device := blockDevice{
-		name:       ueventDevName(filepath.Join(dir, "uevent")),
-		volumeName: deviceMapperName(dir),
-		stacked:    isStacked(dir),
+		name:            ueventDevName(filepath.Join(dir, "uevent")),
+		volumeName:      deviceMapperName(dir),
+		stacked:         isStacked(dir),
+		dmMultipathPath: heldByDMMultipath(dir),
 	}
 	if device.name == "" {
 		return blockDevice{name: devNumbers}
