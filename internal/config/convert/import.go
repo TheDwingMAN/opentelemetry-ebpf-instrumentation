@@ -30,7 +30,8 @@ var v2NetworkMetricsFeatureMask = export.FeatureNetwork |
 	export.FeatureNetworkInterZone |
 	export.FeatureNetworkFlowPackets
 
-var v2StatsMetricsFeatureMask = export.FeatureStats
+var v2StatsMetricsFeatureMask = export.FeatureStats |
+	export.FeatureStatsDiskServiceDuration
 
 // V2ToRuntime converts a config v2 extension shape into an OBI runtime
 // configuration.
@@ -2303,7 +2304,7 @@ func completeDaemonTelemetry(telemetry schema.DaemonTelemetry) bool {
 
 func applyV2MetricsEnablement(cfg *obi.Config, src *schema.Extension, complete bool) error {
 	if features := src.Capture.Metrics.Features; features != nil {
-		mask, err := export.LoadFeatures(features)
+		mask, err := export.LoadV2Features(features)
 		if err != nil {
 			return fmt.Errorf("capture.metrics.features: %w", err)
 		}
@@ -2574,6 +2575,8 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsTCPRetransmits
 		case statsFeatureTCPIo:
 			out |= export.FeatureStatsTCPIo
+		case statsFeatureDiskServiceDuration:
+			out |= export.FeatureStatsDiskServiceDuration
 		}
 	}
 	return out

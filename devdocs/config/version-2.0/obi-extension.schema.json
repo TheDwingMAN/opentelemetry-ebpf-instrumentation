@@ -952,6 +952,7 @@
                       "network_flow_packets",
                       "network_inter_zone",
                       "stats",
+                      "stats_disk_service_duration",
                       "stats_tcp_failed_connections",
                       "stats_tcp_io",
                       "stats_tcp_retransmits",
@@ -971,7 +972,7 @@
                 ]
               },
               "type": "array",
-              "description": "Metric features using the same names as Config v1. An explicit list replaces the selection inferred from protocol and network switches; [] disables all metric features. When omitted, protocol and network enablement determines the features."
+              "description": "Metric features using the same names as Config v1, plus stats_disk_service_duration, which only Config v2 enables and which stats, all and * don't include. An explicit list replaces the selection inferred from protocol and network switches; [] disables all metric features. When omitted, protocol and network enablement determines the features."
             }
           }
         }
@@ -2124,7 +2125,7 @@
         },
         "stats": {
           "type": "object",
-          "description": "TCP stats capture controls.",
+          "description": "TCP and block I/O (disk) stats capture controls.",
           "additionalProperties": true,
           "properties": {
             "enabled": {
@@ -2141,11 +2142,12 @@
                   "tcp_failed_connections",
                   "tcp_successful_connections",
                   "tcp_retransmits",
-                  "tcp_io"
+                  "tcp_io",
+                  "disk_service_duration"
                 ]
               },
               "default": [],
-              "description": "Enabled TCP stats families.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones and disk_service_duration, the block I/O (disk) one.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",

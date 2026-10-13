@@ -93,3 +93,29 @@ func testStatMetricsTCPIoGo(t *testing.T) {
 		})
 	}
 }
+
+// testStatMetricsDiskServiceDuration checks the latency histogram of the O_DIRECT I/O of the
+// disk-io container, which reaches the block device
+func testStatMetricsDiskServiceDuration(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		t.Run(direction, func(t *testing.T) {
+			require.EventuallyWithT(t, func(ct *assert.CollectT) {
+				for _, series := range []string{"_count", "_sum"} {
+					results, err := pq.Query(`obi_stat_disk_service_duration_seconds` + series +
+						`{disk_io_direction="` + direction + `",system_device!=""} > 0`)
+					require.NoError(ct, err)
+					enoughPromResults(ct, results)
+				}
+			}, testTimeout, 100*time.Millisecond)
+		})
+	}
+}
+
+// testStatMetricsNoDiskStats checks that the stats aggregate feature doesn't enable the disk stats
+func testStatMetricsNoDiskStats(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	results, err := pq.Query(`{__name__=~"obi_stat_disk_.*"}`)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}
