@@ -32,6 +32,7 @@ func FeatureDiskStats() features.Feature {
 		Assess("reports the workload on the counters by default", testDiskCountersOfTheWorkload).
 		Assess("reports the cluster alone on the latency histogram by default", testDiskHistogramOfTheCluster).
 		Assess("counts the requests of the latency histogram", testDiskCountersAreTheHistogram).
+		Assess("reports the cluster alone on the file sync histogram by default", testFsSyncHistogramOfTheCluster).
 		Feature()
 }
 
@@ -93,5 +94,14 @@ func testDiskCountersAreTheHistogram(ctx context.Context, t *testing.T, _ *envco
 	queryNoResults(t, by+`(obi_stat_disk_operations_total) != `+by+`(obi_stat_disk_service_duration_seconds_count)`)
 	queryNoResults(t, `abs(`+by+`(obi_stat_disk_service_time_seconds_total) - `+
 		by+`(obi_stat_disk_service_duration_seconds_sum)) > 1e-6`)
+	return ctx
+}
+
+func testFsSyncHistogramOfTheCluster(ctx context.Context, t *testing.T, _ *envconf.Config) context.Context {
+	for _, res := range queryResults(t, `obi_stat_fs_sync_duration_seconds_count{k8s_cluster_name="my-kube",obi_fs_sync_type="fsync"} > 0`) {
+		assert.NotContains(t, res.Metric, "k8s_namespace_name", "the workload is opt-in on the histogram")
+		assert.NotContains(t, res.Metric, "k8s_owner_name")
+	}
+	queryNoResults(t, `count by (obi_fs_sync_type, error_type) (obi_stat_fs_sync_duration_seconds_count) > 1`)
 	return ctx
 }

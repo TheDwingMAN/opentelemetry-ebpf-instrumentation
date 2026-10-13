@@ -142,10 +142,24 @@ func testStatMetricsDiskCounters(t *testing.T, containerID string) {
 	}
 }
 
-// testStatMetricsNoDiskStats checks that the stats aggregate feature doesn't enable the disk stats
-func testStatMetricsNoDiskStats(t *testing.T) {
+// testStatMetricsFsSyncDuration checks the latency histogram of the fsyncs of the disk-io container
+func testStatMetricsFsSyncDuration(t *testing.T, containerID string) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
-	results, err := pq.Query(`{__name__=~"obi_stat_disk_.*"}`)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for _, series := range []string{"_count", "_sum"} {
+			results, err := pq.Query(`obi_stat_fs_sync_duration_seconds` + series +
+				`{container_id="` + containerID + `",obi_fs_sync_type="fsync"} > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, results)
+		}
+	}, testTimeout, 100*time.Millisecond)
+}
+
+// testStatMetricsNoStorageStats checks that the stats aggregate feature doesn't enable the disk and
+// file sync stats
+func testStatMetricsNoStorageStats(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	results, err := pq.Query(`{__name__=~"obi_stat_(disk|fs)_.*"}`)
 	require.NoError(t, err)
 	assert.Empty(t, results)
 }

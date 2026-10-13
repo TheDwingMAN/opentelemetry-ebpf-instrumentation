@@ -46,32 +46,36 @@ func dtlog() *slog.Logger {
 	return slog.With("component", "stat.DiskMapTracer")
 }
 
-// DiskMapTracer periodically reads the block request durations that the kernel accumulates, and
-// forwards what each device and direction gained since the previous read.
+// DiskMapTracer periodically reads the block request and file sync durations that the kernel
+// accumulates, and forwards what each key gained since the previous read.
 type DiskMapTracer struct {
-	reader   *diskReader
+	// the readStats of the accumulation maps that the kernel fills
+	readers  []func() []*ebpf.Stat
 	interval time.Duration
 }
 
-func NewDiskMapTracer(accum, cgroupNames *ciliumebpf.Map, statusIsBlkStatus bool, cfg *config.EBPFTracer) *DiskMapTracer {
+// NewDiskMapTracer reads the accumulation maps that are not nil
+func NewDiskMapTracer(diskAccum, fsSyncAccum, cgroupNames *ciliumebpf.Map, statusIsBlkStatus bool,
+	cfg *config.EBPFTracer,
+) *DiskMapTracer {
 	interval := cfg.BatchTimeout
 	if interval <= 0 {
 		interval = defaultDiskReadInterval
 	}
-	reader := newDiskReader(ebpfDiskAccum{accum: accum}, &blockDevices{sysRoot: "/sys", procRoot: "/proc"}, interval)
-	reader.statusIsBlkStatus = statusIsBlkStatus
-	names := func(cgroupID uint64) (string, string, bool) {
-		var name ebpf.StatsDiskCgroupNameT
-		if err := cgroupNames.Lookup(cgroupID, &name); err != nil {
-			return "", "", false
-		}
-		return unix.ByteSliceToString(name.Name[:]), unix.ByteSliceToString(name.Parent[:]), true
+	containers := ebpfCgroupContainers(cgroupNames)
+	tracer := &DiskMapTracer{interval: interval}
+	if diskAccum != nil {
+		reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: diskAccum},
+			&blockDevices{sysRoot: "/sys", procRoot: "/proc"}, interval)
+		reader.statusIsBlkStatus = statusIsBlkStatus
+		reader.containers = containers
+		tracer.readers = append(tracer.readers, reader.readStats)
 	}
-	reader.containers = newCgroupContainers(names, int(cgroupNames.MaxEntries()))
-	return &DiskMapTracer{
-		reader:   reader,
-		interval: interval,
+	if fsSyncAccum != nil {
+		accum := ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: fsSyncAccum}
+		tracer.readers = append(tracer.readers, newFsSyncReader(accum, containers, interval).readStats)
 	}
+	return tracer
 }
 
 func (m *DiskMapTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
@@ -84,7 +88,11 @@ func (m *DiskMapTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if stats := m.reader.readStats(); len(stats) > 0 {
+				var stats []*ebpf.Stat
+				for _, readStats := range m.readers {
+					stats = append(stats, readStats()...)
+				}
+				if len(stats) > 0 {
 					out.SendCtx(ctx, stats)
 				}
 			}
@@ -92,21 +100,21 @@ func (m *DiskMapTracer) TraceLoop(out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 	}
 }
 
-type diskAccum interface {
+type accumMap[K, V comparable] interface {
 	// read returns the entries of the map, with errAccumFull when it is full
-	read() (map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT, error)
-	lookupAndDelete(key ebpf.StatsDiskIoKeyT) (ebpf.StatsDiskIoAccumT, error)
-	delete(key ebpf.StatsDiskIoKeyT) error
+	read() (map[K]V, error)
+	lookupAndDelete(key K) (V, error)
+	delete(key K) error
 }
 
-type ebpfDiskAccum struct {
+type ebpfAccum[K, V comparable] struct {
 	accum *ciliumebpf.Map
 }
 
-func (a ebpfDiskAccum) read() (map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT, error) {
-	entries := map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{}
-	var key ebpf.StatsDiskIoKeyT
-	var value ebpf.StatsDiskIoAccumT
+func (a ebpfAccum[K, V]) read() (map[K]V, error) {
+	entries := map[K]V{}
+	var key K
+	var value V
 	iter := a.accum.Iterate()
 	for iter.Next(&key, &value) {
 		entries[key] = value
@@ -120,66 +128,102 @@ func (a ebpfDiskAccum) read() (map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT, 
 	return entries, nil
 }
 
-func (a ebpfDiskAccum) lookupAndDelete(key ebpf.StatsDiskIoKeyT) (ebpf.StatsDiskIoAccumT, error) {
-	var last ebpf.StatsDiskIoAccumT
+func (a ebpfAccum[K, V]) lookupAndDelete(key K) (V, error) {
+	var last V
 	err := a.accum.LookupAndDelete(&key, &last)
 	return last, err
 }
 
-func (a ebpfDiskAccum) delete(key ebpf.StatsDiskIoKeyT) error {
+func (a ebpfAccum[K, V]) delete(key K) error {
 	return a.accum.Delete(&key)
 }
 
-// diskReader forwards, as stats, what the entries of the kernel map gained since the previous read.
-// The kernel only adds to them, and the reader deletes those that stay unchanged for diskIdleTime.
-type diskReader struct {
-	log        *slog.Logger
-	accum      diskAccum
-	devices    *blockDevices
-	entries    map[ebpf.StatsDiskIoKeyT]diskEntry
+// accumReader forwards, as stats, what the entries of a kernel accumulation map gained since the
+// previous read. The kernel only adds to them, and the reader deletes those that stay unchanged for
+// diskIdleTime.
+type accumReader[K, V comparable] struct {
+	log   *slog.Logger
+	accum accumMap[K, V]
+	// toStat returns the stat of what an entry gained since its previous value
+	toStat     func(key K, current, previous V) *ebpf.Stat
+	entries    map[K]accumEntry[V]
 	warnedFull bool
-	// the statuses of the keys are blk_status_t values instead of errnos
-	statusIsBlkStatus bool
 	// idleReadsBeforeDelete is how many reads find an entry unchanged before it is deleted
 	idleReadsBeforeDelete int
-	containers            *cgroupContainers
 }
 
-type diskEntry struct {
-	previous  ebpf.StatsDiskIoAccumT
+type accumEntry[V comparable] struct {
+	previous  V
 	idleReads int
 }
 
-func newDiskReader(accum diskAccum, devices *blockDevices, interval time.Duration) *diskReader {
-	return &diskReader{
-		log:                   dtlog(),
+func newAccumReader[K, V comparable](mapName string, accum accumMap[K, V], toStat func(K, V, V) *ebpf.Stat,
+	interval time.Duration,
+) *accumReader[K, V] {
+	return &accumReader[K, V]{
+		log:                   dtlog().With("map", mapName),
 		accum:                 accum,
-		devices:               devices,
-		entries:               map[ebpf.StatsDiskIoKeyT]diskEntry{},
+		toStat:                toStat,
+		entries:               map[K]accumEntry[V]{},
 		idleReadsBeforeDelete: max(1, int((diskIdleTime+interval-1)/interval)),
 	}
 }
 
-func (r *diskReader) readStats() []*ebpf.Stat {
+// diskReader reads the accumulation map of the block requests
+type diskReader struct {
+	*accumReader[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]
+	devices *blockDevices
+	// the statuses of the keys are blk_status_t values instead of errnos
+	statusIsBlkStatus bool
+	containers        *cgroupContainers
+}
+
+func newDiskReader(accum accumMap[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT], devices *blockDevices,
+	interval time.Duration,
+) *diskReader {
+	r := &diskReader{devices: devices}
+	r.accumReader = newAccumReader(ebpf.StatsMapDiskIoAccum, accum, r.stat, interval)
+	return r
+}
+
+// newFsSyncReader reads the accumulation map of the file syncs
+func newFsSyncReader(accum accumMap[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT], containers *cgroupContainers,
+	interval time.Duration,
+) *accumReader[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT] {
+	return newAccumReader(ebpf.StatsMapFsSyncAccum, accum, func(key ebpf.StatsFsSyncKeyT, current, previous ebpf.StatsFsSyncAccumT) *ebpf.Stat {
+		return &ebpf.Stat{
+			Type: ebpf.StatTypeFsSync,
+			FsSync: &ebpf.FsSync{
+				Type: ebpf.FsSyncTypeCode(key.Type),
+				// a sync returns an errno, as block_rq_complete before Linux 5.16
+				ErrorType:   diskErrorType(key.Status, false),
+				ContainerID: containers.containerID(key.CgroupId),
+				Latency:     latencyDelta(current.LatencyCount[:], previous.LatencyCount[:], current.LatencySumNs, previous.LatencySumNs),
+			},
+		}
+	}, interval)
+}
+
+func (r *accumReader[K, V]) readStats() []*ebpf.Stat {
 	entries, err := r.accum.read()
 	switch {
 	case errors.Is(err, errAccumFull):
 		if !r.warnedFull {
 			r.warnedFull = true
-			r.log.Warn("the disk_io_accum map is full: the I/O of the devices, directions and workloads that it "+
-				"doesn't hold is not measured until idle entries are deleted", "entries", len(entries))
+			r.log.Warn("a storage accumulation map is full: the operations of the keys that it doesn't hold are "+
+				"not measured until idle entries are deleted", "entries", len(entries))
 		}
 	case err != nil:
 		// what was read is forwarded, and the rest at the next read
-		r.log.Debug("can't read the disk_io_accum map", "error", err)
+		r.log.Debug("can't read a storage accumulation map", "error", err)
 	}
 
 	var stats []*ebpf.Stat
 	for key, current := range entries {
 		entry := r.entries[key]
 		if current != entry.previous {
-			r.entries[key] = diskEntry{previous: current}
-			stats = append(stats, r.stat(key, current, entry.previous))
+			r.entries[key] = accumEntry[V]{previous: current}
+			stats = append(stats, r.toStat(key, current, entry.previous))
 			continue
 		}
 		entry.idleReads++
@@ -199,7 +243,7 @@ func (r *diskReader) readStats() []*ebpf.Stat {
 // Linux 5.14: before, what the kernel adds between the read and the delete is lost. A completion that
 // looked the entry up before its deletion adds to the freed element: its request is lost, or counted
 // under the key that reuses the element.
-func (r *diskReader) deleteIdle(key ebpf.StatsDiskIoKeyT, entry diskEntry) *ebpf.Stat {
+func (r *accumReader[K, V]) deleteIdle(key K, entry accumEntry[V]) *ebpf.Stat {
 	last, err := r.accum.lookupAndDelete(key)
 	if err != nil && !errors.Is(err, ciliumebpf.ErrKeyNotExist) {
 		last, err = entry.previous, r.accum.delete(key)
@@ -209,7 +253,7 @@ func (r *diskReader) deleteIdle(key ebpf.StatsDiskIoKeyT, entry diskEntry) *ebpf
 		delete(r.entries, key)
 		return nil
 	case err != nil:
-		r.log.Debug("can't delete an idle entry of the disk_io_accum map", "error", err)
+		r.log.Debug("can't delete an idle entry of a storage accumulation map", "error", err)
 		r.entries[key] = entry
 		return nil
 	}
@@ -217,20 +261,26 @@ func (r *diskReader) deleteIdle(key ebpf.StatsDiskIoKeyT, entry diskEntry) *ebpf
 	if last == entry.previous {
 		return nil
 	}
-	return r.stat(key, last, entry.previous)
+	return r.toStat(key, last, entry.previous)
+}
+
+// latencyDelta returns what a kernel latency histogram counted since a previous read
+func latencyDelta(counts, previousCounts []uint64, sumNs, previousSumNs uint64) ebpf.LatencyHistogram {
+	latency := ebpf.LatencyHistogram{
+		BucketCounts: make([]uint64, len(counts)),
+		Sum:          float64(sumNs-previousSumNs) / float64(time.Second),
+	}
+	for bucket := range counts {
+		latency.BucketCounts[bucket] = counts[bucket] - previousCounts[bucket]
+	}
+	return latency
 }
 
 // stat returns the requests that completed on the device and in the direction of a key since the
 // previous read
 func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsDiskIoAccumT) *ebpf.Stat {
 	device := r.devices.device(key.Major, key.Minor)
-	latency := ebpf.LatencyHistogram{
-		BucketCounts: make([]uint64, len(current.LatencyCount)),
-		Sum:          float64(current.LatencySumNs-previous.LatencySumNs) / float64(time.Second),
-	}
-	for bucket := range current.LatencyCount {
-		latency.BucketCounts[bucket] = current.LatencyCount[bucket] - previous.LatencyCount[bucket]
-	}
+	latency := latencyDelta(current.LatencyCount[:], previous.LatencyCount[:], current.LatencySumNs, previous.LatencySumNs)
 	return &ebpf.Stat{
 		Type: ebpf.StatTypeDiskIO,
 		DiskIO: &ebpf.DiskIO{
@@ -248,11 +298,23 @@ func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.Stats
 	}
 }
 
-// cgroupContainers names the containers of the cgroups that the kernel charges the I/O to, from the
-// names of the cgroups and of their parents that the kernel recorded
+// cgroupContainers names the containers of the cgroups that the kernel charges the I/O and the syncs
+// to, from the names of the cgroups and of their parents that the kernel recorded
 type cgroupContainers struct {
 	names func(cgroupID uint64) (name, parent string, ok bool)
 	cache *simplelru.LRU[uint64, string]
+}
+
+// ebpfCgroupContainers names the containers from the names that the kernel records in cgroupNames
+func ebpfCgroupContainers(cgroupNames *ciliumebpf.Map) *cgroupContainers {
+	names := func(cgroupID uint64) (string, string, bool) {
+		var name ebpf.StatsDiskCgroupNameT
+		if err := cgroupNames.Lookup(cgroupID, &name); err != nil {
+			return "", "", false
+		}
+		return unix.ByteSliceToString(name.Name[:]), unix.ByteSliceToString(name.Parent[:]), true
+	}
+	return newCgroupContainers(names, int(cgroupNames.MaxEntries()))
 }
 
 func newCgroupContainers(names func(uint64) (string, string, bool), size int) *cgroupContainers {

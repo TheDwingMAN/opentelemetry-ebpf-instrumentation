@@ -375,11 +375,18 @@ func TestDiskWriterProcess(t *testing.T) {
 // runInCgroup creates a cgroup and runs TestDiskWriterProcess in it, with its arguments
 func runInCgroup(t *testing.T, cgroup string, direct bool, path string, blocks int) {
 	t.Helper()
+	runChildInCgroup(t, cgroup, "TestDiskWriterProcess", fmt.Sprintf("%s=%t %s %d", envDiskWriter, direct, path, blocks))
+}
+
+// runChildInCgroup creates a cgroup and runs a test of this binary in it as a child process, with
+// an environment variable
+func runChildInCgroup(t *testing.T, cgroup, child, env string) {
+	t.Helper()
 	require.NoError(t, os.Mkdir(cgroup, 0o755))
 	t.Cleanup(func() { _ = os.Remove(cgroup) })
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestDiskWriterProcess$")
-	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%t %s %d", envDiskWriter, direct, path, blocks))
+	cmd := exec.Command(os.Args[0], "-test.run=^"+child+"$")
+	cmd.Env = append(os.Environ(), env)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	start, err := cmd.StdinPipe()
 	require.NoError(t, err)
@@ -413,8 +420,10 @@ func attachDiskReader(t *testing.T, features export.Features, readsCgroup bool) 
 		ebpf.CgroupReads{Disk: readsCgroup})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
-	reader := NewDiskMapTracer(fetcher.DiskIOAccumMap(), fetcher.DiskCgroupNamesMap(), fetcher.DiskStatusIsBlkStatus(),
-		&config.EBPFTracer{}).reader
+	reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: fetcher.DiskIOAccumMap()},
+		&blockDevices{sysRoot: "/sys", procRoot: "/proc"}, defaultDiskReadInterval)
+	reader.statusIsBlkStatus = fetcher.DiskStatusIsBlkStatus()
+	reader.containers = ebpfCgroupContainers(fetcher.DiskCgroupNamesMap())
 	// forget the I/O that happened before
 	reader.readStats()
 	return reader
@@ -423,6 +432,13 @@ func attachDiskReader(t *testing.T, features export.Features, readsCgroup bool) 
 // diskProgramMisses returns how many runs of the disk programs the kernel skipped as nested on a
 // CPU, each of which loses a request
 func diskProgramMisses(t *testing.T) uint64 {
+	t.Helper()
+	return programMisses(t, "obi_stats_raw_tp_block_rq_")
+}
+
+// programMisses returns how many runs of the programs whose name starts with prefix the kernel
+// skipped as nested on a CPU
+func programMisses(t *testing.T, prefix string) uint64 {
 	t.Helper()
 	var misses uint64
 	id, err := ciliumebpf.ProgramGetNextID(0)
@@ -435,7 +451,7 @@ func diskProgramMisses(t *testing.T) uint64 {
 		stats, statsErr := program.Stats()
 		program.Close()
 		require.NoError(t, errors.Join(infoErr, statsErr))
-		if strings.HasPrefix(info.Name, "obi_stats_raw_tp_block_rq_") {
+		if strings.HasPrefix(info.Name, prefix) {
 			misses += stats.RecursionMisses
 		}
 	}

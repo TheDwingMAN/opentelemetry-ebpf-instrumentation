@@ -545,3 +545,38 @@ metrics:
       - ref: error.type
         requirement_level:
           conditionally_required: if the request ended in an error
+
+  - name: obi.stat.fs.sync.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      Duration of the file syncs, per sync type and outcome, from the sync
+      call until it returns: fsync, fdatasync, sync, syncfs, sync_file_range
+      when it waits for the writeback, and the syncs of O_SYNC and O_DSYNC
+      writes and msync. The calls that sync nothing (EBADF, EINVAL, ESPIPE)
+      are not counted.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: obi.fs.sync.type
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the sync failed

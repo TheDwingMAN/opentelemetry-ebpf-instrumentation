@@ -29,7 +29,12 @@ import (
 
 func statAttrs(s *ebpf.Stat) *pipe.CommonAttrs { return &s.CommonAttrs }
 
-func diskContainerID(s *ebpf.Stat) string { return s.DiskIO.ContainerID }
+func storageContainerID(s *ebpf.Stat) string {
+	if s.FsSync != nil {
+		return s.FsSync.ContainerID
+	}
+	return s.DiskIO.ContainerID
+}
 
 // mockable functions for testing
 var newRingBufTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
@@ -93,22 +98,22 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		statAttrs, dynamicDecoratedStats, dynamicFilteredStats),
 		swarm.WithID("DynamicPIDFilter"))
 
-	// the disk stats have no network endpoints, so they join the TCP stats after the nodes that use
-	// them, and before the attribute filter
+	// the disk and file sync stats have no network endpoints, so they join the TCP stats after the
+	// nodes that use them, and before the attribute filter
 	statsToFilter := dynamicFilteredStats
 	if s.diskTracer != nil {
 		diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
 		swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
 
-		// under dynamic application selection, the disk stats are matched to the selected applications
-		// by the containers that they are charged to
+		// under dynamic application selection, the disk and file sync stats are matched to the selected
+		// applications by the containers that they are charged to
 		selectedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "selectedDiskStats")
-		swi.Add(filter.ByDynamicContainer(dynamicSelector, s.ctxInfo.K8sInformer, diskContainerID, diskStats, selectedDiskStats),
+		swi.Add(filter.ByDynamicContainer(dynamicSelector, s.ctxInfo.K8sInformer, storageContainerID, diskStats, selectedDiskStats),
 			swarm.WithID("DynamicContainerFilter"))
 
 		kubeDecoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "kubeDecoratedDiskStats")
 		swi.Add(k8s.ContainerMetadataDecoratorProvider(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
-			diskContainerID, statAttrs, selectedDiskStats, kubeDecoratedDiskStats), swarm.WithID("DiskK8sMetadataDecorator"))
+			storageContainerID, statAttrs, selectedDiskStats, kubeDecoratedDiskStats), swarm.WithID("DiskK8sMetadataDecorator"))
 
 		decoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "decoratedDiskStats")
 		swi.Add(decorate.Decorate(s.agentIP, statAttrs, kubeDecoratedDiskStats, decoratedDiskStats),
