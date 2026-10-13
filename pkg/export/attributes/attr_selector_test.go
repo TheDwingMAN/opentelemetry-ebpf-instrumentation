@@ -280,8 +280,10 @@ func TestDefault_StatStorage(t *testing.T) {
 		StatDiskOperations:      slices.Concat(device, workload, []attr.Name{attr.ErrorType}),
 		StatDiskServiceTime:     slices.Concat(device, workload, []attr.Name{attr.ErrorType}),
 		// the failed requests transfer no bytes
-		StatDiskIO:         slices.Concat(device, workload),
-		StatFsSyncDuration: {attr.ErrorType, attr.FsSyncType, attr.K8sClusterName},
+		StatDiskIO:           slices.Concat(device, workload),
+		StatFsSyncDuration:   {attr.ErrorType, attr.FsSyncType, attr.K8sClusterName},
+		StatFsSyncOperations: slices.Concat(workload, []attr.Name{attr.ErrorType, attr.FsSyncType}),
+		StatFsSyncTime:       slices.Concat(workload, []attr.Name{attr.ErrorType, attr.FsSyncType}),
 	} {
 		assert.ElementsMatch(t, want, p.For(metric), metric.OTEL)
 	}
