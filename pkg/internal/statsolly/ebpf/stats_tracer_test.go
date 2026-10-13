@@ -6,10 +6,16 @@
 package ebpf
 
 import (
+	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/cilium/ebpf"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"go.opentelemetry.io/obi/pkg/export"
 )
 
 func TestFixupSpec(t *testing.T) {
@@ -187,5 +193,56 @@ func TestTracepointConstantFormat(t *testing.T) {
 		if _, _, ok := strings.Cut(hook, "/"); !ok {
 			t.Errorf("tracepoint constant %q is not in group/name format", hook)
 		}
+	}
+}
+
+// A storage feature whose probes fail is disabled, and the probes are loaded again without it, while
+// a failure of the TCP probes is returned
+func TestStorageDegrade(t *testing.T) {
+	disk := export.FeatureStatsDiskServiceDuration | export.FeatureStatsDiskIO
+	loadErr := errors.New("load program: invalid argument")
+	tcpErr := errors.New("failed kprobe attachment tcp_close: not found")
+	for _, tc := range []struct {
+		name      string
+		errs      []error
+		wantLoads []export.Features
+		wantErr   error
+	}{
+		{
+			name:      "a storage failure disables its features",
+			errs:      []error{&storageError{features: disk, err: loadErr}},
+			wantLoads: []export.Features{disk, 0},
+		},
+		{
+			name:      "a TCP failure is returned",
+			errs:      []error{tcpErr},
+			wantLoads: []export.Features{disk},
+			wantErr:   tcpErr,
+		},
+		{
+			name:      "a TCP failure without the storage features is returned",
+			errs:      []error{&storageError{features: disk, err: loadErr}, tcpErr},
+			wantLoads: []export.Features{disk, 0},
+			wantErr:   tcpErr,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var loads []export.Features
+			fetcher, err := loadDegradingStorage(slog.Default(), storagePlan{features: disk},
+				func(storage storagePlan) (*StatsFetcher, error) {
+					loads = append(loads, storage.features)
+					if len(loads) <= len(tc.errs) {
+						return nil, tc.errs[len(loads)-1]
+					}
+					return &StatsFetcher{storage: storage.features}, nil
+				})
+			assert.Equal(t, tc.wantLoads, loads)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantLoads[len(loads)-1], fetcher.storage)
+		})
 	}
 }
