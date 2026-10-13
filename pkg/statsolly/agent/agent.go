@@ -133,7 +133,7 @@ func statsAgent(
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
 	var diskTracer *stats.DiskMapTracer
-	if cfg.Metrics.Features.StatsDiskServiceDuration() {
+	if cfg.Metrics.Features.StatsDisk() {
 		diskTracer = stats.NewDiskMapTracer(statsFetcher.DiskIOAccumMap(), statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
 	}
 

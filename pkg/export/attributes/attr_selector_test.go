@@ -268,11 +268,19 @@ func TestDefault_MessagingSubscription(t *testing.T) {
 	assert.Contains(t, p.For(MessagingProcessDuration), attr.MessagingSubscription)
 }
 
-func TestDefault_StatDiskServiceDuration(t *testing.T) {
+func TestDefault_StatDisk(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)
-	assert.Equal(t, []attr.Name{attr.DiskIODirection, attr.ErrorType, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice},
-		p.For(StatDiskServiceDuration))
+	withErrorType := []attr.Name{attr.DiskIODirection, attr.ErrorType, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice}
+	for metric, want := range map[Name][]attr.Name{
+		StatDiskServiceDuration: withErrorType,
+		StatDiskOperations:      withErrorType,
+		StatDiskServiceTime:     withErrorType,
+		// the failed requests transfer no bytes
+		StatDiskIO: {attr.DiskIODirection, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice},
+	} {
+		assert.Equal(t, want, p.For(metric), metric.OTEL)
+	}
 }
 
 func TestDefault_HTTPServerMetrics(t *testing.T) {

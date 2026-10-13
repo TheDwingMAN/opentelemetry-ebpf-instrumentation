@@ -52,6 +52,7 @@ static __always_inline void record_issue(struct request *rq) {
     struct gendisk *disk = request_disk(rq);
     const disk_rq_start_t start = {
         .issued_ns = bpf_ktime_get_ns(),
+        .bytes = BPF_CORE_READ(rq, __data_len),
         .major = BPF_CORE_READ(disk, major),
         .minor = BPF_CORE_READ(disk, first_minor),
         .op = op,
@@ -142,5 +143,8 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     const u32 bucket = disk_latency_bucket(disk_latency_bounds_ns, latency_ns);
     __sync_fetch_and_add(&accum->latency_count[bucket], 1);
     __sync_fetch_and_add(&accum->latency_sum_ns, latency_ns);
+    if (key.status == 0) {
+        __sync_fetch_and_add(&accum->bytes, start.bytes);
+    }
     return 0;
 }

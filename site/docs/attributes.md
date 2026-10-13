@@ -27,7 +27,7 @@ Attributes of OBI's block I/O (disk) statistics that the semantic conventions do
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
-| `obi.disk.stacked` | boolean | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID and loop devices are. A dm-multipath device is not, as its paths report nothing. To count the I/O once, add up the devices where it is `false`. | true |
+| `obi.disk.stacked` | boolean | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID and loop devices are. A dm-multipath device is not, as its paths don't report its latency histogram. To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, without `obi.disk.volume.name`. | true |
 | `obi.disk.volume.name` | string | development | Device mapper name of the block device (`system.device`), as `/dev/mapper` lists it. Absent for the other devices. | mpatha |
 
 ## `registry.obi.exception`

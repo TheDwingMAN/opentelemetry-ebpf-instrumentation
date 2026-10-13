@@ -127,7 +127,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 
-	diskEnabled := features.StatsDiskServiceDuration()
+	diskEnabled := features.StatsDisk()
 	var issueHasQueueArg, completeReportsBlkStatus bool
 	if diskEnabled {
 		if issueHasQueueArg, completeReportsBlkStatus, err = kernelBlockTracepoints(); err != nil {
