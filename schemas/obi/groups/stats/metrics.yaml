@@ -391,5 +391,10 @@ metrics:
         requirement_level: opt_in
       - ref: system.device
         requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
+      - ref: obi.disk.volume.name
+        requirement_level:
+          conditionally_required: if the block device is a device mapper device
       - ref: disk.io.direction
         requirement_level: recommended

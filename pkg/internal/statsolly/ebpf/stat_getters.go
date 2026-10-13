@@ -80,6 +80,22 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.SystemDevice), device)
 		}
+	case attr.DiskStacked:
+		getter = func(s *Stat) attribute.KeyValue {
+			var stacked bool
+			if s.DiskIO != nil {
+				stacked = s.DiskIO.Stacked
+			}
+			return attribute.Bool(string(attr.DiskStacked), stacked)
+		}
+	case attr.DiskVolumeName:
+		getter = func(s *Stat) attribute.KeyValue {
+			// the devices that aren't device mapper volumes have none: an invalid KeyValue isn't exported
+			if s.DiskIO == nil || s.DiskIO.VolumeName == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.DiskVolumeName), s.DiskIO.VolumeName)
+		}
 	case attr.DiskIODirection:
 		getter = func(s *Stat) attribute.KeyValue {
 			var op DiskOpCode
