@@ -11,12 +11,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	ciliumebpf "github.com/cilium/ebpf"
 	"github.com/prometheus/procfs/blockdevice"
+	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/obi/pkg/config"
+	"go.opentelemetry.io/obi/pkg/internal/errtype"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
@@ -44,14 +47,16 @@ type DiskMapTracer struct {
 	interval time.Duration
 }
 
-func NewDiskMapTracer(accum *ciliumebpf.Map, cfg *config.EBPFTracer) *DiskMapTracer {
+func NewDiskMapTracer(accum *ciliumebpf.Map, statusIsBlkStatus bool, cfg *config.EBPFTracer) *DiskMapTracer {
 	interval := cfg.BatchTimeout
 	if interval <= 0 {
 		interval = defaultDiskReadInterval
 	}
 	read := func() (map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT, error) { return readDiskAccum(accum) }
+	reader := newDiskReader(read, &blockDevices{sysRoot: "/sys", procRoot: "/proc"})
+	reader.statusIsBlkStatus = statusIsBlkStatus
 	return &DiskMapTracer{
-		reader:   newDiskReader(read, &blockDevices{sysRoot: "/sys", procRoot: "/proc"}),
+		reader:   reader,
 		interval: interval,
 	}
 }
@@ -100,6 +105,8 @@ type diskReader struct {
 	devices    *blockDevices
 	previous   map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT
 	warnedFull bool
+	// the statuses of the keys are blk_status_t values instead of errnos
+	statusIsBlkStatus bool
 }
 
 func newDiskReader(read func() (map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT, error), devices *blockDevices) *diskReader {
@@ -159,8 +166,26 @@ func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.Stats
 			Stacked:    device.stacked,
 			Op:         ebpf.DiskOpCode(key.Op),
 			Latency:    latency,
+			ErrorType:  diskErrorType(key.Status, r.statusIsBlkStatus),
 		},
 	}
+}
+
+// diskErrorType names the status of failed requests after its errno, so that it reads the same
+// whether the kernel reports errnos or blk_status_t values, and is empty on success
+func diskErrorType(status uint8, isBlkStatus bool) string {
+	if status == 0 {
+		return ""
+	}
+	errno := syscall.Errno(status)
+	if isBlkStatus {
+		// errno 0, which has no name, if the table doesn't know the status
+		errno = blkStatusErrno[status]
+	}
+	if name := unix.ErrnoName(errno); name != "" {
+		return name
+	}
+	return errtype.Other
 }
 
 type devNum struct {

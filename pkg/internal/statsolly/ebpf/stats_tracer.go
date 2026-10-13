@@ -72,6 +72,8 @@ type StatsFetcher struct {
 	log       *slog.Logger
 	objects   *StatsObjects
 	closables []io.Closer
+
+	diskStatusIsBlkStatus bool
 }
 
 func tlog() *slog.Logger {
@@ -285,6 +287,8 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		log:       tlog,
 		objects:   &objects,
 		closables: closables,
+
+		diskStatusIsBlkStatus: completeReportsBlkStatus,
 	}, nil
 }
 
@@ -322,6 +326,12 @@ func (m *StatsFetcher) DebugEventsMap() *ebpf.Map {
 // DiskIOAccumMap returns the map where the kernel accumulates the block request durations
 func (m *StatsFetcher) DiskIOAccumMap() *ebpf.Map {
 	return m.objects.DiskIoAccum
+}
+
+// DiskStatusIsBlkStatus tells whether the statuses in the keys of DiskIOAccumMap are blk_status_t
+// values (Linux 5.16+) instead of errnos
+func (m *StatsFetcher) DiskStatusIsBlkStatus() bool {
+	return m.diskStatusIsBlkStatus
 }
 
 // fixupSpec replaces disabled programs with no-op stubs before loading,
