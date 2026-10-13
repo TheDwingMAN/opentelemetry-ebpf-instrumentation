@@ -82,6 +82,7 @@ func TestFeatureStatsDisk(t *testing.T) {
 		}
 		require.NoError(t, err, tc.name)
 		assert.Equal(t, tc.want, features&FeatureStatsDisk, tc.name)
+		assert.False(t, features.StatsFsSync(), tc.name)
 	}
 	assert.True(t, FeatureStatsDiskOperations.StatMetrics(), "each enables the stats pipeline on its own")
 

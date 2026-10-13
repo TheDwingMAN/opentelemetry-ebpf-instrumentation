@@ -8,6 +8,10 @@
 
 #include <statsolly/types.h>
 
+// The latency histogram bounds of the block requests and of the file syncs, injected by userspace
+// at load
+volatile const u64 disk_latency_bounds_ns[k_disk_latency_bounds];
+
 // The histogram bucket of latency_ns. Buckets are upper-inclusive, like Prometheus "le" buckets:
 // bucket i holds the values in (bounds[i-1], bounds[i]], and the last bucket the values above the
 // last bound. bounds are sorted in ascending order.
@@ -64,4 +68,31 @@ static __always_inline u8 disk_status_code(const u64 raw_status, const bool is_b
     // the raw tracepoint argument holds the negative int zero-extended
     const u32 errno_value = -(u32)raw_status;
     return errno_value < k_status_other ? (u8)errno_value : k_status_other;
+}
+
+// The errnos of the syncs that sync nothing
+enum {
+    k_errno_ebadf = 9,
+    k_errno_einval = 22,
+    k_errno_espipe = 29,
+};
+
+// A sync fails with EBADF on an invalid file descriptor, and with EINVAL on a file that can't be
+// synced, such as a pipe, a socket or a terminal (as a logger syncing its standard output does), or
+// on invalid sync_file_range(2) flags or offsets, which fails with ESPIPE on a pipe instead
+static __always_inline bool fs_sync_attempted(const s32 ret) {
+    return ret != -k_errno_ebadf && ret != -k_errno_einval && ret != -k_errno_espipe;
+}
+
+// The flags of sync_file_range(2) (include/uapi/linux/fs.h), which the kernel BTF doesn't have
+enum {
+    k_sync_file_range_wait_before = 1,
+    k_sync_file_range_write = 2,
+    k_sync_file_range_wait_after = 4,
+};
+
+// sync_file_range(2) with SYNC_FILE_RANGE_WRITE alone, as the flush hints of PostgreSQL and RocksDB,
+// starts the writeback without waiting for it: it is not a sync
+static __always_inline bool sync_file_range_waits(const u32 flags) {
+    return (flags & (k_sync_file_range_wait_before | k_sync_file_range_wait_after)) != 0;
 }

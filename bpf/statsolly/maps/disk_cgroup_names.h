@@ -18,10 +18,10 @@ typedef struct disk_cgroup_name {
     unsigned char parent[k_disk_cgroup_name_max_len];
 } disk_cgroup_name_t;
 
-// The names of the cgroups that block I/O is charged to, and of their parents, by cgroup id, so
-// that userspace finds the containers of cgroups outside its cgroup namespace or already gone. An
-// LRU map can evict entries before it is full until the fix of Linux 6.16 (and 6.12.39, 6.6.99):
-// the completion records the names again at the next I/O of the cgroup.
+// The names of the cgroups that block I/O and file syncs are charged to, and of their parents, by
+// cgroup id, so that userspace finds the containers of cgroups outside its cgroup namespace or
+// already gone. An LRU map can evict entries before it is full until the fix of Linux 6.16 (and
+// 6.12.39, 6.6.99): the probes record the names again at the next I/O or sync of the cgroup.
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1 << 13);

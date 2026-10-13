@@ -63,25 +63,42 @@ func TestBlockRqCompleteReportsBlkStatus(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSizeDiskMaps(t *testing.T) {
+func TestSizeStorageMaps(t *testing.T) {
+	const inFlight, accum, names, beyond = 1 << 14, 1 << 12, 1 << 13, 2 * lruLocalFreeTarget * 192
+	both := export.FeatureStatsDisk | export.FeatureStatsFsSync
 	for _, tc := range []struct {
-		name                               string
-		enabled, readsCgroup               bool
-		cpus                               int
-		wantInFlight, wantAccum, wantNames uint32
+		name    string
+		storage export.Features
+		reads   CgroupReads
+		cpus    int
+		// disk_rq_start, disk_io_accum, fs_sync_start, fs_sync_accum and disk_cgroup_names
+		want [5]uint32
 	}{
-		{name: "disabled", readsCgroup: true, cpus: 192, wantInFlight: 1, wantAccum: 1, wantNames: 1},
-		{name: "up to 64 CPUs", enabled: true, cpus: 64, wantInFlight: 1 << 14, wantAccum: 1 << 12, wantNames: 1},
-		{name: "beyond", enabled: true, cpus: 192, wantInFlight: 2 * lruLocalFreeTarget * 192, wantAccum: 1 << 12, wantNames: 1},
-		{name: "reading the cgroups", enabled: true, readsCgroup: true, cpus: 64, wantInFlight: 1 << 14, wantAccum: 1 << 12, wantNames: 1 << 13},
+		{name: "disabled", reads: CgroupReads{Disk: true, FsSync: true}, cpus: 192, want: [5]uint32{1, 1, 1, 1, 1}},
+		{name: "up to 64 CPUs", storage: both, cpus: 64, want: [5]uint32{inFlight, accum, inFlight, accum, 1}},
+		{name: "beyond", storage: both, cpus: 192, want: [5]uint32{beyond, accum, beyond, accum, 1}},
+		{
+			name: "the disk reads the cgroups", storage: export.FeatureStatsDisk, reads: CgroupReads{Disk: true}, cpus: 64,
+			want: [5]uint32{inFlight, accum, 1, 1, names},
+		},
+		{
+			name: "the file syncs read the cgroups", storage: export.FeatureStatsFsSync, reads: CgroupReads{FsSync: true}, cpus: 64,
+			want: [5]uint32{1, 1, inFlight, accum, names},
+		},
+		{
+			name: "a disabled feature doesn't read them", storage: export.FeatureStatsDisk, reads: CgroupReads{FsSync: true}, cpus: 64,
+			want: [5]uint32{inFlight, accum, 1, 1, 1},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec, err := LoadStats()
 			require.NoError(t, err)
-			sizeDiskMaps(spec, tc.enabled, tc.readsCgroup, tc.cpus)
-			assert.Equal(t, tc.wantInFlight, spec.Maps["disk_rq_start"].MaxEntries)
-			assert.Equal(t, tc.wantAccum, spec.Maps["disk_io_accum"].MaxEntries)
-			assert.Equal(t, tc.wantNames, spec.Maps["disk_cgroup_names"].MaxEntries)
+			sizeStorageMaps(spec, tc.storage, tc.reads, tc.cpus)
+			var got [5]uint32
+			for i, name := range []string{"disk_rq_start", "disk_io_accum", "fs_sync_start", "fs_sync_accum", "disk_cgroup_names"} {
+				got[i] = spec.Maps[name].MaxEntries
+			}
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

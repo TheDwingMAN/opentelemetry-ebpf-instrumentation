@@ -409,7 +409,8 @@ func ioCgroupRoot(t *testing.T) string {
 
 func attachDiskReader(t *testing.T, features export.Features, readsCgroup bool) *diskReader {
 	t.Helper()
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{}, readsCgroup)
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{},
+		ebpf.CgroupReads{Disk: readsCgroup})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 	reader := NewDiskMapTracer(fetcher.DiskIOAccumMap(), fetcher.DiskCgroupNamesMap(), fetcher.DiskStatusIsBlkStatus(),
