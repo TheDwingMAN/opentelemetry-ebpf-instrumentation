@@ -129,7 +129,7 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     if (!disk_rq_final_completion(nr_bytes, BPF_CORE_READ(rq, __data_len))) {
         return 0;
     }
-    // the operations that are not measured, like flushes, have no issue record
+    // the operations that are not measured, like discards, have no issue record
     if (request_op(rq) == disk_op_unknown) {
         return 0;
     }

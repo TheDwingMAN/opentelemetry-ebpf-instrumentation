@@ -50,7 +50,7 @@ static void test_op_from_req_op(void) {
     assert_true(disk_op_from_req_op(k_req_op_write) == disk_op_write, "REQ_OP_WRITE is a write");
     assert_true(disk_op_from_req_op(k_req_op_write_zeroes) == disk_op_write,
                 "REQ_OP_WRITE_ZEROES is a write");
-    assert_true(disk_op_from_req_op(2) == disk_op_unknown, "REQ_OP_FLUSH is not measured");
+    assert_true(disk_op_from_req_op(k_req_op_flush) == disk_op_flush, "REQ_OP_FLUSH is a flush");
     assert_true(disk_op_from_req_op(3) == disk_op_unknown, "REQ_OP_DISCARD is not measured");
     assert_true(disk_op_from_req_op(7) == disk_op_unknown,
                 "a zone append (6.1+) or WRITE_SAME (5.8) is not measured");

@@ -212,7 +212,8 @@ func fakeIoRecord(srcPort, dstPort uint16, direction uint8, bytes uint32) *ebpf.
 }
 
 // The disk stats get the OBI IP, go through the stats filters and are exported. The paths of a
-// dm-multipath device have the counters, but not the histogram
+// dm-multipath device have the counters, but not the histograms. The cache flushes are only in
+// their own histogram.
 func TestDiskStats(t *testing.T) {
 	disk, promURL := startDiskPipeline(t, func(s *Stats) {
 		s.cfg.Attributes.Select = attributes.Selection{"obi.stat.disk.*": attributes.InclusionLists{Include: []string{"*"}}}
@@ -225,7 +226,9 @@ func TestDiskStats(t *testing.T) {
 	failed.DiskIO.ErrorType, failed.DiskIO.Bytes = "EIO", 0
 	path := fakeDiskRecord("sdb", 3)
 	path.DiskIO.MultipathPath = true
-	disk <- []*ebpf.Stat{failed, path}
+	flush, pathFlush := fakeDiskRecord("nvme0n1", 4), fakeDiskRecord("sdb", 1)
+	flush.DiskIO.Op, pathFlush.DiskIO.Op, pathFlush.DiskIO.MultipathPath = ebpf.CodeDiskOpFlush, ebpf.CodeDiskOpFlush, true
+	disk <- []*ebpf.Stat{failed, path, flush, pathFlush}
 
 	labels := func(device, errorType string) map[string]string {
 		return map[string]string{
@@ -257,6 +260,11 @@ func TestDiskStats(t *testing.T) {
 			{Name: "obi_stat_disk_io_bytes_total", Value: 6 * 4096, Labels: ioLabels("nvme0n1")},
 			{Name: "obi_stat_disk_io_bytes_total", Value: 3 * 4096, Labels: ioLabels("sdb")},
 		}, named("obi_stat_disk_io_bytes_total"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{{
+			Name: "obi_stat_disk_flush_duration_seconds_count", Value: 4, Labels: map[string]string{
+				"obi_ip": "1.2.3.4", "system_device": "nvme0n1", "obi_disk_stacked": "false", "obi_disk_volume_name": "", "error_type": "",
+			},
+		}}, named("obi_stat_disk_flush_duration_seconds_count"))
 	}, timeout, 100*time.Millisecond)
 }
 
