@@ -171,6 +171,38 @@ func getDefinitions(
 		nil,
 	)
 
+	// the Kubernetes workload that the block I/O is charged to, and the cluster, which is the same on
+	// every series of a node: a series per workload by default, not per pod
+	statsStorageKubeAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sClusterName:   true,
+			attr.K8sNamespaceName: true,
+			attr.K8sOwnerName:     true,
+			attr.K8sKind:          true,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
+		},
+		nil,
+	)
+
+	// the same attributes, on the histograms, whose series cost a series per bucket: only the
+	// cluster by default, as the counters give the mean per workload
+	statsStorageKubeOptInAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sClusterName:   true,
+			attr.K8sNamespaceName: false,
+			attr.K8sOwnerName:     false,
+			attr.K8sKind:          false,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
+		},
+		nil,
+	)
+
 	// attributes to be reported exclusively for stat metrics when
 	// kubernetes metadata is enabled
 	statsKubeAttributes := NewAttrReportGroup(
@@ -946,23 +978,23 @@ func getDefinitions(
 			},
 		},
 		StatDiskServiceDuration.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeOptInAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
 		},
 		StatDiskIO.Section: {
-			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeAttributes},
 			Attributes: map[attr.Name]Default{},
 		},
 		StatDiskOperations.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
 		},
 		StatDiskServiceTime.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},

@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
+	"go.opentelemetry.io/obi/pkg/internal/pipe"
 )
 
 func TestStatGetters_DiskIO(t *testing.T) {
@@ -20,6 +21,7 @@ func TestStatGetters_DiskIO(t *testing.T) {
 		Device: "dm-0", VolumeName: "vg0-data", Stacked: true, Op: CodeDiskOpRead, ContainerID: "0123abcd",
 	}}
 	failed := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "sda", Op: CodeDiskOpRead, ErrorType: "EIO"}}
+	read.CommonAttrs = pipe.CommonAttrs{Metadata: map[attr.Name]string{attr.K8sNamespaceName: "storage"}}
 	rtt := &Stat{Type: StatTypeTCPRtt, TCPRtt: &TCPRtt{}}
 	for _, tc := range []struct {
 		name attr.Name
@@ -37,6 +39,9 @@ func TestStatGetters_DiskIO(t *testing.T) {
 		{name: attr.ErrorType, stat: failed, want: attribute.String("error.type", "EIO")},
 		{name: attr.ContainerID, stat: write},
 		{name: attr.ContainerID, stat: read, want: attribute.String("container.id", "0123abcd")},
+		{name: attr.K8sNamespaceName, stat: read, want: attribute.String("k8s.namespace.name", "storage")},
+		{name: attr.K8sNamespaceName, stat: write},
+		{name: attr.K8sNamespaceName, stat: rtt, want: attribute.String("k8s.namespace.name", "")},
 		{name: attr.SystemDevice, stat: rtt, want: attribute.String("system.device", "")},
 		{name: attr.DiskStacked, stat: rtt, want: attribute.Bool("obi.disk.stacked", false)},
 		{name: attr.DiskVolumeName, stat: rtt},
