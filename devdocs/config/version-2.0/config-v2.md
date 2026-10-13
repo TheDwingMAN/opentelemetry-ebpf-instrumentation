@@ -563,7 +563,7 @@ This section is the primary user control for defining how OBI captures and proce
 The current shape separates packet/flow capture from TCP, block I/O (disk) and file sync stats capture:
 
 - `capture.network.capture` controls network flow capture and flow-derived telemetry.
-- `capture.network.stats` controls TCP, block I/O (disk) and file sync stats telemetry. `enabled` is the stats master switch, and `features` lists enabled stats families: `tcp_rtt`, `tcp_failed_connections`, `tcp_successful_connections`, `tcp_retransmits`, `tcp_io`, `disk_service_duration`, `disk_io`, `disk_operations`, `disk_service_time`, `fs_sync_duration`, `fs_sync_operations`, and `fs_sync_time`.
+- `capture.network.stats` controls TCP, block I/O (disk) and file sync stats telemetry. `enabled` is the stats master switch, and `features` lists enabled stats families: `tcp_rtt`, `tcp_failed_connections`, `tcp_successful_connections`, `tcp_retransmits`, `tcp_io`, `disk_service_duration`, `disk_io`, `disk_operations`, `disk_service_time`, `disk_flush_duration`, `fs_sync_duration`, `fs_sync_operations`, and `fs_sync_time`.
 
 `tcp_io` can produce substantially more events than the other stats families, so users should opt into it deliberately when they need per-send/per-receive I/O stats.
 
@@ -571,7 +571,7 @@ The `disk_*` families probe every block I/O request, and the `fs_sync_*` familie
 
 ### `capture.metrics.features`
 
-Select metric families with the same names as Config v1, plus `stats_disk_service_duration`, `stats_disk_io`, `stats_disk_operations`, `stats_disk_service_time`, `stats_fs_sync_duration`, `stats_fs_sync_operations`, and `stats_fs_sync_time`, which only Config v2 enables. For standalone OBI:
+Select metric families with the same names as Config v1, plus `stats_disk_service_duration`, `stats_disk_io`, `stats_disk_operations`, `stats_disk_service_time`, `stats_disk_flush_duration`, `stats_fs_sync_duration`, `stats_fs_sync_operations`, and `stats_fs_sync_time`, which only Config v2 enables. For standalone OBI:
 
 ```yaml
 extensions:

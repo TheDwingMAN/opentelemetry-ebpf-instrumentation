@@ -30,6 +30,7 @@ static __always_inline u32 disk_latency_bucket(const volatile u64 *bounds, const
 enum {
     k_req_op_read = 0,
     k_req_op_write = 1,
+    k_req_op_flush = 2,
     k_req_op_write_zeroes = 9,
 };
 
@@ -41,6 +42,8 @@ static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op) {
     case k_req_op_write:
     case k_req_op_write_zeroes:
         return disk_op_write;
+    case k_req_op_flush:
+        return disk_op_flush;
     default:
         return disk_op_unknown;
     }

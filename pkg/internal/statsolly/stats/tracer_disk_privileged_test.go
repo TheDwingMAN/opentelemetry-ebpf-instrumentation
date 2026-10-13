@@ -250,7 +250,7 @@ func TestDiskServiceTimeOfAKnownLatency(t *testing.T) {
 		delay  = 2 * time.Millisecond
 		blocks = 50
 	)
-	device := slowNullBlockDevice(t, delay)
+	device := slowNullBlockDevice(t, delay, nil)
 	reader := attachDiskReader(t, export.FeatureStatsDiskServiceDuration, false)
 
 	f, err := os.OpenFile(device, os.O_RDWR|unix.O_DIRECT, 0)
@@ -277,6 +277,32 @@ func TestDiskServiceTimeOfAKnownLatency(t *testing.T) {
 	require.InDelta(t, 2*blocks, requests, float64(diskProgramMisses(t)))
 	assert.GreaterOrEqual(t, serviceTime/float64(requests), delay.Seconds(), "the device completes each request after the delay")
 	assert.LessOrEqual(t, serviceTime, elapsed.Seconds(), "one request at a time: they never overlap")
+}
+
+// TestDiskFlushDurationOfAKnownLatency syncs, one sync at a time, a null_blk device with a volatile
+// write cache that completes each request a known delay after it receives it: each sync sends a cache
+// flush, which counts that delay, and the flushes never overlap
+func TestDiskFlushDurationOfAKnownLatency(t *testing.T) {
+	const (
+		delay = 2 * time.Millisecond
+		syncs = 50
+	)
+	device := slowNullBlockDevice(t, delay, map[string]string{"memory_backed": "1", "cache_size": "64"})
+	reader := attachDiskReader(t, export.FeatureStatsDiskFlushDuration, false)
+
+	f, err := os.OpenFile(device, os.O_RDWR, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	start := time.Now()
+	for range syncs {
+		require.NoError(t, unix.Fdatasync(int(f.Fd())))
+	}
+	elapsed := time.Since(start)
+
+	flushes := deviceLatency(reader.readStats(), filepath.Base(device), ebpf.CodeDiskOpFlush)
+	require.InDelta(t, syncs, flushes.Count(), float64(diskProgramMisses(t)), "each sync sends a flush")
+	assert.GreaterOrEqual(t, flushes.Sum/float64(flushes.Count()), delay.Seconds(), "the device completes each flush after the delay")
+	assert.LessOrEqual(t, flushes.Sum, elapsed.Seconds(), "one flush at a time: they never overlap")
 }
 
 // TestDiskIOIsChargedPerCgroup writes to a loop device from processes in the cgroups of three
@@ -561,8 +587,9 @@ func deviceNode(t *testing.T, name string) string {
 }
 
 // slowNullBlockDevice creates a null_blk device that completes each request after the given delay,
-// and returns the path of its node. It skips the test if null_blk can't be configured.
-func slowNullBlockDevice(t *testing.T, delay time.Duration) string {
+// with the given configfs settings, and returns the path of its node. It skips the test if null_blk
+// can't be configured.
+func slowNullBlockDevice(t *testing.T, delay time.Duration, settings map[string]string) string {
 	t.Helper()
 	_ = exec.Command("modprobe", "null_blk", "nr_devices=0").Run()
 	dir := filepath.Join("/sys/kernel/config/nullb", fmt.Sprintf("obi-test-%d", os.Getpid()))
@@ -573,10 +600,12 @@ func slowNullBlockDevice(t *testing.T, delay time.Duration) string {
 		_ = os.WriteFile(filepath.Join(dir, "power"), []byte("0"), 0o644)
 		_ = os.Remove(dir)
 	})
-	for name, value := range map[string]string{
+	all := map[string]string{
 		"irqmode":         "2", // complete the requests from a timer
 		"completion_nsec": strconv.FormatInt(delay.Nanoseconds(), 10),
-	} {
+	}
+	maps.Copy(all, settings)
+	for name, value := range all {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(value), 0o644), name)
 	}
 	// null_blk names the device nullb<index> on older kernels, and after the configfs directory on

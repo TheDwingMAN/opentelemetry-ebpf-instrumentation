@@ -139,7 +139,7 @@ func fexitTimesFsync(t *testing.T) bool {
 func TestFsSyncConcurrentSyncsDuringAStall(t *testing.T) {
 	const concurrentSyncs = 64
 	cgroupRoot := ioCgroupRoot(t)
-	device := slowNullBlockDevice(t, time.Second)
+	device := slowNullBlockDevice(t, time.Second, nil)
 	reader, _ := attachFsSyncReader(t, true)
 
 	containerID := strings.Repeat("a7", 32)
@@ -170,7 +170,7 @@ func TestFsSyncConcurrentSyncsDuringAStall(t *testing.T) {
 // freed memory: OBI uses kprobes there.
 func TestFsSyncDetachWhileSyncing(t *testing.T) {
 	const blockedSyncs = 32
-	device := slowNullBlockDevice(t, 3*time.Second)
+	device := slowNullBlockDevice(t, 3*time.Second, nil)
 	_, fetcher := attachFsSyncReader(t, false)
 	errorsBefore := kernelErrorLines(t)
 
