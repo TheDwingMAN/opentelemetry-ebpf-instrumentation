@@ -100,6 +100,8 @@ type statMetricsExporter struct {
 	diskOperations           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskServiceTime          *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
 	fsSyncDuration           *kernelHistogram
+	fsSyncOperations         *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	fsSyncTime               *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
 	kernelHistograms         *kernelHistogramProducer
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
@@ -280,6 +282,26 @@ func newStatMetricsExporter(
 		nme.fsSyncDuration = kernelHistograms.histogram(attributes.StatFsSyncDuration, export.DiskLatencyBounds, attrs)
 	}
 
+	if cfg.CommonCfg.Features.StatsFsSyncOperations() {
+		fsSyncOperations, err := ebpfEvents.Int64Counter(attributes.StatFsSyncOperations.OTEL,
+			metric2.WithUnit(attributes.StatFsSyncOperations.Unit))
+		if err != nil {
+			return nil, fmt.Errorf("creating stats fs sync operations counter: %w", err)
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatFsSyncOperations))
+		nme.fsSyncOperations = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, fsSyncOperations, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if cfg.CommonCfg.Features.StatsFsSyncTime() {
+		fsSyncTime, err := ebpfEvents.Float64Counter(attributes.StatFsSyncTime.OTEL,
+			metric2.WithUnit(attributes.StatFsSyncTime.Unit))
+		if err != nil {
+			return nil, fmt.Errorf("creating stats fs sync time counter: %w", err)
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatFsSyncTime))
+		nme.fsSyncTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, fsSyncTime, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -311,7 +333,7 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 				me.recordDiskIO(ctx, v)
 			}
 			if v.FsSync != nil {
-				me.recordFsSync(v)
+				me.recordFsSync(ctx, v)
 			}
 		}
 	}
@@ -335,8 +357,16 @@ func (me *statMetricsExporter) recordDiskIO(ctx context.Context, v *ebpf.Stat) {
 	}
 }
 
-func (me *statMetricsExporter) recordFsSync(v *ebpf.Stat) {
+func (me *statMetricsExporter) recordFsSync(ctx context.Context, v *ebpf.Stat) {
 	if me.fsSyncDuration != nil {
 		me.kernelHistograms.record(me.fsSyncDuration, v, &v.FsSync.Latency)
+	}
+	if me.fsSyncOperations != nil {
+		fsSyncOperations, attrs := me.fsSyncOperations.ForRecord(v)
+		fsSyncOperations.Add(ctx, int64(v.FsSync.Latency.Count()), metric2.WithAttributeSet(attrs))
+	}
+	if me.fsSyncTime != nil {
+		fsSyncTime, attrs := me.fsSyncTime.ForRecord(v)
+		fsSyncTime.Add(ctx, v.FsSync.Latency.Sum, metric2.WithAttributeSet(attrs))
 	}
 }

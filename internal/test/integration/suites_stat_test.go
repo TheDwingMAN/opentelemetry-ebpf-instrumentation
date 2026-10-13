@@ -41,6 +41,7 @@ func TestStat_GoDiskStatMetrics(t *testing.T) {
 	require.Len(t, containerID, 64)
 	t.Run("Go Stat Metrics disk counters tests", func(t *testing.T) { testStatMetricsDiskCounters(t, containerID) })
 	t.Run("Go Stat Metrics file sync duration tests", func(t *testing.T) { testStatMetricsFsSyncDuration(t, containerID) })
+	t.Run("Go Stat Metrics file sync counters tests", func(t *testing.T) { testStatMetricsFsSyncCounters(t, containerID) })
 	runWeaverValidation(t)
 	require.NoError(t, compose.Close())
 }

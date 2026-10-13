@@ -91,7 +91,8 @@ func TestStatMetricsExporter_DiskCounters(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
-// The file sync metrics split the syncs by type and outcome
+// The file sync metrics split the syncs by type and outcome, and the counters are the count and the
+// sum of the histogram
 func TestStatMetricsExporter_FsSync(t *testing.T) {
 	stats, records := startStatExporter(t, export.FeatureStatsFsSync, attributes.UndefinedGroup)
 	stats.Send([]*ebpf.Stat{
@@ -109,8 +110,12 @@ func TestStatMetricsExporter_FsSync(t *testing.T) {
 				record.FloatVal + float64(record.IntVal)
 		})
 		assert.Equal(ct, map[string]float64{
-			"obi.stat.fs.sync.duration fsync ":        0.004,
-			"obi.stat.fs.sync.duration fdatasync EIO": 1.5,
+			"obi.stat.fs.sync.duration fsync ":          0.004,
+			"obi.stat.fs.sync.duration fdatasync EIO":   1.5,
+			"obi.stat.fs.sync.operations fsync ":        2,
+			"obi.stat.fs.sync.operations fdatasync EIO": 1,
+			"obi.stat.fs.sync.time fsync ":              0.004,
+			"obi.stat.fs.sync.time fdatasync EIO":       1.5,
 		}, got)
 	}, timeout, 100*time.Millisecond)
 }

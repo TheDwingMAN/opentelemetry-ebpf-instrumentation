@@ -47,6 +47,8 @@ type statMetricsReporter struct {
 	diskOperations           *Expirer[prometheus.Counter]
 	diskServiceTime          *Expirer[prometheus.Counter]
 	fsSyncDuration           *kernelHistogramVec
+	fsSyncOperations         *Expirer[prometheus.Counter]
+	fsSyncTime               *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -60,6 +62,8 @@ type statMetricsReporter struct {
 	diskOperationsAttrs           []attributes.Field[*ebpf.Stat, string]
 	diskServiceTimeAttrs          []attributes.Field[*ebpf.Stat, string]
 	fsSyncDurationAttrs           []attributes.Field[*ebpf.Stat, string]
+	fsSyncOperationsAttrs         []attributes.Field[*ebpf.Stat, string]
+	fsSyncTimeAttrs               []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -240,6 +244,28 @@ func newStatsReporter(
 		register = append(register, mr.fsSyncDuration)
 	}
 
+	if cfg.CommonCfg.Features.StatsFsSyncOperations() {
+		log.Debug("registering stat fs sync operations metric")
+
+		mr.fsSyncOperationsAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncOperations))
+		mr.fsSyncOperations = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatFsSyncOperations.Prom,
+			Help: "number of completed file syncs",
+		}, labelNames(mr.fsSyncOperationsAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.fsSyncOperations)
+	}
+
+	if cfg.CommonCfg.Features.StatsFsSyncTime() {
+		log.Debug("registering stat fs sync time metric")
+
+		mr.fsSyncTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncTime))
+		mr.fsSyncTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatFsSyncTime.Prom,
+			Help: "sum of the durations of the completed file syncs, from the sync call until it returns, in seconds",
+		}, labelNames(mr.fsSyncTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.fsSyncTime)
+	}
+
 	mr.promConnect.Register(cfg.Config.Port, cfg.Config.Path, register...)
 
 	mr.input = input.Subscribe(msg.SubscriberName("prom.StatsReporterInput"))
@@ -334,5 +360,11 @@ func (r *statMetricsReporter) observeFsSync(stat *ebpf.Stat) {
 	}
 	if r.fsSyncDuration != nil {
 		r.fsSyncDuration.observe(labelValues(stat, r.fsSyncDurationAttrs), &stat.FsSync.Latency)
+	}
+	if r.fsSyncOperations != nil {
+		r.fsSyncOperations.WithLabelValues(labelValues(stat, r.fsSyncOperationsAttrs)...).Metric.Add(float64(stat.FsSync.Latency.Count()))
+	}
+	if r.fsSyncTime != nil {
+		r.fsSyncTime.WithLabelValues(labelValues(stat, r.fsSyncTimeAttrs)...).Metric.Add(stat.FsSync.Latency.Sum)
 	}
 }

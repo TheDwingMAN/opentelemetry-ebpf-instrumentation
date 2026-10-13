@@ -280,8 +280,20 @@ func TestFsSyncStats(t *testing.T) {
 				Name: "obi_stat_fs_sync_duration_seconds_count", Value: 1,
 				Labels: map[string]string{"obi_fs_sync_type": "fdatasync", "error_type": "EIO"},
 			},
-		}, slices.DeleteFunc(allMetrics, func(m promtest.ScrapedMetric) bool {
+		}, slices.DeleteFunc(slices.Clone(allMetrics), func(m promtest.ScrapedMetric) bool {
 			return m.Name != "obi_stat_fs_sync_duration_seconds_count"
+		}))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{
+				Name: "obi_stat_fs_sync_operations_total", Value: 3,
+				Labels: map[string]string{"obi_fs_sync_type": "fsync", "error_type": ""},
+			},
+			{
+				Name: "obi_stat_fs_sync_operations_total", Value: 1,
+				Labels: map[string]string{"obi_fs_sync_type": "fdatasync", "error_type": "EIO"},
+			},
+		}, slices.DeleteFunc(allMetrics, func(m promtest.ScrapedMetric) bool {
+			return m.Name != "obi_stat_fs_sync_operations_total"
 		}))
 	}, timeout, 100*time.Millisecond)
 }
