@@ -22,6 +22,9 @@ func TestV2MetricFeatures(t *testing.T) {
 
 	features := maps.Clone(export.FeatureMapper)
 	features["stats_disk_service_duration"] = export.FeatureStatsDiskServiceDuration
+	features["stats_disk_io"] = export.FeatureStatsDiskIO
+	features["stats_disk_operations"] = export.FeatureStatsDiskOperations
+	features["stats_disk_service_time"] = export.FeatureStatsDiskServiceTime
 	for name, feature := range features {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -146,14 +149,14 @@ instrumentation:
 }
 
 // The disk stats must be listed: none of the aggregates of an explicit list selects them
-func TestV2MetricFeaturesDiskServiceDurationIsOptIn(t *testing.T) {
+func TestV2MetricFeaturesDiskStatsAreOptIn(t *testing.T) {
 	t.Parallel()
 
 	const network = `
 version: '2.0'
 network:
   stats:
-    features: [disk_service_duration]
+    features: [disk_service_duration, disk_io, disk_operations, disk_service_time]
 `
 	for _, test := range []struct {
 		name     string
@@ -172,7 +175,7 @@ network:
 			require.NoError(t, err)
 			got, err := V2ToRuntime(ext)
 			require.NoError(t, err)
-			require.Equal(t, test.wantDisk, got.Metrics.Features.StatsDiskServiceDuration())
+			require.Equal(t, test.wantDisk, got.Metrics.Features.StatsDisk())
 		})
 	}
 }

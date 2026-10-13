@@ -55,11 +55,11 @@ func TestFeatureEnv_NetworkFlowPackets(t *testing.T) {
 	assert.False(t, doc.Features.has(FeatureAll))
 }
 
-func TestFeatureStatsDiskServiceDuration(t *testing.T) {
+func TestFeatureStatsDisk(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		load    func([]string) (Features, error)
-		want    bool
+		want    Features
 		wantErr bool
 	}{
 		{name: "stats", load: LoadFeatures},
@@ -69,7 +69,10 @@ func TestFeatureStatsDiskServiceDuration(t *testing.T) {
 		{name: "disk_service_duration", load: LoadFeatures, wantErr: true},
 		{name: "stats", load: LoadV2Features},
 		{name: "all", load: LoadV2Features},
-		{name: "stats_disk_service_duration", load: LoadV2Features, want: true},
+		{name: "stats_disk_service_duration", load: LoadV2Features, want: FeatureStatsDiskServiceDuration},
+		{name: "stats_disk_io", load: LoadV2Features, want: FeatureStatsDiskIO},
+		{name: "stats_disk_operations", load: LoadV2Features, want: FeatureStatsDiskOperations},
+		{name: "stats_disk_service_time", load: LoadV2Features, want: FeatureStatsDiskServiceTime},
 		{name: "disk_service_duration", load: LoadV2Features, wantErr: true},
 	} {
 		features, err := tc.load([]string{tc.name})
@@ -78,11 +81,11 @@ func TestFeatureStatsDiskServiceDuration(t *testing.T) {
 			continue
 		}
 		require.NoError(t, err, tc.name)
-		assert.Equal(t, tc.want, features.StatsDiskServiceDuration(), tc.name)
+		assert.Equal(t, tc.want, features&FeatureStatsDisk, tc.name)
 	}
-	assert.True(t, FeatureStatsDiskServiceDuration.StatMetrics(), "it enables the stats pipeline on its own")
+	assert.True(t, FeatureStatsDiskOperations.StatMetrics(), "each enables the stats pipeline on its own")
 
-	features := FeatureAll | FeatureStatsDiskServiceDuration
+	features := FeatureAll | FeatureStatsDisk
 	loaded, err := LoadV2Features(features.Names())
 	require.NoError(t, err)
 	assert.Equal(t, features, loaded, "Config v2 loads the names that it renders")

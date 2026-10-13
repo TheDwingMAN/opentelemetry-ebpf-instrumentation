@@ -24,6 +24,8 @@ typedef struct disk_io_key {
 typedef struct disk_io_accum {
     u64 latency_count[k_disk_latency_buckets];
     u64 latency_sum_ns;
+    // bytes of the successful requests, at their issue
+    u64 bytes;
 } disk_io_accum_t;
 
 // A hash map, not an LRU one, so that the kernel never evicts the cumulative values

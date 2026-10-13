@@ -129,23 +129,25 @@ To add a new metric, follow these guidelines:
 
 12. Register the metric in the schema registry: add the metric to the `metrics:` list in [schemas/obi/groups/stats/metrics.yaml](../schemas/obi/groups/stats/metrics.yaml).
 
-### Disk service duration
+### Disk stats
 
 `obi.stat.disk.service.duration`, enabled by the Config v2 stats feature `disk_service_duration`, is the service time of the block reads and writes, per whole disk (`system.device`: the I/O of a partition is its disk's) and direction (`disk.io.direction`). A raw tracepoint program records the last `block_rq_issue` of each request on OBI's clock, and its final `block_rq_complete` adds the duration to a histogram per device and direction in the kernel, which `DiskMapTracer` reads every `capture.engine.batching.batch_timeout`. A request is counted only when its final completion takes the record of its issue, so it is counted once, without its wait in the I/O scheduler. Writes include write-zeroes. Cache flushes, discards, zone appends, passthrough commands and the I/O of bio-based devices (LVM, dm-crypt, md RAID, NVMe native multipath heads) are not measured.
 
-`obi.disk.stacked` tells whether the device is built on other block devices, which also report its I/O: device mapper, md RAID and loop devices, or any device that sysfs lists slaves of. `obi.disk.volume.name` is the name of a device mapper device, as `/dev/mapper` lists it (e.g. `mpatha` for `dm-1`), and is absent for the other devices. The paths of a dm-multipath device (e.g. `sdb` and `sdc`) report nothing, as the multipath device reports the same requests, so the multipath device isn't stacked.
+`obi.disk.stacked` tells whether the device is built on other block devices, which also report its I/O: device mapper, md RAID and loop devices, or any device that sysfs lists slaves of. `obi.disk.volume.name` is the name of a device mapper device, as `/dev/mapper` lists it (e.g. `mpatha` for `dm-1`), and is absent for the other devices. The paths of a dm-multipath device (e.g. `sdb` and `sdc`) don't report the histogram, as the multipath device reports the same requests, so the multipath device isn't stacked.
 
 The buckets are fixed, from 100 µs to 60 s (`DiskLatencyBounds` in [bucket.go](../pkg/export/bucket.go)), as the kernel buckets the durations. Both exporters export them as explicit histograms: exponential and native histograms don't apply.
 
 Failed requests are in series of their own, with `error.type`: the name of the errno that they failed with (e.g. `EIO`, `ETIMEDOUT`), or `_OTHER` for the block statuses whose numbers changed between kernel versions, such as those of zoned and offline devices. It is absent on success.
 
+`obi.stat.disk.operations` and `obi.stat.disk.service_time` (the stats features `disk_operations` and `disk_service_time`) are the count and the sum of the histogram, and `obi.stat.disk.io` (`disk_io`) the bytes of its successful requests, at their issue. A histogram series costs a series per bucket, while the two counters give the mean service time at one series each. The paths of dm-multipath devices report the counters, where a slow or failing path shows. The four features share the same probes.
+
 ### Known limitations
 
-#### Disk service duration
+#### Disk stats
 
 - Only the requests whose issue OBI recorded are counted, so the counts are not those of `/proc/diskstats`. Missed are the requests in flight at startup or evicted from the in-flight map, those whose issue or completion program the kernel skipped as nested (the programs' `recursion_misses`), the rare ones whose in-flight record the kernel refused to delete because another map operation was running on the same CPU (3 in 8,192 on RHEL 8.9 under emulation), and the empty writes of file syncs, which the kernel completes with a cache flush without issuing them, so fsync-heavy workloads show fewer writes.
 - Failed requests are timed from their last issue, in their own series by `error.type`: a command that times out lands in the top buckets only if its last attempt does.
-- The I/O of loop devices is also reported by the devices below them, as in `/proc/diskstats`. To add up a node's I/O, sum the devices with `obi_disk_stacked="false"`.
+- The I/O of loop devices is also reported by the devices below them, as in `/proc/diskstats`. To add up a node's I/O, sum the devices with `obi_disk_stacked="false"`, and on the counters, which the paths of dm-multipath devices report too, leave out the devices with an `obi_disk_volume_name`.
 - Devices are named from `/sys/dev/block` and, for the hidden paths of NVMe native multipath (e.g. `nvme1c0n1`), from `/proc/diskstats` on Linux 6.1 and later, refreshed every 30 seconds (a new volume that takes the numbers of a removed one keeps its volume name until then), or else by their `major:minor` numbers. The kernel keeps an entry per device, direction and outcome, which OBI deletes after a minute without I/O: while its entries (4096 by default) are full, the I/O of new keys isn't counted, and OBI logs a warning. Before Linux 5.14, the I/O that completes between the last read of an idle entry and its deletion is lost.
 - The stats filters (`capture.network.stats.filters`) also apply to the disk stats: a filter on an attribute that only the TCP stats have drops the disk stats, and the other way around.
 - Dynamic application selection (`instrumenter.WithDynamicSelector`) doesn't apply to the disk stats, which are node-wide.

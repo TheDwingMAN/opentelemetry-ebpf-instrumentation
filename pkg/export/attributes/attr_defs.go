@@ -156,6 +156,20 @@ func getDefinitions(
 		extraGroupAttributes[GroupNetKube],
 	)
 
+	// block devices have no connection endpoints, so the disk stats don't have statsAttributes
+	statsDiskAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:           false,
+			attr.SystemDevice:    true,
+			attr.DiskStacked:     true,
+			attr.DiskVolumeName:  true,
+			attr.DiskIODirection: true,
+		},
+		nil,
+	)
+
 	// attributes to be reported exclusively for stat metrics when
 	// kubernetes metadata is enabled
 	statsKubeAttributes := NewAttrReportGroup(
@@ -918,15 +932,26 @@ func getDefinitions(
 				attr.NetworkTCPHandshakeRole: false,
 			},
 		},
-		// block devices have no connection endpoints, so the disk stats don't have statsAttributes
 		StatDiskServiceDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
 			Attributes: map[attr.Name]Default{
-				attr.OBIIP:           false,
-				attr.SystemDevice:    true,
-				attr.DiskStacked:     true,
-				attr.DiskVolumeName:  true,
-				attr.DiskIODirection: true,
-				attr.ErrorType:       true,
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskOperations.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskServiceTime.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
 			},
 		},
 

@@ -33,6 +33,7 @@ func TestStat_GoDiskStatMetrics(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, compose.Up())
 	t.Run("Go Stat Metrics disk service duration tests", testStatMetricsDiskServiceDuration)
+	t.Run("Go Stat Metrics disk counters tests", testStatMetricsDiskCounters)
 	runWeaverValidation(t)
 	require.NoError(t, compose.Close())
 }
