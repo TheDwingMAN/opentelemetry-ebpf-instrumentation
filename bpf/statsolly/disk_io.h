@@ -49,6 +49,23 @@ static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op) {
     }
 }
 
+// disk_accounted_start_ns is the start of a request (rq->start_time_ns) if the kernel accounts the
+// request in /proc/diskstats, and 0 otherwise. From Linux 6.13, the kernel writes the start only when
+// it accounts the request (io_stat_flag, RQF_IO_STAT), so a request of a device without I/O
+// statistics keeps the start of an earlier use. The flushes of a flush sequence (flush_seq_flag,
+// RQF_FLUSH_SEQ) have no RQF_IO_STAT, but the kernel accounts them all, from the start that it writes
+// when it sends them. io_stat_flag is 0 where the kernel numbers its request flags with macros, and
+// writes the start, or 0, at every allocation.
+static __always_inline u64 disk_accounted_start_ns(const u64 start_ns,
+                                                   const u32 rq_flags,
+                                                   const u32 io_stat_flag,
+                                                   const u32 flush_seq_flag) {
+    if (io_stat_flag != 0 && (rq_flags & (io_stat_flag | flush_seq_flag)) == 0) {
+        return 0;
+    }
+    return start_ns;
+}
+
 // A request can complete in several block_rq_complete calls. Each call reports the bytes that it
 // completed while remaining_bytes (rq->__data_len) still holds the bytes left before it, so the call
 // that completes the rest is the final one. A failed call that leaves bytes is not: the kernel

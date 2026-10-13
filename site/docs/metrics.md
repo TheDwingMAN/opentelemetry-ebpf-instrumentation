@@ -1358,7 +1358,7 @@ Ratio [0-1] between the unread messages of an internal Go channel and its total 
 
 ## `obi.stat.disk.flush.duration`
 
-Duration of the cache flushes that the block devices with a volatile write cache are sent, per disk and outcome, from their last issue to the device until their completion. One flush serves the file syncs and journal commits pending when the kernel sends it. Bio-based devices pass theirs down to the devices below them, and the paths of dm-multipath devices report nothing: the multipath device reports the same flushes.
+Duration of the cache flushes that the block devices with a volatile write cache are sent, per disk and outcome, from their last issue to the device until their completion, or from the kernel's start of those that fail before their issue. One flush serves the file syncs and journal commits pending when the kernel sends it. Bio-based devices pass theirs down to the devices below them, and the paths of dm-multipath devices report nothing: the multipath device reports the same flushes.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1422,7 +1422,7 @@ Completed block reads and writes, per disk, direction and outcome: the count of 
 
 ## `obi.stat.disk.service.duration`
 
-Service time of the block reads and writes, per disk and direction, from their last issue to the device until their final completion. Only the requests whose issue OBI recorded are counted, so the counts differ from /proc/diskstats, and the I/O of bio-based devices (LVM, dm-crypt, md RAID, NVMe native multipath heads) is not measured. The paths of dm-multipath devices report nothing: the multipath device reports the same requests.
+Service time of the block reads and writes, per disk and direction, from their last issue to the device until their final completion, or from the kernel's start of the requests that complete without an issue. The requests are counted as in /proc/diskstats, but for those in flight at startup or missed by the probes, and the I/O of bio-based devices (LVM, dm-crypt, md RAID, NVMe native multipath heads) is not measured. The paths of dm-multipath devices report nothing: the multipath device reports the same requests.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
