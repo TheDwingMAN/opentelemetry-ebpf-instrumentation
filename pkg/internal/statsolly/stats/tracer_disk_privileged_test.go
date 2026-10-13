@@ -146,6 +146,39 @@ func TestDiskFailedRequestsAreNamedAfterTheirErrno(t *testing.T) {
 	}
 }
 
+// TestDiskIdleEntriesAreDeleted checks that the reader deletes the kernel's entry of a device that
+// stays idle, and that the I/O that creates it again is counted from zero
+func TestDiskIdleEntriesAreDeleted(t *testing.T) {
+	devPath := attachLoopDevice(t, t.TempDir())
+	device := filepath.Base(devPath)
+	major, minor := deviceNumbers(t, device)
+	reader := attachDiskReader(t)
+	reader.idleReadsBeforeDelete = 1
+	_, err := reader.accum.lookupAndDelete(ebpf.StatsDiskIoKeyT{})
+	t.Logf("the kernel looks up and deletes the entries at once: %t (%v)", errors.Is(err, ciliumebpf.ErrKeyNotExist), err)
+
+	f, err := os.OpenFile(devPath, os.O_WRONLY|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	block := alignedBuffer(t)
+	write := func(blocks int) ebpf.LatencyHistogram {
+		for i := range blocks {
+			_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+			require.NoError(t, err)
+		}
+		return deviceLatency(reader.readStats(), device, ebpf.CodeDiskOpWrite)
+	}
+
+	assert.InDelta(t, directIOBlocks, requests(write(directIOBlocks)), float64(diskProgramMisses(t)))
+	reader.readStats()
+	entries, err := reader.accum.read()
+	require.NoError(t, err)
+	for key := range entries {
+		assert.False(t, key.Major == major && key.Minor == minor, "the entries of the idle device are deleted")
+	}
+	assert.InDelta(t, directIOBlocks/4, requests(write(directIOBlocks/4)), float64(diskProgramMisses(t)))
+}
+
 // TestDiskStackedDevicesInSysfs checks what OBI reads in sysfs of a loop device, and of a device
 // mapper volume over it
 func TestDiskStackedDevicesInSysfs(t *testing.T) {
