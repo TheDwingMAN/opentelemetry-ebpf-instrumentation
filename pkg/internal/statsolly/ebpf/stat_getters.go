@@ -121,7 +121,15 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		}
 
 	default:
-		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
+		getter = func(s *Stat) attribute.KeyValue {
+			value := s.CommonAttrs.Metadata[name]
+			// the disk stats leave out the metadata that they don't have, like the Kubernetes
+			// attributes of the I/O charged to no pod: an invalid KeyValue isn't exported
+			if value == "" && s.Type == StatTypeDiskIO {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(name), value)
+		}
 	}
 	return getter, getter != nil
 }
