@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	ciliumebpf "github.com/cilium/ebpf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -22,10 +23,33 @@ import (
 type fakeDiskAccum struct {
 	entries map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT
 	err     error
+	// afterRead replaces entries once they are read, as the kernel adds to them meanwhile
+	afterRead map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT
+	// lookupAndDeleteErr is the error of lookupAndDelete, as before Linux 5.14
+	lookupAndDeleteErr error
 }
 
 func (f *fakeDiskAccum) read() (map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT, error) {
-	return maps.Clone(f.entries), f.err
+	entries := maps.Clone(f.entries)
+	maps.Copy(f.entries, f.afterRead)
+	f.afterRead = nil
+	return entries, f.err
+}
+
+func (f *fakeDiskAccum) lookupAndDelete(key ebpf.StatsDiskIoKeyT) (ebpf.StatsDiskIoAccumT, error) {
+	if f.lookupAndDeleteErr != nil {
+		return ebpf.StatsDiskIoAccumT{}, f.lookupAndDeleteErr
+	}
+	last := f.entries[key]
+	return last, f.delete(key)
+}
+
+func (f *fakeDiskAccum) delete(key ebpf.StatsDiskIoKeyT) error {
+	if _, ok := f.entries[key]; !ok {
+		return ciliumebpf.ErrKeyNotExist
+	}
+	delete(f.entries, key)
+	return nil
 }
 
 func writeKey(major, minor uint32) ebpf.StatsDiskIoKeyT {
@@ -52,7 +76,7 @@ func assertLatency(t *testing.T, latency ebpf.LatencyHistogram, sumSeconds float
 }
 
 func newTestDiskReader(src *fakeDiskAccum) *diskReader {
-	return newDiskReader(src.read, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"})
+	return newDiskReader(src, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"}, defaultDiskReadInterval)
 }
 
 func TestDiskReaderForwardsDeltas(t *testing.T) {
@@ -91,6 +115,46 @@ func TestDiskReaderForwardsWhatItReads(t *testing.T) {
 	stats := r.readStats()
 	require.Len(t, stats, 1)
 	assertLatency(t, stats[0].DiskIO.Latency, 2*0.0005, 2)
+}
+
+// An entry that stays unchanged is deleted, with what the kernel added to it since its last read when
+// the kernel can look it up and delete it at once, and a request that creates it again counts from zero
+func TestDiskReaderDeletesIdleEntries(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		lookupAndDeleteErr error
+		lastGrowth         []uint64
+	}{
+		{name: "lookup and delete", lastGrowth: []uint64{1}},
+		{name: "delete before Linux 5.14", lookupAndDeleteErr: ciliumebpf.ErrNotSupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := writeKey(8, 0)
+			src := &fakeDiskAccum{
+				entries:            map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{key: accum([]uint64{2}, []uint64{100_000})},
+				lookupAndDeleteErr: tc.lookupAndDeleteErr,
+			}
+			r := newDiskReader(src, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"}, diskIdleTime/2)
+			require.Len(t, r.readStats(), 1)
+			assert.Empty(t, r.readStats())
+			assert.Contains(t, src.entries, key, "idle for less than diskIdleTime")
+
+			// a request completes after the read that finds the entry idle long enough
+			src.afterRead = map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{key: accum([]uint64{3}, []uint64{100_000})}
+			var lastGrowth []uint64
+			for _, stat := range r.readStats() {
+				lastGrowth = stat.DiskIO.Latency.BucketCounts[:1]
+			}
+			assert.Equal(t, tc.lastGrowth, lastGrowth)
+			assert.NotContains(t, src.entries, key)
+			assert.NotContains(t, r.entries, key)
+
+			src.entries[key] = accum([]uint64{1}, []uint64{100_000})
+			stats := r.readStats()
+			require.Len(t, stats, 1)
+			assertLatency(t, stats[0].DiskIO.Latency, 0.0001, 1)
+		})
+	}
 }
 
 // fakeBlockDevices is a fake sysfs, with block devices linked from /sys/dev/block by their numbers,
@@ -218,7 +282,7 @@ func TestStackedDevices(t *testing.T) {
 		stacked    bool
 	}
 	devices := map[string]labels{}
-	for _, stat := range newDiskReader(src.read, fake.blockDevices()).readStats() {
+	for _, stat := range newDiskReader(src, fake.blockDevices(), defaultDiskReadInterval).readStats() {
 		devices[stat.DiskIO.Device] = labels{volumeName: stat.DiskIO.VolumeName, stacked: stat.DiskIO.Stacked}
 	}
 	assert.Equal(t, map[string]labels{
@@ -264,7 +328,7 @@ func TestDiskReaderLeavesOutTheMultipathPaths(t *testing.T) {
 	for _, numbers := range []devNum{{8, 16}, {8, 32}, {8, 48}, {8, 64}, {253, 0}, {253, 1}, {253, 2}, {253, 3}} {
 		src.entries[writeKey(numbers.major, numbers.minor)] = accum([]uint64{1}, []uint64{100_000})
 	}
-	r := newDiskReader(src.read, fake.blockDevices())
+	r := newDiskReader(src, fake.blockDevices(), defaultDiskReadInterval)
 	stacked := map[string]bool{}
 	for _, stat := range r.readStats() {
 		stacked[stat.DiskIO.Device] = stat.DiskIO.Stacked
@@ -273,5 +337,7 @@ func TestDiskReaderLeavesOutTheMultipathPaths(t *testing.T) {
 		"sdd": false, "sde": false, "dm-1": false, "dm-3": false,
 		"dm-0": true, "dm-2": true,
 	}, stacked, "the paths of dm-1 and dm-3 report nothing")
-	assert.Equal(t, src.entries, r.previous, "a path reports none of the requests it served while it was one")
+	for key, current := range src.entries {
+		assert.Equal(t, current, r.entries[key].previous, "a path reports none of the requests it served while it was one")
+	}
 }
