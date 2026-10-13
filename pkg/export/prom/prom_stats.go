@@ -46,6 +46,7 @@ type statMetricsReporter struct {
 	diskIO                   *Expirer[prometheus.Counter]
 	diskOperations           *Expirer[prometheus.Counter]
 	diskServiceTime          *Expirer[prometheus.Counter]
+	diskFlushDuration        *kernelHistogramVec
 	fsSyncDuration           *kernelHistogramVec
 	fsSyncOperations         *Expirer[prometheus.Counter]
 	fsSyncTime               *Expirer[prometheus.Counter]
@@ -61,6 +62,7 @@ type statMetricsReporter struct {
 	diskIOAttrs                   []attributes.Field[*ebpf.Stat, string]
 	diskOperationsAttrs           []attributes.Field[*ebpf.Stat, string]
 	diskServiceTimeAttrs          []attributes.Field[*ebpf.Stat, string]
+	diskFlushDurationAttrs        []attributes.Field[*ebpf.Stat, string]
 	fsSyncDurationAttrs           []attributes.Field[*ebpf.Stat, string]
 	fsSyncOperationsAttrs         []attributes.Field[*ebpf.Stat, string]
 	fsSyncTimeAttrs               []attributes.Field[*ebpf.Stat, string]
@@ -237,6 +239,16 @@ func newStatsReporter(
 		register = append(register, mr.diskServiceTime)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskFlushDuration() {
+		log.Debug("registering stat disk flush duration metric")
+
+		mr.diskFlushDurationAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskFlushDuration))
+		mr.diskFlushDuration = newKernelHistogramVec(attributes.StatDiskFlushDuration.Prom,
+			"measures the duration of the cache flushes of block devices, from their last issue to the device until their completion, in seconds",
+			export.DiskLatencyBounds, labelNames(mr.diskFlushDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.diskFlushDuration)
+	}
+
 	if cfg.CommonCfg.Features.StatsFsSyncDuration() {
 		log.Debug("registering stat fs sync duration metric")
 
@@ -292,8 +304,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPSuccessfulConnections(stat)
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
-			r.observeDiskServiceDuration(stat)
-			r.observeDiskCounters(stat)
+			r.observeDisk(stat)
 			r.observeFsSync(stat)
 		}
 	}
@@ -337,6 +348,20 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 	}
 	r.tcpIo.WithLabelValues(labelValues(stat, r.tcpIoAttrs)...).
 		Metric.Add(float64(stat.TCPIo.Bytes))
+}
+
+func (r *statMetricsReporter) observeDisk(stat *ebpf.Stat) {
+	if stat.DiskIO == nil {
+		return
+	}
+	if stat.DiskIO.Op == ebpf.CodeDiskOpFlush {
+		if r.diskFlushDuration != nil && !stat.DiskIO.MultipathPath {
+			r.diskFlushDuration.observe(labelValues(stat, r.diskFlushDurationAttrs), &stat.DiskIO.Latency)
+		}
+		return
+	}
+	r.observeDiskServiceDuration(stat)
+	r.observeDiskCounters(stat)
 }
 
 func (r *statMetricsReporter) observeDiskServiceDuration(stat *ebpf.Stat) {

@@ -52,7 +52,7 @@ attributes:
       Whether the block device (`system.device`) is built on other block
       devices that also report its I/O, as device mapper, md RAID and loop
       devices are. A dm-multipath device is not, as its paths don't report
-      its latency histogram. To count the I/O once, add up the devices where
+      its latency histograms. To count the I/O once, add up the devices where
       it is `false`, and on the disk counters, which the paths report,
       without `obi.disk.volume.name`.
     examples: [true]

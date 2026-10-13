@@ -703,6 +703,12 @@ var (
 		Unit:    "s",
 		Type:    InstrumentCounter,
 	})
+	StatDiskFlushDuration = metric(Name{
+		Section: "obi.stat.disk.flush.duration",
+		OTEL:    "obi.stat.disk.flush.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
 	StatFsSyncDuration = metric(Name{
 		Section: "obi.stat.fs.sync.duration",
 		OTEL:    "obi.stat.fs.sync.duration",
