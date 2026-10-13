@@ -142,6 +142,8 @@ type DiskIO struct {
 	ErrorType string
 	// Bytes of the successful requests, at their issue
 	Bytes uint64
+	// ContainerID is the container that the kernel charges the I/O to, empty for none
+	ContainerID string
 	// MultipathPath is set on the paths of a dm-multipath device, which serve the requests that the
 	// multipath device reports: the histogram exporters leave them out
 	MultipathPath bool

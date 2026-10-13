@@ -64,6 +64,22 @@ var cgroupFormats = []*regexp.Regexp{
 	regexp.MustCompile(`^\d+:.*:/(?:\.\./)+([0-9a-fA-F]{64})`),
 }
 
+// cgroupNameFormat matches the name of a container cgroup: the container ID, alone (cgroupfs drivers)
+// or in the systemd scope of its runtime, like cri-containerd-<id>.scope
+var cgroupNameFormat = regexp.MustCompile(`^(?:[a-z-]+-)?([0-9a-f]{64})(?:\.scope)?$`)
+
+// IDFromCgroupNames returns the container ID from the name of a cgroup, or else from the name of its
+// parent: some runtimes run the processes of a container in a child cgroup of the container's, like
+// crun in `container` on cgroup v2 with the systemd driver, or systemd in a container in `init.scope`.
+func IDFromCgroupNames(name, parent string) (string, bool) {
+	for _, cgroup := range []string{name, parent} {
+		if submatches := cgroupNameFormat.FindStringSubmatch(cgroup); submatches != nil {
+			return submatches[1], true
+		}
+	}
+	return "", false
+}
+
 // InfoForPID returns the container ID and PID namespace for the given PID.
 func InfoForPID(pid app.PID) (Info, error) {
 	ns, err := namespaceFinder(pid)

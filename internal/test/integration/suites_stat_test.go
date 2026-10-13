@@ -7,6 +7,7 @@ import (
 	"path"
 	"testing"
 
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/obi/internal/test/integration/components/docker"
@@ -33,7 +34,12 @@ func TestStat_GoDiskStatMetrics(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, compose.Up())
 	t.Run("Go Stat Metrics disk service duration tests", testStatMetricsDiskServiceDuration)
-	t.Run("Go Stat Metrics disk counters tests", testStatMetricsDiskCounters)
+	cl, err := client.New(client.FromEnv)
+	require.NoError(t, err)
+	defer cl.Close()
+	containerID := testContainerID(t, cl, "hatest-go-disk-io")
+	require.Len(t, containerID, 64)
+	t.Run("Go Stat Metrics disk counters tests", func(t *testing.T) { testStatMetricsDiskCounters(t, containerID) })
 	runWeaverValidation(t)
 	require.NoError(t, compose.Close())
 }

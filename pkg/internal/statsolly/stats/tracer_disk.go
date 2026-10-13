@@ -15,11 +15,13 @@ import (
 	"time"
 
 	ciliumebpf "github.com/cilium/ebpf"
+	"github.com/hashicorp/golang-lru/v2/simplelru"
 	"github.com/prometheus/procfs/blockdevice"
 	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/internal/errtype"
+	"go.opentelemetry.io/obi/pkg/internal/helpers/container"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
@@ -51,13 +53,21 @@ type DiskMapTracer struct {
 	interval time.Duration
 }
 
-func NewDiskMapTracer(accum *ciliumebpf.Map, statusIsBlkStatus bool, cfg *config.EBPFTracer) *DiskMapTracer {
+func NewDiskMapTracer(accum, cgroupNames *ciliumebpf.Map, statusIsBlkStatus bool, cfg *config.EBPFTracer) *DiskMapTracer {
 	interval := cfg.BatchTimeout
 	if interval <= 0 {
 		interval = defaultDiskReadInterval
 	}
 	reader := newDiskReader(ebpfDiskAccum{accum: accum}, &blockDevices{sysRoot: "/sys", procRoot: "/proc"}, interval)
 	reader.statusIsBlkStatus = statusIsBlkStatus
+	names := func(cgroupID uint64) (string, string, bool) {
+		var name ebpf.StatsDiskCgroupNameT
+		if err := cgroupNames.Lookup(cgroupID, &name); err != nil {
+			return "", "", false
+		}
+		return unix.ByteSliceToString(name.Name[:]), unix.ByteSliceToString(name.Parent[:]), true
+	}
+	reader.containers = newCgroupContainers(names, int(cgroupNames.MaxEntries()))
 	return &DiskMapTracer{
 		reader:   reader,
 		interval: interval,
@@ -132,6 +142,7 @@ type diskReader struct {
 	statusIsBlkStatus bool
 	// idleReadsBeforeDelete is how many reads find an entry unchanged before it is deleted
 	idleReadsBeforeDelete int
+	containers            *cgroupContainers
 }
 
 type diskEntry struct {
@@ -155,7 +166,7 @@ func (r *diskReader) readStats() []*ebpf.Stat {
 	case errors.Is(err, errAccumFull):
 		if !r.warnedFull {
 			r.warnedFull = true
-			r.log.Warn("the disk_io_accum map is full: the I/O of the devices and directions that it "+
+			r.log.Warn("the disk_io_accum map is full: the I/O of the devices, directions and workloads that it "+
 				"doesn't hold is not measured until idle entries are deleted", "entries", len(entries))
 		}
 	case err != nil:
@@ -231,9 +242,41 @@ func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.Stats
 			ErrorType:  diskErrorType(key.Status, r.statusIsBlkStatus),
 			Bytes:      current.Bytes - previous.Bytes,
 
+			ContainerID:   r.containers.containerID(key.CgroupId),
 			MultipathPath: device.dmMultipathPath,
 		},
 	}
+}
+
+// cgroupContainers names the containers of the cgroups that the kernel charges the I/O to, from the
+// names of the cgroups and of their parents that the kernel recorded
+type cgroupContainers struct {
+	names func(cgroupID uint64) (name, parent string, ok bool)
+	cache *simplelru.LRU[uint64, string]
+}
+
+func newCgroupContainers(names func(uint64) (string, string, bool), size int) *cgroupContainers {
+	// the size of a map, which is positive
+	cache, _ := simplelru.NewLRU[uint64, string](size, nil)
+	return &cgroupContainers{names: names, cache: cache}
+}
+
+// containerID returns the ID of the container of a cgroup, or an empty string for none
+func (c *cgroupContainers) containerID(cgroupID uint64) string {
+	if cgroupID == 0 {
+		return ""
+	}
+	if id, ok := c.cache.Get(cgroupID); ok {
+		return id
+	}
+	name, parent, ok := c.names(cgroupID)
+	if !ok {
+		// not cached, as the kernel can still record the names
+		return ""
+	}
+	id, _ := container.IDFromCgroupNames(name, parent)
+	c.cache.Add(cgroupID, id)
+	return id
 }
 
 // diskErrorType names the status of failed requests after its errno, so that it reads the same

@@ -400,6 +400,8 @@ metrics:
           conditionally_required: if the block device is a device mapper device
       - ref: disk.io.direction
         requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
       - ref: error.type
         requirement_level:
           conditionally_required: if the request ended in an error
@@ -425,6 +427,8 @@ metrics:
           conditionally_required: if the block device is a device mapper device
       - ref: disk.io.direction
         requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
 
   - name: obi.stat.disk.operations
     instrument: counter
@@ -447,6 +451,8 @@ metrics:
           conditionally_required: if the block device is a device mapper device
       - ref: disk.io.direction
         requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
       - ref: error.type
         requirement_level:
           conditionally_required: if the request ended in an error
@@ -473,6 +479,8 @@ metrics:
           conditionally_required: if the block device is a device mapper device
       - ref: disk.io.direction
         requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
       - ref: error.type
         requirement_level:
           conditionally_required: if the request ended in an error

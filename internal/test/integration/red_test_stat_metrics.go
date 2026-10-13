@@ -112,12 +112,13 @@ func testStatMetricsDiskServiceDuration(t *testing.T) {
 	}
 }
 
-// testStatMetricsDiskCounters checks the counters of the O_DIRECT I/O of the disk-io container, and
-// that the operations and their service time are the count and the sum of the latency histogram
-func testStatMetricsDiskCounters(t *testing.T) {
+// testStatMetricsDiskCounters checks the counters of the O_DIRECT I/O of the disk-io container, which
+// they are charged to, and that the operations and their service time are the count and the sum of
+// the latency histogram
+func testStatMetricsDiskCounters(t *testing.T, containerID string) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
 	for _, direction := range []string{"read", "write"} {
-		selector := `{disk_io_direction="` + direction + `",system_device!=""}`
+		selector := `{container_id="` + containerID + `",disk_io_direction="` + direction + `",system_device!=""}`
 		t.Run(direction, func(t *testing.T) {
 			require.EventuallyWithT(t, func(ct *assert.CollectT) {
 				for _, counter := range []string{
