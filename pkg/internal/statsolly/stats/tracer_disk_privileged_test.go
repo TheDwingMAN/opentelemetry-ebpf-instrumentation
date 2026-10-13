@@ -302,9 +302,50 @@ func TestDiskFlushDurationOfAKnownLatency(t *testing.T) {
 	assert.LessOrEqual(t, flushes.Sum, elapsed.Seconds(), "one flush at a time: they never overlap")
 }
 
+// TestDiskFileSyncsAreCountedLikeTheKernel syncs the files of an ext4 filesystem on a loop device,
+// which has a volatile write cache: the kernel sends the device cache flushes, and completes the
+// empty flush write of each sync without issuing it. The writes and the flushes are counted as in
+// /proc/diskstats, and the flushes are timed from their issue, after the kernel's start of them.
+func TestDiskFileSyncsAreCountedLikeTheKernel(t *testing.T) {
+	const syncs = 20
+	mountPoint, device := mountExt4(t)
+	syncFile := func(name, data string) {
+		f, err := os.OpenFile(filepath.Join(mountPoint, name), os.O_WRONLY|os.O_CREATE, 0o600)
+		require.NoError(t, err)
+		defer f.Close()
+		_, err = f.WriteString(data)
+		require.NoError(t, err)
+		require.NoError(t, f.Sync())
+	}
+	syncFile("unchanged", "data")
+	// the probes measure the flushes whichever disk feature is enabled
+	reader := attachDiskReader(t, export.FeatureStatsDiskServiceDuration, false)
+
+	before := readKernelDiskStats(t, device)
+	for range syncs {
+		syncFile("unchanged", "")
+		syncFile("changed", "data")
+	}
+	stats := reader.readStats()
+	writes := deviceLatency(stats, device, ebpf.CodeDiskOpWrite).Count()
+	flushes := deviceLatency(stats, device, ebpf.CodeDiskOpFlush)
+	// OBI counts a write before the kernel accounts it in /proc/diskstats
+	after := readKernelDiskStatsOnceWritten(t, device, before, int(writes))
+	misses := float64(diskProgramMisses(t))
+	assert.InDelta(t, after.writes-before.writes, writes, misses, "the empty flush writes are counted")
+	require.Positive(t, flushes.Count(), "the file syncs flush the cache of the device")
+	if !after.hasFlushes {
+		t.Log("/proc/diskstats has no flush fields on this kernel")
+		return
+	}
+	assert.InDelta(t, after.flushes-before.flushes, flushes.Count(), misses)
+	// the kernel counts whole milliseconds
+	assert.LessOrEqual(t, flushes.Sum, (after.flushTime - before.flushTime + time.Millisecond).Seconds())
+}
+
 // TestDiskIOIsChargedPerCgroup writes to a loop device from processes in the cgroups of three
 // containers, the third in a child cgroup of its scope, as crun runs them on cgroup v2: each
-// container is charged its own writes
+// container is charged its own writes, and the empty flush write of its sync
 func TestDiskIOIsChargedPerCgroup(t *testing.T) {
 	root := ioCgroupRoot(t)
 	// a counter alone loads the disk probes
@@ -331,7 +372,7 @@ func TestDiskIOIsChargedPerCgroup(t *testing.T) {
 	misses := float64(diskProgramMisses(t))
 	require.Len(t, charged, len(written), "%v", charged)
 	for containerID, blocks := range written {
-		assert.InDelta(t, blocks, charged[containerID], misses, containerID)
+		assert.InDelta(t, blocks+1, charged[containerID], misses, containerID)
 	}
 }
 
@@ -716,10 +757,17 @@ func waitForWritesInFlight(t *testing.T, device string, writes int) {
 	}, 10*time.Second, 10*time.Millisecond)
 }
 
+// fields of a /proc/diskstats line with the cache flushes, from Linux 5.5 but not on RHEL 8
+const diskstatsFieldsWithFlushes = 20
+
 type kernelDiskStats struct {
 	writes uint64
 	// writeTime adds up the durations of the writes, from the kernel's start of each
 	writeTime time.Duration
+	flushes   uint64
+	flushTime time.Duration
+	// hasFlushes tells whether the kernel reports the flushes
+	hasFlushes bool
 }
 
 func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
@@ -730,7 +778,13 @@ func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 	require.NoError(t, err)
 	for _, stats := range diskstats {
 		if stats.DeviceName == device {
-			return kernelDiskStats{writes: stats.WriteIOs, writeTime: time.Duration(stats.WriteTicks) * time.Millisecond}
+			return kernelDiskStats{
+				writes:     stats.WriteIOs,
+				writeTime:  time.Duration(stats.WriteTicks) * time.Millisecond,
+				flushes:    stats.FlushRequestsCompleted,
+				flushTime:  time.Duration(stats.TimeSpentFlushing) * time.Millisecond,
+				hasFlushes: stats.IoStatsCount >= diskstatsFieldsWithFlushes,
+			}
 		}
 	}
 	require.Failf(t, "device not found", "%s is not in /proc/diskstats", device)

@@ -36,27 +36,62 @@ const (
 // blkStatusSize is the size of a blk_status_t, a u8
 const blkStatusSize = 1
 
-// kernelBlockTracepoints reads the prototypes of the block tracepoints in the kernel BTF: whether
-// block_rq_issue is (q, rq) instead of (rq), and whether block_rq_complete reports a blk_status_t
-// instead of an int errno. The kernel version can't tell: 5.10.137 and RHEL 8.6 backported the
-// block_rq_issue change of 5.11.
-func kernelBlockTracepoints() (issueHasQueueArg, completeReportsBlkStatus bool, err error) {
+// blockLayout is what the block probes need to know of the kernel, from its BTF
+type blockLayout struct {
+	// block_rq_issue is (q, rq) instead of (rq)
+	issueHasQueueArg bool
+	// block_rq_complete reports a blk_status_t instead of an int errno
+	completeReportsBlkStatus bool
+	// the RQF_IO_STAT and RQF_FLUSH_SEQ request flags, 0 where the kernel numbers them with macros
+	rqfIOStat, rqfFlushSeq uint32
+}
+
+// kernelBlockLayout reads the prototypes of the block tracepoints and the request flags in the
+// kernel BTF. The kernel version can't tell: 5.10.137 and RHEL 8.6 backported the block_rq_issue
+// change of 5.11, and RHEL 9.6 numbers the request flags with the enum of 6.11.
+func kernelBlockLayout() (blockLayout, error) {
+	var layout blockLayout
 	spec, err := btf.LoadKernelSpec()
 	if err != nil {
-		return false, false, err
+		return layout, err
 	}
 	var issue, complete *btf.Typedef
 	if err = spec.TypeByName("btf_trace_block_rq_issue", &issue); err != nil {
-		return false, false, err
+		return layout, err
 	}
 	if err = spec.TypeByName("btf_trace_block_rq_complete", &complete); err != nil {
-		return false, false, err
+		return layout, err
 	}
-	if issueHasQueueArg, err = blockRqIssueHasQueueArg(issue); err != nil {
-		return false, false, err
+	if layout.issueHasQueueArg, err = blockRqIssueHasQueueArg(issue); err != nil {
+		return layout, err
 	}
-	completeReportsBlkStatus, err = blockRqCompleteReportsBlkStatus(complete)
-	return issueHasQueueArg, completeReportsBlkStatus, err
+	if layout.completeReportsBlkStatus, err = blockRqCompleteReportsBlkStatus(complete); err != nil {
+		return layout, err
+	}
+	return layout, layout.readEnums(spec)
+}
+
+// readEnums reads the enumerators of the layout in one walk of the enums of the spec, named or not:
+// some kernels leave the enum of the request flags anonymous, so the BPF programs can't relocate them
+func (l *blockLayout) readEnums(spec *btf.Spec) error {
+	for typ, err := range spec.All() {
+		if err != nil {
+			return err
+		}
+		enum, ok := typ.(*btf.Enum)
+		if !ok {
+			continue
+		}
+		for _, value := range enum.Values {
+			switch value.Name {
+			case "__RQF_IO_STAT":
+				l.rqfIOStat = 1 << value.Value
+			case "__RQF_FLUSH_SEQ":
+				l.rqfFlushSeq = 1 << value.Value
+			}
+		}
+	}
+	return nil
 }
 
 func blockRqIssueHasQueueArg(issue *btf.Typedef) (bool, error) {
