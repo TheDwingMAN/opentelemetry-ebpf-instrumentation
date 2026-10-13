@@ -8,6 +8,7 @@ package stats
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,6 +107,45 @@ func TestDiskRequestsAreTimedFromTheirIssue(t *testing.T) {
 	assert.InDelta(t, held, requestsWithin(latency, hold.Seconds()), misses, "the held writes are timed from their issue")
 }
 
+// TestDiskFailedRequestsAreNamedAfterTheirErrno writes to a loop device whose backing file is on a
+// small tmpfs, so that the loop driver fails the writes that don't fit, and checks that OBI names each
+// write after the errno that the writer gets, whether the kernel reports errnos or blk_status_t values.
+func TestDiskFailedRequestsAreNamedAfterTheirErrno(t *testing.T) {
+	const fitting = 16
+	tmpfs := t.TempDir()
+	require.NoError(t, unix.Mount("tmpfs", tmpfs, "tmpfs", 0, fmt.Sprintf("size=%d", fitting*directIOBlockSize)))
+	t.Cleanup(func() { _ = unix.Unmount(tmpfs, unix.MNT_DETACH) })
+	devPath := attachLoopDevice(t, tmpfs)
+	reader := attachDiskReader(t)
+
+	f, err := os.OpenFile(devPath, os.O_WRONLY|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	block := alignedBuffer(t)
+	// the writes by the name of the errno that they return, empty for none
+	written := map[string]uint64{}
+	for i := range 2 * fitting {
+		var errno unix.Errno
+		if _, err := f.WriteAt(block, int64(i*directIOBlockSize)); err != nil {
+			require.ErrorAs(t, err, &errno)
+		}
+		written[unix.ErrnoName(errno)]++
+	}
+	require.Less(t, written[""], uint64(2*fitting), "the writes that don't fit fail")
+
+	measured := map[string]uint64{}
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device == filepath.Base(devPath) && stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
+			measured[stat.DiskIO.ErrorType] += requests(stat.DiskIO.Latency)
+		}
+	}
+	misses := float64(diskProgramMisses(t))
+	assert.ElementsMatch(t, slices.Collect(maps.Keys(written)), slices.Collect(maps.Keys(measured)))
+	for errorType, writes := range written {
+		assert.InDelta(t, writes, measured[errorType], misses, "writes with error type %q", errorType)
+	}
+}
+
 // TestDiskStackedDevicesInSysfs checks what OBI reads in sysfs of a loop device, and of a device
 // mapper volume over it
 func TestDiskStackedDevicesInSysfs(t *testing.T) {
@@ -164,7 +204,7 @@ func attachDiskReader(t *testing.T) *diskReader {
 	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{})
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
-	reader := NewDiskMapTracer(fetcher.DiskIOAccumMap(), &config.EBPFTracer{}).reader
+	reader := NewDiskMapTracer(fetcher.DiskIOAccumMap(), fetcher.DiskStatusIsBlkStatus(), &config.EBPFTracer{}).reader
 	// forget the I/O that happened before
 	reader.readStats()
 	return reader

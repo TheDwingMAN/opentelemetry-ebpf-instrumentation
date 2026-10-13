@@ -137,14 +137,16 @@ To add a new metric, follow these guidelines:
 
 The buckets are fixed, from 100 µs to 60 s (`DiskLatencyBounds` in [bucket.go](../pkg/export/bucket.go)), as the kernel buckets the durations. Both exporters export them as explicit histograms: exponential and native histograms don't apply.
 
+Failed requests are in series of their own, with `error.type`: the name of the errno that they failed with (e.g. `EIO`, `ETIMEDOUT`), or `_OTHER` for the block statuses whose numbers changed between kernel versions, such as those of zoned and offline devices. It is absent on success.
+
 ### Known limitations
 
 #### Disk service duration
 
 - Only the requests whose issue OBI recorded are counted, so the counts are not those of `/proc/diskstats`. Missed are the requests in flight at startup or evicted from the in-flight map, those whose issue or completion program the kernel skipped as nested (the programs' `recursion_misses`), the rare ones whose in-flight record the kernel refused to delete because another map operation was running on the same CPU (3 in 8,192 on RHEL 8.9 under emulation), and the empty writes of file syncs, which the kernel completes with a cache flush without issuing them, so fsync-heavy workloads show fewer writes.
-- Failed requests are counted too, timed from their last issue: a command that times out lands in the top buckets only if its last attempt does.
+- Failed requests are timed from their last issue, in their own series by `error.type`: a command that times out lands in the top buckets only if its last attempt does.
 - The I/O of loop devices is also reported by the devices below them, as in `/proc/diskstats`. To add up a node's I/O, sum the devices with `obi_disk_stacked="false"`.
-- Devices are named from `/sys/dev/block` and, for the hidden paths of NVMe native multipath (e.g. `nvme1c0n1`), from `/proc/diskstats` on Linux 6.1 and later, refreshed every 30 seconds (a new volume that takes the numbers of a removed one keeps its volume name until then), or else by their `major:minor` numbers. The kernel keeps an entry per device and direction until OBI restarts: once its entries (4096 by default) are full, the I/O of a new device or direction isn't counted, and OBI logs a warning.
+- Devices are named from `/sys/dev/block` and, for the hidden paths of NVMe native multipath (e.g. `nvme1c0n1`), from `/proc/diskstats` on Linux 6.1 and later, refreshed every 30 seconds (a new volume that takes the numbers of a removed one keeps its volume name until then), or else by their `major:minor` numbers. The kernel keeps an entry per device, direction and outcome until OBI restarts: once its entries (4096 by default) are full, the I/O of new keys isn't counted, even on a device that has entries, and OBI logs a warning.
 - The stats filters (`capture.network.stats.filters`) also apply to the disk stats: a filter on an attribute that only the TCP stats have drops the disk stats, and the other way around, unless the default value that a stat reads for an attribute it lacks (e.g. empty, `0` for a port, `::` for an address) passes the filter, as it does `match: "*"` or a `not_match` pattern that doesn't match it.
 - Dynamic application selection (`instrumenter.WithDynamicSelector`) doesn't apply to the disk stats, which are node-wide.
 - If the disk probes can't be loaded or attached, for example without `block_rq_issue` in the kernel BTF, OBI exits at startup, as it does when a TCP stats probe fails: disable the feature on such nodes.

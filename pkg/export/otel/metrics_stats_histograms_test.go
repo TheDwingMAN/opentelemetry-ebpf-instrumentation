@@ -148,3 +148,22 @@ func TestKernelHistogramProducerOmitsAbsentAttributes(t *testing.T) {
 		"dm-0": {attribute.String("obi.disk.volume.name", "vg0-data"), attribute.String("system.device", "dm-0")},
 	}, exported)
 }
+
+// The failed requests are in their own series, with their error.type, which the series of the
+// successful requests doesn't export
+func TestKernelHistogramProducerSeparatesTheFailedRequests(t *testing.T) {
+	fixedClock(t)
+	p := newKernelHistogramProducer(metricdata.CumulativeTemporality, time.Hour)
+	h := p.histogram(attributes.StatDiskServiceDuration, []float64{0.001},
+		attributes.OpenTelemetryGetters(ebpf.StatGetters, []attr.Name{attr.SystemDevice, attr.ErrorType}))
+	failed := diskStat("sda")
+	failed.DiskIO.ErrorType = "EIO"
+	p.record(h, diskStat("sda"), latency(0.001, 2, 0))
+	p.record(h, failed, latency(0.0005, 1, 0))
+
+	requests := map[string]uint64{}
+	for _, point := range produceHistograms(t, p) {
+		requests[point.Attributes.Encoded(attribute.DefaultEncoder())] = point.Count
+	}
+	assert.Equal(t, map[string]uint64{"system.device=sda": 2, "error.type=EIO,system.device=sda": 1}, requests)
+}
