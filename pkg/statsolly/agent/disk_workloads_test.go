@@ -20,12 +20,13 @@ func TestDiskReadsCgroup(t *testing.T) {
 		return attributes.Selection{metric.Section: attributes.InclusionLists{Include: include}}
 	}
 	for _, tc := range []struct {
-		name      string
-		groups    attributes.AttrGroups
-		features  export.Features
-		selection attributes.Selection
-		filters   filter.AttributeFamilyConfig
-		want      bool
+		name             string
+		groups           attributes.AttrGroups
+		features         export.Features
+		selection        attributes.Selection
+		filters          filter.AttributeFamilyConfig
+		dynamicSelection bool
+		want             bool
 	}{
 		{name: "default attributes", features: export.FeatureStatsDisk},
 		{
@@ -54,11 +55,12 @@ func TestDiskReadsCgroup(t *testing.T) {
 			name: "cluster filtered", features: export.FeatureStatsDiskIO,
 			filters: filter.AttributeFamilyConfig{"k8s.cluster.name": {Match: "prod"}},
 		},
+		{name: "dynamic selection", features: export.FeatureStatsDiskServiceDuration, dynamicSelection: true, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			attrSel, err := attributes.NewAttrSelector(tc.groups, &attributes.SelectorConfig{SelectionCfg: tc.selection})
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, diskReadsCgroup(tc.features, attrSel, tc.filters))
+			assert.Equal(t, tc.want, diskReadsCgroup(tc.features, attrSel, tc.filters, tc.dynamicSelection))
 		})
 	}
 }

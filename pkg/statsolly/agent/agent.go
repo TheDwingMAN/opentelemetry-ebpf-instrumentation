@@ -121,7 +121,7 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 			"the operations and service time counters give their mean service time at a series each",
 			"metric", attributes.StatDiskServiceDuration.OTEL, "attributes", perPod)
 	}
-	readsCgroup := diskReadsCgroup(cfg.Metrics.Features, attrSel, cfg.Filters.Stats)
+	readsCgroup := diskReadsCgroup(cfg.Metrics.Features, attrSel, cfg.Filters.Stats, ctxInfo.DynamicSelector != nil)
 	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, readsCgroup)
 	if err != nil {
 		return nil, err

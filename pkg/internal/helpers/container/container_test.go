@@ -142,6 +142,31 @@ func TestContainerID(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrContainerNotFound)
 }
 
+func TestIDFromIOCgroupOfPID(t *testing.T) {
+	procRoot = t.TempDir() + "/"
+	for pid, tc := range []struct{ cgroups, want string }{
+		{cgroups: "0::/" + fixtureContainerID, want: fixtureContainerID},
+		{cgroups: "0::/docker/" + fixtureContainerID, want: fixtureContainerID},
+		{cgroups: "0::/libpod_parent/libpod-" + fixtureContainerID, want: fixtureContainerID},
+		{cgroups: "0::/system.slice/docker-" + fixtureContainerID + ".scope", want: fixtureContainerID},
+		{cgroups: "0::/machine.slice/libpod-" + fixtureContainerID + ".scope/container", want: fixtureContainerID},
+		// cgroup v1 charges the block I/O to the blkio cgroup
+		{cgroups: "8:blkio:/docker/" + fixtureContainerID + "\n1:name=systemd:/user.slice\n0::/user.slice", want: fixtureContainerID},
+		{cgroups: "8:cpu,blkio:/user.slice\n0::/docker/" + fixtureContainerID},
+		{cgroups: "0::/user.slice/user-963461.slice/session-11909.scope"},
+		{cgroups: "0::/"},
+	} {
+		dir := fmt.Sprintf("%s%d", procRoot, pid)
+		require.NoError(t, os.Mkdir(dir, 0o777))
+		require.NoError(t, os.WriteFile(dir+"/cgroup", []byte(tc.cgroups+"\n"), 0o666))
+		id, ok := IDFromIOCgroupOfPID(app.PID(pid))
+		assert.Equal(t, tc.want != "", ok, tc.cgroups)
+		assert.Equal(t, tc.want, id, tc.cgroups)
+	}
+	_, ok := IDFromIOCgroupOfPID(12345)
+	assert.False(t, ok, "a process that is gone")
+}
+
 func TestIDFromCgroupNames(t *testing.T) {
 	const otherContainerID = "d36686f9785534531160dc936aec9d711a26eb37f4fc7752a2ae27d0a24345c1"
 	for _, tc := range []struct{ name, parent, want string }{
