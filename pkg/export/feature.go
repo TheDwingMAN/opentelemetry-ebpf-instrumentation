@@ -63,11 +63,17 @@ const (
 	FeatureStatsDiskIO
 	FeatureStatsDiskOperations
 	FeatureStatsDiskServiceTime
-	FeatureAll = Features(^uint(0)) &^ FeatureStatsDisk
+	// The file sync stat features are in neither `stats` nor `all`, as their probes fire on every
+	// file sync
+	FeatureStatsFsSyncDuration
+	FeatureAll = Features(^uint(0)) &^ (FeatureStatsDisk | FeatureStatsFsSync)
 )
 
 // FeatureStatsDisk groups the disk stat features, which the same probes measure
 const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskServiceTime
+
+// FeatureStatsFsSync groups the file sync stat features, which the same probes measure
+const FeatureStatsFsSync = FeatureStatsFsSyncDuration
 
 // FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -457,6 +463,10 @@ func (f Features) StatsDiskServiceTime() bool {
 
 func (f Features) StatsDisk() bool {
 	return f.any(FeatureStatsDisk)
+}
+
+func (f Features) StatsFsSync() bool {
+	return f.any(FeatureStatsFsSync)
 }
 
 func (f Features) NetworkInterZone() bool {

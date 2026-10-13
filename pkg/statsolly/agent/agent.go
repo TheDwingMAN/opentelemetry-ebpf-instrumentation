@@ -121,8 +121,10 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 			"the operations and service time counters give their mean service time at a series each",
 			"metric", attributes.StatDiskServiceDuration.OTEL, "attributes", perPod)
 	}
-	readsCgroup := diskReadsCgroup(cfg.Metrics.Features, attrSel, cfg.Filters.Stats, ctxInfo.DynamicSelector != nil)
-	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, readsCgroup)
+	reads := ebpf.CgroupReads{
+		Disk: diskReadsCgroup(cfg.Metrics.Features, attrSel, cfg.Filters.Stats, ctxInfo.DynamicSelector != nil),
+	}
+	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, reads)
 	if err != nil {
 		return nil, err
 	}
@@ -131,9 +133,9 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 }
 
 func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig,
-	diskReadsCgroup bool,
+	reads ebpf.CgroupReads,
 ) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, diskReadsCgroup)
+	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, reads)
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests

@@ -197,52 +197,73 @@ func TestTracepointConstantFormat(t *testing.T) {
 }
 
 // A storage feature whose probes fail is disabled, and the probes are loaded again without it, while
-// a failure of the TCP probes is returned
+// a failure of the TCP probes is returned. A failed load first moves the file syncs to kprobes.
 func TestStorageDegrade(t *testing.T) {
 	disk := export.FeatureStatsDiskServiceDuration | export.FeatureStatsDiskIO
-	loadErr := errors.New("load program: invalid argument")
+	storage := disk | export.FeatureStatsFsSyncDuration
+	loadErr := &storageError{features: storage, load: true, err: errors.New("load program: invalid argument")}
 	tcpErr := errors.New("failed kprobe attachment tcp_close: not found")
+	// what a load plans: its storage features, and whether fexit programs time the file syncs
+	type load struct {
+		features export.Features
+		fexit    bool
+	}
 	for _, tc := range []struct {
 		name      string
 		errs      []error
-		wantLoads []export.Features
+		wantLoads []load
 		wantErr   error
 	}{
 		{
-			name:      "a storage failure disables its features",
-			errs:      []error{&storageError{features: disk, err: loadErr}},
-			wantLoads: []export.Features{disk, 0},
+			name:      "a failed load moves the file syncs to kprobes",
+			errs:      []error{loadErr},
+			wantLoads: []load{{storage, true}, {storage, false}},
+		},
+		{
+			name:      "a failed load with kprobes disables the storage features",
+			errs:      []error{loadErr, loadErr},
+			wantLoads: []load{{storage, true}, {storage, false}, {0, false}},
+		},
+		{
+			name:      "a disk probe that can't be attached disables the disk stats",
+			errs:      []error{&storageError{features: export.FeatureStatsDisk, err: errors.New("block_rq_complete")}},
+			wantLoads: []load{{storage, true}, {export.FeatureStatsFsSyncDuration, true}},
+		},
+		{
+			name:      "vfs_fsync_range probes that can't be attached disable the file syncs",
+			errs:      []error{&storageError{features: export.FeatureStatsFsSync, err: errors.New("vfs_fsync_range")}},
+			wantLoads: []load{{storage, true}, {disk, true}},
 		},
 		{
 			name:      "a TCP failure is returned",
 			errs:      []error{tcpErr},
-			wantLoads: []export.Features{disk},
+			wantLoads: []load{{storage, true}},
 			wantErr:   tcpErr,
 		},
 		{
 			name:      "a TCP failure without the storage features is returned",
-			errs:      []error{&storageError{features: disk, err: loadErr}, tcpErr},
-			wantLoads: []export.Features{disk, 0},
+			errs:      []error{loadErr, loadErr, tcpErr},
+			wantLoads: []load{{storage, true}, {storage, false}, {0, false}},
 			wantErr:   tcpErr,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var loads []export.Features
-			fetcher, err := loadDegradingStorage(slog.Default(), storagePlan{features: disk},
-				func(storage storagePlan) (*StatsFetcher, error) {
-					loads = append(loads, storage.features)
-					if len(loads) <= len(tc.errs) {
-						return nil, tc.errs[len(loads)-1]
-					}
-					return &StatsFetcher{storage: storage.features}, nil
-				})
+			var loads []load
+			plan := storagePlan{features: storage, fsSyncTracing: map[string]bool{fsSyncRequiredHook: true}}
+			fetcher, err := loadDegradingStorage(slog.Default(), plan, func(storage storagePlan) (*StatsFetcher, error) {
+				loads = append(loads, load{features: storage.features, fexit: len(storage.fsSyncTracing) > 0})
+				if len(loads) <= len(tc.errs) {
+					return nil, tc.errs[len(loads)-1]
+				}
+				return &StatsFetcher{storage: storage.features}, nil
+			})
 			assert.Equal(t, tc.wantLoads, loads)
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tc.wantLoads[len(loads)-1], fetcher.storage)
+			assert.Equal(t, tc.wantLoads[len(loads)-1].features, fetcher.storage)
 		})
 	}
 }
