@@ -91,6 +91,30 @@ func TestStatMetricsExporter_DiskCounters(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// The file sync metrics split the syncs by type and outcome
+func TestStatMetricsExporter_FsSync(t *testing.T) {
+	stats, records := startStatExporter(t, export.FeatureStatsFsSync, attributes.UndefinedGroup)
+	stats.Send([]*ebpf.Stat{
+		{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{Type: ebpf.CodeFsSyncFsync, Latency: *latency(0.004, 0, 2)}},
+		{Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{
+			Type: ebpf.CodeFsSyncFdatasync, ErrorType: "EIO", Latency: *latency(1.5, 0, 0, 1),
+		}},
+	})
+
+	// the last value of each series by metric, sync type and error type
+	got := map[string]float64{}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		receive(records, func(record collector.MetricRecord) {
+			got[record.Name+" "+record.Attributes["obi.fs.sync.type"]+" "+record.Attributes["error.type"]] =
+				record.FloatVal + float64(record.IntVal)
+		})
+		assert.Equal(ct, map[string]float64{
+			"obi.stat.fs.sync.duration fsync ":        0.004,
+			"obi.stat.fs.sync.duration fdatasync EIO": 1.5,
+		}, got)
+	}, timeout, 100*time.Millisecond)
+}
+
 // Over OTLP, the disk stats leave out the Kubernetes metadata of the I/O charged to no pod, instead
 // of exporting it empty
 func TestStatMetricsExporter_DiskStatsOmitAbsentKubernetesMetadata(t *testing.T) {
