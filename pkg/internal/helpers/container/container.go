@@ -9,8 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 
 	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/internal/procs"
@@ -78,6 +81,32 @@ func IDFromCgroupNames(name, parent string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// IDFromIOCgroupOfPID returns the container ID from the names of the cgroup that the block I/O of a
+// process is charged to, as IDFromCgroupNames does from the names that the kernel records: its blkio
+// cgroup on cgroup v1, or else its cgroup v2
+func IDFromIOCgroupOfPID(pid app.PID) (string, bool) {
+	cgroups, err := os.ReadFile(procRoot + strconv.Itoa(int(pid)) + "/cgroup")
+	if err != nil {
+		return "", false
+	}
+	var ioCgroup string
+	for entry := range strings.SplitSeq(string(cgroups), "\n") {
+		fields := strings.SplitN(entry, ":", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		if slices.Contains(strings.Split(fields[1], ","), "blkio") {
+			ioCgroup = fields[2]
+			break
+		}
+		if fields[0] == "0" {
+			ioCgroup = fields[2]
+		}
+	}
+	parent, name := path.Split(ioCgroup)
+	return IDFromCgroupNames(name, path.Base(parent))
 }
 
 // InfoForPID returns the container ID and PID namespace for the given PID.
