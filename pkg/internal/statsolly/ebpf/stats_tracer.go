@@ -31,6 +31,8 @@ type probe struct {
 	name    string
 	program *ebpf.Program
 	enabled bool
+	// the storage features of a storage probe, 0 for a TCP probe
+	feature export.Features
 }
 
 // Program names
@@ -73,6 +75,8 @@ type StatsFetcher struct {
 	objects   *StatsObjects
 	closables []io.Closer
 
+	// the storage features whose probes are attached
+	storage               export.Features
 	diskStatusIsBlkStatus bool
 }
 
@@ -81,7 +85,9 @@ func tlog() *slog.Logger {
 }
 
 // NewStatsFetcher loads and attaches the probes of the enabled stat features. The disk probes read
-// the cgroup that the I/O is charged to when diskReadsCgroup is set.
+// the cgroup that the I/O is charged to when diskReadsCgroup is set. An enabled storage feature
+// whose probes can't be loaded or attached is disabled with a warning, while a TCP probe that fails
+// is an error.
 func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig,
 	diskReadsCgroup bool,
 ) (*StatsFetcher, error) {
@@ -89,12 +95,6 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	if err := rlimit.RemoveMemlock(); err != nil {
 		tlog.Warn("can't remove mem lock. The agent could not be able to start eBPF programs",
 			"error", err)
-	}
-
-	objects := StatsObjects{}
-	spec, err := LoadStats()
-	if err != nil {
-		return nil, fmt.Errorf("loading BPF data: %w", err)
 	}
 
 	// UndefinedGroup is intentional: we only need to check NetworkTCPHandshakeRole,
@@ -131,14 +131,88 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 
-	diskEnabled := features.StatsDisk()
-	var issueHasQueueArg, completeReportsBlkStatus bool
-	if diskEnabled {
-		if issueHasQueueArg, completeReportsBlkStatus, err = kernelBlockTracepoints(); err != nil {
-			return nil, fmt.Errorf("reading the block tracepoint prototypes in the kernel BTF: %w", err)
+	return loadDegradingStorage(tlog, planStorage(tlog, features), func(storage storagePlan) (*StatsFetcher, error) {
+		return loadAndAttach(cfg, features, toDisable, connRoleUsed, storage, diskReadsCgroup)
+	})
+}
+
+// storagePlan is what the storage probes load: the enabled storage features but those disabled,
+// and the block tracepoint prototypes
+type storagePlan struct {
+	features                 export.Features
+	issueHasQueueArg         bool
+	completeReportsBlkStatus bool
+}
+
+// storageError is a failure of the probes of storage features, which disables them
+type storageError struct {
+	features export.Features
+	err      error
+}
+
+func (e *storageError) Error() string { return e.err.Error() }
+
+func (e *storageError) Unwrap() error { return e.err }
+
+func planStorage(log *slog.Logger, features *export.Features) storagePlan {
+	storage := storagePlan{features: *features & export.FeatureStatsDisk}
+	if storage.features.StatsDisk() {
+		var err error
+		if storage.issueHasQueueArg, storage.completeReportsBlkStatus, err = kernelBlockTracepoints(); err != nil {
+			storage.drop(log, export.FeatureStatsDisk,
+				fmt.Errorf("reading the block tracepoint prototypes in the kernel BTF: %w", err))
 		}
 	}
-	toDisable = append(toDisable, diskProgramsToDisable(diskEnabled, issueHasQueueArg)...)
+	return storage
+}
+
+// drop disables the planned storage features of a group
+func (s *storagePlan) drop(log *slog.Logger, group export.Features, err error) {
+	log.Warn("storage stats disabled on this node: their probes can't be loaded or attached. The TCP stats keep running",
+		"features", (s.features & group).Names(), "error", err)
+	s.features &^= group
+}
+
+// loadDegradingStorage loads and attaches the probes, and disables the storage features of each
+// storageError until the rest load and attach
+func loadDegradingStorage(log *slog.Logger, storage storagePlan,
+	loadAndAttach func(storagePlan) (*StatsFetcher, error),
+) (*StatsFetcher, error) {
+	for {
+		fetcher, err := loadAndAttach(storage)
+		var failed *storageError
+		// each storageError disables a planned feature, so that the loop ends
+		if !errors.As(err, &failed) || storage.features&failed.features == 0 {
+			return fetcher, err
+		}
+		storage.drop(log, failed.features, err)
+	}
+}
+
+// loadAndAttach loads the stats programs of the TCP features and of the planned storage features,
+// and attaches their probes. A failed load while storage features are planned, and a storage probe
+// that can't be attached, are storageErrors. On failure, it closes what it loaded.
+func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable []string, connRoleUsed bool,
+	storage storagePlan, diskReadsCgroup bool,
+) (_ *StatsFetcher, err error) {
+	objects := StatsObjects{}
+	sharedMaps := map[string]*ebpf.Map{}
+	defer func() {
+		if err != nil {
+			objects.Close()
+			for _, m := range sharedMaps {
+				m.Close()
+			}
+		}
+	}()
+
+	spec, err := LoadStats()
+	if err != nil {
+		return nil, fmt.Errorf("loading BPF data: %w", err)
+	}
+
+	diskEnabled := storage.features.StatsDisk()
+	toDisable = slices.Concat(toDisable, diskProgramsToDisable(diskEnabled, storage.issueHasQueueArg))
 
 	if err := fixupSpec(spec, toDisable); err != nil {
 		return nil, fmt.Errorf("fixing up BPF spec: %w", err)
@@ -149,16 +223,20 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	cpus, _ := ebpf.PossibleCPU()
 	sizeDiskMaps(spec, diskEnabled, diskReadsCgroup, cpus)
 
-	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
 	if err := ebpfconvenience.LoadSpec(spec, &objects, map[string]any{
 		"g_bpf_debug":               cfg.BpfDebug,
 		"stats_wakeup_data_bytes":   uint32(cfg.StatsWakeupDataBytes),
 		"disk_latency_bounds_ns":    diskLatencyBoundsNs(),
-		"disk_status_is_blk_status": completeReportsBlkStatus,
+		"disk_status_is_blk_status": storage.completeReportsBlkStatus,
 		"disk_read_cgroup":          diskReadsCgroup,
 	}, sharedMaps, &mu, "", nil); err != nil {
-		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
+		err = fmt.Errorf("loading stats eBPF spec: %w", err)
+		if storage.features != 0 {
+			// the kernel's error doesn't tell which program it can't load
+			return nil, &storageError{features: storage.features, err: err}
+		}
+		return nil, err
 	}
 
 	var closables []io.Closer
@@ -267,11 +345,13 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 			name:    RawTracepointBlockRqComplete,
 			program: objects.ObiStatsRawTpBlockRqComplete,
 			enabled: diskEnabled,
+			feature: export.FeatureStatsDisk,
 		},
 		{
 			name:    RawTracepointBlockRqIssue,
-			program: diskIssueProgram(&objects, issueHasQueueArg),
+			program: diskIssueProgram(&objects, storage.issueHasQueueArg),
 			enabled: diskEnabled,
+			feature: export.FeatureStatsDisk,
 		},
 	} {
 		if !t.enabled {
@@ -283,17 +363,22 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		})
 		if err != nil {
 			closeAll(closables)
-			return nil, fmt.Errorf("failed raw tracepoint attachment %s: %w", t.name, err)
+			err = fmt.Errorf("failed raw tracepoint attachment %s: %w", t.name, err)
+			if t.feature != 0 {
+				return nil, &storageError{features: t.feature, err: err}
+			}
+			return nil, err
 		}
 		closables = append(closables, l)
 	}
 
 	return &StatsFetcher{
-		log:       tlog,
+		log:       tlog(),
 		objects:   &objects,
 		closables: closables,
 
-		diskStatusIsBlkStatus: completeReportsBlkStatus,
+		storage:               storage.features,
+		diskStatusIsBlkStatus: storage.completeReportsBlkStatus,
 	}, nil
 }
 
@@ -328,14 +413,21 @@ func (m *StatsFetcher) DebugEventsMap() *ebpf.Map {
 	return m.objects.DebugEvents
 }
 
-// DiskIOAccumMap returns the map where the kernel accumulates the block request durations
+// DiskIOAccumMap returns the map where the kernel accumulates the block request durations, or nil
+// when the disk stats are disabled
 func (m *StatsFetcher) DiskIOAccumMap() *ebpf.Map {
+	if !m.storage.StatsDisk() {
+		return nil
+	}
 	return m.objects.DiskIoAccum
 }
 
 // DiskCgroupNamesMap returns the map where the kernel records the names of the cgroups that block
-// I/O is charged to
+// I/O is charged to, or nil when the disk stats are disabled
 func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
+	if !m.storage.StatsDisk() {
+		return nil
+	}
 	return m.objects.DiskCgroupNames
 }
 
