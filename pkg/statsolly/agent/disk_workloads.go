@@ -22,8 +22,11 @@ var workloadAttributes = []attr.Name{
 var perPodAttributes = []attr.Name{attr.ContainerID, attr.K8sPodName, attr.K8sContainerName}
 
 // diskReadsCgroup tells whether the disk probes read the cgroup of the I/O: when an enabled disk
-// metric reports, or a stats filter matches, an attribute of the workload that it is charged to
-func diskReadsCgroup(features export.Features, attrSel *attributes.AttrSelector, filters filter.AttributeFamilyConfig) bool {
+// metric reports, or a stats filter matches, an attribute of the workload that it is charged to, and
+// under dynamic application selection, which selects the I/O by its container
+func diskReadsCgroup(features export.Features, attrSel *attributes.AttrSelector, filters filter.AttributeFamilyConfig,
+	dynamicSelection bool,
+) bool {
 	var names []attr.Name
 	for name := range filters {
 		names = append(names, attr.Name(name))
@@ -41,7 +44,7 @@ func diskReadsCgroup(features export.Features, attrSel *attributes.AttrSelector,
 			names = append(names, attrSel.For(metric.name)...)
 		}
 	}
-	return features.StatsDisk() && slices.ContainsFunc(names, isWorkloadAttribute)
+	return features.StatsDisk() && (dynamicSelection || slices.ContainsFunc(names, isWorkloadAttribute))
 }
 
 // isWorkloadAttribute tells whether an attribute, named with dots or underscores, is a workload one
