@@ -22,6 +22,11 @@ volatile const bool disk_status_is_blk_status;
 // leaves their reads out
 volatile const bool disk_read_cgroup;
 
+// The RQF_IO_STAT and RQF_FLUSH_SEQ request flags, which userspace finds in the kernel BTF: some
+// kernels number them in an anonymous enum, and those that number them with macros get 0
+volatile const u32 disk_rqf_io_stat;
+volatile const u32 disk_rqf_flush_seq;
+
 // Force structs into the ELF for automatic creation of Golang struct
 const disk_io_key_t *unused_disk_io_key __attribute__((unused));
 const disk_io_accum_t *unused_disk_io_accum __attribute__((unused));
@@ -52,6 +57,21 @@ static __always_inline struct cgroup *request_cgroup(struct request *rq) {
     return bio_cgroup(BPF_CORE_READ(rq, bio));
 }
 
+// request_start is the start of a request at started_ns: its whole disk, its operation and its size
+static __always_inline disk_rq_start_t request_start(struct request *rq,
+                                                     const enum disk_op op,
+                                                     const u64 started_ns) {
+    struct gendisk *disk = request_disk(rq);
+    const disk_rq_start_t start = {
+        .issued_ns = started_ns,
+        .bytes = BPF_CORE_READ(rq, __data_len),
+        .major = BPF_CORE_READ(disk, major),
+        .minor = BPF_CORE_READ(disk, first_minor),
+        .op = op,
+    };
+    return start;
+}
+
 // record_issue records the issue of a request to the device, on OBI's clock. A request issued again
 // after a requeue keeps its last issue.
 static __always_inline void record_issue(struct request *rq) {
@@ -59,14 +79,7 @@ static __always_inline void record_issue(struct request *rq) {
     if (op == disk_op_unknown) {
         return;
     }
-    struct gendisk *disk = request_disk(rq);
-    const disk_rq_start_t start = {
-        .issued_ns = bpf_ktime_get_ns(),
-        .bytes = BPF_CORE_READ(rq, __data_len),
-        .major = BPF_CORE_READ(disk, major),
-        .minor = BPF_CORE_READ(disk, first_minor),
-        .op = op,
-    };
+    const disk_rq_start_t start = request_start(rq, op, bpf_ktime_get_ns());
     const u64 key = (u64)(uintptr_t)rq;
     bpf_map_update_elem(&disk_rq_start, &key, &start, BPF_ANY);
 }
@@ -83,6 +96,13 @@ SEC("raw_tracepoint/block_rq_issue")
 int obi_stats_raw_tp_block_rq_issue_legacy(struct bpf_raw_tracepoint_args *ctx) {
     record_issue((struct request *)ctx->args[1]);
     return 0;
+}
+
+// never_issued tells whether a request completes without having been issued to the device: the
+// empty flush write of a file sync, which the flush that it waited for completes, or a request that
+// the driver fails before its issue, as the SCSI layer fails those of an offline device
+static __always_inline bool never_issued(struct request *rq) {
+    return BPF_CORE_READ(rq, state) == bpf_core_enum_value(enum mq_rq_state, MQ_RQ_IDLE);
 }
 
 // take_issue moves the issue record of a request into start. A request has none when it was issued
@@ -104,6 +124,25 @@ static __always_inline bool take_issue(struct request *rq, disk_rq_start_t *star
     return start->issued_ns >= BPF_CORE_READ(rq, start_time_ns);
 }
 
+// take_start moves into start the issue record of a request, or, for a request that was never
+// issued, the kernel's start of the request, as /proc/diskstats times it, which doesn't count it
+// without one
+static __always_inline bool
+take_start(struct request *rq, const enum disk_op op, disk_rq_start_t *start) {
+    if (!never_issued(rq)) {
+        return take_issue(rq, start);
+    }
+    const u64 started_ns = disk_accounted_start_ns(BPF_CORE_READ(rq, start_time_ns),
+                                                   BPF_CORE_READ(rq, rq_flags),
+                                                   disk_rqf_io_stat,
+                                                   disk_rqf_flush_seq);
+    if (started_ns == 0) {
+        return false;
+    }
+    *start = request_start(rq, op, started_ns);
+    return true;
+}
+
 static __always_inline disk_io_accum_t *lookup_or_init_accum(const disk_io_key_t *key) {
     disk_io_accum_t *accum = bpf_map_lookup_elem(&disk_io_accum, key);
     if (accum) {
@@ -119,8 +158,9 @@ static __always_inline disk_io_accum_t *lookup_or_init_accum(const disk_io_key_t
     return bpf_map_lookup_elem(&disk_io_accum, key);
 }
 
-// A request is counted once, at its final completion, if that completion takes its issue record:
-// a request that the kernel completes again, as at the end of a flush sequence, has none left.
+// A request is counted once, at its final completion, if that completion takes its issue record or
+// the request was never issued: a write that the kernel completes again at the end of its flush
+// sequence was issued, and has no record left.
 SEC("raw_tracepoint/block_rq_complete")
 int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     struct request *rq = (struct request *)ctx->args[0];
@@ -130,11 +170,12 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
         return 0;
     }
     // the operations that are not measured, like discards, have no issue record
-    if (request_op(rq) == disk_op_unknown) {
+    const enum disk_op op = request_op(rq);
+    if (op == disk_op_unknown) {
         return 0;
     }
     disk_rq_start_t start;
-    if (!take_issue(rq, &start)) {
+    if (!take_start(rq, op, &start)) {
         return 0;
     }
 

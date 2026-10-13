@@ -68,6 +68,21 @@ static void test_final_completion(void) {
                 "sequence");
 }
 
+static void test_accounted_start_ns(void) {
+    const u32 io_stat = 1 << 8;
+    const u32 flush_seq = 1 << 1;
+    assert_true(disk_accounted_start_ns(1000, 0, 0, 0) == 1000,
+                "a kernel that writes the start at every allocation needs no flag");
+    assert_true(disk_accounted_start_ns(0, 0, 0, 0) == 0,
+                "a request that such a kernel doesn't time has no start");
+    assert_true(disk_accounted_start_ns(1000, io_stat, io_stat, flush_seq) == 1000,
+                "the start of an accounted request");
+    assert_true(disk_accounted_start_ns(1000, 1 << 4, io_stat, flush_seq) == 0,
+                "a request that is not accounted may keep the start of an earlier use");
+    assert_true(disk_accounted_start_ns(1000, flush_seq, io_stat, flush_seq) == 1000,
+                "the flush of a flush sequence is accounted without RQF_IO_STAT");
+}
+
 static void test_status_code(void) {
     // a blk_status_t from Linux 5.16
     assert_true(disk_status_code(10, true) == 10, "BLK_STS_IOERR is status 10");
@@ -103,6 +118,7 @@ int main(void) {
     test_latency_bucket_is_upper_inclusive();
     test_op_from_req_op();
     test_final_completion();
+    test_accounted_start_ns();
     test_status_code();
     test_fs_sync_attempted();
     test_sync_file_range_waits();

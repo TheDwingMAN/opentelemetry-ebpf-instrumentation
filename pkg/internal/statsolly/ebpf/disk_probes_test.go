@@ -6,6 +6,7 @@
 package ebpf
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/cilium/ebpf/btf"
@@ -61,6 +62,33 @@ func TestBlockRqCompleteReportsBlkStatus(t *testing.T) {
 	require.Error(t, err, "an unexpected prototype is an error, not a guess")
 	_, err = blockRqCompleteReportsBlkStatus(&btf.Typedef{Type: &btf.Pointer{Target: &btf.FuncProto{Return: &btf.Void{}}}})
 	require.Error(t, err)
+}
+
+// The request flags were macros, then an enum, which some kernels leave anonymous (6.12, RHEL 9.6)
+func TestBlockLayoutEnums(t *testing.T) {
+	flags := []btf.EnumValue{{Name: "__RQF_STARTED", Value: 0}, {Name: "__RQF_FLUSH_SEQ", Value: 1}, {Name: "__RQF_IO_STAT", Value: 8}}
+	enumFlags := blockLayout{rqfIOStat: 1 << 8, rqfFlushSeq: 1 << 1}
+	for _, tc := range []struct {
+		name string
+		typ  btf.Type
+		want blockLayout
+	}{
+		{name: "macros", typ: &btf.Int{Name: "int", Size: 4}},
+		{name: "anonymous enum", typ: &btf.Enum{Size: 4, Values: flags}, want: enumFlags},
+		{name: "named enum", typ: &btf.Enum{Name: "rqf_flags", Size: 4, Values: flags}, want: enumFlags},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, err := btf.NewBuilder([]btf.Type{tc.typ}, nil)
+			require.NoError(t, err)
+			raw, err := builder.Marshal(nil, nil)
+			require.NoError(t, err)
+			spec, err := btf.LoadSpecFromReader(bytes.NewReader(raw))
+			require.NoError(t, err)
+			var layout blockLayout
+			require.NoError(t, layout.readEnums(spec))
+			assert.Equal(t, tc.want, layout)
+		})
+	}
 }
 
 func TestSizeStorageMaps(t *testing.T) {

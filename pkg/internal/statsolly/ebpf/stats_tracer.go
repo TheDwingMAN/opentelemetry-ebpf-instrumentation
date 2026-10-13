@@ -137,13 +137,12 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 }
 
 // storagePlan is what the storage probes load: the enabled storage features but those disabled,
-// the block tracepoint prototypes, and the file sync hooks, by function, that fentry and fexit
+// the block layout of the kernel, and the file sync hooks, by function, that fentry and fexit
 // programs time
 type storagePlan struct {
-	features                 export.Features
-	issueHasQueueArg         bool
-	completeReportsBlkStatus bool
-	fsSyncTracing            map[string]bool
+	features export.Features
+	blockLayout
+	fsSyncTracing map[string]bool
 }
 
 // storageError is a failure of the probes of storage features, which disables them
@@ -162,7 +161,7 @@ func planStorage(log *slog.Logger, features *export.Features) storagePlan {
 	storage := storagePlan{features: *features & (export.FeatureStatsDisk | export.FeatureStatsFsSync)}
 	if storage.features.StatsDisk() {
 		var err error
-		if storage.issueHasQueueArg, storage.completeReportsBlkStatus, err = kernelBlockTracepoints(); err != nil {
+		if storage.blockLayout, err = kernelBlockLayout(); err != nil {
 			storage.drop(log, export.FeatureStatsDisk,
 				fmt.Errorf("reading the block tracepoint prototypes in the kernel BTF: %w", err))
 		}
@@ -252,6 +251,8 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 		"disk_latency_bounds_ns":    diskLatencyBoundsNs(),
 		"disk_status_is_blk_status": storage.completeReportsBlkStatus,
 		"disk_read_cgroup":          reads.Disk,
+		"disk_rqf_io_stat":          storage.rqfIOStat,
+		"disk_rqf_flush_seq":        storage.rqfFlushSeq,
 		"fs_sync_read_cgroup":       reads.FsSync,
 	}, sharedMaps, &mu, "", nil); err != nil {
 		err = fmt.Errorf("loading stats eBPF spec: %w", err)
