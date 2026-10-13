@@ -73,7 +73,7 @@ type Stats struct {
 
 	// stat metrics
 	rbTracer *stats.RingBufTracer
-	// nil unless the disk stats are enabled
+	// nil unless the disk probes are attached
 	diskTracer *stats.DiskMapTracer
 
 	// focuses on TCP/UDP stack internals (kprobes/tracepoints)
@@ -146,8 +146,8 @@ func statsAgent(
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
 	var diskTracer *stats.DiskMapTracer
-	if cfg.Metrics.Features.StatsDisk() {
-		diskTracer = stats.NewDiskMapTracer(statsFetcher.DiskIOAccumMap(), statsFetcher.DiskCgroupNamesMap(),
+	if accum := statsFetcher.DiskIOAccumMap(); accum != nil {
+		diskTracer = stats.NewDiskMapTracer(accum, statsFetcher.DiskCgroupNamesMap(),
 			statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
 	}
 
