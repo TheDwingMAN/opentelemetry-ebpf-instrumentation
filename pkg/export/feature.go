@@ -66,6 +66,8 @@ const (
 	// The file sync stat features are in neither `stats` nor `all`, as their probes fire on every
 	// file sync
 	FeatureStatsFsSyncDuration
+	FeatureStatsFsSyncOperations
+	FeatureStatsFsSyncTime
 	FeatureAll = Features(^uint(0)) &^ (FeatureStatsDisk | FeatureStatsFsSync)
 )
 
@@ -73,7 +75,7 @@ const (
 const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskServiceTime
 
 // FeatureStatsFsSync groups the file sync stat features, which the same probes measure
-const FeatureStatsFsSync = FeatureStatsFsSyncDuration
+const FeatureStatsFsSync = FeatureStatsFsSyncDuration | FeatureStatsFsSyncOperations | FeatureStatsFsSyncTime
 
 // FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -114,6 +116,8 @@ var v2OnlyFeatures = map[string]Features{
 	"stats_disk_operations":       FeatureStatsDiskOperations,
 	"stats_disk_service_time":     FeatureStatsDiskServiceTime,
 	"stats_fs_sync_duration":      FeatureStatsFsSyncDuration,
+	"stats_fs_sync_operations":    FeatureStatsFsSyncOperations,
+	"stats_fs_sync_time":          FeatureStatsFsSyncTime,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -468,6 +472,14 @@ func (f Features) StatsDisk() bool {
 
 func (f Features) StatsFsSyncDuration() bool {
 	return f.any(FeatureStatsFsSyncDuration)
+}
+
+func (f Features) StatsFsSyncOperations() bool {
+	return f.any(FeatureStatsFsSyncOperations)
+}
+
+func (f Features) StatsFsSyncTime() bool {
+	return f.any(FeatureStatsFsSyncTime)
 }
 
 func (f Features) StatsFsSync() bool {

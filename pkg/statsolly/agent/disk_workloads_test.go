@@ -62,7 +62,8 @@ func TestCgroupReads(t *testing.T) {
 			name: "file syncs selected", features: export.FeatureStatsDisk | export.FeatureStatsFsSync,
 			selection: selecting(attributes.StatFsSyncDuration, "container.id"), want: fsSync,
 		},
-		{name: "file sync histogram in Kubernetes", groups: attributes.GroupKubernetes, features: export.FeatureStatsFsSync},
+		{name: "file sync histogram in Kubernetes", groups: attributes.GroupKubernetes, features: export.FeatureStatsFsSyncDuration},
+		{name: "file sync counters in Kubernetes", groups: attributes.GroupKubernetes, features: export.FeatureStatsFsSyncTime, want: fsSync},
 		{
 			name: "both filtered", features: export.FeatureStatsDiskIO | export.FeatureStatsFsSync,
 			filters: filter.AttributeFamilyConfig{"k8s.owner.name": {Match: "db"}}, want: both,

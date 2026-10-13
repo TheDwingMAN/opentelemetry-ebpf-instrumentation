@@ -76,6 +76,8 @@ func TestFeatureStatsDisk(t *testing.T) {
 		{name: "disk_service_duration", load: LoadV2Features, wantErr: true},
 		{name: "stats_fs_sync_duration", load: LoadFeatures, wantErr: true},
 		{name: "stats_fs_sync_duration", load: LoadV2Features, want: FeatureStatsFsSyncDuration},
+		{name: "stats_fs_sync_operations", load: LoadV2Features, want: FeatureStatsFsSyncOperations},
+		{name: "stats_fs_sync_time", load: LoadV2Features, want: FeatureStatsFsSyncTime},
 		{name: "fs_sync_duration", load: LoadV2Features, wantErr: true},
 	} {
 		features, err := tc.load([]string{tc.name})

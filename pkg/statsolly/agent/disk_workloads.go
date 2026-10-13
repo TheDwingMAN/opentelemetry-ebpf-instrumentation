@@ -56,6 +56,8 @@ func cgroupReads(features export.Features, attrSel *attributes.AttrSelector, fil
 		}),
 		FsSync: readsCgroup(features.StatsFsSync(), []storageMetric{
 			{enabled: features.StatsFsSyncDuration(), name: attributes.StatFsSyncDuration},
+			{enabled: features.StatsFsSyncOperations(), name: attributes.StatFsSyncOperations},
+			{enabled: features.StatsFsSyncTime(), name: attributes.StatFsSyncTime},
 		}),
 	}
 }

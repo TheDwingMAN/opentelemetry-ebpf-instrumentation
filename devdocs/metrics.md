@@ -155,6 +155,8 @@ OBI times the syncs with fentry and fexit programs where the kernel BTF has the 
 
 `error.type` is the errno that the sync returned, e.g. `EIO` or `ENOSPC`. The calls that fail before they sync anything are not counted: on an invalid file descriptor (`EBADF`), on a file that can't be synced, such as a pipe, a socket or a terminal (`EINVAL`, or `ESPIPE` for `sync_file_range(2)`), and `sync_file_range(2)` with invalid arguments. `container.id`, opt-in, and the Kubernetes attributes are those of the io controller cgroup of the thread that synced, found as for the disk stats, and the histogram reports only the cluster by default.
 
+`obi.stat.fs.sync.operations` and `obi.stat.fs.sync.time` (the stats features `fs_sync_operations` and `fs_sync_time`, which share the probes) are the count and the sum of the histogram. As the disk counters, they report the cluster, namespace, owner and kind by default in Kubernetes: their ratio is the mean sync time of each workload, at two series each.
+
 ### Known limitations
 
 #### Disk stats
