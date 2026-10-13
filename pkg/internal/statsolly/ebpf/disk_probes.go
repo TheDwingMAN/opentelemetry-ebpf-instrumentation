@@ -25,32 +25,42 @@ const diskLatencyBuckets = len(StatsDiskIoAccumT{}.LatencyCount)
 // (LOCAL_FREE_TARGET in kernel/bpf/bpf_lru_list.c)
 const lruLocalFreeTarget = 128
 
-// Parameters of the btf_trace_block_rq_issue prototype: the private data of the tracepoint, then
+// Parameters of the btf_trace_<tracepoint> prototypes: the private data of the tracepoint, then
 // its arguments
 const (
-	blockRqIssueParams       = 2 // data, rq
-	blockRqIssueLegacyParams = 3 // data, q, rq
+	blockRqIssueParams         = 2 // data, rq
+	blockRqIssueLegacyParams   = 3 // data, q, rq
+	blockRqCompleteStatusParam = 2 // data, rq, status, nr_bytes
 )
 
-// kernelBlockRqIssueHasQueueArg tells whether block_rq_issue is (q, rq) instead of (rq) in the
-// kernel BTF. The kernel version can't tell: 5.10.137 and RHEL 8.6 backported the change of 5.11.
-func kernelBlockRqIssueHasQueueArg() (bool, error) {
+// blkStatusSize is the size of a blk_status_t, a u8
+const blkStatusSize = 1
+
+// kernelBlockTracepoints reads the prototypes of the block tracepoints in the kernel BTF: whether
+// block_rq_issue is (q, rq) instead of (rq), and whether block_rq_complete reports a blk_status_t
+// instead of an int errno. The kernel version can't tell: 5.10.137 and RHEL 8.6 backported the
+// block_rq_issue change of 5.11.
+func kernelBlockTracepoints() (issueHasQueueArg, completeReportsBlkStatus bool, err error) {
 	spec, err := btf.LoadKernelSpec()
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	var issue *btf.Typedef
-	if err := spec.TypeByName("btf_trace_block_rq_issue", &issue); err != nil {
-		return false, err
+	var issue, complete *btf.Typedef
+	if err = spec.TypeByName("btf_trace_block_rq_issue", &issue); err != nil {
+		return false, false, err
 	}
-	return blockRqIssueHasQueueArg(issue)
+	if err = spec.TypeByName("btf_trace_block_rq_complete", &complete); err != nil {
+		return false, false, err
+	}
+	if issueHasQueueArg, err = blockRqIssueHasQueueArg(issue); err != nil {
+		return false, false, err
+	}
+	completeReportsBlkStatus, err = blockRqCompleteReportsBlkStatus(complete)
+	return issueHasQueueArg, completeReportsBlkStatus, err
 }
 
 func blockRqIssueHasQueueArg(issue *btf.Typedef) (bool, error) {
-	var proto *btf.FuncProto
-	if pointer, ok := issue.Type.(*btf.Pointer); ok {
-		proto, _ = pointer.Target.(*btf.FuncProto)
-	}
+	proto := tracepointProto(issue)
 	switch {
 	case proto == nil:
 		return false, errors.New("btf_trace_block_rq_issue is not a function pointer")
@@ -60,6 +70,29 @@ func blockRqIssueHasQueueArg(issue *btf.Typedef) (bool, error) {
 		return true, nil
 	}
 	return false, fmt.Errorf("unexpected block_rq_issue prototype with %d parameters", len(proto.Params))
+}
+
+// blockRqCompleteReportsBlkStatus tells whether the status of block_rq_complete is a blk_status_t,
+// as from Linux 5.16, instead of an int errno
+func blockRqCompleteReportsBlkStatus(complete *btf.Typedef) (bool, error) {
+	proto := tracepointProto(complete)
+	if proto == nil || len(proto.Params) <= blockRqCompleteStatusParam {
+		return false, errors.New("unexpected block_rq_complete prototype")
+	}
+	status, ok := btf.UnderlyingType(proto.Params[blockRqCompleteStatusParam].Type).(*btf.Int)
+	if !ok {
+		return false, errors.New("unexpected block_rq_complete status type")
+	}
+	return status.Size == blkStatusSize, nil
+}
+
+// tracepointProto returns the prototype of a btf_trace_<tracepoint> function pointer, or nil
+func tracepointProto(typedef *btf.Typedef) *btf.FuncProto {
+	if pointer, ok := typedef.Type.(*btf.Pointer); ok {
+		proto, _ := pointer.Target.(*btf.FuncProto)
+		return proto
+	}
+	return nil
 }
 
 // diskProgramsToDisable returns the disk programs that must not be loaded: all of them when the

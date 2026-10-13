@@ -17,6 +17,9 @@
 // The latency histogram bounds of the block requests, injected by userspace at load
 volatile const u64 disk_latency_bounds_ns[k_disk_latency_bounds];
 
+// Set by userspace when block_rq_complete reports a blk_status_t instead of an errno
+volatile const bool disk_status_is_blk_status;
+
 // Force structs into the ELF for automatic creation of Golang struct
 const disk_io_key_t *unused_disk_io_key __attribute__((unused));
 const disk_io_accum_t *unused_disk_io_accum __attribute__((unused));
@@ -126,7 +129,12 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
 
     const u64 now_ns = bpf_ktime_get_ns();
     const u64 latency_ns = now_ns > start.issued_ns ? now_ns - start.issued_ns : 0;
-    const disk_io_key_t key = {.major = start.major, .minor = start.minor, .op = start.op};
+    const disk_io_key_t key = {
+        .major = start.major,
+        .minor = start.minor,
+        .op = start.op,
+        .status = disk_status_code(ctx->args[1], disk_status_is_blk_status),
+    };
     disk_io_accum_t *accum = lookup_or_init_accum(&key);
     if (!accum) {
         return 0;
