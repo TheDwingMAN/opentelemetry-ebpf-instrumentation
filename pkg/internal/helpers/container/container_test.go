@@ -141,3 +141,28 @@ func TestContainerID(t *testing.T) {
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrContainerNotFound)
 }
+
+func TestIDFromCgroupNames(t *testing.T) {
+	const otherContainerID = "d36686f9785534531160dc936aec9d711a26eb37f4fc7752a2ae27d0a24345c1"
+	for _, tc := range []struct{ name, parent, want string }{
+		{name: "cri-containerd-" + fixtureContainerID + ".scope", parent: "kubepods-besteffort.slice", want: fixtureContainerID},
+		{name: "crio-" + fixtureContainerID + ".scope", parent: "kubepods.slice", want: fixtureContainerID},
+		{name: "docker-" + fixtureContainerID + ".scope", parent: "system.slice", want: fixtureContainerID},
+		// cgroupfs drivers, as /docker/<id> or /kubepods/burstable/pod<uid>/<id>
+		{name: fixtureContainerID, parent: "docker", want: fixtureContainerID},
+		// crun on cgroup v2 with the systemd driver, and systemd in a container
+		{name: "container", parent: "libpod-" + fixtureContainerID + ".scope", want: fixtureContainerID},
+		{name: "init.scope", parent: "cri-containerd-" + fixtureContainerID + ".scope", want: fixtureContainerID},
+		// the innermost container, like a container of a kind node
+		{name: fixtureContainerID, parent: "docker-" + otherContainerID + ".scope", want: fixtureContainerID},
+		{name: "sshd.service", parent: "system.slice"},
+		{name: "kubepods-besteffort-pod7260904b_bd08_e72e_4dff_95d9fccd2ee8.slice", parent: "kubepods-besteffort.slice"},
+		{name: fixtureContainerID[1:], parent: "docker"},
+		{name: "docker-" + fixtureContainerID + ".scope.old", parent: "system.slice"},
+		{name: "", parent: ""},
+	} {
+		id, ok := IDFromCgroupNames(tc.name, tc.parent)
+		assert.Equal(t, tc.want != "", ok, "%s in %s", tc.name, tc.parent)
+		assert.Equal(t, tc.want, id, "%s in %s", tc.name, tc.parent)
+	}
+}

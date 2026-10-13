@@ -16,7 +16,9 @@ import (
 
 func TestStatGetters_DiskIO(t *testing.T) {
 	write := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "nvme0n1", Op: CodeDiskOpWrite}}
-	read := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "dm-0", VolumeName: "vg0-data", Stacked: true, Op: CodeDiskOpRead}}
+	read := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{
+		Device: "dm-0", VolumeName: "vg0-data", Stacked: true, Op: CodeDiskOpRead, ContainerID: "0123abcd",
+	}}
 	failed := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "sda", Op: CodeDiskOpRead, ErrorType: "EIO"}}
 	rtt := &Stat{Type: StatTypeTCPRtt, TCPRtt: &TCPRtt{}}
 	for _, tc := range []struct {
@@ -33,6 +35,8 @@ func TestStatGetters_DiskIO(t *testing.T) {
 		{name: attr.DiskIODirection, stat: read, want: attribute.String("disk.io.direction", "read")},
 		{name: attr.ErrorType, stat: write},
 		{name: attr.ErrorType, stat: failed, want: attribute.String("error.type", "EIO")},
+		{name: attr.ContainerID, stat: write},
+		{name: attr.ContainerID, stat: read, want: attribute.String("container.id", "0123abcd")},
 		{name: attr.SystemDevice, stat: rtt, want: attribute.String("system.device", "")},
 		{name: attr.DiskStacked, stat: rtt, want: attribute.Bool("obi.disk.stacked", false)},
 		{name: attr.DiskVolumeName, stat: rtt},

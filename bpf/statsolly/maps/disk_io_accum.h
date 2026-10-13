@@ -11,13 +11,15 @@
 #include <statsolly/types.h>
 
 typedef struct disk_io_key {
+    // the io controller cgroup that the I/O is charged to, or 0 when it isn't read
+    u64 cgroup_id;
     // the whole disk
     u32 major;
     u32 minor;
     enum disk_op op;
     // 0 on success, or else a blk_status_t or an errno (disk_status_code)
     u8 status;
-    u8 _pad[2];
+    u8 _pad[6];
 } disk_io_key_t;
 
 // Cumulative values: userspace reads them periodically and computes the deltas
