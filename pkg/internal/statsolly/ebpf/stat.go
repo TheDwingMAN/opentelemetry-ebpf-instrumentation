@@ -20,7 +20,14 @@ const (
 	StatTypeTCPIo                   = StatType(StatsStatTypeK_statTypeTcpIo)
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
 	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
+	StatTypeFsSync                  = StatType(StatsStatTypeK_statTypeFsSync)
 )
+
+// CgroupReads tells which storage probes read the cgroups that the kernel charges the operations
+// to, for the attributes of their workloads
+type CgroupReads struct {
+	Disk, FsSync bool
+}
 
 type TCPFailReasonType string
 

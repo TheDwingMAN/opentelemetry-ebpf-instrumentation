@@ -16,6 +16,7 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 
@@ -68,7 +69,7 @@ const (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type fs_sync_type -type fs_sync_key_t -type fs_sync_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -84,12 +85,11 @@ func tlog() *slog.Logger {
 	return slog.With("component", "ebpf.StatFetcher")
 }
 
-// NewStatsFetcher loads and attaches the probes of the enabled stat features. The disk probes read
-// the cgroup that the I/O is charged to when diskReadsCgroup is set. An enabled storage feature
-// whose probes can't be loaded or attached is disabled with a warning, while a TCP probe that fails
-// is an error.
+// NewStatsFetcher loads and attaches the probes of the enabled stat features. The storage probes
+// read the cgroups that reads tells. An enabled storage feature whose probes can't be loaded or
+// attached is disabled with a warning, while a TCP probe that fails is an error.
 func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig,
-	diskReadsCgroup bool,
+	reads CgroupReads,
 ) (*StatsFetcher, error) {
 	tlog := tlog()
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -132,22 +132,26 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	}
 
 	return loadDegradingStorage(tlog, planStorage(tlog, features), func(storage storagePlan) (*StatsFetcher, error) {
-		return loadAndAttach(cfg, features, toDisable, connRoleUsed, storage, diskReadsCgroup)
+		return loadAndAttach(cfg, features, toDisable, connRoleUsed, storage, reads)
 	})
 }
 
 // storagePlan is what the storage probes load: the enabled storage features but those disabled,
-// and the block tracepoint prototypes
+// the block tracepoint prototypes, and the file sync hooks, by function, that fentry and fexit
+// programs time
 type storagePlan struct {
 	features                 export.Features
 	issueHasQueueArg         bool
 	completeReportsBlkStatus bool
+	fsSyncTracing            map[string]bool
 }
 
 // storageError is a failure of the probes of storage features, which disables them
 type storageError struct {
 	features export.Features
-	err      error
+	// a failed load, rather than a failed attach
+	load bool
+	err  error
 }
 
 func (e *storageError) Error() string { return e.err.Error() }
@@ -155,12 +159,18 @@ func (e *storageError) Error() string { return e.err.Error() }
 func (e *storageError) Unwrap() error { return e.err }
 
 func planStorage(log *slog.Logger, features *export.Features) storagePlan {
-	storage := storagePlan{features: *features & export.FeatureStatsDisk}
+	storage := storagePlan{features: *features & (export.FeatureStatsDisk | export.FeatureStatsFsSync)}
 	if storage.features.StatsDisk() {
 		var err error
 		if storage.issueHasQueueArg, storage.completeReportsBlkStatus, err = kernelBlockTracepoints(); err != nil {
 			storage.drop(log, export.FeatureStatsDisk,
 				fmt.Errorf("reading the block tracepoint prototypes in the kernel BTF: %w", err))
+		}
+	}
+	if storage.features.StatsFsSync() {
+		// without the kernel BTF, the kprobes time every file sync hook
+		if kernel, err := btf.LoadKernelSpec(); err == nil {
+			storage.fsSyncTracing = fsSyncTracingHooks(kernel)
 		}
 	}
 	return storage
@@ -174,18 +184,27 @@ func (s *storagePlan) drop(log *slog.Logger, group export.Features, err error) {
 }
 
 // loadDegradingStorage loads and attaches the probes, and disables the storage features of each
-// storageError until the rest load and attach
+// storageError until the rest load and attach. A failed load first moves the file syncs from the
+// fentry and fexit programs to the kprobes, which every supported kernel loads.
 func loadDegradingStorage(log *slog.Logger, storage storagePlan,
 	loadAndAttach func(storagePlan) (*StatsFetcher, error),
 ) (*StatsFetcher, error) {
 	for {
 		fetcher, err := loadAndAttach(storage)
 		var failed *storageError
-		// each storageError disables a planned feature, so that the loop ends
-		if !errors.As(err, &failed) || storage.features&failed.features == 0 {
+		switch {
+		case !errors.As(err, &failed):
 			return fetcher, err
+		case failed.load && storage.features.StatsFsSync() && len(storage.fsSyncTracing) > 0:
+			log.Debug("can't load the stats programs with the fentry and fexit programs of the file syncs: "+
+				"probing the file syncs with kprobes", "error", err)
+			storage.fsSyncTracing = nil
+		// each other storageError disables a planned feature, so that the loop ends
+		case storage.features&failed.features == 0:
+			return fetcher, err
+		default:
+			storage.drop(log, failed.features, err)
 		}
-		storage.drop(log, failed.features, err)
 	}
 }
 
@@ -193,7 +212,7 @@ func loadDegradingStorage(log *slog.Logger, storage storagePlan,
 // and attaches their probes. A failed load while storage features are planned, and a storage probe
 // that can't be attached, are storageErrors. On failure, it closes what it loaded.
 func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable []string, connRoleUsed bool,
-	storage storagePlan, diskReadsCgroup bool,
+	storage storagePlan, reads CgroupReads,
 ) (_ *StatsFetcher, err error) {
 	objects := StatsObjects{}
 	sharedMaps := map[string]*ebpf.Map{}
@@ -212,16 +231,19 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 	}
 
 	diskEnabled := storage.features.StatsDisk()
-	toDisable = slices.Concat(toDisable, diskProgramsToDisable(diskEnabled, storage.issueHasQueueArg))
+	fsSyncEnabled := storage.features.StatsFsSync()
+	toDisable = slices.Concat(toDisable, diskProgramsToDisable(diskEnabled, storage.issueHasQueueArg),
+		fsSyncProgramsToDisable(fsSyncEnabled, storage.fsSyncTracing))
 
+	setFsSyncTracingTargets(spec)
 	if err := fixupSpec(spec, toDisable); err != nil {
 		return nil, fmt.Errorf("fixing up BPF spec: %w", err)
 	}
 
 	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
-	// without the number of CPUs, the in-flight map keeps its size
+	// without the number of CPUs, the in-flight maps keep their size
 	cpus, _ := ebpf.PossibleCPU()
-	sizeDiskMaps(spec, diskEnabled, diskReadsCgroup, cpus)
+	sizeStorageMaps(spec, storage.features, reads, cpus)
 
 	var mu sync.Mutex
 	if err := ebpfconvenience.LoadSpec(spec, &objects, map[string]any{
@@ -229,12 +251,13 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 		"stats_wakeup_data_bytes":   uint32(cfg.StatsWakeupDataBytes),
 		"disk_latency_bounds_ns":    diskLatencyBoundsNs(),
 		"disk_status_is_blk_status": storage.completeReportsBlkStatus,
-		"disk_read_cgroup":          diskReadsCgroup,
+		"disk_read_cgroup":          reads.Disk,
+		"fs_sync_read_cgroup":       reads.FsSync,
 	}, sharedMaps, &mu, "", nil); err != nil {
 		err = fmt.Errorf("loading stats eBPF spec: %w", err)
 		if storage.features != 0 {
 			// the kernel's error doesn't tell which program it can't load
-			return nil, &storageError{features: storage.features, err: err}
+			return nil, &storageError{features: storage.features, load: true, err: err}
 		}
 		return nil, err
 	}
@@ -372,6 +395,16 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 		closables = append(closables, l)
 	}
 
+	if fsSyncEnabled {
+		links, mechanisms, err := attachFsSync(tlog(), &objects, storage.fsSyncTracing)
+		if err != nil {
+			closeAll(closables)
+			return nil, err
+		}
+		closables = append(closables, links...)
+		logFsSyncMechanisms(tlog(), mechanisms)
+	}
+
 	return &StatsFetcher{
 		log:       tlog(),
 		objects:   &objects,
@@ -422,10 +455,19 @@ func (m *StatsFetcher) DiskIOAccumMap() *ebpf.Map {
 	return m.objects.DiskIoAccum
 }
 
+// FsSyncAccumMap returns the map where the kernel accumulates the file sync durations, or nil when
+// the file sync stats are disabled
+func (m *StatsFetcher) FsSyncAccumMap() *ebpf.Map {
+	if !m.storage.StatsFsSync() {
+		return nil
+	}
+	return m.objects.FsSyncAccum
+}
+
 // DiskCgroupNamesMap returns the map where the kernel records the names of the cgroups that block
-// I/O is charged to, or nil when the disk stats are disabled
+// I/O and file syncs are charged to, or nil when the disk and file sync stats are disabled
 func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
-	if !m.storage.StatsDisk() {
+	if m.storage == 0 {
 		return nil
 	}
 	return m.objects.DiskCgroupNames
@@ -445,9 +487,14 @@ func fixupSpec(spec *ebpf.CollectionSpec, toDisable []string) error {
 		if prog == nil {
 			return fmt.Errorf("unknown program name %s", name)
 		}
+		// a stub has no kernel function for a tracing program to attach to
+		typ := prog.Type
+		if typ == ebpf.Tracing {
+			typ = ebpf.Kprobe
+		}
 		spec.Programs[name] = &ebpf.ProgramSpec{
 			Name:         "stats_dummy",
-			Type:         prog.Type,
+			Type:         typ,
 			Instructions: asm.Instructions{asm.Mov.Imm(asm.R0, 0), asm.Return()},
 			License:      "Dual MIT/GPL",
 		}

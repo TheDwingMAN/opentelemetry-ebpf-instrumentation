@@ -15,7 +15,7 @@ import (
 
 type StatsFetcher struct{}
 
-func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig, _ bool) (*StatsFetcher, error) {
+func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig, _ CgroupReads) (*StatsFetcher, error) {
 	return nil, nil
 }
 

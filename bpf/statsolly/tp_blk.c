@@ -15,9 +15,6 @@
 #include <statsolly/maps/disk_io_accum.h>
 #include <statsolly/maps/disk_rq_start.h>
 
-// The latency histogram bounds of the block requests, injected by userspace at load
-volatile const u64 disk_latency_bounds_ns[k_disk_latency_bounds];
-
 // Set by userspace when block_rq_complete reports a blk_status_t instead of an errno
 volatile const bool disk_status_is_blk_status;
 
