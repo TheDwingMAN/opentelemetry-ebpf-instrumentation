@@ -68,10 +68,23 @@ static void test_final_completion(void) {
                 "sequence");
 }
 
+static void test_status_code(void) {
+    // a blk_status_t from Linux 5.16
+    assert_true(disk_status_code(10, true) == 10, "BLK_STS_IOERR is status 10");
+    assert_true(disk_status_code(0, true) == 0, "BLK_STS_OK is a success");
+    // a negative int errno before, which the raw tracepoint argument holds zero-extended
+    assert_true(disk_status_code((u32)-5, false) == 5, "-EIO is status 5");
+    assert_true(disk_status_code((u64)-5, false) == 5, "a sign-extended -EIO is status 5 too");
+    assert_true(disk_status_code(0, false) == 0, "errno 0 is a success");
+    assert_true(disk_status_code((u32)-512, false) == k_status_other,
+                "an errno that doesn't fit in a status, like ERESTARTSYS, is not a success");
+}
+
 int main(void) {
     test_latency_bucket_is_upper_inclusive();
     test_op_from_req_op();
     test_final_completion();
+    test_status_code();
 
     if (failed_assertions) {
         printf("%u assertion(s) failed\n", failed_assertions);
