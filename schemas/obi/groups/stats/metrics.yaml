@@ -385,7 +385,9 @@ metrics:
       their last issue to the device until their final completion. Only the
       requests whose issue OBI recorded are counted, so the counts differ from
       /proc/diskstats, and the I/O of bio-based devices (LVM, dm-crypt, md
-      RAID, NVMe native multipath heads) is not measured.
+      RAID, NVMe native multipath heads) is not measured. The paths of
+      dm-multipath devices report nothing: the multipath device reports the
+      same requests.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
