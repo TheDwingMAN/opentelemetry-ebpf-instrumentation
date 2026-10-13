@@ -168,9 +168,7 @@ func (r *diskReader) readStats() []*ebpf.Stat {
 		entry := r.entries[key]
 		if current != entry.previous {
 			r.entries[key] = diskEntry{previous: current}
-			if stat := r.stat(key, current, entry.previous); stat != nil {
-				stats = append(stats, stat)
-			}
+			stats = append(stats, r.stat(key, current, entry.previous))
 			continue
 		}
 		entry.idleReads++
@@ -212,12 +210,9 @@ func (r *diskReader) deleteIdle(key ebpf.StatsDiskIoKeyT, entry diskEntry) *ebpf
 }
 
 // stat returns the requests that completed on the device and in the direction of a key since the
-// previous read, or nil on a path of a measured dm-multipath device, which reports the same requests
+// previous read
 func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsDiskIoAccumT) *ebpf.Stat {
 	device := r.devices.device(key.Major, key.Minor)
-	if device.dmMultipathPath {
-		return nil
-	}
 	latency := ebpf.LatencyHistogram{
 		BucketCounts: make([]uint64, len(current.LatencyCount)),
 		Sum:          float64(current.LatencySumNs-previous.LatencySumNs) / float64(time.Second),
@@ -234,6 +229,9 @@ func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.Stats
 			Op:         ebpf.DiskOpCode(key.Op),
 			Latency:    latency,
 			ErrorType:  diskErrorType(key.Status, r.statusIsBlkStatus),
+			Bytes:      current.Bytes - previous.Bytes,
+
+			MultipathPath: device.dmMultipathPath,
 		},
 	}
 }

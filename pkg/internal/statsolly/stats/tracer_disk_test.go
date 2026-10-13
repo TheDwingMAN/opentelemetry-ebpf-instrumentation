@@ -80,9 +80,9 @@ func newTestDiskReader(src *fakeDiskAccum) *diskReader {
 }
 
 func TestDiskReaderForwardsDeltas(t *testing.T) {
-	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
-		writeKey(259, 0): accum([]uint64{0, 3}, []uint64{0, 2_000_000}),
-	}}
+	written := accum([]uint64{0, 3}, []uint64{0, 2_000_000})
+	written.Bytes = 3 * 4096
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{writeKey(259, 0): written}}
 	r := newTestDiskReader(src)
 
 	stats := r.readStats()
@@ -91,12 +91,16 @@ func TestDiskReaderForwardsDeltas(t *testing.T) {
 	assert.Equal(t, "259:0", stats[0].DiskIO.Device, "named after its numbers when sysfs doesn't know it")
 	assert.Equal(t, ebpf.CodeDiskOpWrite, stats[0].DiskIO.Op)
 	assertLatency(t, stats[0].DiskIO.Latency, 3*0.002, 0, 3)
+	assert.Equal(t, uint64(3*4096), stats[0].DiskIO.Bytes)
 
 	// two more requests in the same bucket, one in a higher bucket
-	src.entries[writeKey(259, 0)] = accum([]uint64{0, 5, 1}, []uint64{0, 2_000_000, 50_000_000})
+	written = accum([]uint64{0, 5, 1}, []uint64{0, 2_000_000, 50_000_000})
+	written.Bytes = 6 * 4096
+	src.entries[writeKey(259, 0)] = written
 	stats = r.readStats()
 	require.Len(t, stats, 1)
 	assertLatency(t, stats[0].DiskIO.Latency, 2*0.002+0.05, 0, 2, 1)
+	assert.Equal(t, uint64(3*4096), stats[0].DiskIO.Bytes)
 
 	assert.Empty(t, r.readStats(), "nothing changed, nothing forwarded")
 }
@@ -296,9 +300,9 @@ func TestStackedDevices(t *testing.T) {
 	}, devices)
 }
 
-// The paths of a measured dm-multipath device report nothing, as the multipath device reports the
-// same requests, so the multipath device is not stacked
-func TestDiskReaderLeavesOutTheMultipathPaths(t *testing.T) {
+// The paths of a measured dm-multipath device are marked, so that the histogram exporters leave them
+// out, as the multipath device reports the same requests: the multipath device is not stacked
+func TestDiskReaderMarksTheMultipathPaths(t *testing.T) {
 	fake := newFakeBlockDevices(t)
 	fake.add("8:16", "sdb")
 	fake.add("8:32", "sdc")
@@ -328,16 +332,14 @@ func TestDiskReaderLeavesOutTheMultipathPaths(t *testing.T) {
 	for _, numbers := range []devNum{{8, 16}, {8, 32}, {8, 48}, {8, 64}, {253, 0}, {253, 1}, {253, 2}, {253, 3}} {
 		src.entries[writeKey(numbers.major, numbers.minor)] = accum([]uint64{1}, []uint64{100_000})
 	}
-	r := newDiskReader(src, fake.blockDevices(), defaultDiskReadInterval)
-	stacked := map[string]bool{}
-	for _, stat := range r.readStats() {
-		stacked[stat.DiskIO.Device] = stat.DiskIO.Stacked
+	type marks struct{ stacked, multipathPath bool }
+	devices := map[string]marks{}
+	for _, stat := range newDiskReader(src, fake.blockDevices(), defaultDiskReadInterval).readStats() {
+		devices[stat.DiskIO.Device] = marks{stacked: stat.DiskIO.Stacked, multipathPath: stat.DiskIO.MultipathPath}
 	}
-	assert.Equal(t, map[string]bool{
-		"sdd": false, "sde": false, "dm-1": false, "dm-3": false,
-		"dm-0": true, "dm-2": true,
-	}, stacked, "the paths of dm-1 and dm-3 report nothing")
-	for key, current := range src.entries {
-		assert.Equal(t, current, r.entries[key].previous, "a path reports none of the requests it served while it was one")
-	}
+	assert.Equal(t, map[string]marks{
+		"sdb": {multipathPath: true}, "sdc": {multipathPath: true},
+		"sdd": {}, "sde": {}, "dm-1": {}, "dm-3": {},
+		"dm-0": {stacked: true}, "dm-2": {stacked: true},
+	}, devices, "sdb and sdc are the paths of dm-1 and dm-3")
 }

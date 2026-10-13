@@ -61,7 +61,9 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	misses := float64(diskProgramMisses(t))
 	for _, op := range []ebpf.DiskOpCode{ebpf.CodeDiskOpWrite, ebpf.CodeDiskOpRead} {
 		latency := deviceLatency(stats, filepath.Base(devPath), op)
-		assert.InDelta(t, directIOBlocks, requests(latency), misses, "one sample per request of op %d", op)
+		assert.InDelta(t, directIOBlocks, latency.Count(), misses, "one sample per request of op %d", op)
+		assert.InDelta(t, directIOBlocks*directIOBlockSize, deviceBytes(stats, filepath.Base(devPath), op),
+			misses*directIOBlockSize, "the bytes of op %d", op)
 		assert.Positive(t, latency.Sum)
 		// without the bounds, the kernel would put every request above the last one
 		assert.Zero(t, latency.BucketCounts[len(export.DiskLatencyBounds)], "no request takes longer than the last bound")
@@ -100,7 +102,7 @@ func TestDiskRequestsAreTimedFromTheirIssue(t *testing.T) {
 	latency := deviceLatency(reader.readStats(), device, ebpf.CodeDiskOpWrite)
 	misses := float64(diskProgramMisses(t))
 	require.Equal(t, uint64(tags+held), after.writes-before.writes)
-	require.InDelta(t, tags+held, requests(latency), misses)
+	require.InDelta(t, tags+held, latency.Count(), misses)
 	leftOut := (after.writeTime - before.writeTime).Seconds() - latency.Sum
 	assert.Greater(t, leftOut, 0.9*held*hold.Seconds(), "OBI leaves the wait of the held writes out")
 	// the writes in flight wait out the hold, so only the held ones can be timed within it
@@ -136,7 +138,7 @@ func TestDiskFailedRequestsAreNamedAfterTheirErrno(t *testing.T) {
 	measured := map[string]uint64{}
 	for _, stat := range reader.readStats() {
 		if stat.DiskIO.Device == filepath.Base(devPath) && stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
-			measured[stat.DiskIO.ErrorType] += requests(stat.DiskIO.Latency)
+			measured[stat.DiskIO.ErrorType] += stat.DiskIO.Latency.Count()
 		}
 	}
 	misses := float64(diskProgramMisses(t))
@@ -169,14 +171,14 @@ func TestDiskIdleEntriesAreDeleted(t *testing.T) {
 		return deviceLatency(reader.readStats(), device, ebpf.CodeDiskOpWrite)
 	}
 
-	assert.InDelta(t, directIOBlocks, requests(write(directIOBlocks)), float64(diskProgramMisses(t)))
+	assert.InDelta(t, directIOBlocks, write(directIOBlocks).Count(), float64(diskProgramMisses(t)))
 	reader.readStats()
 	entries, err := reader.accum.read()
 	require.NoError(t, err)
 	for key := range entries {
 		assert.False(t, key.Major == major && key.Minor == minor, "the entries of the idle device are deleted")
 	}
-	assert.InDelta(t, directIOBlocks/4, requests(write(directIOBlocks/4)), float64(diskProgramMisses(t)))
+	assert.InDelta(t, directIOBlocks/4, write(directIOBlocks/4).Count(), float64(diskProgramMisses(t)))
 }
 
 // TestDiskStackedDevicesInSysfs checks what OBI reads in sysfs of a loop device, and of a device
@@ -191,10 +193,10 @@ func TestDiskStackedDevicesInSysfs(t *testing.T) {
 	assert.Equal(t, blockDevice{name: dm, volumeName: volume, stacked: true}, devices.device(deviceNumbers(t, dm)))
 }
 
-// TestDiskMultipathPathsReportNothing writes to a dm-multipath volume over a loop device, its only
-// path, as multipathd sets one up over a LUN: the volume reports the writes, and the path, which
-// serves the same requests, reports nothing
-func TestDiskMultipathPathsReportNothing(t *testing.T) {
+// TestDiskMultipathPathsAreMarked writes to a dm-multipath volume over a loop device, its only path,
+// as multipathd sets one up over a LUN: the volume and the path report the writes, and the path is
+// marked, so that the histogram exporters leave it out
+func TestDiskMultipathPathsAreMarked(t *testing.T) {
 	if out, err := exec.Command("modprobe", "-a", "dm_multipath", "dm_round_robin").CombinedOutput(); err != nil {
 		t.Skipf("needs dm-multipath: %v: %s", err, out)
 	}
@@ -218,17 +220,59 @@ func TestDiskMultipathPathsReportNothing(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	var written *ebpf.DiskIO
+	written := map[string]*ebpf.DiskIO{}
 	for _, stat := range reader.readStats() {
-		assert.NotEqual(t, filepath.Base(loopPath), stat.DiskIO.Device, "the path reports nothing")
-		if stat.DiskIO.Device == dm && stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
-			written = stat.DiskIO
+		if stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
+			written[stat.DiskIO.Device] = stat.DiskIO
 		}
 	}
-	require.NotNil(t, written)
-	assert.Equal(t, volume, written.VolumeName)
-	assert.False(t, written.Stacked, "its path reports nothing")
-	assert.InDelta(t, directIOBlocks, requests(written.Latency), float64(diskProgramMisses(t)))
+	misses := float64(diskProgramMisses(t))
+	require.Contains(t, written, dm)
+	assert.Equal(t, volume, written[dm].VolumeName)
+	assert.False(t, written[dm].Stacked, "its path doesn't report its histogram")
+	assert.False(t, written[dm].MultipathPath)
+	assert.InDelta(t, directIOBlocks, written[dm].Latency.Count(), misses)
+	path := filepath.Base(loopPath)
+	require.Contains(t, written, path)
+	assert.True(t, written[path].MultipathPath)
+	assert.InDelta(t, directIOBlocks, written[path].Latency.Count(), misses)
+}
+
+// TestDiskServiceTimeOfAKnownLatency writes and reads, one request at a time, a null_blk device that
+// completes each request a known delay after it receives it: the service time counts that delay for
+// each request, and the requests never overlap
+func TestDiskServiceTimeOfAKnownLatency(t *testing.T) {
+	const (
+		delay  = 2 * time.Millisecond
+		blocks = 50
+	)
+	device := slowNullBlockDevice(t, delay)
+	reader := attachDiskReader(t)
+
+	f, err := os.OpenFile(device, os.O_RDWR|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	block := alignedBuffer(t)
+	start := time.Now()
+	for i := range blocks {
+		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+		_, err = f.ReadAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+	}
+	elapsed := time.Since(start)
+
+	var requests uint64
+	var serviceTime float64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device == filepath.Base(device) {
+			requests += stat.DiskIO.Latency.Count()
+			serviceTime += stat.DiskIO.Latency.Sum
+		}
+	}
+	require.InDelta(t, 2*blocks, requests, float64(diskProgramMisses(t)))
+	assert.GreaterOrEqual(t, serviceTime/float64(requests), delay.Seconds(), "the device completes each request after the delay")
+	assert.LessOrEqual(t, serviceTime, elapsed.Seconds(), "one request at a time: they never overlap")
 }
 
 func attachDiskReader(t *testing.T) *diskReader {
@@ -266,6 +310,16 @@ func diskProgramMisses(t *testing.T) uint64 {
 	return misses
 }
 
+func deviceBytes(stats []*ebpf.Stat, device string, op ebpf.DiskOpCode) uint64 {
+	var bytes uint64
+	for _, stat := range stats {
+		if stat.DiskIO.Device == device && stat.DiskIO.Op == op {
+			bytes += stat.DiskIO.Bytes
+		}
+	}
+	return bytes
+}
+
 func deviceLatency(stats []*ebpf.Stat, device string, op ebpf.DiskOpCode) ebpf.LatencyHistogram {
 	for _, stat := range stats {
 		if stat.DiskIO.Device == device && stat.DiskIO.Op == op {
@@ -273,14 +327,6 @@ func deviceLatency(stats []*ebpf.Stat, device string, op ebpf.DiskOpCode) ebpf.L
 		}
 	}
 	return ebpf.LatencyHistogram{BucketCounts: make([]uint64, len(export.DiskLatencyBounds)+1)}
-}
-
-func requests(latency ebpf.LatencyHistogram) uint64 {
-	var count uint64
-	for _, bucketCount := range latency.BucketCounts {
-		count += bucketCount
-	}
-	return count
 }
 
 func requestsWithin(latency ebpf.LatencyHistogram, seconds float64) uint64 {
@@ -363,6 +409,41 @@ func deviceNode(t *testing.T, name string) string {
 	node := filepath.Join(t.TempDir(), name)
 	require.NoError(t, unix.Mknod(node, unix.S_IFBLK|0o600, int(unix.Mkdev(major, minor))))
 	return node
+}
+
+// slowNullBlockDevice creates a null_blk device that completes each request after the given delay,
+// and returns the path of its node. It skips the test if null_blk can't be configured.
+func slowNullBlockDevice(t *testing.T, delay time.Duration) string {
+	t.Helper()
+	_ = exec.Command("modprobe", "null_blk", "nr_devices=0").Run()
+	dir := filepath.Join("/sys/kernel/config/nullb", fmt.Sprintf("obi-test-%d", os.Getpid()))
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Skipf("null_blk can't be configured through configfs: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.WriteFile(filepath.Join(dir, "power"), []byte("0"), 0o644)
+		_ = os.Remove(dir)
+	})
+	for name, value := range map[string]string{
+		"irqmode":         "2", // complete the requests from a timer
+		"completion_nsec": strconv.FormatInt(delay.Nanoseconds(), 10),
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(value), 0o644), name)
+	}
+	// null_blk names the device nullb<index> on older kernels, and after the configfs directory on
+	// newer ones: take the block device that appears when it's powered on
+	before, err := os.ReadDir("/sys/class/block")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "power"), []byte("1"), 0o644))
+	after, err := os.ReadDir("/sys/class/block")
+	require.NoError(t, err)
+	for _, entry := range after {
+		if !slices.ContainsFunc(before, func(existing os.DirEntry) bool { return existing.Name() == entry.Name() }) {
+			return deviceNode(t, entry.Name())
+		}
+	}
+	require.FailNow(t, "no block device appeared when powering on the null_blk device")
+	return ""
 }
 
 func mountExt4(t *testing.T) string {
