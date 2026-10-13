@@ -5,9 +5,11 @@ package stats
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,7 +52,7 @@ func assertLatency(t *testing.T, latency ebpf.LatencyHistogram, sumSeconds float
 }
 
 func newTestDiskReader(src *fakeDiskAccum) *diskReader {
-	return newDiskReader(src.read, &blockDevices{sysRoot: "/nonexistent"})
+	return newDiskReader(src.read, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"})
 }
 
 func TestDiskReaderForwardsDeltas(t *testing.T) {
@@ -91,23 +93,34 @@ func TestDiskReaderForwardsWhatItReads(t *testing.T) {
 	assertLatency(t, stats[0].DiskIO.Latency, 2*0.0005, 2)
 }
 
-// fakeBlockDevices is a fake sysfs, with block devices linked from /sys/dev/block by their numbers
+// fakeBlockDevices is a fake sysfs, with block devices linked from /sys/dev/block by their numbers,
+// and a fake /proc/diskstats
 type fakeBlockDevices struct {
-	t       *testing.T
-	sysRoot string
+	t                 *testing.T
+	sysRoot, procRoot string
+	diskstats         []string
 }
 
 func newFakeBlockDevices(t *testing.T) *fakeBlockDevices {
-	return &fakeBlockDevices{t: t, sysRoot: t.TempDir()}
+	return &fakeBlockDevices{t: t, sysRoot: t.TempDir(), procRoot: t.TempDir()}
 }
 
 func (f *fakeBlockDevices) blockDevices() *blockDevices {
-	return &blockDevices{sysRoot: f.sysRoot}
+	return &blockDevices{sysRoot: f.sysRoot, procRoot: f.procRoot}
 }
 
 func (f *fakeBlockDevices) add(numbers, name string) {
 	f.file(name, "uevent", "DEVNAME="+name+"\nDEVTYPE=disk")
 	f.link(filepath.Join("dev", "block", numbers), name)
+}
+
+// hidden adds a device that /proc/diskstats lists, but that sysfs doesn't link from /sys/dev/block,
+// as the path devices of NVMe native multipath
+func (f *fakeBlockDevices) hidden(numbers, name string) {
+	major, minor, _ := strings.Cut(numbers, ":")
+	f.diskstats = append(f.diskstats, fmt.Sprintf("%4s %7s %s 0 0 80 5 0 0 160 9 0 12 14 0 0 0 0 0 0", major, minor, name))
+	diskstats := []byte(strings.Join(f.diskstats, "\n") + "\n")
+	require.NoError(f.t, os.WriteFile(filepath.Join(f.procRoot, "diskstats"), diskstats, 0o644))
 }
 
 // file writes a file of the sysfs directory of a device
@@ -145,15 +158,38 @@ func TestDeviceNames(t *testing.T) {
 	assert.Equal(t, blockDevice{name: "dm-0", volumeName: "vg0-data", stacked: true}, devices.device(253, 0))
 	assert.Equal(t, blockDevice{name: "8:0"}, devices.device(8, 0), "named after its numbers when sysfs doesn't know it")
 
-	// the volume was removed, and its numbers given to a new one
+	// the volume was removed, and its numbers given to a new one, and a hidden NVMe path appeared
 	fake.file("dm-0", "dm/name", "vg0-new")
+	fake.hidden("259:1", "nvme1c0n1")
 	assert.Equal(t, "vg0-data", devices.device(253, 0).volumeName, "cached")
+	assert.Equal(t, "259:1", devices.device(259, 1).name, "/proc/diskstats is read once per cache period")
 	now = now.Add(blockDevicesCachePeriod)
 	assert.Equal(t, "vg0-new", devices.device(253, 0).volumeName, "read again once the cache expired")
+	assert.Equal(t, "nvme1c0n1", devices.device(259, 1).name, "read again once the cache expired")
 
 	// the numbers of unknown devices are not cached: a new device is named at its first I/O
 	fake.add("8:0", "sda")
 	assert.Equal(t, blockDevice{name: "sda"}, devices.device(8, 0))
+}
+
+func TestDeviceNamesOfHiddenNVMePaths(t *testing.T) {
+	fake := newFakeBlockDevices(t)
+	fake.add("259:2", "nvme1n1")
+	fake.hidden("259:1", "nvme1c0n1")
+	fake.hidden("259:0", "nvme1c1n1")
+	// before Linux 6.1, the kernel lists the hidden paths without their numbers
+	fake.hidden("0:0", "nvme2c0n1")
+	fake.hidden("0:0", "nvme2c1n1")
+	devices := fake.blockDevices()
+	for numbers, name := range map[devNum]string{
+		{259, 2}: "nvme1n1",
+		{259, 1}: "nvme1c0n1",
+		{259, 0}: "nvme1c1n1",
+		{259, 3}: "259:3",
+		{0, 0}:   "0:0",
+	} {
+		assert.Equal(t, blockDevice{name: name}, devices.device(numbers.major, numbers.minor))
+	}
 }
 
 func TestStackedDevices(t *testing.T) {

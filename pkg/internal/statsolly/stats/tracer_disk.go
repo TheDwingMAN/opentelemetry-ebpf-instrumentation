@@ -14,6 +14,7 @@ import (
 	"time"
 
 	ciliumebpf "github.com/cilium/ebpf"
+	"github.com/prometheus/procfs/blockdevice"
 
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
@@ -50,7 +51,7 @@ func NewDiskMapTracer(accum *ciliumebpf.Map, cfg *config.EBPFTracer) *DiskMapTra
 	}
 	read := func() (map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT, error) { return readDiskAccum(accum) }
 	return &DiskMapTracer{
-		reader:   newDiskReader(read, &blockDevices{sysRoot: "/sys"}),
+		reader:   newDiskReader(read, &blockDevices{sysRoot: "/sys", procRoot: "/proc"}),
 		interval: interval,
 	}
 }
@@ -175,18 +176,21 @@ type blockDevice struct {
 }
 
 type blockDevices struct {
-	sysRoot  string
-	cachedAt time.Time
-	devices  map[devNum]blockDevice
+	sysRoot, procRoot string
+	cachedAt          time.Time
+	devices           map[devNum]blockDevice
+	// diskstats names the devices that /proc/diskstats lists, read once per cache period
+	diskstats map[devNum]string
 }
 
-// device returns what sysfs tells of a block device. A device that sysfs doesn't know, as one
-// removed since its I/O, is named by its "major:minor" numbers, which are not cached, as the kernel
-// can give them to a new device.
+// device returns what sysfs tells of a block device. A device that neither sysfs nor
+// /proc/diskstats knows, as one removed since its I/O, is named by its "major:minor" numbers, which
+// are not cached, as the kernel can give them to a new device.
 func (d *blockDevices) device(major, minor uint32) blockDevice {
 	if now := timeNow(); now.Sub(d.cachedAt) >= blockDevicesCachePeriod {
 		d.cachedAt = now
 		d.devices = map[devNum]blockDevice{}
+		d.diskstats = nil
 	}
 	numbers := devNum{major: major, minor: minor}
 	if device, ok := d.devices[numbers]; ok {
@@ -201,10 +205,38 @@ func (d *blockDevices) device(major, minor uint32) blockDevice {
 		dmMultipathPath: heldByDMMultipath(dir),
 	}
 	if device.name == "" {
+		// sysfs doesn't link the hidden path devices of NVMe native multipath (nvmeXcYnZ) from
+		// /sys/dev/block, but /proc/diskstats lists them
+		device.name = d.diskstatsName(numbers)
+	}
+	if device.name == "" {
 		return blockDevice{name: devNumbers}
 	}
 	d.devices[numbers] = device
 	return device
+}
+
+func (d *blockDevices) diskstatsName(numbers devNum) string {
+	if d.diskstats == nil {
+		d.diskstats = map[devNum]string{}
+		for _, stat := range procDiskstats(d.procRoot, d.sysRoot) {
+			// before Linux 6.1, the kernel lists all the hidden NVMe paths as 0:0
+			if stat.MajorNumber != 0 {
+				d.diskstats[devNum{major: stat.MajorNumber, minor: stat.MinorNumber}] = stat.DeviceName
+			}
+		}
+	}
+	return d.diskstats[numbers]
+}
+
+// procDiskstats returns what it could read of /proc/diskstats
+func procDiskstats(procRoot, sysRoot string) []blockdevice.Diskstats {
+	fs, err := blockdevice.NewFS(procRoot, sysRoot)
+	if err != nil {
+		return nil
+	}
+	diskstats, _ := fs.ProcDiskstats()
+	return diskstats
 }
 
 func ueventDevName(path string) string {
