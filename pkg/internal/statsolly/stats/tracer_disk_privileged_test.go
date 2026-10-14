@@ -106,6 +106,55 @@ func TestDiskRequestsAreTimedFromTheirIssue(t *testing.T) {
 	assert.InDelta(t, held, requestsWithin(latency, hold.Seconds()), misses, "the held writes are timed from their issue")
 }
 
+// TestDiskStackedDevicesInSysfs checks what OBI reads in sysfs of a loop device, and of a device
+// mapper volume over it
+func TestDiskStackedDevicesInSysfs(t *testing.T) {
+	loopPath := attachLoopDevice(t, t.TempDir())
+	loop := filepath.Base(loopPath)
+	devices := &blockDevices{sysRoot: "/sys"}
+	assert.Equal(t, blockDevice{name: loop, stacked: true}, devices.device(deviceNumbers(t, loop)))
+
+	volume, dm := deviceMapperVolume(t, loopPath, "", "linear "+loopPath+" 0")
+	assert.Equal(t, blockDevice{name: dm, volumeName: volume, stacked: true}, devices.device(deviceNumbers(t, dm)))
+}
+
+// TestDiskMultipathPathsReportNothing writes to a dm-multipath volume over a loop device, its only
+// path, as multipathd sets one up over a LUN: the volume reports the writes, and the path, which
+// serves the same requests, reports nothing
+func TestDiskMultipathPathsReportNothing(t *testing.T) {
+	if out, err := exec.Command("modprobe", "-a", "dm_multipath", "dm_round_robin").CombinedOutput(); err != nil {
+		t.Skipf("needs dm-multipath: %v: %s", err, out)
+	}
+	loopPath := attachLoopDevice(t, t.TempDir())
+	target := "multipath 0 0 1 1 round-robin 0 1 1 " + loopPath + " 1"
+	volume, dm := deviceMapperVolume(t, loopPath, dmMultipathUUIDPrefix, target)
+	if !exists(filepath.Join("/sys/block", dm, "mq")) {
+		t.Skipf("the multipath volume %s is not request-based on this kernel", dm)
+	}
+	reader := attachDiskReader(t)
+
+	f, err := os.OpenFile(deviceNode(t, dm), os.O_WRONLY|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	block := alignedBuffer(t)
+	for i := range directIOBlocks {
+		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+	}
+
+	var written *ebpf.DiskIO
+	for _, stat := range reader.readStats() {
+		assert.NotEqual(t, filepath.Base(loopPath), stat.DiskIO.Device, "the path reports nothing")
+		if stat.DiskIO.Device == dm && stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
+			written = stat.DiskIO
+		}
+	}
+	require.NotNil(t, written)
+	assert.Equal(t, volume, written.VolumeName)
+	assert.False(t, written.Stacked, "its path reports nothing")
+	assert.InDelta(t, directIOBlocks, requests(written.Latency), float64(diskProgramMisses(t)))
+}
+
 func attachDiskReader(t *testing.T) *diskReader {
 	t.Helper()
 	features := export.FeatureStatsDiskServiceDuration
@@ -192,6 +241,52 @@ func attachLoopDevice(t *testing.T, dir string) string {
 		loop.Close()
 	})
 	return path
+}
+
+// deviceMapperVolume creates a device mapper volume over a whole device, with the given target and
+// its arguments, and returns its name and its kernel name. Its UUID is its name after uuidPrefix.
+func deviceMapperVolume(t *testing.T, devPath, uuidPrefix, target string) (volume, name string) {
+	t.Helper()
+	path, err := exec.LookPath("dmsetup")
+	if err != nil {
+		t.Skip("needs dmsetup")
+	}
+	_ = exec.Command("modprobe", "dm_mod").Run()
+	if misc, _ := os.ReadFile("/proc/misc"); !strings.Contains(string(misc), "device-mapper") {
+		t.Skip("needs device mapper")
+	}
+	dmsetup := func(args ...string) *exec.Cmd {
+		cmd := exec.Command(path, args...)
+		// without udev, dmsetup creates and removes the device nodes itself
+		cmd.Env = append(os.Environ(), "DM_DISABLE_UDEV=1")
+		return cmd
+	}
+	sectors := readSysFile(t, filepath.Join("/sys/class/block", filepath.Base(devPath), "size"))
+	volume = fmt.Sprintf("obi-test-%d", time.Now().UnixNano())
+	out, err := dmsetup("create", volume, "--uuid", uuidPrefix+volume,
+		"--table", fmt.Sprintf("0 %s %s", sectors, target)).CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	t.Cleanup(func() { _ = dmsetup("remove", volume).Run() })
+	out, err = dmsetup("info", "-c", "--noheadings", "-o", "blkdevname", volume).Output()
+	require.NoError(t, err)
+	return volume, strings.TrimSpace(string(out))
+}
+
+func deviceNumbers(t *testing.T, name string) (major, minor uint32) {
+	t.Helper()
+	_, err := fmt.Sscanf(readSysFile(t, filepath.Join("/sys/class/block", name, "dev")), "%d:%d", &major, &minor)
+	require.NoError(t, err)
+	return major, minor
+}
+
+// deviceNode creates a node of a block device in a temporary directory, as /dev isn't populated
+// without udev
+func deviceNode(t *testing.T, name string) string {
+	t.Helper()
+	major, minor := deviceNumbers(t, name)
+	node := filepath.Join(t.TempDir(), name)
+	require.NoError(t, unix.Mknod(node, unix.S_IFBLK|0o600, int(unix.Mkdev(major, minor))))
+	return node
 }
 
 func mountExt4(t *testing.T) string {
