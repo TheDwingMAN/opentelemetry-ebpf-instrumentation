@@ -39,6 +39,30 @@ func TestBlockRqIssueHasQueueArg(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestBlockRqCompleteReportsBlkStatus(t *testing.T) {
+	pointer := btf.FuncParam{Type: &btf.Pointer{Target: &btf.Void{}}}
+	complete := func(status btf.Type) *btf.Typedef {
+		proto := &btf.FuncProto{Return: &btf.Void{}, Params: []btf.FuncParam{
+			pointer, pointer, {Name: "error", Type: status}, {Name: "nr_bytes", Type: &btf.Int{Size: 4}},
+		}}
+		return &btf.Typedef{Name: "btf_trace_block_rq_complete", Type: &btf.Pointer{Target: proto}}
+	}
+	blkStatus := &btf.Typedef{Name: "blk_status_t", Type: &btf.Typedef{Name: "u8", Type: &btf.Int{Size: 1}}}
+
+	reportsBlkStatus, err := blockRqCompleteReportsBlkStatus(complete(blkStatus))
+	require.NoError(t, err)
+	assert.True(t, reportsBlkStatus, "(data, rq, blk_status_t error, nr_bytes): Linux 5.16+")
+
+	reportsBlkStatus, err = blockRqCompleteReportsBlkStatus(complete(&btf.Int{Size: 4, Encoding: btf.Signed}))
+	require.NoError(t, err)
+	assert.False(t, reportsBlkStatus, "(data, rq, int error, nr_bytes)")
+
+	_, err = blockRqCompleteReportsBlkStatus(complete(pointer.Type))
+	require.Error(t, err, "an unexpected prototype is an error, not a guess")
+	_, err = blockRqCompleteReportsBlkStatus(&btf.Typedef{Type: &btf.Pointer{Target: &btf.FuncProto{Return: &btf.Void{}}}})
+	require.Error(t, err)
+}
+
 func TestSizeDiskMaps(t *testing.T) {
 	for _, tc := range []struct {
 		name                    string

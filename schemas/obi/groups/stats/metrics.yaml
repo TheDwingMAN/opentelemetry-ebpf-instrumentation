@@ -400,3 +400,6 @@ metrics:
           conditionally_required: if the block device is a device mapper device
       - ref: disk.io.direction
         requirement_level: recommended
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the request ended in an error

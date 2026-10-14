@@ -104,6 +104,14 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.DiskIODirection), diskIODirectionStr(op))
 		}
+	case attr.ErrorType:
+		getter = func(s *Stat) attribute.KeyValue {
+			// the successful requests have none: an invalid KeyValue isn't exported
+			if s.DiskIO == nil || s.DiskIO.ErrorType == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.ErrorType), s.DiskIO.ErrorType)
+		}
 
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }

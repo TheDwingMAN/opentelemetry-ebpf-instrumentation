@@ -87,6 +87,7 @@ type ebpFetcher interface {
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
 	DiskIOAccumMap() *ciliumebpf.Map
+	DiskStatusIsBlkStatus() bool
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -133,7 +134,7 @@ func statsAgent(
 
 	var diskTracer *stats.DiskMapTracer
 	if cfg.Metrics.Features.StatsDiskServiceDuration() {
-		diskTracer = stats.NewDiskMapTracer(statsFetcher.DiskIOAccumMap(), &cfg.EBPF)
+		diskTracer = stats.NewDiskMapTracer(statsFetcher.DiskIOAccumMap(), statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
 	}
 
 	return &Stats{
