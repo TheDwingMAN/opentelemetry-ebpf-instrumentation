@@ -73,6 +73,8 @@ type Stats struct {
 
 	// stat metrics
 	rbTracer *stats.RingBufTracer
+	// nil unless the disk or file sync probes are attached
+	diskTracer *stats.DiskMapTracer
 
 	// focuses on TCP/UDP stack internals (kprobes/tracepoints)
 	fetcher ebpFetcher
@@ -84,6 +86,10 @@ type ebpFetcher interface {
 	io.Closer
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
+	DiskIOAccumMap() *ciliumebpf.Map
+	FsSyncAccumMap() *ciliumebpf.Map
+	DiskCgroupNamesMap() *ciliumebpf.Map
+	DiskStatusIsBlkStatus() bool
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -107,7 +113,20 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		SelectionCfg:            cfg.Attributes.Select,
 		ExtraGroupAttributesCfg: cfg.Attributes.ExtraGroupAttributes,
 	}
-	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg)
+	attrSel, err := attributes.NewAttrSelector(ctxInfo.MetricAttributeGroups, selectorCfg)
+	if err != nil {
+		return nil, fmt.Errorf("creating attr selector: %w", err)
+	}
+	for metric, perPod := range perPodHistograms(cfg.Metrics.Features, attrSel) {
+		alog.Warn("a latency histogram is reported per pod or container, at a series per bucket for each: "+
+			"its operations and time counters give the mean at a series each", "metric", metric, "attributes", perPod)
+	}
+	if ctxInfo.DynamicSelector != nil && cfg.Metrics.Features.StatsDiskFlushDuration() {
+		alog.Warn("the cache flushes are not reported under dynamic application selection: the block layer sends "+
+			"them charged to no container", "metric", attributes.StatDiskFlushDuration.OTEL)
+	}
+	reads := cgroupReads(cfg.Metrics.Features, attrSel, cfg.Filters.Stats, ctxInfo.DynamicSelector != nil)
+	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, reads)
 	if err != nil {
 		return nil, err
 	}
@@ -115,8 +134,10 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
 }
 
-func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg)
+func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig,
+	reads ebpf.CgroupReads,
+) (ebpFetcher, error) {
+	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, reads)
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests
@@ -128,12 +149,20 @@ func statsAgent(
 ) (*Stats, error) {
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
+	var diskTracer *stats.DiskMapTracer
+	diskAccum, fsSyncAccum := statsFetcher.DiskIOAccumMap(), statsFetcher.FsSyncAccumMap()
+	if diskAccum != nil || fsSyncAccum != nil {
+		diskTracer = stats.NewDiskMapTracer(diskAccum, fsSyncAccum, statsFetcher.DiskCgroupNamesMap(),
+			statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
+	}
+
 	return &Stats{
-		ctxInfo:  ctxInfo,
-		cfg:      cfg,
-		rbTracer: rbTracer,
-		agentIP:  agentIP,
-		fetcher:  statsFetcher,
+		ctxInfo:    ctxInfo,
+		cfg:        cfg,
+		rbTracer:   rbTracer,
+		diskTracer: diskTracer,
+		agentIP:    agentIP,
+		fetcher:    statsFetcher,
 	}, nil
 }
 

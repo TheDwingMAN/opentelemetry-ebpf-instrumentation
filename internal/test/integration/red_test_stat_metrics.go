@@ -93,3 +93,95 @@ func testStatMetricsTCPIoGo(t *testing.T) {
 		})
 	}
 }
+
+// testStatMetricsDiskServiceDuration checks the latency histogram of the O_DIRECT I/O of the
+// disk-io container, which reaches the block device
+func testStatMetricsDiskServiceDuration(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		t.Run(direction, func(t *testing.T) {
+			require.EventuallyWithT(t, func(ct *assert.CollectT) {
+				for _, series := range []string{"_count", "_sum"} {
+					results, err := pq.Query(`obi_stat_disk_service_duration_seconds` + series +
+						`{disk_io_direction="` + direction + `",system_device!=""} > 0`)
+					require.NoError(ct, err)
+					enoughPromResults(ct, results)
+				}
+			}, testTimeout, 100*time.Millisecond)
+		})
+	}
+}
+
+// testStatMetricsDiskCounters checks the counters of the O_DIRECT I/O of the disk-io container, which
+// they are charged to, and that the operations and their service time are the count and the sum of
+// the latency histogram
+func testStatMetricsDiskCounters(t *testing.T, containerID string) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	for _, direction := range []string{"read", "write"} {
+		selector := `{container_id="` + containerID + `",disk_io_direction="` + direction + `",system_device!=""}`
+		t.Run(direction, func(t *testing.T) {
+			require.EventuallyWithT(t, func(ct *assert.CollectT) {
+				for _, counter := range []string{
+					"obi_stat_disk_operations_total", "obi_stat_disk_service_time_seconds_total", "obi_stat_disk_io_bytes_total",
+				} {
+					results, err := pq.Query(counter + selector + ` > 0`)
+					require.NoError(ct, err)
+					enoughPromResults(ct, results)
+				}
+				for _, mismatches := range []string{
+					`obi_stat_disk_service_duration_seconds_count` + selector + ` != obi_stat_disk_operations_total` + selector,
+					`abs(obi_stat_disk_service_duration_seconds_sum` + selector +
+						` - obi_stat_disk_service_time_seconds_total` + selector + `) > 1e-6`,
+				} {
+					results, err := pq.Query(mismatches)
+					require.NoError(ct, err)
+					assert.Empty(ct, results, mismatches)
+				}
+			}, testTimeout, 100*time.Millisecond)
+		})
+	}
+}
+
+// testStatMetricsFsSyncDuration checks the latency histogram of the fsyncs of the disk-io container
+func testStatMetricsFsSyncDuration(t *testing.T, containerID string) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for _, series := range []string{"_count", "_sum"} {
+			results, err := pq.Query(`obi_stat_fs_sync_duration_seconds` + series +
+				`{container_id="` + containerID + `",obi_fs_sync_type="fsync"} > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, results)
+		}
+	}, testTimeout, 100*time.Millisecond)
+}
+
+// testStatMetricsFsSyncCounters checks the counters of the fsyncs of the disk-io container, and that
+// they are the count and the sum of the latency histogram
+func testStatMetricsFsSyncCounters(t *testing.T, containerID string) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	selector := `{container_id="` + containerID + `",obi_fs_sync_type="fsync",error_type=""}`
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		for _, counter := range []string{"obi_stat_fs_sync_operations_total", "obi_stat_fs_sync_time_seconds_total"} {
+			results, err := pq.Query(counter + selector + ` > 0`)
+			require.NoError(ct, err)
+			enoughPromResults(ct, results)
+		}
+		for _, mismatches := range []string{
+			`obi_stat_fs_sync_duration_seconds_count` + selector + ` != obi_stat_fs_sync_operations_total` + selector,
+			`abs(obi_stat_fs_sync_duration_seconds_sum` + selector + ` - obi_stat_fs_sync_time_seconds_total` + selector + `) > 1e-6`,
+		} {
+			results, err := pq.Query(mismatches)
+			require.NoError(ct, err)
+			assert.Empty(ct, results, mismatches)
+		}
+	}, testTimeout, 100*time.Millisecond)
+}
+
+// testStatMetricsNoStorageStats checks that the stats aggregate feature doesn't enable the disk and
+// file sync stats
+func testStatMetricsNoStorageStats(t *testing.T) {
+	pq := promtest.Client{HostPort: prometheusHostPort}
+	results, err := pq.Query(`{__name__=~"obi_stat_(disk|fs)_.*"}`)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+}

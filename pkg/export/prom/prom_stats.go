@@ -10,6 +10,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/connector"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
@@ -41,6 +42,14 @@ type statMetricsReporter struct {
 	tcpRetransmits           *Expirer[prometheus.Counter]
 	tcpIo                    *Expirer[prometheus.Counter]
 	tcpSuccessfulConnections *Expirer[prometheus.Counter]
+	diskServiceDuration      *kernelHistogramVec
+	diskIO                   *Expirer[prometheus.Counter]
+	diskOperations           *Expirer[prometheus.Counter]
+	diskServiceTime          *Expirer[prometheus.Counter]
+	diskFlushDuration        *kernelHistogramVec
+	fsSyncDuration           *kernelHistogramVec
+	fsSyncOperations         *Expirer[prometheus.Counter]
+	fsSyncTime               *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -49,6 +58,14 @@ type statMetricsReporter struct {
 	tcpRetransmitsAttrs           []attributes.Field[*ebpf.Stat, string]
 	tcpIoAttrs                    []attributes.Field[*ebpf.Stat, string]
 	tcpSuccessfulConnectionsAttrs []attributes.Field[*ebpf.Stat, string]
+	diskServiceDurationAttrs      []attributes.Field[*ebpf.Stat, string]
+	diskIOAttrs                   []attributes.Field[*ebpf.Stat, string]
+	diskOperationsAttrs           []attributes.Field[*ebpf.Stat, string]
+	diskServiceTimeAttrs          []attributes.Field[*ebpf.Stat, string]
+	diskFlushDurationAttrs        []attributes.Field[*ebpf.Stat, string]
+	fsSyncDurationAttrs           []attributes.Field[*ebpf.Stat, string]
+	fsSyncOperationsAttrs         []attributes.Field[*ebpf.Stat, string]
+	fsSyncTimeAttrs               []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -176,6 +193,94 @@ func newStatsReporter(
 		register = append(register, mr.tcpSuccessfulConnections)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskServiceDuration() {
+		log.Debug("registering stat disk service duration metric")
+
+		mr.diskServiceDurationAttrs = attributes.PrometheusGetters(
+			ebpf.StatStringGetters,
+			provider.For(attributes.StatDiskServiceDuration))
+
+		mr.diskServiceDuration = newKernelHistogramVec(attributes.StatDiskServiceDuration.Prom,
+			"measures the service time of block I/O requests, from their last issue to the device until their final completion, in seconds",
+			export.DiskLatencyBounds, labelNames(mr.diskServiceDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.diskServiceDuration)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskIO() {
+		log.Debug("registering stat disk io metric")
+
+		mr.diskIOAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskIO))
+		mr.diskIO = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskIO.Prom,
+			Help: "bytes of the successful block I/O requests, at their issue to the device",
+		}, labelNames(mr.diskIOAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskIO)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskOperations() {
+		log.Debug("registering stat disk operations metric")
+
+		mr.diskOperationsAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskOperations))
+		mr.diskOperations = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskOperations.Prom,
+			Help: "number of completed block I/O requests",
+		}, labelNames(mr.diskOperationsAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskOperations)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskServiceTime() {
+		log.Debug("registering stat disk service time metric")
+
+		mr.diskServiceTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskServiceTime))
+		mr.diskServiceTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskServiceTime.Prom,
+			Help: "sum of the service times of the completed block I/O requests, from their last issue to the device until their final completion, in seconds",
+		}, labelNames(mr.diskServiceTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskServiceTime)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskFlushDuration() {
+		log.Debug("registering stat disk flush duration metric")
+
+		mr.diskFlushDurationAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskFlushDuration))
+		mr.diskFlushDuration = newKernelHistogramVec(attributes.StatDiskFlushDuration.Prom,
+			"measures the duration of the cache flushes of block devices, from their last issue to the device until their completion, in seconds",
+			export.DiskLatencyBounds, labelNames(mr.diskFlushDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.diskFlushDuration)
+	}
+
+	if cfg.CommonCfg.Features.StatsFsSyncDuration() {
+		log.Debug("registering stat fs sync duration metric")
+
+		mr.fsSyncDurationAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncDuration))
+		mr.fsSyncDuration = newKernelHistogramVec(attributes.StatFsSyncDuration.Prom,
+			"measures the duration of the file syncs, from the sync call until it returns, in seconds",
+			export.DiskLatencyBounds, labelNames(mr.fsSyncDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.fsSyncDuration)
+	}
+
+	if cfg.CommonCfg.Features.StatsFsSyncOperations() {
+		log.Debug("registering stat fs sync operations metric")
+
+		mr.fsSyncOperationsAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncOperations))
+		mr.fsSyncOperations = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatFsSyncOperations.Prom,
+			Help: "number of completed file syncs",
+		}, labelNames(mr.fsSyncOperationsAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.fsSyncOperations)
+	}
+
+	if cfg.CommonCfg.Features.StatsFsSyncTime() {
+		log.Debug("registering stat fs sync time metric")
+
+		mr.fsSyncTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncTime))
+		mr.fsSyncTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatFsSyncTime.Prom,
+			Help: "sum of the durations of the completed file syncs, from the sync call until it returns, in seconds",
+		}, labelNames(mr.fsSyncTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.fsSyncTime)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -199,6 +304,8 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPSuccessfulConnections(stat)
 			r.observeTCPRetransmits(stat)
 			r.observeTCPIo(stat)
+			r.observeDisk(stat)
+			r.observeFsSync(stat)
 		}
 	}
 }
@@ -241,4 +348,55 @@ func (r *statMetricsReporter) observeTCPIo(stat *ebpf.Stat) {
 	}
 	r.tcpIo.WithLabelValues(labelValues(stat, r.tcpIoAttrs)...).
 		Metric.Add(float64(stat.TCPIo.Bytes))
+}
+
+func (r *statMetricsReporter) observeDisk(stat *ebpf.Stat) {
+	if stat.DiskIO == nil {
+		return
+	}
+	if stat.DiskIO.Op == ebpf.CodeDiskOpFlush {
+		if r.diskFlushDuration != nil && !stat.DiskIO.MultipathPath {
+			r.diskFlushDuration.observe(labelValues(stat, r.diskFlushDurationAttrs), &stat.DiskIO.Latency)
+		}
+		return
+	}
+	r.observeDiskServiceDuration(stat)
+	r.observeDiskCounters(stat)
+}
+
+func (r *statMetricsReporter) observeDiskServiceDuration(stat *ebpf.Stat) {
+	if r.diskServiceDuration == nil || stat.DiskIO == nil || stat.DiskIO.MultipathPath {
+		return
+	}
+	r.diskServiceDuration.observe(labelValues(stat, r.diskServiceDurationAttrs), &stat.DiskIO.Latency)
+}
+
+func (r *statMetricsReporter) observeDiskCounters(stat *ebpf.Stat) {
+	if stat.DiskIO == nil {
+		return
+	}
+	if r.diskIO != nil && stat.DiskIO.Bytes > 0 {
+		r.diskIO.WithLabelValues(labelValues(stat, r.diskIOAttrs)...).Metric.Add(float64(stat.DiskIO.Bytes))
+	}
+	if r.diskOperations != nil {
+		r.diskOperations.WithLabelValues(labelValues(stat, r.diskOperationsAttrs)...).Metric.Add(float64(stat.DiskIO.Latency.Count()))
+	}
+	if r.diskServiceTime != nil {
+		r.diskServiceTime.WithLabelValues(labelValues(stat, r.diskServiceTimeAttrs)...).Metric.Add(stat.DiskIO.Latency.Sum)
+	}
+}
+
+func (r *statMetricsReporter) observeFsSync(stat *ebpf.Stat) {
+	if stat.FsSync == nil {
+		return
+	}
+	if r.fsSyncDuration != nil {
+		r.fsSyncDuration.observe(labelValues(stat, r.fsSyncDurationAttrs), &stat.FsSync.Latency)
+	}
+	if r.fsSyncOperations != nil {
+		r.fsSyncOperations.WithLabelValues(labelValues(stat, r.fsSyncOperationsAttrs)...).Metric.Add(float64(stat.FsSync.Latency.Count()))
+	}
+	if r.fsSyncTime != nil {
+		r.fsSyncTime.WithLabelValues(labelValues(stat, r.fsSyncTimeAttrs)...).Metric.Add(stat.FsSync.Latency.Sum)
+	}
 }

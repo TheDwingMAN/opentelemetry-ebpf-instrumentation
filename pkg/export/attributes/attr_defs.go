@@ -156,6 +156,84 @@ func getDefinitions(
 		extraGroupAttributes[GroupNetKube],
 	)
 
+	// block devices have no connection endpoints, so the disk stats don't have statsAttributes
+	statsDiskDeviceAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:          false,
+			attr.SystemDevice:   true,
+			attr.DiskStacked:    true,
+			attr.DiskVolumeName: true,
+		},
+		nil,
+	)
+
+	// the cache flushes have neither a direction nor a container
+	statsDiskAttributes := NewAttrReportGroup(
+		false,
+		[]*AttrReportGroup{&statsDiskDeviceAttributes},
+		map[attr.Name]Default{
+			attr.DiskIODirection: true,
+			attr.ContainerID:     false,
+		},
+		nil,
+	)
+
+	// file syncs have no connection endpoints either
+	statsFsSyncAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:       false,
+			attr.FsSyncType:  true,
+			attr.ContainerID: false,
+		},
+		nil,
+	)
+
+	// the Kubernetes workload that the block I/O or the sync is charged to, and the cluster, which is
+	// the same on every series of a node: a series per workload by default, not per pod
+	statsStorageKubeAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sClusterName:   true,
+			attr.K8sNamespaceName: true,
+			attr.K8sOwnerName:     true,
+			attr.K8sKind:          true,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
+		},
+		nil,
+	)
+
+	// the same attributes, on the histograms, whose series cost a series per bucket: only the
+	// cluster by default, as the counters give the mean per workload
+	statsStorageKubeOptInAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sClusterName:   true,
+			attr.K8sNamespaceName: false,
+			attr.K8sOwnerName:     false,
+			attr.K8sKind:          false,
+			attr.K8sPodName:       false,
+			attr.K8sContainerName: false,
+		},
+		nil,
+	)
+
+	// the block layer sends the cache flushes itself, charged to no workload
+	statsDiskFlushKubeAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sClusterName: true,
+		},
+		nil,
+	)
+
 	// attributes to be reported exclusively for stat metrics when
 	// kubernetes metadata is enabled
 	statsKubeAttributes := NewAttrReportGroup(
@@ -916,6 +994,52 @@ func getDefinitions(
 			SubGroups: []*AttrReportGroup{&statsAttributes, &statsKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.NetworkTCPHandshakeRole: false,
+			},
+		},
+		StatDiskServiceDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeOptInAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskIO.Section: {
+			SubGroups:  []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{},
+		},
+		StatDiskOperations.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskServiceTime.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskFlushDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes, &statsDiskFlushKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatFsSyncDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsStorageKubeOptInAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatFsSyncOperations.Section: {
+			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatFsSyncTime.Section: {
+			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
 			},
 		},
 

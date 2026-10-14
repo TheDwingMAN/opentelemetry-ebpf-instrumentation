@@ -1010,7 +1010,7 @@ func (c *runtimeCurrentUpDownCounter) Record(snapshot runtimemetrics.RuntimeMetr
 		c.lastExpiration = now
 	}
 
-	recordAttrs, attrValues := runtimeAttributeSet(c.attrs, snapshot)
+	recordAttrs, attrValues := attributeSet(c.attrs, snapshot)
 	entry := c.entries.GetOrCreate(attrValues, func() *runtimeCurrentUpDownCounterEntry {
 		c.log.Debug("storing new metric label set", "labelValues", attrValues)
 		return &runtimeCurrentUpDownCounterEntry{attrs: recordAttrs}
@@ -1031,17 +1031,21 @@ func (c *runtimeCurrentUpDownCounter) removeOutdated(ctx context.Context) {
 	}
 }
 
-func runtimeAttributeSet(
-	fields []attributes.Field[runtimemetrics.RuntimeMetricSnapshot, attribute.KeyValue],
-	snapshot runtimemetrics.RuntimeMetricSnapshot,
+func attributeSet[T any](
+	fields []attributes.Field[T, attribute.KeyValue],
+	record T,
 ) (attribute.Set, []string) {
 	keyVals := make([]attribute.KeyValue, 0, len(fields))
 	vals := make([]string, 0, len(fields))
 
 	for _, field := range fields {
-		kv := sanitizeKeyValue(field.Get(snapshot))
-		keyVals = append(keyVals, kv)
+		kv := sanitizeKeyValue(field.Get(record))
+		// an invalid KeyValue is an absent attribute: it is not exported, but keeps its position
+		// in the values, so that records with different absent attributes stay apart
 		vals = append(vals, kv.Value.Emit())
+		if kv.Valid() {
+			keyVals = append(keyVals, kv)
+		}
 	}
 
 	return attribute.NewSet(keyVals...), vals

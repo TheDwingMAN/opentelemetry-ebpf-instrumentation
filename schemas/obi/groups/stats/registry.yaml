@@ -45,6 +45,48 @@ attributes:
     brief: >
       Role of the local endpoint in the TCP three-way handshake
       (`client` initiated the SYN, `server` was awaiting it).
+  - key: obi.disk.stacked
+    type: boolean
+    stability: development
+    brief: >
+      Whether the block device (`system.device`) is built on other block
+      devices that also report its I/O, as device mapper, md RAID and loop
+      devices are. A dm-multipath device is not, as its paths don't report
+      its latency histograms. To count the I/O once, add up the devices where
+      it is `false`, and on the disk counters, which the paths report,
+      without `obi.disk.volume.name`.
+    examples: [true]
+  - key: obi.disk.volume.name
+    type: string
+    stability: development
+    brief: >
+      Device mapper name of the block device (`system.device`), as
+      `/dev/mapper` lists it. Absent for the other devices.
+    examples: ["mpatha"]
+  # Mirrors `FsSyncTypeCode` in `pkg/internal/statsolly/ebpf/stat.go`.
+  - key: obi.fs.sync.type
+    type:
+      members:
+        - id: fsync
+          value: fsync
+          stability: development
+        - id: fdatasync
+          value: fdatasync
+          stability: development
+        - id: sync
+          value: sync
+          stability: development
+        - id: syncfs
+          value: syncfs
+          stability: development
+        - id: sync_file_range
+          value: sync_file_range
+          stability: development
+    stability: development
+    brief: >
+      The system call that synced files, or, for the syncs within other calls
+      (O_SYNC and O_DSYNC writes, msync, io_uring), `fsync` or `fdatasync`,
+      depending on whether the metadata is synced too.
 
 attribute_groups:
   # `obi.ip` / `src.*` / `dst.*` are reused from `registry.obi.network` so we
@@ -63,3 +105,22 @@ attribute_groups:
     attributes:
       - ref: reason
       - ref: network.tcp.handshake.role
+
+  - id: registry.obi.disk
+    visibility: public
+    brief: >
+      Attributes of OBI's block I/O (disk) statistics that the semantic
+      conventions don't define.
+    stability: development
+    attributes:
+      - ref: obi.disk.stacked
+      - ref: obi.disk.volume.name
+
+  - id: registry.obi.fs.sync
+    visibility: public
+    brief: >
+      Attributes of OBI's file sync statistics that the semantic conventions
+      don't define.
+    stability: development
+    attributes:
+      - ref: obi.fs.sync.type
