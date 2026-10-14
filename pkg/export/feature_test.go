@@ -73,6 +73,7 @@ func TestFeatureStatsDisk(t *testing.T) {
 		{name: "stats_disk_io", load: LoadV2Features, want: FeatureStatsDiskIO},
 		{name: "stats_disk_operations", load: LoadV2Features, want: FeatureStatsDiskOperations},
 		{name: "stats_disk_service_time", load: LoadV2Features, want: FeatureStatsDiskServiceTime},
+		{name: "stats_disk_flush_duration", load: LoadV2Features, want: FeatureStatsDiskFlushDuration},
 		{name: "disk_service_duration", load: LoadV2Features, wantErr: true},
 		{name: "stats_fs_sync_duration", load: LoadFeatures, wantErr: true},
 		{name: "stats_fs_sync_duration", load: LoadV2Features, want: FeatureStatsFsSyncDuration},

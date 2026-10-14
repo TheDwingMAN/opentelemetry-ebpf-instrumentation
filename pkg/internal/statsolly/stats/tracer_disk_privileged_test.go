@@ -247,7 +247,7 @@ func TestDiskServiceTimeOfAKnownLatency(t *testing.T) {
 		delay  = 2 * time.Millisecond
 		blocks = 50
 	)
-	device := slowNullBlockDevice(t, delay)
+	device := slowNullBlockDevice(t, delay, nil)
 	reader := attachDiskReader(t, export.FeatureStatsDiskServiceDuration, false)
 
 	f, err := os.OpenFile(device, os.O_RDWR|unix.O_DIRECT, 0)
@@ -276,9 +276,76 @@ func TestDiskServiceTimeOfAKnownLatency(t *testing.T) {
 	assert.LessOrEqual(t, serviceTime, elapsed.Seconds(), "one request at a time: they never overlap")
 }
 
+// TestDiskFlushDurationOfAKnownLatency syncs, one sync at a time, a null_blk device with a volatile
+// write cache that completes each request a known delay after it receives it: each sync sends a cache
+// flush, which counts that delay, and the flushes never overlap
+func TestDiskFlushDurationOfAKnownLatency(t *testing.T) {
+	const (
+		delay = 2 * time.Millisecond
+		syncs = 50
+	)
+	device := slowNullBlockDevice(t, delay, map[string]string{"memory_backed": "1", "cache_size": "64"})
+	reader := attachDiskReader(t, export.FeatureStatsDiskFlushDuration, false)
+
+	f, err := os.OpenFile(device, os.O_RDWR, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	start := time.Now()
+	for range syncs {
+		require.NoError(t, unix.Fdatasync(int(f.Fd())))
+	}
+	elapsed := time.Since(start)
+
+	flushes := deviceLatency(reader.readStats(), filepath.Base(device), ebpf.CodeDiskOpFlush)
+	require.InDelta(t, syncs, flushes.Count(), float64(diskProgramMisses(t)), "each sync sends a flush")
+	assert.GreaterOrEqual(t, flushes.Sum/float64(flushes.Count()), delay.Seconds(), "the device completes each flush after the delay")
+	assert.LessOrEqual(t, flushes.Sum, elapsed.Seconds(), "one flush at a time: they never overlap")
+}
+
+// TestDiskFileSyncsAreCountedLikeTheKernel syncs the files of an ext4 filesystem on a loop device,
+// which has a volatile write cache: the kernel sends the device cache flushes, and completes the
+// empty flush write of each sync without issuing it. The writes and the flushes are counted as in
+// /proc/diskstats, and the flushes are timed from their issue, after the kernel's start of them.
+func TestDiskFileSyncsAreCountedLikeTheKernel(t *testing.T) {
+	const syncs = 20
+	mountPoint, device := mountExt4(t)
+	syncFile := func(name, data string) {
+		f, err := os.OpenFile(filepath.Join(mountPoint, name), os.O_WRONLY|os.O_CREATE, 0o600)
+		require.NoError(t, err)
+		defer f.Close()
+		_, err = f.WriteString(data)
+		require.NoError(t, err)
+		require.NoError(t, f.Sync())
+	}
+	syncFile("unchanged", "data")
+	// the probes measure the flushes whichever disk feature is enabled
+	reader := attachDiskReader(t, export.FeatureStatsDiskServiceDuration, false)
+
+	before := readKernelDiskStats(t, device)
+	for range syncs {
+		syncFile("unchanged", "")
+		syncFile("changed", "data")
+	}
+	stats := reader.readStats()
+	writes := deviceLatency(stats, device, ebpf.CodeDiskOpWrite).Count()
+	flushes := deviceLatency(stats, device, ebpf.CodeDiskOpFlush)
+	// OBI counts a write before the kernel accounts it in /proc/diskstats
+	after := readKernelDiskStatsOnceWritten(t, device, before, int(writes))
+	misses := float64(diskProgramMisses(t))
+	assert.InDelta(t, after.writes-before.writes, writes, misses, "the empty flush writes are counted")
+	require.Positive(t, flushes.Count(), "the file syncs flush the cache of the device")
+	if !after.hasFlushes {
+		t.Log("/proc/diskstats has no flush fields on this kernel")
+		return
+	}
+	assert.InDelta(t, after.flushes-before.flushes, flushes.Count(), misses)
+	// the kernel counts whole milliseconds
+	assert.LessOrEqual(t, flushes.Sum, (after.flushTime - before.flushTime + time.Millisecond).Seconds())
+}
+
 // TestDiskIOIsChargedPerCgroup writes to a loop device from processes in the cgroups of three
 // containers, the third in a child cgroup of its scope, as crun runs them on cgroup v2: each
-// container is charged its own writes
+// container is charged its own writes, and the empty flush write of its sync
 func TestDiskIOIsChargedPerCgroup(t *testing.T) {
 	root := ioCgroupRoot(t)
 	// a counter alone loads the disk probes
@@ -305,7 +372,7 @@ func TestDiskIOIsChargedPerCgroup(t *testing.T) {
 	misses := float64(diskProgramMisses(t))
 	require.Len(t, charged, len(written), "%v", charged)
 	for containerID, blocks := range written {
-		assert.InDelta(t, blocks, charged[containerID], misses, containerID)
+		assert.InDelta(t, blocks+1, charged[containerID], misses, containerID)
 	}
 }
 
@@ -558,8 +625,9 @@ func deviceNode(t *testing.T, name string) string {
 }
 
 // slowNullBlockDevice creates a null_blk device that completes each request after the given delay,
-// and returns the path of its node. It skips the test if null_blk can't be configured.
-func slowNullBlockDevice(t *testing.T, delay time.Duration) string {
+// with the given configfs settings, and returns the path of its node. It skips the test if null_blk
+// can't be configured.
+func slowNullBlockDevice(t *testing.T, delay time.Duration, settings map[string]string) string {
 	t.Helper()
 	_ = exec.Command("modprobe", "null_blk", "nr_devices=0").Run()
 	dir := filepath.Join("/sys/kernel/config/nullb", fmt.Sprintf("obi-test-%d", os.Getpid()))
@@ -570,10 +638,12 @@ func slowNullBlockDevice(t *testing.T, delay time.Duration) string {
 		_ = os.WriteFile(filepath.Join(dir, "power"), []byte("0"), 0o644)
 		_ = os.Remove(dir)
 	})
-	for name, value := range map[string]string{
+	all := map[string]string{
 		"irqmode":         "2", // complete the requests from a timer
 		"completion_nsec": strconv.FormatInt(delay.Nanoseconds(), 10),
-	} {
+	}
+	maps.Copy(all, settings)
+	for name, value := range all {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(value), 0o644), name)
 	}
 	// null_blk names the device nullb<index> on older kernels, and after the configfs directory on
@@ -687,10 +757,17 @@ func waitForWritesInFlight(t *testing.T, device string, writes int) {
 	}, 10*time.Second, 10*time.Millisecond)
 }
 
+// fields of a /proc/diskstats line with the cache flushes, from Linux 5.5 but not on RHEL 8
+const diskstatsFieldsWithFlushes = 20
+
 type kernelDiskStats struct {
 	writes uint64
 	// writeTime adds up the durations of the writes, from the kernel's start of each
 	writeTime time.Duration
+	flushes   uint64
+	flushTime time.Duration
+	// hasFlushes tells whether the kernel reports the flushes
+	hasFlushes bool
 }
 
 func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
@@ -701,7 +778,13 @@ func readKernelDiskStats(t *testing.T, device string) kernelDiskStats {
 	require.NoError(t, err)
 	for _, stats := range diskstats {
 		if stats.DeviceName == device {
-			return kernelDiskStats{writes: stats.WriteIOs, writeTime: time.Duration(stats.WriteTicks) * time.Millisecond}
+			return kernelDiskStats{
+				writes:     stats.WriteIOs,
+				writeTime:  time.Duration(stats.WriteTicks) * time.Millisecond,
+				flushes:    stats.FlushRequestsCompleted,
+				flushTime:  time.Duration(stats.TimeSpentFlushing) * time.Millisecond,
+				hasFlushes: stats.IoStatsCount >= diskstatsFieldsWithFlushes,
+			}
 		}
 	}
 	require.Failf(t, "device not found", "%s is not in /proc/diskstats", device)

@@ -63,6 +63,7 @@ const (
 	FeatureStatsDiskIO
 	FeatureStatsDiskOperations
 	FeatureStatsDiskServiceTime
+	FeatureStatsDiskFlushDuration
 	// The file sync stat features are in neither `stats` nor `all`, as their probes fire on every
 	// file sync
 	FeatureStatsFsSyncDuration
@@ -72,7 +73,8 @@ const (
 )
 
 // FeatureStatsDisk groups the disk stat features, which the same probes measure
-const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskServiceTime
+const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations |
+	FeatureStatsDiskServiceTime | FeatureStatsDiskFlushDuration
 
 // FeatureStatsFsSync groups the file sync stat features, which the same probes measure
 const FeatureStatsFsSync = FeatureStatsFsSyncDuration | FeatureStatsFsSyncOperations | FeatureStatsFsSyncTime
@@ -115,6 +117,7 @@ var v2OnlyFeatures = map[string]Features{
 	"stats_disk_io":               FeatureStatsDiskIO,
 	"stats_disk_operations":       FeatureStatsDiskOperations,
 	"stats_disk_service_time":     FeatureStatsDiskServiceTime,
+	"stats_disk_flush_duration":   FeatureStatsDiskFlushDuration,
 	"stats_fs_sync_duration":      FeatureStatsFsSyncDuration,
 	"stats_fs_sync_operations":    FeatureStatsFsSyncOperations,
 	"stats_fs_sync_time":          FeatureStatsFsSyncTime,
@@ -464,6 +467,10 @@ func (f Features) StatsDiskOperations() bool {
 
 func (f Features) StatsDiskServiceTime() bool {
 	return f.any(FeatureStatsDiskServiceTime)
+}
+
+func (f Features) StatsDiskFlushDuration() bool {
+	return f.any(FeatureStatsDiskFlushDuration)
 }
 
 func (f Features) StatsDisk() bool {

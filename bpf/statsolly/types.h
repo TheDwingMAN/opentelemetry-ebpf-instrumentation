@@ -44,11 +44,12 @@ enum network_io_direction : u8 {
     direction_transmit = 2,
 };
 
-// The operation of a block request. Only reads and writes are measured.
+// The operation of a block request. Only reads, writes and cache flushes are measured.
 enum disk_op : u8 {
     disk_op_unknown = 0,
     disk_op_read = 1,
     disk_op_write = 2,
+    disk_op_flush = 3,
 };
 
 // The call that synced files

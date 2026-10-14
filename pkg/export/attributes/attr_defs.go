@@ -157,14 +157,23 @@ func getDefinitions(
 	)
 
 	// block devices have no connection endpoints, so the disk stats don't have statsAttributes
-	statsDiskAttributes := NewAttrReportGroup(
+	statsDiskDeviceAttributes := NewAttrReportGroup(
 		false,
 		nil,
 		map[attr.Name]Default{
-			attr.OBIIP:           false,
-			attr.SystemDevice:    true,
-			attr.DiskStacked:     true,
-			attr.DiskVolumeName:  true,
+			attr.OBIIP:          false,
+			attr.SystemDevice:   true,
+			attr.DiskStacked:    true,
+			attr.DiskVolumeName: true,
+		},
+		nil,
+	)
+
+	// the cache flushes have neither a direction nor a container
+	statsDiskAttributes := NewAttrReportGroup(
+		false,
+		[]*AttrReportGroup{&statsDiskDeviceAttributes},
+		map[attr.Name]Default{
 			attr.DiskIODirection: true,
 			attr.ContainerID:     false,
 		},
@@ -211,6 +220,16 @@ func getDefinitions(
 			attr.K8sKind:          false,
 			attr.K8sPodName:       false,
 			attr.K8sContainerName: false,
+		},
+		nil,
+	)
+
+	// the block layer sends the cache flushes itself, charged to no workload
+	statsDiskFlushKubeAttributes := NewAttrReportGroup(
+		!kubeEnabled,
+		nil,
+		map[attr.Name]Default{
+			attr.K8sClusterName: true,
 		},
 		nil,
 	)
@@ -995,6 +1014,12 @@ func getDefinitions(
 		},
 		StatDiskServiceTime.Section: {
 			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatDiskFlushDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes, &statsDiskFlushKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
