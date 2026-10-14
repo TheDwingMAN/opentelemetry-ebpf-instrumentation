@@ -952,7 +952,10 @@
                       "network_flow_packets",
                       "network_inter_zone",
                       "stats",
+                      "stats_disk_io",
+                      "stats_disk_operations",
                       "stats_disk_service_duration",
+                      "stats_disk_service_time",
                       "stats_tcp_failed_connections",
                       "stats_tcp_io",
                       "stats_tcp_retransmits",
@@ -972,7 +975,7 @@
                 ]
               },
               "type": "array",
-              "description": "Metric features using the same names as Config v1, plus stats_disk_service_duration, which only Config v2 enables and which stats, all and * don't include. An explicit list replaces the selection inferred from protocol and network switches; [] disables all metric features. When omitted, protocol and network enablement determines the features."
+              "description": "Metric features using the same names as Config v1, plus stats_disk_service_duration, stats_disk_io, stats_disk_operations and stats_disk_service_time, which only Config v2 enables and which stats, all and * don't include. An explicit list replaces the selection inferred from protocol and network switches; [] disables all metric features. When omitted, protocol and network enablement determines the features."
             }
           }
         }
@@ -2143,11 +2146,14 @@
                   "tcp_successful_connections",
                   "tcp_retransmits",
                   "tcp_io",
-                  "disk_service_duration"
+                  "disk_service_duration",
+                  "disk_io",
+                  "disk_operations",
+                  "disk_service_time"
                 ]
               },
               "default": [],
-              "description": "Enabled stats families: the TCP ones and disk_service_duration, the block I/O (disk) one.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones, and the block I/O (disk) ones: disk_service_duration, disk_io, disk_operations and disk_service_time.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",

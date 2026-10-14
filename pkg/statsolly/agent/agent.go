@@ -87,6 +87,7 @@ type ebpFetcher interface {
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
 	DiskIOAccumMap() *ciliumebpf.Map
+	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
 }
 
@@ -111,7 +112,17 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		SelectionCfg:            cfg.Attributes.Select,
 		ExtraGroupAttributesCfg: cfg.Attributes.ExtraGroupAttributes,
 	}
-	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg)
+	attrSel, err := attributes.NewAttrSelector(ctxInfo.MetricAttributeGroups, selectorCfg)
+	if err != nil {
+		return nil, fmt.Errorf("creating attr selector: %w", err)
+	}
+	if perPod := perPodHistogramAttributes(cfg.Metrics.Features, attrSel); len(perPod) > 0 {
+		alog.Warn("the disk latency histogram is reported per pod or container, at a series per bucket for each: "+
+			"the operations and service time counters give their mean service time at a series each",
+			"metric", attributes.StatDiskServiceDuration.OTEL, "attributes", perPod)
+	}
+	readsCgroup := diskReadsCgroup(cfg.Metrics.Features, attrSel, cfg.Filters.Stats, ctxInfo.DynamicSelector != nil)
+	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, readsCgroup)
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +130,10 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
 }
 
-func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg)
+func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig,
+	diskReadsCgroup bool,
+) (ebpFetcher, error) {
+	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, diskReadsCgroup)
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests
@@ -133,8 +146,9 @@ func statsAgent(
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
 	var diskTracer *stats.DiskMapTracer
-	if cfg.Metrics.Features.StatsDiskServiceDuration() {
-		diskTracer = stats.NewDiskMapTracer(statsFetcher.DiskIOAccumMap(), statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
+	if cfg.Metrics.Features.StatsDisk() {
+		diskTracer = stats.NewDiskMapTracer(statsFetcher.DiskIOAccumMap(), statsFetcher.DiskCgroupNamesMap(),
+			statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
 	}
 
 	return &Stats{
