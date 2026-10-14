@@ -20,31 +20,34 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 )
 
-type fakeDiskAccum struct {
-	entries map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT
+type fakeAccum[K, V comparable] struct {
+	entries map[K]V
 	err     error
 	// afterRead replaces entries once they are read, as the kernel adds to them meanwhile
-	afterRead map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT
+	afterRead map[K]V
 	// lookupAndDeleteErr is the error of lookupAndDelete, as before Linux 5.14
 	lookupAndDeleteErr error
 }
 
-func (f *fakeDiskAccum) read() (map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT, error) {
+type fakeDiskAccum = fakeAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]
+
+func (f *fakeAccum[K, V]) read() (map[K]V, error) {
 	entries := maps.Clone(f.entries)
 	maps.Copy(f.entries, f.afterRead)
 	f.afterRead = nil
 	return entries, f.err
 }
 
-func (f *fakeDiskAccum) lookupAndDelete(key ebpf.StatsDiskIoKeyT) (ebpf.StatsDiskIoAccumT, error) {
+func (f *fakeAccum[K, V]) lookupAndDelete(key K) (V, error) {
 	if f.lookupAndDeleteErr != nil {
-		return ebpf.StatsDiskIoAccumT{}, f.lookupAndDeleteErr
+		var none V
+		return none, f.lookupAndDeleteErr
 	}
 	last := f.entries[key]
 	return last, f.delete(key)
 }
 
-func (f *fakeDiskAccum) delete(key ebpf.StatsDiskIoKeyT) error {
+func (f *fakeAccum[K, V]) delete(key K) error {
 	if _, ok := f.entries[key]; !ok {
 		return ciliumebpf.ErrKeyNotExist
 	}

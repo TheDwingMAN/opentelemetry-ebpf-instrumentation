@@ -46,6 +46,9 @@ type statMetricsReporter struct {
 	diskIO                   *Expirer[prometheus.Counter]
 	diskOperations           *Expirer[prometheus.Counter]
 	diskServiceTime          *Expirer[prometheus.Counter]
+	fsSyncDuration           *kernelHistogramVec
+	fsSyncOperations         *Expirer[prometheus.Counter]
+	fsSyncTime               *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -58,6 +61,9 @@ type statMetricsReporter struct {
 	diskIOAttrs                   []attributes.Field[*ebpf.Stat, string]
 	diskOperationsAttrs           []attributes.Field[*ebpf.Stat, string]
 	diskServiceTimeAttrs          []attributes.Field[*ebpf.Stat, string]
+	fsSyncDurationAttrs           []attributes.Field[*ebpf.Stat, string]
+	fsSyncOperationsAttrs         []attributes.Field[*ebpf.Stat, string]
+	fsSyncTimeAttrs               []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -231,6 +237,38 @@ func newStatsReporter(
 		register = append(register, mr.diskServiceTime)
 	}
 
+	if cfg.CommonCfg.Features.StatsFsSyncDuration() {
+		log.Debug("registering stat fs sync duration metric")
+
+		mr.fsSyncDurationAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncDuration))
+		mr.fsSyncDuration = newKernelHistogramVec(attributes.StatFsSyncDuration.Prom,
+			"measures the duration of the file syncs, from the sync call until it returns, in seconds",
+			export.DiskLatencyBounds, labelNames(mr.fsSyncDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.fsSyncDuration)
+	}
+
+	if cfg.CommonCfg.Features.StatsFsSyncOperations() {
+		log.Debug("registering stat fs sync operations metric")
+
+		mr.fsSyncOperationsAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncOperations))
+		mr.fsSyncOperations = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatFsSyncOperations.Prom,
+			Help: "number of completed file syncs",
+		}, labelNames(mr.fsSyncOperationsAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.fsSyncOperations)
+	}
+
+	if cfg.CommonCfg.Features.StatsFsSyncTime() {
+		log.Debug("registering stat fs sync time metric")
+
+		mr.fsSyncTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatFsSyncTime))
+		mr.fsSyncTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatFsSyncTime.Prom,
+			Help: "sum of the durations of the completed file syncs, from the sync call until it returns, in seconds",
+		}, labelNames(mr.fsSyncTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.fsSyncTime)
+	}
+
 	if cfg.Config.Registry != nil {
 		cfg.Config.Registry.MustRegister(register...)
 	} else {
@@ -256,6 +294,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPIo(stat)
 			r.observeDiskServiceDuration(stat)
 			r.observeDiskCounters(stat)
+			r.observeFsSync(stat)
 		}
 	}
 }
@@ -319,5 +358,20 @@ func (r *statMetricsReporter) observeDiskCounters(stat *ebpf.Stat) {
 	}
 	if r.diskServiceTime != nil {
 		r.diskServiceTime.WithLabelValues(labelValues(stat, r.diskServiceTimeAttrs)...).Metric.Add(stat.DiskIO.Latency.Sum)
+	}
+}
+
+func (r *statMetricsReporter) observeFsSync(stat *ebpf.Stat) {
+	if stat.FsSync == nil {
+		return
+	}
+	if r.fsSyncDuration != nil {
+		r.fsSyncDuration.observe(labelValues(stat, r.fsSyncDurationAttrs), &stat.FsSync.Latency)
+	}
+	if r.fsSyncOperations != nil {
+		r.fsSyncOperations.WithLabelValues(labelValues(stat, r.fsSyncOperationsAttrs)...).Metric.Add(float64(stat.FsSync.Latency.Count()))
+	}
+	if r.fsSyncTime != nil {
+		r.fsSyncTime.WithLabelValues(labelValues(stat, r.fsSyncTimeAttrs)...).Metric.Add(stat.FsSync.Latency.Sum)
 	}
 }
