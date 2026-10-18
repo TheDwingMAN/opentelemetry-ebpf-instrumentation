@@ -271,7 +271,8 @@ func TestDefault_MessagingSubscription(t *testing.T) {
 func TestDefault_StatDiskServiceDuration(t *testing.T) {
 	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
 	require.NoError(t, err)
-	assert.Equal(t, []attr.Name{attr.DiskIODirection, attr.SystemDevice}, p.For(StatDiskServiceDuration))
+	assert.Equal(t, []attr.Name{attr.DiskIODirection, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice},
+		p.For(StatDiskServiceDuration))
 }
 
 func TestDefault_HTTPServerMetrics(t *testing.T) {

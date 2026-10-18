@@ -45,6 +45,23 @@ attributes:
     brief: >
       Role of the local endpoint in the TCP three-way handshake
       (`client` initiated the SYN, `server` was awaiting it).
+  - key: obi.disk.stacked
+    type: boolean
+    stability: development
+    brief: >
+      Whether the block device (`system.device`) is built on other block
+      devices that also report its I/O, as device mapper, md RAID and loop
+      devices are. A dm-multipath device is not, as its paths report
+      nothing. To count the I/O once, add up the devices where it is
+      `false`.
+    examples: [true]
+  - key: obi.disk.volume.name
+    type: string
+    stability: development
+    brief: >
+      Device mapper name of the block device (`system.device`), as
+      `/dev/mapper` lists it. Absent for the other devices.
+    examples: ["mpatha"]
 
 attribute_groups:
   # `obi.ip` / `src.*` / `dst.*` are reused from `registry.obi.network` so we
@@ -63,3 +80,13 @@ attribute_groups:
     attributes:
       - ref: reason
       - ref: network.tcp.handshake.role
+
+  - id: registry.obi.disk
+    visibility: public
+    brief: >
+      Attributes of OBI's block I/O (disk) statistics that the semantic
+      conventions don't define.
+    stability: development
+    attributes:
+      - ref: obi.disk.stacked
+      - ref: obi.disk.volume.name
