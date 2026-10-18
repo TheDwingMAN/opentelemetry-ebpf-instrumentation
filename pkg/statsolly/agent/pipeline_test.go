@@ -255,6 +255,9 @@ func TestDiskStats(t *testing.T) {
 
 	disk <- []*ebpf.Stat{fakeDiskRecord("nvme0n1", 5), fakeDiskRecord("vda", 1)}
 	disk <- []*ebpf.Stat{fakeDiskRecord("nvme0n1", 1)}
+	failed := fakeDiskRecord("nvme0n1", 2)
+	failed.DiskIO.ErrorType = "EIO"
+	disk <- []*ebpf.Stat{failed}
 
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
 		allMetrics, err := promtest.Scrape(promServer.URL)
@@ -262,12 +265,19 @@ func TestDiskStats(t *testing.T) {
 		counts := slices.DeleteFunc(allMetrics, func(m promtest.ScrapedMetric) bool {
 			return m.Name != "obi_stat_disk_service_duration_seconds_count"
 		})
-		assert.Equal(ct, []promtest.ScrapedMetric{{
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{{
 			Name:  "obi_stat_disk_service_duration_seconds_count",
 			Value: 6,
 			Labels: map[string]string{
 				"obi_ip": "1.2.3.4", "system_device": "nvme0n1", "obi_disk_stacked": "false", "obi_disk_volume_name": "",
-				"disk_io_direction": "write",
+				"disk_io_direction": "write", "error_type": "",
+			},
+		}, {
+			Name:  "obi_stat_disk_service_duration_seconds_count",
+			Value: 2,
+			Labels: map[string]string{
+				"obi_ip": "1.2.3.4", "system_device": "nvme0n1", "obi_disk_stacked": "false", "obi_disk_volume_name": "",
+				"disk_io_direction": "write", "error_type": "EIO",
 			},
 		}}, counts)
 	}, timeout, 100*time.Millisecond)
