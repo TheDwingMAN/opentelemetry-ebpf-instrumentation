@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //go:build obi_bpf_ignore
+#include "k_fsync.c"
 #include "k_tcp.c"
 #include "tp_blk.c"
 #include "tp_tcp.c"
@@ -12,5 +13,6 @@ const enum tcp_fail_reason *unused_2 __attribute__((unused));
 const enum tcp_handshake_role *unused_3 __attribute__((unused));
 const enum network_io_direction *unused_4 __attribute__((unused));
 const enum disk_op *unused_5 __attribute__((unused));
+const enum fs_sync_type *unused_6 __attribute__((unused));
 
 char __license[] SEC("license") = "Dual MIT/GPL";

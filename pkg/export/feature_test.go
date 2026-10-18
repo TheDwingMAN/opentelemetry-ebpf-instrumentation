@@ -74,6 +74,11 @@ func TestFeatureStatsDisk(t *testing.T) {
 		{name: "stats_disk_operations", load: LoadV2Features, want: FeatureStatsDiskOperations},
 		{name: "stats_disk_service_time", load: LoadV2Features, want: FeatureStatsDiskServiceTime},
 		{name: "disk_service_duration", load: LoadV2Features, wantErr: true},
+		{name: "stats_fs_sync_duration", load: LoadFeatures, wantErr: true},
+		{name: "stats_fs_sync_duration", load: LoadV2Features, want: FeatureStatsFsSyncDuration},
+		{name: "stats_fs_sync_operations", load: LoadV2Features, want: FeatureStatsFsSyncOperations},
+		{name: "stats_fs_sync_time", load: LoadV2Features, want: FeatureStatsFsSyncTime},
+		{name: "fs_sync_duration", load: LoadV2Features, wantErr: true},
 	} {
 		features, err := tc.load([]string{tc.name})
 		if tc.wantErr {
@@ -81,11 +86,12 @@ func TestFeatureStatsDisk(t *testing.T) {
 			continue
 		}
 		require.NoError(t, err, tc.name)
-		assert.Equal(t, tc.want, features&FeatureStatsDisk, tc.name)
+		assert.Equal(t, tc.want, features&(FeatureStatsDisk|FeatureStatsFsSync), tc.name)
 	}
 	assert.True(t, FeatureStatsDiskOperations.StatMetrics(), "each enables the stats pipeline on its own")
+	assert.True(t, FeatureStatsFsSyncDuration.StatMetrics(), "each enables the stats pipeline on its own")
 
-	features := FeatureAll | FeatureStatsDisk
+	features := FeatureAll | FeatureStatsDisk | FeatureStatsFsSync
 	loaded, err := LoadV2Features(features.Names())
 	require.NoError(t, err)
 	assert.Equal(t, features, loaded, "Config v2 loads the names that it renders")

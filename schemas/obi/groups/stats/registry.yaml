@@ -63,6 +63,30 @@ attributes:
       Device mapper name of the block device (`system.device`), as
       `/dev/mapper` lists it. Absent for the other devices.
     examples: ["mpatha"]
+  # Mirrors `FsSyncTypeCode` in `pkg/internal/statsolly/ebpf/stat.go`.
+  - key: obi.fs.sync.type
+    type:
+      members:
+        - id: fsync
+          value: fsync
+          stability: development
+        - id: fdatasync
+          value: fdatasync
+          stability: development
+        - id: sync
+          value: sync
+          stability: development
+        - id: syncfs
+          value: syncfs
+          stability: development
+        - id: sync_file_range
+          value: sync_file_range
+          stability: development
+    stability: development
+    brief: >
+      The system call that synced files, or, for the syncs within other calls
+      (O_SYNC and O_DSYNC writes, msync, io_uring), `fsync` or `fdatasync`,
+      depending on whether the metadata is synced too.
 
 attribute_groups:
   # `obi.ip` / `src.*` / `dst.*` are reused from `registry.obi.network` so we
@@ -91,3 +115,12 @@ attribute_groups:
     attributes:
       - ref: obi.disk.stacked
       - ref: obi.disk.volume.name
+
+  - id: registry.obi.fs.sync
+    visibility: public
+    brief: >
+      Attributes of OBI's file sync statistics that the semantic conventions
+      don't define.
+    stability: development
+    attributes:
+      - ref: obi.fs.sync.type

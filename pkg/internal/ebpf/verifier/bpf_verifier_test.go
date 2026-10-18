@@ -331,10 +331,25 @@ func TestBPFVerifierWithConstants(t *testing.T) {
 	})
 
 	// statsolly
-	forEachCombination(t, "statsolly/Stats", statsolly.LoadStats, []constOption{
+	forEachCombination(t, "statsolly/Stats", loadStats, []constOption{
 		{"g_bpf_debug", []any{true, false}},
 		{"stats_wakeup_data_bytes", []any{uint32(0), uint32(1 << 20)}},
 		{"disk_status_is_blk_status", []any{false, true}},
 		{"disk_read_cgroup", []any{false, true}},
+		{"fs_sync_read_cgroup", []any{false, true}},
 	})
+}
+
+// loadStats loads the stats programs with the fentry and fexit programs of every file sync function
+// that this kernel has
+func loadStats() (*ebpf.CollectionSpec, error) {
+	spec, err := statsolly.LoadStats()
+	if err != nil {
+		return nil, err
+	}
+	kernel, err := btfCache.Kernel()
+	if err != nil {
+		return nil, err
+	}
+	return spec, statsolly.PrepareStatsSpec(spec, kernel)
 }

@@ -25,6 +25,9 @@ func TestV2MetricFeatures(t *testing.T) {
 	features["stats_disk_io"] = export.FeatureStatsDiskIO
 	features["stats_disk_operations"] = export.FeatureStatsDiskOperations
 	features["stats_disk_service_time"] = export.FeatureStatsDiskServiceTime
+	features["stats_fs_sync_duration"] = export.FeatureStatsFsSyncDuration
+	features["stats_fs_sync_operations"] = export.FeatureStatsFsSyncOperations
+	features["stats_fs_sync_time"] = export.FeatureStatsFsSyncTime
 	for name, feature := range features {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -156,7 +159,7 @@ func TestV2MetricFeaturesDiskStatsAreOptIn(t *testing.T) {
 version: '2.0'
 network:
   stats:
-    features: [disk_service_duration, disk_io, disk_operations, disk_service_time]
+    features: [disk_service_duration, disk_io, disk_operations, disk_service_time, fs_sync_duration, fs_sync_operations, fs_sync_time]
 `
 	for _, test := range []struct {
 		name     string
@@ -176,6 +179,7 @@ network:
 			got, err := V2ToRuntime(ext)
 			require.NoError(t, err)
 			require.Equal(t, test.wantDisk, got.Metrics.Features.StatsDisk())
+			require.Equal(t, test.wantDisk, got.Metrics.Features.StatsFsSync())
 		})
 	}
 }
