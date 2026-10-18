@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"net"
+	"slices"
 	"testing"
 	"time"
 
@@ -17,8 +18,10 @@ import (
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
 	"go.opentelemetry.io/obi/pkg/export/prom"
+	"go.opentelemetry.io/obi/pkg/filter"
 	"go.opentelemetry.io/obi/pkg/internal/pipe"
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
+	statstracers "go.opentelemetry.io/obi/pkg/internal/statsolly/stats"
 	"go.opentelemetry.io/obi/pkg/internal/testutil"
 	"go.opentelemetry.io/obi/pkg/obi"
 	"go.opentelemetry.io/obi/pkg/pipe/global"
@@ -204,4 +207,71 @@ func fakeIoRecord(srcPort, dstPort uint16, direction uint8, bytes uint32) *ebpf.
 			DstPort: dstPort,
 		},
 	}
+}
+
+// The disk stats get the OBI IP, go through the stats filters and are exported
+func TestDiskStats(t *testing.T) {
+	promServer := testutil.NewPrometheusServer(t)
+
+	stats := Stats{
+		agentIP: net.ParseIP("1.2.3.4"),
+		ctxInfo: &global.ContextInfo{
+			Prometheus: promServer.Manager,
+		},
+		cfg: &obi.Config{
+			Prometheus: prom.PrometheusConfig{Port: promServer.Port, Path: "/metrics", TTL: time.Hour},
+			Metrics:    perapp.GlobalMetricsConfig{Features: export.FeatureStatsDiskServiceDuration},
+			Attributes: obi.Attributes{Select: attributes.Selection{
+				attributes.StatDiskServiceDuration.Section: attributes.InclusionLists{Include: []string{"*"}},
+			}},
+			Filters: filter.AttributesConfig{Stats: filter.AttributeFamilyConfig{"system.device": {Match: "nvme0n1"}}},
+		},
+		diskTracer: &statstracers.DiskMapTracer{},
+	}
+
+	ringBuf := make(chan []*ebpf.Stat)
+	disk := make(chan []*ebpf.Stat, 10)
+	defaultRingBufTracer, defaultDiskTracer := newRingBufTracer, newDiskTracer
+	t.Cleanup(func() {
+		newRingBufTracer, newDiskTracer = defaultRingBufTracer, defaultDiskTracer
+		close(ringBuf)
+		close(disk)
+	})
+	tracer := func(events chan []*ebpf.Stat) func(*Stats, *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+		return func(_ *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+			return func(ctx context.Context) {
+				defer out.MarkCloseable()
+				for i := range events {
+					out.SendCtx(ctx, i)
+				}
+			}
+		}
+	}
+	newRingBufTracer, newDiskTracer = tracer(ringBuf), tracer(disk)
+
+	runner, err := stats.buildPipeline(t.Context())
+	require.NoError(t, err)
+	go runner.Start(t.Context())
+
+	disk <- []*ebpf.Stat{fakeDiskRecord("nvme0n1", 5), fakeDiskRecord("vda", 1)}
+	disk <- []*ebpf.Stat{fakeDiskRecord("nvme0n1", 1)}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		allMetrics, err := promtest.Scrape(promServer.URL)
+		require.NoError(ct, err)
+		counts := slices.DeleteFunc(allMetrics, func(m promtest.ScrapedMetric) bool {
+			return m.Name != "obi_stat_disk_service_duration_seconds_count"
+		})
+		assert.Equal(ct, []promtest.ScrapedMetric{{
+			Name:   "obi_stat_disk_service_duration_seconds_count",
+			Value:  6,
+			Labels: map[string]string{"obi_ip": "1.2.3.4", "system_device": "nvme0n1", "disk_io_direction": "write"},
+		}}, counts)
+	}, timeout, 100*time.Millisecond)
+}
+
+func fakeDiskRecord(device string, writes uint64) *ebpf.Stat {
+	latency := ebpf.LatencyHistogram{BucketCounts: make([]uint64, len(export.DiskLatencyBounds)+1)}
+	latency.BucketCounts[0] = writes
+	return &ebpf.Stat{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{Device: device, Op: ebpf.CodeDiskOpWrite, Latency: latency}}
 }
