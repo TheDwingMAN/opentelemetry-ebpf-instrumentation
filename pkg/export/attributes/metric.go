@@ -684,6 +684,55 @@ var (
 		OTEL:    "obi.stat.tcp.successful.connections",
 		Type:    InstrumentCounter,
 	})
+	StatDiskServiceDuration = metric(Name{
+		Section: "obi.stat.disk.service.duration",
+		OTEL:    "obi.stat.disk.service.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatDiskIO = metric(Name{
+		Section: "obi.stat.disk.io",
+		OTEL:    "obi.stat.disk.io",
+		Unit:    "By",
+		Type:    InstrumentCounter,
+	})
+	StatDiskOperations = metric(Name{
+		Section: "obi.stat.disk.operations",
+		OTEL:    "obi.stat.disk.operations",
+		Unit:    "{operation}",
+		Type:    InstrumentCounter,
+	})
+	StatDiskServiceTime = metric(Name{
+		// the attributes.select keys have their underscores replaced by dots
+		Section: "obi.stat.disk.service.time",
+		OTEL:    "obi.stat.disk.service_time",
+		Unit:    "s",
+		Type:    InstrumentCounter,
+	})
+	StatDiskFlushDuration = metric(Name{
+		Section: "obi.stat.disk.flush.duration",
+		OTEL:    "obi.stat.disk.flush.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatFsSyncDuration = metric(Name{
+		Section: "obi.stat.fs.sync.duration",
+		OTEL:    "obi.stat.fs.sync.duration",
+		Unit:    "s",
+		Type:    InstrumentHistogram,
+	})
+	StatFsSyncOperations = metric(Name{
+		Section: "obi.stat.fs.sync.operations",
+		OTEL:    "obi.stat.fs.sync.operations",
+		Unit:    "{operation}",
+		Type:    InstrumentCounter,
+	})
+	StatFsSyncTime = metric(Name{
+		Section: "obi.stat.fs.sync.time",
+		OTEL:    "obi.stat.fs.sync.time",
+		Unit:    "s",
+		Type:    InstrumentCounter,
+	})
 )
 
 // normalizeMetric will facilitate the user-input in the attributes.enable section.

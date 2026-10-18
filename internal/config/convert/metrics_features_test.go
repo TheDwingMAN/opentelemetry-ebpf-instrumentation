@@ -5,6 +5,7 @@ package convert // import "go.opentelemetry.io/obi/internal/config/convert"
 
 import (
 	"fmt"
+	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,7 +20,16 @@ import (
 func TestV2MetricFeatures(t *testing.T) {
 	t.Parallel()
 
-	for name, feature := range export.FeatureMapper {
+	features := maps.Clone(export.FeatureMapper)
+	features["stats_disk_service_duration"] = export.FeatureStatsDiskServiceDuration
+	features["stats_disk_io"] = export.FeatureStatsDiskIO
+	features["stats_disk_operations"] = export.FeatureStatsDiskOperations
+	features["stats_disk_service_time"] = export.FeatureStatsDiskServiceTime
+	features["stats_disk_flush_duration"] = export.FeatureStatsDiskFlushDuration
+	features["stats_fs_sync_duration"] = export.FeatureStatsFsSyncDuration
+	features["stats_fs_sync_operations"] = export.FeatureStatsFsSyncOperations
+	features["stats_fs_sync_time"] = export.FeatureStatsFsSyncTime
+	for name, feature := range features {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
@@ -140,4 +150,37 @@ instrumentation:
 	got, err = V2ToRuntime(docExt)
 	require.NoError(t, err)
 	require.False(t, instrumentations.NewInstrumentationSelection(got.OTELMetrics.Instrumentations).HTTPEnabled())
+}
+
+// The disk stats must be listed: none of the aggregates of an explicit list selects them
+func TestV2MetricFeaturesDiskStatsAreOptIn(t *testing.T) {
+	t.Parallel()
+
+	const network = `
+version: '2.0'
+network:
+  stats:
+    features: [disk_service_duration, disk_io, disk_operations, disk_service_time, disk_flush_duration, fs_sync_duration, fs_sync_operations, fs_sync_time]
+`
+	for _, test := range []struct {
+		name     string
+		metrics  string
+		wantDisk bool
+	}{
+		{name: "omitted", wantDisk: true},
+		{name: "stats", metrics: "metrics:\n  features: [stats]\n"},
+		{name: "all", metrics: "metrics:\n  features: [all]\n"},
+		{name: "*", metrics: "metrics:\n  features: [\"*\"]\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			ext, err := schema.ParseReceiverYAML([]byte(network + test.metrics))
+			require.NoError(t, err)
+			got, err := V2ToRuntime(ext)
+			require.NoError(t, err)
+			require.Equal(t, test.wantDisk, got.Metrics.Features.StatsDisk())
+			require.Equal(t, test.wantDisk, got.Metrics.Features.StatsFsSync())
+		})
+	}
 }

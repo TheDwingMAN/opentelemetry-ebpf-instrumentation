@@ -952,6 +952,14 @@
                       "network_flow_packets",
                       "network_inter_zone",
                       "stats",
+                      "stats_disk_flush_duration",
+                      "stats_disk_io",
+                      "stats_disk_operations",
+                      "stats_disk_service_duration",
+                      "stats_disk_service_time",
+                      "stats_fs_sync_duration",
+                      "stats_fs_sync_operations",
+                      "stats_fs_sync_time",
                       "stats_tcp_failed_connections",
                       "stats_tcp_io",
                       "stats_tcp_retransmits",
@@ -971,7 +979,7 @@
                 ]
               },
               "type": "array",
-              "description": "Metric features using the same names as Config v1. An explicit list replaces the selection inferred from protocol and network switches; [] disables all metric features. When omitted, protocol and network enablement determines the features."
+              "description": "Metric features using the same names as Config v1, plus stats_disk_service_duration, stats_disk_io, stats_disk_operations, stats_disk_service_time, stats_disk_flush_duration, stats_fs_sync_duration, stats_fs_sync_operations and stats_fs_sync_time, which only Config v2 enables and which stats, all and * don't include. An explicit list replaces the selection inferred from protocol and network switches; [] disables all metric features. When omitted, protocol and network enablement determines the features."
             }
           }
         }
@@ -2124,7 +2132,7 @@
         },
         "stats": {
           "type": "object",
-          "description": "TCP stats capture controls.",
+          "description": "TCP, block I/O (disk) and file sync stats capture controls.",
           "additionalProperties": true,
           "properties": {
             "enabled": {
@@ -2141,11 +2149,19 @@
                   "tcp_failed_connections",
                   "tcp_successful_connections",
                   "tcp_retransmits",
-                  "tcp_io"
+                  "tcp_io",
+                  "disk_service_duration",
+                  "disk_io",
+                  "disk_operations",
+                  "disk_service_time",
+                  "disk_flush_duration",
+                  "fs_sync_duration",
+                  "fs_sync_operations",
+                  "fs_sync_time"
                 ]
               },
               "default": [],
-              "description": "Enabled TCP stats families.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones, the block I/O (disk) ones: disk_service_duration, disk_io, disk_operations, disk_service_time and disk_flush_duration, and the file sync ones: fs_sync_duration, fs_sync_operations and fs_sync_time.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",

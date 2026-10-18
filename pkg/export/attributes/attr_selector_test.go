@@ -4,6 +4,7 @@
 package attributes
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -266,6 +267,36 @@ func TestDefault_MessagingSubscription(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, p.For(MessagingPublishDuration), attr.MessagingSubscription)
 	assert.Contains(t, p.For(MessagingProcessDuration), attr.MessagingSubscription)
+}
+
+func TestDefault_StatStorage(t *testing.T) {
+	p, err := NewAttrSelector(GroupKubernetes, &SelectorConfig{})
+	require.NoError(t, err)
+	device := []attr.Name{attr.DiskIODirection, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice}
+	workload := []attr.Name{attr.K8sClusterName, attr.K8sNamespaceName, attr.K8sOwnerName, attr.K8sKind}
+	for metric, want := range map[Name][]attr.Name{
+		// a series per bucket: the workload is opt-in
+		StatDiskServiceDuration: slices.Concat(device, []attr.Name{attr.ErrorType, attr.K8sClusterName}),
+		StatDiskOperations:      slices.Concat(device, workload, []attr.Name{attr.ErrorType}),
+		StatDiskServiceTime:     slices.Concat(device, workload, []attr.Name{attr.ErrorType}),
+		// the failed requests transfer no bytes
+		StatDiskIO:            slices.Concat(device, workload),
+		StatDiskFlushDuration: {attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice, attr.ErrorType, attr.K8sClusterName},
+		StatFsSyncDuration:    {attr.ErrorType, attr.FsSyncType, attr.K8sClusterName},
+		StatFsSyncOperations:  slices.Concat(workload, []attr.Name{attr.ErrorType, attr.FsSyncType}),
+		StatFsSyncTime:        slices.Concat(workload, []attr.Name{attr.ErrorType, attr.FsSyncType}),
+	} {
+		assert.ElementsMatch(t, want, p.For(metric), metric.OTEL)
+	}
+
+	// a cache flush has no direction, and is charged to no workload
+	p, err = NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: Selection{
+		StatDiskFlushDuration.Section: InclusionLists{Include: []string{"*"}},
+	}})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []attr.Name{
+		attr.OBIIP, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice, attr.ErrorType, attr.K8sClusterName,
+	}, p.For(StatDiskFlushDuration))
 }
 
 func TestDefault_HTTPServerMetrics(t *testing.T) {

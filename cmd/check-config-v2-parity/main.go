@@ -406,6 +406,30 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsTCPIo() {
 		want = append(want, "tcp_io")
 	}
+	if features.StatsDiskServiceDuration() {
+		want = append(want, "disk_service_duration")
+	}
+	if features.StatsDiskIO() {
+		want = append(want, "disk_io")
+	}
+	if features.StatsDiskOperations() {
+		want = append(want, "disk_operations")
+	}
+	if features.StatsDiskServiceTime() {
+		want = append(want, "disk_service_time")
+	}
+	if features.StatsDiskFlushDuration() {
+		want = append(want, "disk_flush_duration")
+	}
+	if features.StatsFsSyncDuration() {
+		want = append(want, "fs_sync_duration")
+	}
+	if features.StatsFsSyncOperations() {
+		want = append(want, "fs_sync_operations")
+	}
+	if features.StatsFsSyncTime() {
+		want = append(want, "fs_sync_time")
+	}
 
 	got := toStringSlice(featuresValue)
 	if !sameStringSet(got, want) {

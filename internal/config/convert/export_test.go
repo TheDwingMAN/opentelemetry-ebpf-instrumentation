@@ -1048,6 +1048,27 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 		}, value(t, ext.Capture.Network, "stats", "features"))
 	})
 
+	t.Run("disk and file sync stat families are listed apart from the stats aggregate", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := defaultRuntimeConfig()
+		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsDisk | export.FeatureStatsFsSync
+
+		_, ext := RuntimeToV2(&cfg)
+
+		require.ElementsMatch(t, []string{
+			"tcp_rtt",
+			"disk_service_duration",
+			"disk_io",
+			"disk_operations",
+			"disk_service_time",
+			"disk_flush_duration",
+			"fs_sync_duration",
+			"fs_sync_operations",
+			"fs_sync_time",
+		}, value(t, ext.Capture.Network, "stats", "features"))
+	})
+
 	t.Run("preserves individual stat families", func(t *testing.T) {
 		t.Parallel()
 
