@@ -29,6 +29,8 @@ import (
 
 func statAttrs(s *ebpf.Stat) *pipe.CommonAttrs { return &s.CommonAttrs }
 
+func diskContainerID(s *ebpf.Stat) string { return s.DiskIO.ContainerID }
+
 // mockable functions for testing
 var newRingBufTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 	return s.rbTracer.TraceLoop(out)
@@ -98,8 +100,18 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
 		swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
 
+		// under dynamic application selection, the disk stats are matched to the selected applications
+		// by the containers that they are charged to
+		selectedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "selectedDiskStats")
+		swi.Add(filter.ByDynamicContainer(dynamicSelector, s.ctxInfo.K8sInformer, diskContainerID, diskStats, selectedDiskStats),
+			swarm.WithID("DynamicContainerFilter"))
+
+		kubeDecoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "kubeDecoratedDiskStats")
+		swi.Add(k8s.ContainerMetadataDecoratorProvider(ctx, &s.cfg.Attributes.Kubernetes, s.ctxInfo.K8sInformer,
+			diskContainerID, statAttrs, selectedDiskStats, kubeDecoratedDiskStats), swarm.WithID("DiskK8sMetadataDecorator"))
+
 		decoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "decoratedDiskStats")
-		swi.Add(decorate.Decorate(s.agentIP, statAttrs, diskStats, decoratedDiskStats),
+		swi.Add(decorate.Decorate(s.agentIP, statAttrs, kubeDecoratedDiskStats, decoratedDiskStats),
 			swarm.WithID("DiskStatsDecorator"))
 
 		statsToFilter = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "mergedStats")

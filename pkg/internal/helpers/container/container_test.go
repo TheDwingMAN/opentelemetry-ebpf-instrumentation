@@ -141,3 +141,53 @@ func TestContainerID(t *testing.T) {
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrContainerNotFound)
 }
+
+func TestIDFromIOCgroupOfPID(t *testing.T) {
+	procRoot = t.TempDir() + "/"
+	for pid, tc := range []struct{ cgroups, want string }{
+		{cgroups: "0::/" + fixtureContainerID, want: fixtureContainerID},
+		{cgroups: "0::/docker/" + fixtureContainerID, want: fixtureContainerID},
+		{cgroups: "0::/libpod_parent/libpod-" + fixtureContainerID, want: fixtureContainerID},
+		{cgroups: "0::/system.slice/docker-" + fixtureContainerID + ".scope", want: fixtureContainerID},
+		{cgroups: "0::/machine.slice/libpod-" + fixtureContainerID + ".scope/container", want: fixtureContainerID},
+		// cgroup v1 charges the block I/O to the blkio cgroup
+		{cgroups: "8:blkio:/docker/" + fixtureContainerID + "\n1:name=systemd:/user.slice\n0::/user.slice", want: fixtureContainerID},
+		{cgroups: "8:cpu,blkio:/user.slice\n0::/docker/" + fixtureContainerID},
+		{cgroups: "0::/user.slice/user-963461.slice/session-11909.scope"},
+		{cgroups: "0::/"},
+	} {
+		dir := fmt.Sprintf("%s%d", procRoot, pid)
+		require.NoError(t, os.Mkdir(dir, 0o777))
+		require.NoError(t, os.WriteFile(dir+"/cgroup", []byte(tc.cgroups+"\n"), 0o666))
+		id, ok := IDFromIOCgroupOfPID(app.PID(pid))
+		assert.Equal(t, tc.want != "", ok, tc.cgroups)
+		assert.Equal(t, tc.want, id, tc.cgroups)
+	}
+	_, ok := IDFromIOCgroupOfPID(12345)
+	assert.False(t, ok, "a process that is gone")
+}
+
+func TestIDFromCgroupNames(t *testing.T) {
+	const otherContainerID = "d36686f9785534531160dc936aec9d711a26eb37f4fc7752a2ae27d0a24345c1"
+	for _, tc := range []struct{ name, parent, want string }{
+		{name: "cri-containerd-" + fixtureContainerID + ".scope", parent: "kubepods-besteffort.slice", want: fixtureContainerID},
+		{name: "crio-" + fixtureContainerID + ".scope", parent: "kubepods.slice", want: fixtureContainerID},
+		{name: "docker-" + fixtureContainerID + ".scope", parent: "system.slice", want: fixtureContainerID},
+		// cgroupfs drivers, as /docker/<id> or /kubepods/burstable/pod<uid>/<id>
+		{name: fixtureContainerID, parent: "docker", want: fixtureContainerID},
+		// crun on cgroup v2 with the systemd driver, and systemd in a container
+		{name: "container", parent: "libpod-" + fixtureContainerID + ".scope", want: fixtureContainerID},
+		{name: "init.scope", parent: "cri-containerd-" + fixtureContainerID + ".scope", want: fixtureContainerID},
+		// the innermost container, like a container of a kind node
+		{name: fixtureContainerID, parent: "docker-" + otherContainerID + ".scope", want: fixtureContainerID},
+		{name: "sshd.service", parent: "system.slice"},
+		{name: "kubepods-besteffort-pod7260904b_bd08_e72e_4dff_95d9fccd2ee8.slice", parent: "kubepods-besteffort.slice"},
+		{name: fixtureContainerID[1:], parent: "docker"},
+		{name: "docker-" + fixtureContainerID + ".scope.old", parent: "system.slice"},
+		{name: "", parent: ""},
+	} {
+		id, ok := IDFromCgroupNames(tc.name, tc.parent)
+		assert.Equal(t, tc.want != "", ok, "%s in %s", tc.name, tc.parent)
+		assert.Equal(t, tc.want, id, "%s in %s", tc.name, tc.parent)
+	}
+}

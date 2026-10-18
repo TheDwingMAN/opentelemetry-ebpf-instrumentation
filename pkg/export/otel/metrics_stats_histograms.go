@@ -23,6 +23,7 @@ import (
 type kernelHistogramProducer struct {
 	temporality metricdata.Temporality
 	ttl         time.Duration
+	clock       func() time.Time
 	// mu guards the counts of the series of the histograms
 	mu         sync.Mutex
 	histograms []*kernelHistogram
@@ -46,7 +47,7 @@ type kernelHistogramSeries struct {
 }
 
 func newKernelHistogramProducer(temporality metricdata.Temporality, ttl time.Duration) *kernelHistogramProducer {
-	return &kernelHistogramProducer{temporality: temporality, ttl: ttl}
+	return &kernelHistogramProducer{temporality: temporality, ttl: ttl, clock: timeNow}
 }
 
 func (p *kernelHistogramProducer) histogram(
@@ -58,7 +59,7 @@ func (p *kernelHistogramProducer) histogram(
 		name:   name,
 		bounds: bounds,
 		attrs:  attrs,
-		series: expire.NewExpiryMap[*kernelHistogramSeries](timeNow, p.ttl),
+		series: expire.NewExpiryMap[*kernelHistogramSeries](p.clock, p.ttl),
 	}
 	p.mu.Lock()
 	p.histograms = append(p.histograms, h)
@@ -69,7 +70,7 @@ func (p *kernelHistogramProducer) histogram(
 func (p *kernelHistogramProducer) record(h *kernelHistogram, stat *ebpf.Stat, latency *ebpf.LatencyHistogram) {
 	attrs, values := attributeSet(h.attrs, stat)
 	series := h.series.GetOrCreate(values, func() *kernelHistogramSeries {
-		return &kernelHistogramSeries{attrs: attrs, start: timeNow(), buckets: make([]uint64, len(h.bounds)+1)}
+		return &kernelHistogramSeries{attrs: attrs, start: p.clock(), buckets: make([]uint64, len(h.bounds)+1)}
 	})
 
 	p.mu.Lock()
@@ -89,7 +90,7 @@ func (p *kernelHistogramProducer) Produce(ctx context.Context) ([]metricdata.Sco
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	now := timeNow()
+	now := p.clock()
 	var metrics []metricdata.Metrics
 	for _, h := range p.histograms {
 		h.series.DeleteExpired()
