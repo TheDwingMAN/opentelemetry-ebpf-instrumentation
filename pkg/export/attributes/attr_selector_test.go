@@ -280,13 +280,23 @@ func TestDefault_StatStorage(t *testing.T) {
 		StatDiskOperations:      slices.Concat(device, workload, []attr.Name{attr.ErrorType}),
 		StatDiskServiceTime:     slices.Concat(device, workload, []attr.Name{attr.ErrorType}),
 		// the failed requests transfer no bytes
-		StatDiskIO:           slices.Concat(device, workload),
-		StatFsSyncDuration:   {attr.ErrorType, attr.FsSyncType, attr.K8sClusterName},
-		StatFsSyncOperations: slices.Concat(workload, []attr.Name{attr.ErrorType, attr.FsSyncType}),
-		StatFsSyncTime:       slices.Concat(workload, []attr.Name{attr.ErrorType, attr.FsSyncType}),
+		StatDiskIO:            slices.Concat(device, workload),
+		StatDiskFlushDuration: {attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice, attr.ErrorType, attr.K8sClusterName},
+		StatFsSyncDuration:    {attr.ErrorType, attr.FsSyncType, attr.K8sClusterName},
+		StatFsSyncOperations:  slices.Concat(workload, []attr.Name{attr.ErrorType, attr.FsSyncType}),
+		StatFsSyncTime:        slices.Concat(workload, []attr.Name{attr.ErrorType, attr.FsSyncType}),
 	} {
 		assert.ElementsMatch(t, want, p.For(metric), metric.OTEL)
 	}
+
+	// a cache flush has no direction, and is charged to no workload
+	p, err = NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: Selection{
+		StatDiskFlushDuration.Section: InclusionLists{Include: []string{"*"}},
+	}})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []attr.Name{
+		attr.OBIIP, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice, attr.ErrorType, attr.K8sClusterName,
+	}, p.For(StatDiskFlushDuration))
 }
 
 func TestDefault_HTTPServerMetrics(t *testing.T) {

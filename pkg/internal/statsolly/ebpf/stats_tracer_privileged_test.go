@@ -55,6 +55,15 @@ func TestStorageFeatureDisabledAfterAnAttachFailure(t *testing.T) {
 	assert.Equal(t, uint32(1), fetcher.objects.DiskIoAccum.MaxEntries())
 }
 
+// Every supported kernel has REQ_OP_ZONE_APPEND, without which the probes would not measure the zone
+// appends
+func TestKernelBlockLayoutZoneAppendOp(t *testing.T) {
+	layout, err := kernelBlockLayout()
+	require.NoError(t, err)
+	t.Logf("REQ_OP_ZONE_APPEND is %d", layout.zoneAppendOp)
+	assert.NotZero(t, layout.zoneAppendOp)
+}
+
 // loadFsSyncPrograms loads the stats programs with the file sync kprobes, and the fentry and fexit
 // programs of the hooks in tracing
 func loadFsSyncPrograms(t *testing.T, tracing map[string]bool) *StatsObjects {

@@ -60,14 +60,18 @@ func TestStatHistogramView_ExplicitUsesBuckets(t *testing.T) {
 }
 
 // The disk counters split the requests and their time by outcome, as the histogram does, and count
-// the requests of the paths of dm-multipath devices, which the histogram leaves out
+// the requests of the paths of dm-multipath devices, which the histograms leave out. The cache
+// flushes are only in their own histogram.
 func TestStatMetricsExporter_DiskCounters(t *testing.T) {
 	stats, records := startStatExporter(t, export.FeatureStatsDisk, attributes.UndefinedGroup)
 	succeeded, failed, path := diskStat("vda"), diskStat("vda"), diskStat("sdb")
 	succeeded.DiskIO.Latency, succeeded.DiskIO.Bytes = *latency(0.0002, 2), 2*4096
 	failed.DiskIO.Latency, failed.DiskIO.ErrorType = *latency(30, 0, 1), "ETIMEDOUT"
 	path.DiskIO.Latency, path.DiskIO.Bytes, path.DiskIO.MultipathPath = *latency(0.0003, 3), 3*4096, true
-	stats.Send([]*ebpf.Stat{succeeded, failed, path})
+	flush, pathFlush := diskStat("vda"), diskStat("sdb")
+	flush.DiskIO.Op, flush.DiskIO.Latency = ebpf.CodeDiskOpFlush, *latency(0.004, 0, 2)
+	pathFlush.DiskIO.Op, pathFlush.DiskIO.Latency, pathFlush.DiskIO.MultipathPath = ebpf.CodeDiskOpFlush, *latency(0.004, 0, 2), true
+	stats.Send([]*ebpf.Stat{succeeded, failed, path, flush, pathFlush})
 
 	// the last value of each series by metric, device and error type: the sum of the histograms
 	got := map[string]float64{}
@@ -87,6 +91,7 @@ func TestStatMetricsExporter_DiskCounters(t *testing.T) {
 			"obi.stat.disk.service_time sdb ":              0.0003,
 			"obi.stat.disk.io vda ":                        2 * 4096,
 			"obi.stat.disk.io sdb ":                        3 * 4096,
+			"obi.stat.disk.flush.duration vda ":            0.004,
 		}, got)
 	}, timeout, 100*time.Millisecond)
 }

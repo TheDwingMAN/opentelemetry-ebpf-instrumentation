@@ -337,6 +337,7 @@ func TestBPFVerifierWithConstants(t *testing.T) {
 		{"disk_status_is_blk_status", []any{false, true}},
 		{"disk_read_cgroup", []any{false, true}},
 		{"fs_sync_read_cgroup", []any{false, true}},
+		{"disk_rqf_io_stat", []any{uint32(0), uint32(1 << 8)}},
 	})
 }
 
