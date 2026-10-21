@@ -82,8 +82,11 @@ const (
 	FeatureStatsFsSyncDuration
 	FeatureStatsFsSyncOperations
 	FeatureStatsFsSyncTime
+	// The NFS client stat features are in neither `stats` nor `all`, as their probe fires on every
+	// RPC of the kernel NFS client
+	FeatureStatsNFSClientProcedureDuration
 	// FeatureAll preserves the legacy all-features behavior while keeping connection info opt-in.
-	FeatureAll = Features(^uint(0)) &^ (FeatureConnectionInfo | FeatureStatsDisk | FeatureStatsFsSync)
+	FeatureAll = Features(^uint(0)) &^ (FeatureConnectionInfo | FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFS)
 )
 
 // FeatureStatsDisk groups the disk stat features, which the same probes measure
@@ -92,6 +95,9 @@ const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | 
 
 // FeatureStatsFsSync groups the file sync stat features, which the same probes measure
 const FeatureStatsFsSync = FeatureStatsFsSyncDuration | FeatureStatsFsSyncOperations | FeatureStatsFsSyncTime
+
+// FeatureStatsNFS groups the NFS client stat features, which the same probes measure
+const FeatureStatsNFS = FeatureStatsNFSClientProcedureDuration
 
 // FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -528,6 +534,10 @@ func (f Features) StatsFsSyncTime() bool {
 
 func (f Features) StatsFsSync() bool {
 	return f.any(FeatureStatsFsSync)
+}
+
+func (f Features) StatsNFS() bool {
+	return f.any(FeatureStatsNFS)
 }
 
 func (f Features) NetworkInterZone() bool {
