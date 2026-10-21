@@ -77,9 +77,11 @@ type StatsFetcher struct {
 	objects   *StatsObjects
 	closables []io.Closer
 
-	// the storage features whose probes are attached
+	// the storage features whose probes are attached, or wait for their kernel module
 	storage               export.Features
 	diskStatusIsBlkStatus bool
+	// the NFS client probe waits for the sunrpc module, and RefreshNFSProbes attaches it
+	nfsWaiting bool
 }
 
 func tlog() *slog.Logger {
@@ -132,9 +134,13 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 
-	return loadDegradingStorage(tlog, planStorage(tlog, features), func(storage storagePlan) (*StatsFetcher, error) {
+	fetcher, err := loadDegradingStorage(tlog, planStorage(tlog, features), func(storage storagePlan) (*StatsFetcher, error) {
 		return loadAndAttach(cfg, features, toDisable, connRoleUsed, storage, reads)
 	})
+	if err == nil && fetcher.nfsWaiting {
+		tlog.Info("the NFS client stats wait for the sunrpc kernel module: their probe is attached when it is loaded")
+	}
+	return fetcher, err
 }
 
 // storagePlan is what the storage probes load: the enabled storage features but those disabled,
@@ -390,12 +396,6 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 			enabled: diskEnabled,
 			feature: export.FeatureStatsDisk,
 		},
-		{
-			name:    RawTracepointRPCStatsLatency,
-			program: objects.ObiStatsRawTpRpcStatsLatency,
-			enabled: nfsEnabled,
-			feature: export.FeatureStatsNFS,
-		},
 	} {
 		if !t.enabled {
 			continue
@@ -415,6 +415,19 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 		closables = append(closables, l)
 	}
 
+	var nfsWaiting bool
+	if nfsEnabled {
+		l, waiting, err := attachNFS(&objects)
+		if err != nil {
+			closeAll(closables)
+			return nil, &storageError{features: export.FeatureStatsNFS, err: err}
+		}
+		if !waiting {
+			closables = append(closables, l)
+		}
+		nfsWaiting = waiting
+	}
+
 	if fsSyncEnabled {
 		links, mechanisms, err := attachFsSync(tlog(), &objects, storage.fsSyncTracing)
 		if err != nil {
@@ -432,6 +445,7 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 
 		storage:               storage.features,
 		diskStatusIsBlkStatus: storage.completeReportsBlkStatus,
+		nfsWaiting:            nfsWaiting,
 	}, nil
 }
 
@@ -485,7 +499,7 @@ func (m *StatsFetcher) FsSyncAccumMap() *ebpf.Map {
 }
 
 // NFSProcedureAccumMap returns the map where the kernel accumulates the durations of the NFS client
-// RPCs, or nil when the NFS client stats are disabled
+// RPCs, or nil when the NFS client stats are disabled. Its probe may be attached later.
 func (m *StatsFetcher) NFSProcedureAccumMap() *ebpf.Map {
 	if !m.storage.StatsNFS() {
 		return nil

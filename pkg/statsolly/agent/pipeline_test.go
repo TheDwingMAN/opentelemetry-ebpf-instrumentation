@@ -349,6 +349,27 @@ func TestDiskStatsUnderDynamicSelection(t *testing.T) {
 	}, time.Second, 100*time.Millisecond)
 }
 
+// The NFS client probe is attached on each refresh until it no longer waits for the sunrpc module
+func TestRefreshNFSProbesUntilNoneWaits(t *testing.T) {
+	const waitingRefreshes = 3
+	refreshes := 0
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		refreshNFSProbes(t.Context(), func() bool {
+			refreshes++
+			return refreshes < waitingRefreshes
+		}, time.Millisecond)
+	}()
+
+	select {
+	case <-done:
+		assert.Equal(t, waitingRefreshes, refreshes)
+	case <-time.After(timeout):
+		t.Fatal("the refreshes didn't stop once the probe no longer waits")
+	}
+}
+
 // startDiskPipeline runs the stats pipeline of the disk stats, as configure changes it, exporting to
 // Prometheus. The disk tracer forwards what the returned channel gets.
 func startDiskPipeline(t *testing.T, configure func(*Stats)) (chan<- []*ebpf.Stat, string) {
