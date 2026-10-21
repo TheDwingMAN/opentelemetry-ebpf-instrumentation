@@ -393,12 +393,16 @@ func diskErrorType(status uint8, isBlkStatus bool) string {
 	return errtype.Other
 }
 
-// nfsErrorType names the status of failed NFS RPCs after its errno, and is empty on success
+// nfsErrorType names the status of failed NFS RPCs after its errno, or else after nfsStatusNames, and
+// is empty on success
 func nfsErrorType(status uint16) string {
 	if status == 0 {
 		return ""
 	}
 	if name := unix.ErrnoName(syscall.Errno(status)); name != "" {
+		return name
+	}
+	if name, ok := nfsStatusNames[status]; ok {
 		return name
 	}
 	return errtype.Other
