@@ -29,6 +29,12 @@ func kernelBTF(t *testing.T, safe bool, functions ...string) *btf.Spec {
 	for _, function := range functions {
 		types = append(types, &btf.Func{Name: function, Type: &btf.FuncProto{Return: &btf.Int{Name: "int", Size: 4}}})
 	}
+	return btfSpecOf(t, types...)
+}
+
+// btfSpecOf builds a BTF spec of the given types
+func btfSpecOf(t *testing.T, types ...btf.Type) *btf.Spec {
+	t.Helper()
 	builder, err := btf.NewBuilder(types, nil)
 	require.NoError(t, err)
 	raw, err := builder.Marshal(nil, nil)

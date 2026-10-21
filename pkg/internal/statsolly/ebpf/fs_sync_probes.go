@@ -148,12 +148,16 @@ func hasFunc(kernel *btf.Spec, name string) bool {
 	return kernel.TypeByName(name, &function) == nil
 }
 
+func hasStruct(kernel *btf.Spec, name string) bool {
+	var structure *btf.Struct
+	return kernel.TypeByName(name, &structure) == nil
+}
+
 // fsSyncTracingHooks returns the hooks, by function, that fentry and fexit programs time on the
 // kernel of a BTF: none where its trampolines are unsafe, else those whose function it has
 func fsSyncTracingHooks(kernel *btf.Spec) map[string]bool {
 	tracing := map[string]bool{}
-	var trampoline *btf.Struct
-	if kernel.TypeByName(safeTrampolineStruct, &trampoline) != nil {
+	if !hasStruct(kernel, safeTrampolineStruct) {
 		return tracing
 	}
 	for _, hook := range fsSyncHooks {

@@ -106,31 +106,32 @@ func TestSizeStorageMaps(t *testing.T) {
 		storage export.Features
 		reads   CgroupReads
 		cpus    int
-		// disk_rq_start, disk_io_accum, fs_sync_start, fs_sync_accum and disk_cgroup_names
-		want [5]uint32
+		// disk_rq_start, disk_io_accum, fs_sync_start, fs_sync_accum, disk_cgroup_names and nfs_procedure_accum
+		want [6]uint32
 	}{
-		{name: "disabled", reads: CgroupReads{Disk: true, FsSync: true}, cpus: 192, want: [5]uint32{1, 1, 1, 1, 1}},
-		{name: "up to 64 CPUs", storage: both, cpus: 64, want: [5]uint32{inFlight, accum, inFlight, accum, 1}},
-		{name: "beyond", storage: both, cpus: 192, want: [5]uint32{beyond, accum, beyond, accum, 1}},
+		{name: "disabled", reads: CgroupReads{Disk: true, FsSync: true}, cpus: 192, want: [6]uint32{1, 1, 1, 1, 1, 1}},
+		{name: "up to 64 CPUs", storage: both, cpus: 64, want: [6]uint32{inFlight, accum, inFlight, accum, 1, 1}},
+		{name: "beyond", storage: both, cpus: 192, want: [6]uint32{beyond, accum, beyond, accum, 1, 1}},
 		{
 			name: "the disk reads the cgroups", storage: export.FeatureStatsDisk, reads: CgroupReads{Disk: true}, cpus: 64,
-			want: [5]uint32{inFlight, accum, 1, 1, names},
+			want: [6]uint32{inFlight, accum, 1, 1, names, 1},
 		},
 		{
 			name: "the file syncs read the cgroups", storage: export.FeatureStatsFsSync, reads: CgroupReads{FsSync: true}, cpus: 64,
-			want: [5]uint32{1, 1, inFlight, accum, names},
+			want: [6]uint32{1, 1, inFlight, accum, names, 1},
 		},
 		{
 			name: "a disabled feature doesn't read them", storage: export.FeatureStatsDisk, reads: CgroupReads{FsSync: true}, cpus: 64,
-			want: [5]uint32{inFlight, accum, 1, 1, 1},
+			want: [6]uint32{inFlight, accum, 1, 1, 1, 1},
 		},
+		{name: "the NFS client", storage: export.FeatureStatsNFS, cpus: 64, want: [6]uint32{1, 1, 1, 1, 1, accum}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec, err := LoadStats()
 			require.NoError(t, err)
 			sizeStorageMaps(spec, tc.storage, tc.reads, tc.cpus)
-			var got [5]uint32
-			for i, name := range []string{"disk_rq_start", "disk_io_accum", "fs_sync_start", "fs_sync_accum", "disk_cgroup_names"} {
+			var got [6]uint32
+			for i, name := range []string{"disk_rq_start", "disk_io_accum", "fs_sync_start", "fs_sync_accum", "disk_cgroup_names", "nfs_procedure_accum"} {
 				got[i] = spec.Maps[name].MaxEntries
 			}
 			assert.Equal(t, tc.want, got)

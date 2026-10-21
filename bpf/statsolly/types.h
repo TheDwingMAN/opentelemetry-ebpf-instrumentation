@@ -16,6 +16,7 @@ enum stat_type : u8 {
     k_stat_type_tcp_successful_connection = 5,
     k_stat_type_disk_io = 6,
     k_stat_type_fs_sync = 7,
+    k_stat_type_nfs_procedure = 8,
 };
 
 // batch size used in tcp io metric
@@ -60,6 +61,14 @@ enum fs_sync_type : u8 {
     fs_sync_type_sync = 3,
     fs_sync_type_syncfs = 4,
     fs_sync_type_sync_file_range = 5,
+};
+
+// Sizes of the NFS client names: the server names of the mounts, such as the names of about 70
+// characters of the Amazon FSx for NetApp ONTAP SVMs (longer names are truncated), and the longest
+// NFSv4 procedure name, BIND_CONN_TO_SESSION (20 characters), with room to spare
+enum {
+    k_nfs_server_max_len = 96,
+    k_nfs_procedure_max_len = 24,
 };
 
 // The latency histogram has the fixed bounds that userspace injects at load (DiskLatencyBounds in

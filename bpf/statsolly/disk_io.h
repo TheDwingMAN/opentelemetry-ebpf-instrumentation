@@ -93,6 +93,20 @@ static __always_inline u8 disk_status_code(const u64 raw_status, const bool is_b
     return errno_value < k_status_other ? (u8)errno_value : k_status_other;
 }
 
+// The status of the NFS RPCs whose error doesn't fit in a u16, which userspace names _OTHER
+enum { k_nfs_status_other = 0xffff };
+
+// The status of a completed RPC task, from its tk_status: 0 on success, otherwise its errno or the
+// NFSv4 status that the NFS client didn't translate into an errno (e.g. NFS4ERR_DELAY, 10008)
+static __always_inline u16 nfs_status(const s32 tk_status) {
+    if (tk_status >= 0) {
+        return 0;
+    }
+    // negated as an unsigned value, which the most negative s32 doesn't overflow
+    const u32 error = 0U - (u32)tk_status;
+    return error < k_nfs_status_other ? (u16)error : (u16)k_nfs_status_other;
+}
+
 // The errnos of the syncs that sync nothing
 enum {
     k_errno_ebadf = 9,

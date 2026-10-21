@@ -22,6 +22,7 @@ import (
 
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/export"
+	"go.opentelemetry.io/obi/pkg/export/attributes"
 	ebpfconvenience "go.opentelemetry.io/obi/pkg/internal/ebpf/convenience"
 )
 
@@ -53,6 +54,37 @@ func TestStorageFeatureDisabledAfterAnAttachFailure(t *testing.T) {
 	assert.Equal(t, 2, loads)
 	assert.Nil(t, fetcher.DiskIOAccumMap())
 	assert.Equal(t, uint32(1), fetcher.objects.DiskIoAccum.MaxEntries())
+}
+
+// The NFS client probe and its map are only loaded with its feature, and the probe is attached where
+// the kernel BTF describes the sunrpc types and the sunrpc module is loaded
+func TestNFSProbes(t *testing.T) {
+	require.NoError(t, rlimit.RemoveMemlock())
+	load := func(features export.Features) *StatsFetcher {
+		fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{}, CgroupReads{})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			fetcher.Close()
+			fetcher.objects.Close()
+		})
+		return fetcher
+	}
+
+	off := load(export.FeatureStatsDiskServiceDuration)
+	assert.Nil(t, off.NFSProcedureAccumMap())
+	assert.Equal(t, uint32(1), off.objects.NfsProcedureAccum.MaxEntries())
+
+	kernel, err := btf.LoadKernelSpec()
+	require.NoError(t, err)
+	if err := kernelRPCTypes(kernel); err != nil {
+		t.Skipf("the NFS client probe doesn't run on this kernel: %v", err)
+	}
+	on := load(export.FeatureStatsNFS)
+	if _, err := os.Stat("/sys/module/sunrpc"); err != nil {
+		assert.Nil(t, on.NFSProcedureAccumMap(), "the probe can't be attached before the sunrpc module is loaded")
+		return
+	}
+	assert.NotNil(t, on.NFSProcedureAccumMap())
 }
 
 // Every supported kernel has REQ_OP_ZONE_APPEND, without which the probes would not measure the zone
