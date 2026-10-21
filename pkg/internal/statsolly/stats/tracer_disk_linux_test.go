@@ -29,6 +29,23 @@ func TestNFSErrorType(t *testing.T) {
 	assert.Equal(t, "EIO", nfsErrorType(5))
 	assert.Equal(t, "ESTALE", nfsErrorType(116))
 	assert.Equal(t, "_OTHER", nfsErrorType(0xffff), "a status that the kernel can't keep")
+	for status, name := range map[uint16]string{
+		512:   "ERESTARTSYS",
+		524:   "ENOTSUPP",
+		528:   "EJUKEBOX",
+		531:   "ENOGRACE",
+		10001: "NFS4ERR_BADHANDLE",
+		10008: "NFS4ERR_DELAY",
+		10013: "NFS4ERR_GRACE",
+		10096: "NFS4ERR_XATTR2BIG",
+		// unassigned kernel-internal errno and NFSv4 status, past the last NFSv4 status, internal pNFS status
+		520:   "_OTHER",
+		10073: "_OTHER",
+		10097: "_OTHER",
+		12001: "_OTHER",
+	} {
+		assert.Equal(t, name, nfsErrorType(status), status)
+	}
 }
 
 func TestDiskReaderForwardsTheFailedRequestsApart(t *testing.T) {
