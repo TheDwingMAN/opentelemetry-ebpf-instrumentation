@@ -21,6 +21,7 @@ const (
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
 	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
 	StatTypeFsSync                  = StatType(StatsStatTypeK_statTypeFsSync)
+	StatTypeNFSProcedure            = StatType(StatsStatTypeK_statTypeNfsProcedure)
 )
 
 // CgroupReads tells which storage probes read the cgroups that the kernel charges the operations
@@ -125,6 +126,7 @@ type Stat struct {
 	TCPIo                   *TCPIo                   `json:"-"`
 	DiskIO                  *DiskIO                  `json:"-"`
 	FsSync                  *FsSync                  `json:"-"`
+	NFSProcedure            *NFSProcedure            `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -181,7 +183,22 @@ type FsSync struct {
 	Latency     LatencyHistogram
 }
 
-// LatencyHistogram counts block requests or file syncs in the buckets of export.DiskLatencyBounds
+// NFSProcedure is the RPCs of an NFS client procedure that completed with an outcome on a server, on
+// the whole node, since the previous read of the kernel map
+type NFSProcedure struct {
+	// Server is the server as its first mount on the node names it
+	Server string
+	// Procedure is the procedure as the NFS client names it, e.g. READ: for NFSv4, the kind of
+	// COMPOUND request, which the client names after its main operation
+	Procedure string
+	// Version is the NFS protocol version, the version of the ONC RPC program
+	Version uint32
+	// ErrorType names the status that the RPCs failed with, and is empty for successful RPCs
+	ErrorType string
+	Latency   LatencyHistogram
+}
+
+// LatencyHistogram counts block requests, file syncs or NFS RPCs in the buckets of export.DiskLatencyBounds
 type LatencyHistogram struct {
 	// BucketCounts has a count per bound, then the count of the overflow bucket
 	BucketCounts []uint64

@@ -177,11 +177,11 @@ func testStatMetricsFsSyncCounters(t *testing.T, containerID string) {
 	}, testTimeout, 100*time.Millisecond)
 }
 
-// testStatMetricsNoStorageStats checks that the stats aggregate feature doesn't enable the disk and
-// file sync stats
+// testStatMetricsNoStorageStats checks that the stats aggregate feature doesn't enable the storage
+// stats
 func testStatMetricsNoStorageStats(t *testing.T) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
-	results, err := pq.Query(`{__name__=~"obi_stat_(disk|fs)_.*"}`)
+	results, err := pq.Query(`{__name__=~"obi_stat_(disk|fs|nfs)_.*"}`)
 	require.NoError(t, err)
 	assert.Empty(t, results)
 }

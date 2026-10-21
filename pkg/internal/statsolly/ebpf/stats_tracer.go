@@ -494,7 +494,7 @@ func (m *StatsFetcher) NFSProcedureAccumMap() *ebpf.Map {
 }
 
 // DiskCgroupNamesMap returns the map where the kernel records the names of the cgroups that block
-// I/O and file syncs are charged to, or nil when the disk and file sync stats are disabled
+// I/O and file syncs are charged to, or nil when the storage stats are disabled
 func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
 	if m.storage == 0 {
 		return nil

@@ -1,4 +1,4 @@
-# Config v2 only enables the disk and file sync stats: their features have no Config v1 name. A v2 document takes
+# Config v2 only enables the storage stats: their features have no Config v1 name. A v2 document takes
 # no OTEL_EBPF_* overrides, so the settings of the suite live here.
 file_format: "1.0"
 log_level: debug
@@ -33,6 +33,7 @@ extensions:
             - fs_sync_duration
             - fs_sync_operations
             - fs_sync_time
+            - nfs_client_procedure_duration
       engine:
         batching:
           batch_timeout: 10ms
