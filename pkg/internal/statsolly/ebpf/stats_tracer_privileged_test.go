@@ -57,7 +57,7 @@ func TestStorageFeatureDisabledAfterAnAttachFailure(t *testing.T) {
 }
 
 // The NFS client probe and its map are only loaded with its feature, and the probe is attached where
-// the kernel BTF describes the sunrpc types and the sunrpc module is loaded
+// the kernel BTF describes the sunrpc types, once the sunrpc module is loaded
 func TestNFSProbes(t *testing.T) {
 	require.NoError(t, rlimit.RemoveMemlock())
 	load := func(features export.Features) *StatsFetcher {
@@ -80,11 +80,9 @@ func TestNFSProbes(t *testing.T) {
 		t.Skipf("the NFS client probe doesn't run on this kernel: %v", err)
 	}
 	on := load(export.FeatureStatsNFS)
-	if _, err := os.Stat("/sys/module/sunrpc"); err != nil {
-		assert.Nil(t, on.NFSProcedureAccumMap(), "the probe can't be attached before the sunrpc module is loaded")
-		return
-	}
-	assert.NotNil(t, on.NFSProcedureAccumMap())
+	require.NotNil(t, on.NFSProcedureAccumMap())
+	_, err = os.Stat("/sys/module/sunrpc")
+	assert.Equal(t, err != nil, on.nfsWaiting, "the probe waits for the sunrpc module, and only for it")
 }
 
 // Every supported kernel has REQ_OP_ZONE_APPEND, without which the probes would not measure the zone

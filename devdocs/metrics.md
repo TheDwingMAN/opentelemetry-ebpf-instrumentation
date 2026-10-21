@@ -167,7 +167,7 @@ OBI times the syncs with fentry and fexit programs where the kernel BTF has the 
 
 `error.type` is the status that the RPC completed with, before the client recovers from it: the name of its errno, e.g. `EIO`, `ESTALE` or `ENOENT`, or `_OTHER`, whose number OBI logs at debug level. It is not the failure of an application: the lookups of names that don't exist (`ENOENT` on `LOOKUP`) and the requests of a server to retry later are normal traffic.
 
-The probe needs the `sunrpc` types in the vmlinux BTF, which `bpftool btf dump file /sys/kernel/btf/vmlinux | grep "STRUCT 'rpc_task'"` shows, and its tracepoint exists only while the `sunrpc` module is loaded, e.g. by an NFS mount: when OBI starts without it, the NFS client stats are disabled with the startup warning until OBI restarts.
+The probe needs the `sunrpc` types in the vmlinux BTF, which `bpftool btf dump file /sys/kernel/btf/vmlinux | grep "STRUCT 'rpc_task'"` shows, and its tracepoint exists only while the `sunrpc` module is loaded, e.g. by the first NFS mount. When OBI starts before it, it logs that the NFS client stats wait for the module, and attaches the probe within 30 seconds of its loading, with another log: the RPCs before that are not counted. An attach that then fails for another reason disables the NFS client stats with a warning. While the probe is attached, `sunrpc` can't be unloaded.
 
 ### Known limitations
 
