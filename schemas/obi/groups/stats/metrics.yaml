@@ -683,3 +683,35 @@ metrics:
       - ref: error.type
         requirement_level:
           conditionally_required: if the sync failed
+
+  - name: obi.stat.nfs.client.procedure.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      Execute time of the RPCs of the kernel NFS client on the whole node, per
+      server, procedure, NFS version and outcome, from the start of each RPC to
+      its completion, as `/proc/self/mountstats` counts it. An RPC that the
+      client restarts is counted once per attempt, and the NULL ping of each
+      new client is counted too. NFSv4 RPCs are COMPOUND requests, which the
+      client names after their main operation.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: server.address
+        requirement_level: recommended
+      - ref: onc_rpc.procedure.name
+        requirement_level:
+          conditionally_required: if the NFS version is 2 or 3
+      - ref: nfs.operation.name
+        requirement_level:
+          conditionally_required: if the NFS version is 4
+      - ref: onc_rpc.version
+        requirement_level: recommended
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the RPC failed

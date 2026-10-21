@@ -192,6 +192,22 @@ func getDefinitions(
 		nil,
 	)
 
+	// the NFS client RPCs of the whole node: the server, and the procedure under the attribute of its NFS
+	// version, onc_rpc.procedure.name for NFSv2 and NFSv3, and nfs.operation.name for NFSv4, whose
+	// RPCs are COMPOUND requests that the client names after their main operation
+	statsNFSProcedureAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:               false,
+			attr.ServerAddr:          true,
+			attr.OncRPCProcedureName: true,
+			attr.NfsOperationName:    true,
+			attr.OncRPCVersion:       true,
+		},
+		nil,
+	)
+
 	// the Kubernetes workload that the block I/O or the sync is charged to, and the cluster, which is
 	// the same on every series of a node: a series per workload by default, not per pod
 	statsStorageKubeAttributes := NewAttrReportGroup(
@@ -224,8 +240,9 @@ func getDefinitions(
 		nil,
 	)
 
-	// the block layer sends the cache flushes itself, charged to no workload
-	statsDiskFlushKubeAttributes := NewAttrReportGroup(
+	// the storage stats of the whole node, charged to no workload: the cache flushes, which the block
+	// layer sends itself, and the NFS client RPCs
+	statsStorageNodeKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
 		nil,
 		map[attr.Name]Default{
@@ -1031,7 +1048,7 @@ func getDefinitions(
 			},
 		},
 		StatDiskFlushDuration.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes, &statsDiskFlushKubeAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes, &statsStorageNodeKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},
@@ -1050,6 +1067,12 @@ func getDefinitions(
 		},
 		StatFsSyncTime.Section: {
 			SubGroups: []*AttrReportGroup{&statsFsSyncAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
+		StatNFSClientProcedureDuration.Section: {
+			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsStorageNodeKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
 			},

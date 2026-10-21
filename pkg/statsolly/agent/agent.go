@@ -73,7 +73,7 @@ type Stats struct {
 
 	// stat metrics
 	rbTracer *stats.RingBufTracer
-	// nil unless the disk or file sync probes are attached
+	// nil unless storage probes are attached
 	diskTracer *stats.DiskMapTracer
 
 	// focuses on TCP/UDP stack internals (kprobes/tracepoints)
@@ -88,6 +88,7 @@ type ebpFetcher interface {
 	DebugEventsMap() *ciliumebpf.Map
 	DiskIOAccumMap() *ciliumebpf.Map
 	FsSyncAccumMap() *ciliumebpf.Map
+	NFSProcedureAccumMap() *ciliumebpf.Map
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
 }
@@ -125,8 +126,14 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		alog.Warn("the cache flushes are not reported under dynamic application selection: the block layer sends "+
 			"them charged to no container", "metric", attributes.StatDiskFlushDuration.OTEL)
 	}
+	probed := cfg.Metrics.Features
+	if ctxInfo.DynamicSelector != nil && probed.StatsNFSClientProcedureDuration() {
+		alog.Warn("the NFS client RPCs are not reported under dynamic application selection: the kernel measures "+
+			"them for the whole node, charged to no container", "metric", attributes.StatNFSClientProcedureDuration.OTEL)
+		probed &^= export.FeatureStatsNFSClientProcedureDuration
+	}
 	reads := cgroupReads(cfg.Metrics.Features, attrSel, cfg.Filters.Stats, ctxInfo.DynamicSelector != nil)
-	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, reads)
+	statsFetcher, err = newFetcher(&cfg.EBPF, &probed, selectorCfg, reads)
 	if err != nil {
 		return nil, err
 	}
@@ -150,9 +157,10 @@ func statsAgent(
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
 	var diskTracer *stats.DiskMapTracer
-	diskAccum, fsSyncAccum := statsFetcher.DiskIOAccumMap(), statsFetcher.FsSyncAccumMap()
-	if diskAccum != nil || fsSyncAccum != nil {
-		diskTracer = stats.NewDiskMapTracer(diskAccum, fsSyncAccum, statsFetcher.DiskCgroupNamesMap(),
+	diskAccum, fsSyncAccum, nfsProcedureAccum := statsFetcher.DiskIOAccumMap(), statsFetcher.FsSyncAccumMap(),
+		statsFetcher.NFSProcedureAccumMap()
+	if diskAccum != nil || fsSyncAccum != nil || nfsProcedureAccum != nil {
+		diskTracer = stats.NewDiskMapTracer(diskAccum, fsSyncAccum, nfsProcedureAccum, statsFetcher.DiskCgroupNamesMap(),
 			statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
 	}
 

@@ -24,6 +24,13 @@ func TestDiskErrorType(t *testing.T) {
 	assert.Equal(t, "_OTHER", diskErrorType(0xff, false), "an errno that doesn't fit in a status, like ERESTARTSYS")
 }
 
+func TestNFSErrorType(t *testing.T) {
+	assert.Empty(t, nfsErrorType(0))
+	assert.Equal(t, "EIO", nfsErrorType(5))
+	assert.Equal(t, "ESTALE", nfsErrorType(116))
+	assert.Equal(t, "_OTHER", nfsErrorType(0xffff), "a status that the kernel can't keep")
+}
+
 func TestDiskReaderForwardsTheFailedRequestsApart(t *testing.T) {
 	failed := writeKey(8, 0)
 	failed.Status = 10

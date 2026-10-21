@@ -376,19 +376,20 @@ func statsCIDRDefinitions(cfg *obi.Config) schema.CIDRDefinitions {
 }
 
 const (
-	statsFeatureTCPRtt                   = "tcp_rtt"
-	statsFeatureTCPFailedConnections     = "tcp_failed_connections"
-	statsFeatureTCPSuccessfulConnections = "tcp_successful_connections"
-	statsFeatureTCPRetransmits           = "tcp_retransmits"
-	statsFeatureTCPIo                    = "tcp_io"
-	statsFeatureDiskServiceDuration      = "disk_service_duration"
-	statsFeatureDiskIO                   = "disk_io"
-	statsFeatureDiskOperations           = "disk_operations"
-	statsFeatureDiskServiceTime          = "disk_service_time"
-	statsFeatureDiskFlushDuration        = "disk_flush_duration"
-	statsFeatureFsSyncDuration           = "fs_sync_duration"
-	statsFeatureFsSyncOperations         = "fs_sync_operations"
-	statsFeatureFsSyncTime               = "fs_sync_time"
+	statsFeatureTCPRtt                     = "tcp_rtt"
+	statsFeatureTCPFailedConnections       = "tcp_failed_connections"
+	statsFeatureTCPSuccessfulConnections   = "tcp_successful_connections"
+	statsFeatureTCPRetransmits             = "tcp_retransmits"
+	statsFeatureTCPIo                      = "tcp_io"
+	statsFeatureDiskServiceDuration        = "disk_service_duration"
+	statsFeatureDiskIO                     = "disk_io"
+	statsFeatureDiskOperations             = "disk_operations"
+	statsFeatureDiskServiceTime            = "disk_service_time"
+	statsFeatureDiskFlushDuration          = "disk_flush_duration"
+	statsFeatureFsSyncDuration             = "fs_sync_duration"
+	statsFeatureFsSyncOperations           = "fs_sync_operations"
+	statsFeatureFsSyncTime                 = "fs_sync_time"
+	statsFeatureNFSClientProcedureDuration = "nfs_client_procedure_duration"
 )
 
 func statsFeatures(features featureexport.Features) []string {
@@ -431,6 +432,9 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsFsSyncTime() {
 		out = append(out, statsFeatureFsSyncTime)
+	}
+	if features.StatsNFSClientProcedureDuration() {
+		out = append(out, statsFeatureNFSClientProcedureDuration)
 	}
 	return out
 }

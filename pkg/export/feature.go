@@ -119,14 +119,15 @@ var FeatureMapper = map[string]Features{
 // v2OnlyFeatures are the capture.metrics.features names of the features that only Config v2
 // enables, as Config v1 is frozen: `stats_` followed by their capture.network.stats.features name
 var v2OnlyFeatures = map[string]Features{
-	"stats_disk_service_duration": FeatureStatsDiskServiceDuration,
-	"stats_disk_io":               FeatureStatsDiskIO,
-	"stats_disk_operations":       FeatureStatsDiskOperations,
-	"stats_disk_service_time":     FeatureStatsDiskServiceTime,
-	"stats_disk_flush_duration":   FeatureStatsDiskFlushDuration,
-	"stats_fs_sync_duration":      FeatureStatsFsSyncDuration,
-	"stats_fs_sync_operations":    FeatureStatsFsSyncOperations,
-	"stats_fs_sync_time":          FeatureStatsFsSyncTime,
+	"stats_disk_service_duration":         FeatureStatsDiskServiceDuration,
+	"stats_disk_io":                       FeatureStatsDiskIO,
+	"stats_disk_operations":               FeatureStatsDiskOperations,
+	"stats_disk_service_time":             FeatureStatsDiskServiceTime,
+	"stats_disk_flush_duration":           FeatureStatsDiskFlushDuration,
+	"stats_fs_sync_duration":              FeatureStatsFsSyncDuration,
+	"stats_fs_sync_operations":            FeatureStatsFsSyncOperations,
+	"stats_fs_sync_time":                  FeatureStatsFsSyncTime,
+	"stats_nfs_client_procedure_duration": FeatureStatsNFSClientProcedureDuration,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -436,7 +437,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStatsDisk | FeatureStatsFsSync)
+	return f.any(FeatureStats | FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFS)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -497,6 +498,10 @@ func (f Features) StatsFsSyncTime() bool {
 
 func (f Features) StatsFsSync() bool {
 	return f.any(FeatureStatsFsSync)
+}
+
+func (f Features) StatsNFSClientProcedureDuration() bool {
+	return f.any(FeatureStatsNFSClientProcedureDuration)
 }
 
 func (f Features) StatsNFS() bool {

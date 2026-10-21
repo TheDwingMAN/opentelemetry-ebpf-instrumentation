@@ -285,6 +285,10 @@ func TestDefault_StatStorage(t *testing.T) {
 		StatFsSyncDuration:    {attr.ErrorType, attr.FsSyncType, attr.K8sClusterName},
 		StatFsSyncOperations:  slices.Concat(workload, []attr.Name{attr.ErrorType, attr.FsSyncType}),
 		StatFsSyncTime:        slices.Concat(workload, []attr.Name{attr.ErrorType, attr.FsSyncType}),
+		// the NFS client RPCs of the whole node: the procedure under the attribute of its NFS version
+		StatNFSClientProcedureDuration: {
+			attr.ServerAddr, attr.OncRPCProcedureName, attr.NfsOperationName, attr.OncRPCVersion, attr.ErrorType, attr.K8sClusterName,
+		},
 	} {
 		assert.ElementsMatch(t, want, p.For(metric), metric.OTEL)
 	}
@@ -297,6 +301,16 @@ func TestDefault_StatStorage(t *testing.T) {
 	assert.ElementsMatch(t, []attr.Name{
 		attr.OBIIP, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice, attr.ErrorType, attr.K8sClusterName,
 	}, p.For(StatDiskFlushDuration))
+
+	// nor are the NFS client RPCs
+	p, err = NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: Selection{
+		StatNFSClientProcedureDuration.Section: InclusionLists{Include: []string{"*"}},
+	}})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []attr.Name{
+		attr.OBIIP, attr.ServerAddr, attr.OncRPCProcedureName, attr.NfsOperationName, attr.OncRPCVersion, attr.ErrorType,
+		attr.K8sClusterName,
+	}, p.For(StatNFSClientProcedureDuration))
 }
 
 func TestDefault_HTTPServerMetrics(t *testing.T) {

@@ -354,6 +354,8 @@ const (
 	OncRPCProcedureName   = Name(semconv.OncRPCProcedureNameKey)
 	OncRPCProcedureNumber = Name(semconv.OncRPCProcedureNumberKey)
 	OncRPCVersion         = Name(semconv.OncRPCVersionKey)
+	// NfsOperationName names the NFSv4 operations, on the NFS client stats
+	NfsOperationName = Name(semconv.NfsOperationNameKey)
 	// Extension until semconv adds an official auth flavor attribute.
 	OncRPCAuthFlavor = Name("onc_rpc.auth.flavor")
 )

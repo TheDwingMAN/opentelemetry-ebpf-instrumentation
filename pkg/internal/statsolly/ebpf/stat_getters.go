@@ -104,6 +104,34 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.DiskIODirection), diskIODirectionStr(op))
 		}
+	case attr.ServerAddr:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSProcedure == nil {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.ServerAddr), s.NFSProcedure.Server)
+		}
+	case attr.OncRPCProcedureName:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSProcedure == nil || isNFSv4(s.NFSProcedure.Version) {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.OncRPCProcedureName), s.NFSProcedure.Procedure)
+		}
+	case attr.NfsOperationName:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSProcedure == nil || !isNFSv4(s.NFSProcedure.Version) {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.NfsOperationName), s.NFSProcedure.Procedure)
+		}
+	case attr.OncRPCVersion:
+		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSProcedure == nil {
+				return attribute.KeyValue{}
+			}
+			return attribute.Int(string(attr.OncRPCVersion), int(s.NFSProcedure.Version))
+		}
 	case attr.FsSyncType:
 		getter = func(s *Stat) attribute.KeyValue {
 			var syncType FsSyncTypeCode
@@ -120,6 +148,8 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 				errorType = s.DiskIO.ErrorType
 			case s.FsSync != nil:
 				errorType = s.FsSync.ErrorType
+			case s.NFSProcedure != nil:
+				errorType = s.NFSProcedure.ErrorType
 			}
 			// the successful operations have none: an invalid KeyValue isn't exported
 			if errorType == "" {
@@ -145,15 +175,24 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 	default:
 		getter = func(s *Stat) attribute.KeyValue {
 			value := s.CommonAttrs.Metadata[name]
-			// the disk and file sync stats leave out the metadata that they don't have, like the
-			// Kubernetes attributes of the I/O charged to no pod: an invalid KeyValue isn't exported
-			if value == "" && (s.Type == StatTypeDiskIO || s.Type == StatTypeFsSync) {
+			// the storage stats leave out the metadata that they don't have, like the Kubernetes
+			// attributes of the I/O charged to no pod: an invalid KeyValue isn't exported
+			if value == "" && (s.Type == StatTypeDiskIO || s.Type == StatTypeFsSync || s.Type == StatTypeNFSProcedure) {
 				return attribute.KeyValue{}
 			}
 			return attribute.String(string(name), value)
 		}
 	}
 	return getter, getter != nil
+}
+
+// nfsV4 is the first version of the NFS protocol whose procedures are COMPOUND requests of operations
+const nfsV4 = 4
+
+// isNFSv4 tells whether an NFS version names its RPCs after NFSv4 operations, which the semantic
+// conventions call nfs.operation.name, rather than after ONC RPC procedures, as NFSv2 and NFSv3 do
+func isNFSv4(version uint32) bool {
+	return version >= nfsV4
 }
 
 func StatStringGetters(name attr.Name) (attributes.Getter[*Stat, string], bool) {
