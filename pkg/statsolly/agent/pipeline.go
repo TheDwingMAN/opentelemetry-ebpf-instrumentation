@@ -33,7 +33,10 @@ func storageContainerID(s *ebpf.Stat) string {
 	if s.FsSync != nil {
 		return s.FsSync.ContainerID
 	}
-	return s.DiskIO.ContainerID
+	if s.DiskIO != nil {
+		return s.DiskIO.ContainerID
+	}
+	return ""
 }
 
 // mockable functions for testing
@@ -98,14 +101,14 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		statAttrs, dynamicDecoratedStats, dynamicFilteredStats),
 		swarm.WithID("DynamicPIDFilter"))
 
-	// the disk and file sync stats have no network endpoints, so they join the TCP stats after the
-	// nodes that use them, and before the attribute filter
+	// the storage stats have no network endpoints, so they join the TCP stats after the nodes that
+	// use them, and before the attribute filter
 	statsToFilter := dynamicFilteredStats
 	if s.diskTracer != nil {
 		diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
 		swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
 
-		// under dynamic application selection, the disk and file sync stats are matched to the selected
+		// under dynamic application selection, the storage stats are matched to the selected
 		// applications by the containers that they are charged to
 		selectedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "selectedDiskStats")
 		swi.Add(filter.ByDynamicContainer(dynamicSelector, s.ctxInfo.K8sInformer, storageContainerID, diskStats, selectedDiskStats),

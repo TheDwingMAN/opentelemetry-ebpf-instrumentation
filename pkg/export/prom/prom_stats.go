@@ -50,6 +50,7 @@ type statMetricsReporter struct {
 	fsSyncDuration           *kernelHistogramVec
 	fsSyncOperations         *Expirer[prometheus.Counter]
 	fsSyncTime               *Expirer[prometheus.Counter]
+	nfsProcedureDuration     *kernelHistogramVec
 
 	promConnect *connector.PrometheusManager
 
@@ -66,6 +67,7 @@ type statMetricsReporter struct {
 	fsSyncDurationAttrs           []attributes.Field[*ebpf.Stat, string]
 	fsSyncOperationsAttrs         []attributes.Field[*ebpf.Stat, string]
 	fsSyncTimeAttrs               []attributes.Field[*ebpf.Stat, string]
+	nfsProcedureDurationAttrs     []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -278,6 +280,16 @@ func newStatsReporter(
 		register = append(register, mr.fsSyncTime)
 	}
 
+	if cfg.CommonCfg.Features.StatsNFSClientProcedureDuration() {
+		log.Debug("registering stat nfs client procedure duration metric")
+
+		mr.nfsProcedureDurationAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatNFSClientProcedureDuration))
+		mr.nfsProcedureDuration = newKernelHistogramVec(attributes.StatNFSClientProcedureDuration.Prom,
+			"measures the duration of the RPCs of the kernel NFS client, from their start until their completion, in seconds",
+			export.DiskLatencyBounds, labelNames(mr.nfsProcedureDurationAttrs), cfg.Config.TTL)
+		register = append(register, mr.nfsProcedureDuration)
+	}
+
 	mr.promConnect.Register(cfg.Config.Port, cfg.Config.Path, register...)
 
 	mr.input = input.Subscribe(msg.SubscriberName("prom.StatsReporterInput"))
@@ -299,6 +311,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeTCPIo(stat)
 			r.observeDisk(stat)
 			r.observeFsSync(stat)
+			r.observeNFSProcedure(stat)
 		}
 	}
 }
@@ -377,6 +390,13 @@ func (r *statMetricsReporter) observeDiskCounters(stat *ebpf.Stat) {
 	if r.diskServiceTime != nil {
 		r.diskServiceTime.WithLabelValues(labelValues(stat, r.diskServiceTimeAttrs)...).Metric.Add(stat.DiskIO.Latency.Sum)
 	}
+}
+
+func (r *statMetricsReporter) observeNFSProcedure(stat *ebpf.Stat) {
+	if r.nfsProcedureDuration == nil || stat.NFSProcedure == nil {
+		return
+	}
+	r.nfsProcedureDuration.observe(labelValues(stat, r.nfsProcedureDurationAttrs), &stat.NFSProcedure.Latency)
 }
 
 func (r *statMetricsReporter) observeFsSync(stat *ebpf.Stat) {

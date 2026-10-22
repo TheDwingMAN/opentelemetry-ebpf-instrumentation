@@ -268,6 +268,30 @@ func TestDiskStats(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// The NFS client stats are exported with their server, and their procedure under the attribute of
+// their NFS version
+func TestNFSStats(t *testing.T) {
+	rpcs, promURL := startDiskPipeline(t, func(s *Stats) { s.cfg.Metrics.Features = export.FeatureStatsNFS })
+	lookup := fakeNFSRecord("LOOKUP", 3, 1)
+	lookup.NFSProcedure.ErrorType = "ENOENT"
+	rpcs <- []*ebpf.Stat{fakeNFSRecord("WRITE", 4, 2), lookup}
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		allMetrics, err := promtest.Scrape(promURL)
+		require.NoError(ct, err)
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_nfs_client_procedure_duration_seconds_count", Value: 2, Labels: map[string]string{
+				"server_address": "nas", "nfs_operation_name": "WRITE", "onc_rpc_procedure_name": "", "onc_rpc_version": "4", "error_type": "",
+			}},
+			{Name: "obi_stat_nfs_client_procedure_duration_seconds_count", Value: 1, Labels: map[string]string{
+				"server_address": "nas", "nfs_operation_name": "", "onc_rpc_procedure_name": "LOOKUP", "onc_rpc_version": "3", "error_type": "ENOENT",
+			}},
+		}, slices.DeleteFunc(allMetrics, func(m promtest.ScrapedMetric) bool {
+			return m.Name != "obi_stat_nfs_client_procedure_duration_seconds_count"
+		}))
+	}, timeout, 100*time.Millisecond)
+}
+
 // Under dynamic application selection, the disk stats are those of the containers of the selected
 // applications: none while nothing is selected
 func TestFsSyncStats(t *testing.T) {
@@ -309,13 +333,13 @@ func TestFsSyncStats(t *testing.T) {
 func TestDiskStatsUnderDynamicSelection(t *testing.T) {
 	disk, promURL := startDiskPipeline(t, func(s *Stats) {
 		s.ctxInfo.DynamicSelector = discover.NewDynamicSelector()
-		s.cfg.Metrics.Features = export.FeatureStatsDisk | export.FeatureStatsFsSync
+		s.cfg.Metrics.Features = export.FeatureStatsDisk | export.FeatureStatsFsSync | export.FeatureStatsNFS
 	})
 	inContainer := fakeDiskRecord("vda", 1)
 	inContainer.DiskIO.ContainerID = "0123abcd"
 	syncInContainer := fakeFsSyncRecord(ebpf.CodeFsSyncFsync, 1)
 	syncInContainer.FsSync.ContainerID = "0123abcd"
-	disk <- []*ebpf.Stat{inContainer, fakeDiskRecord("vda", 1), syncInContainer}
+	disk <- []*ebpf.Stat{inContainer, fakeDiskRecord("vda", 1), syncInContainer, fakeNFSRecord("READ", 4, 1)}
 
 	assert.Never(t, func() bool {
 		allMetrics, err := promtest.Scrape(promURL)
@@ -323,6 +347,27 @@ func TestDiskStatsUnderDynamicSelection(t *testing.T) {
 			return strings.HasPrefix(m.Name, "obi_stat_")
 		})
 	}, time.Second, 100*time.Millisecond)
+}
+
+// The NFS client probe is attached on each refresh until it no longer waits for the sunrpc module
+func TestRefreshNFSProbesUntilNoneWaits(t *testing.T) {
+	const waitingRefreshes = 3
+	refreshes := 0
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		refreshNFSProbes(t.Context(), func() bool {
+			refreshes++
+			return refreshes < waitingRefreshes
+		}, time.Millisecond)
+	}()
+
+	select {
+	case <-done:
+		assert.Equal(t, waitingRefreshes, refreshes)
+	case <-time.After(timeout):
+		t.Fatal("the refreshes didn't stop once the probe no longer waits")
+	}
 }
 
 // startDiskPipeline runs the stats pipeline of the disk stats, as configure changes it, exporting to
@@ -374,6 +419,14 @@ func fakeDiskRecord(device string, writes uint64) *ebpf.Stat {
 	latency.BucketCounts[0] = writes
 	return &ebpf.Stat{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{
 		Device: device, Op: ebpf.CodeDiskOpWrite, Latency: latency, Bytes: writes * 4096,
+	}}
+}
+
+func fakeNFSRecord(procedure string, version uint32, rpcs uint64) *ebpf.Stat {
+	latency := ebpf.LatencyHistogram{BucketCounts: make([]uint64, len(export.DiskLatencyBounds)+1)}
+	latency.BucketCounts[0] = rpcs
+	return &ebpf.Stat{Type: ebpf.StatTypeNFSProcedure, NFSProcedure: &ebpf.NFSProcedure{
+		Server: "nas", Procedure: procedure, Version: version, Latency: latency,
 	}}
 }
 

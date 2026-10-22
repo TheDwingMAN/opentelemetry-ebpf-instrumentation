@@ -179,6 +179,9 @@ func sizeStorageMaps(spec *ebpf.CollectionSpec, storage export.Features, reads C
 		}
 		inFlight.MaxEntries = max(inFlight.MaxEntries, uint32(2*lruLocalFreeTarget*cpus))
 	}
+	if !storage.StatsNFS() {
+		spec.Maps["nfs_procedure_accum"].MaxEntries = 1
+	}
 }
 
 func diskLatencyBoundsNs() [diskLatencyBuckets - 1]uint64 {

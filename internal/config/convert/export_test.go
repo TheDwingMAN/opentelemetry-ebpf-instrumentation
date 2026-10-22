@@ -1048,11 +1048,11 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 		}, value(t, ext.Capture.Network, "stats", "features"))
 	})
 
-	t.Run("disk and file sync stat families are listed apart from the stats aggregate", func(t *testing.T) {
+	t.Run("disk, file sync and NFS client stat families are listed apart from the stats aggregate", func(t *testing.T) {
 		t.Parallel()
 
 		cfg := defaultRuntimeConfig()
-		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsDisk | export.FeatureStatsFsSync
+		cfg.Metrics.Features = export.FeatureStatsTCPRtt | export.FeatureStatsDisk | export.FeatureStatsFsSync | export.FeatureStatsNFS
 
 		_, ext := RuntimeToV2(&cfg)
 
@@ -1066,6 +1066,7 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 			"fs_sync_duration",
 			"fs_sync_operations",
 			"fs_sync_time",
+			"nfs_client_procedure_duration",
 		}, value(t, ext.Capture.Network, "stats", "features"))
 	})
 

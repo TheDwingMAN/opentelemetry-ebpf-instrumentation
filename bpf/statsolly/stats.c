@@ -5,6 +5,7 @@
 #include "k_fsync.c"
 #include "k_tcp.c"
 #include "tp_blk.c"
+#include "tp_nfs.c"
 #include "tp_tcp.c"
 
 // Force emitting these enums into the ELF so bpf2go generates their Go constants

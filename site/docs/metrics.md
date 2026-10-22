@@ -1531,6 +1531,24 @@ Time that threads waited for file syncs, per sync type and outcome: the sum of `
 | `obi.fs.sync.type` | enum | `recommended` | development | The system call that synced files, or, for the syncs within other calls (O_SYNC and O_DSYNC writes, msync, io_uring), `fsync` or `fdatasync`, depending on whether the metadata is synced too. | fsync; fdatasync; sync; syncfs; sync_file_range |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 
+## `obi.stat.nfs.client.procedure.duration`
+
+Execute time of the RPCs of the kernel NFS client on the whole node, per server, procedure, NFS version and outcome, from the start of each RPC to its completion, as `/proc/self/mountstats` counts it. An RPC that the client restarts is counted once per attempt, and the NULL ping of each new client is counted too. NFSv4 RPCs are COMPOUND requests, which the client names after their main operation.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| histogram | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `error.type` | string | `conditionally_required`: if the RPC failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `nfs.operation.name` | string | `conditionally_required`: if the NFS version is 4 | development | NFSv4+ operation name. | OPEN; READ; GETATTR |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `onc_rpc.procedure.name` | string | `conditionally_required`: if the NFS version is 2 or 3 | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
 ## `obi.stat.tcp.failed.connections`
 
 Count of TCP connections that failed to establish, broken down by `reason`.
