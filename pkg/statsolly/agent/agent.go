@@ -95,6 +95,7 @@ type ebpFetcher interface {
 	FsSyncAccumMap() *ciliumebpf.Map
 	NFSProcedureAccumMap() *ciliumebpf.Map
 	NFSProcedureCgroupAccumMap() *ciliumebpf.Map
+	NFSIOAccumMap() *ciliumebpf.Map
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
 	RefreshNFSProbes() bool
@@ -169,6 +170,7 @@ func statsAgent(
 		FsSync:             statsFetcher.FsSyncAccumMap(),
 		NFSProcedure:       statsFetcher.NFSProcedureAccumMap(),
 		NFSProcedureCgroup: statsFetcher.NFSProcedureCgroupAccumMap(),
+		NFSIO:              statsFetcher.NFSIOAccumMap(),
 		CgroupNames:        statsFetcher.DiskCgroupNamesMap(),
 	}
 	if maps.Any() {

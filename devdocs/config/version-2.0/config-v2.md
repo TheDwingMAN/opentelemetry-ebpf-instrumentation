@@ -563,7 +563,7 @@ This section is the primary user control for defining how OBI captures and proce
 The current shape separates packet/flow capture from TCP, block I/O (disk), file sync and NFS client stats capture:
 
 - `capture.network.capture` controls network flow capture and flow-derived telemetry.
-- `capture.network.stats` controls TCP, block I/O (disk), file sync and NFS client stats telemetry. `enabled` is the stats master switch, and `features` lists enabled stats families: `tcp_rtt`, `tcp_failed_connections`, `tcp_successful_connections`, `tcp_retransmits`, `tcp_io`, `disk_service_duration`, `disk_io`, `disk_operations`, `disk_service_time`, `disk_flush_duration`, `fs_sync_duration`, `fs_sync_operations`, `fs_sync_time`, `nfs_client_procedure_duration`, `nfs_client_procedure_count`, and `nfs_client_procedure_time`.
+- `capture.network.stats` controls TCP, block I/O (disk), file sync and NFS client stats telemetry. `enabled` is the stats master switch, and `features` lists enabled stats families: `tcp_rtt`, `tcp_failed_connections`, `tcp_successful_connections`, `tcp_retransmits`, `tcp_io`, `disk_service_duration`, `disk_io`, `disk_operations`, `disk_service_time`, `disk_flush_duration`, `fs_sync_duration`, `fs_sync_operations`, `fs_sync_time`, `nfs_client_procedure_duration`, `nfs_client_procedure_count`, `nfs_client_procedure_time`, and `nfs_client_io`.
 
 `tcp_io` can produce substantially more events than the other stats families, so users should opt into it deliberately when they need per-send/per-receive I/O stats.
 
@@ -571,7 +571,7 @@ The `disk_*` families probe every block I/O request, the `fs_sync_*` families ev
 
 ### `capture.metrics.features`
 
-Select metric families with the same names as Config v1, plus `stats_disk_service_duration`, `stats_disk_io`, `stats_disk_operations`, `stats_disk_service_time`, `stats_disk_flush_duration`, `stats_fs_sync_duration`, `stats_fs_sync_operations`, `stats_fs_sync_time`, `stats_nfs_client_procedure_duration`, `stats_nfs_client_procedure_count`, and `stats_nfs_client_procedure_time`, which only Config v2 enables. For standalone OBI:
+Select metric families with the same names as Config v1, plus `stats_disk_service_duration`, `stats_disk_io`, `stats_disk_operations`, `stats_disk_service_time`, `stats_disk_flush_duration`, `stats_fs_sync_duration`, `stats_fs_sync_operations`, `stats_fs_sync_time`, `stats_nfs_client_procedure_duration`, `stats_nfs_client_procedure_count`, `stats_nfs_client_procedure_time`, and `stats_nfs_client_io`, which only Config v2 enables. For standalone OBI:
 
 ```yaml
 extensions:

@@ -18,6 +18,7 @@ enum stat_type : u8 {
     k_stat_type_fs_sync = 7,
     k_stat_type_nfs_procedure = 8,
     k_stat_type_nfs_procedure_cgroup = 9,
+    k_stat_type_nfs_io = 10,
 };
 
 // batch size used in tcp io metric

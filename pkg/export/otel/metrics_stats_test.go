@@ -142,6 +142,7 @@ func TestStatMetricsExporter_NFSProcedure(t *testing.T) {
 			Server: "nas", Procedure: "LOOKUP", Version: 3, ErrorType: "ENOENT", Latency: *latency(0.001, 1),
 		}},
 		commit,
+		{Type: ebpf.StatTypeNFSIO, NFSIO: &ebpf.NFSIO{Server: "nas", Direction: ebpf.CodeDirectionReceive, Bytes: 65536}},
 	})
 
 	commitAttrs := map[string]string{
@@ -155,6 +156,7 @@ func TestStatMetricsExporter_NFSProcedure(t *testing.T) {
 		},
 		attributes.StatNFSClientProcedureCount.OTEL: {commitAttrs},
 		attributes.StatNFSClientProcedureTime.OTEL:  {commitAttrs},
+		attributes.StatNFSClientIO.OTEL:             {{"server.address": "nas", "network.io.direction": "receive"}},
 	}
 	got := map[string][]map[string]string{}
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {

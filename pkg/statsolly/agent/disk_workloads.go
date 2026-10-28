@@ -63,6 +63,7 @@ func cgroupReads(features export.Features, attrSel *attributes.AttrSelector, fil
 		NFS: readsCgroup(features&export.FeatureStatsNFSClientWorkloads != 0, []storageMetric{
 			{enabled: features.StatsNFSClientProcedureCount(), name: attributes.StatNFSClientProcedureCount},
 			{enabled: features.StatsNFSClientProcedureTime(), name: attributes.StatNFSClientProcedureTime},
+			{enabled: features.StatsNFSClientIO(), name: attributes.StatNFSClientIO},
 		}),
 	}
 }

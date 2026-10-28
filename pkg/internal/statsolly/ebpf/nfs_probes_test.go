@@ -29,6 +29,8 @@ func TestKernelRPCTypes(t *testing.T) {
 		"the vmlinux BTF doesn't describe the sunrpc types: it has no struct rpc_xprt")
 	require.EqualError(t, kernelRPCTypes(kernel()),
 		"the vmlinux BTF doesn't describe the sunrpc types: it has no struct rpc_task", "Linux 5.8, whose sunrpc is a module")
+	require.NoError(t, kernelPgioTypes(kernel("nfs_pgio_header")))
+	require.Error(t, kernelPgioTypes(kernel("rpc_task")))
 }
 
 // Each NFS client probe runs for the features that it measures: the start of the RPCs only when their
@@ -55,31 +57,36 @@ func TestNFSProbeFeatures(t *testing.T) {
 	assert.Equal(t, rpcs, attached(export.FeatureStatsNFSClientProcedureDuration, CgroupReads{NFS: true}))
 	assert.Equal(t, rpcs, attached(export.FeatureStatsNFSClientProcedureCount, CgroupReads{}))
 	assert.Equal(t, both, attached(export.FeatureStatsNFSClientProcedureTime, CgroupReads{NFS: true}))
+	assert.Equal(t, map[string]export.Features{
+		RawTracepointNFSReadpageDone: export.FeatureStatsNFSClientIO, RawTracepointNFSWritebackDone: export.FeatureStatsNFSClientIO,
+		RawTracepointRPCTaskBegin: export.FeatureStatsNFSClientWorkloads,
+	}, attached(export.FeatureStatsNFSClientIO, CgroupReads{NFS: true}))
 }
 
 func TestSizeNFSMaps(t *testing.T) {
-	const histogram, counters, tasks, names, beyond = 1 << 12, 1 << 13, 1 << 14, 1 << 13, 2 * lruLocalFreeTarget * 192
+	const histogram, counters, tasks, names, io, beyond = 1 << 12, 1 << 13, 1 << 14, 1 << 13, 1 << 12, 2 * lruLocalFreeTarget * 192
 	reads := CgroupReads{NFS: true}
 	for _, tc := range []struct {
 		name    string
 		storage export.Features
 		reads   CgroupReads
 		cpus    int
-		// nfs_procedure_accum, nfs_procedure_cgroup_accum, nfs_task_cgroup and disk_cgroup_names
-		want [4]uint32
+		// nfs_procedure_accum, nfs_procedure_cgroup_accum, nfs_task_cgroup, disk_cgroup_names and nfs_io_accum
+		want [5]uint32
 	}{
-		{name: "disabled", reads: reads, cpus: 64, want: [4]uint32{1, 1, 1, 1}},
-		{name: "the histogram never reads the cgroups", storage: export.FeatureStatsNFSClientProcedureDuration, reads: reads, cpus: 64, want: [4]uint32{histogram, 1, 1, 1}},
-		{name: "the counters of the node", storage: export.FeatureStatsNFSClientProcedureCount, cpus: 64, want: [4]uint32{1, counters, 1, 1}},
-		{name: "the counters per workload", storage: export.FeatureStatsNFSClientProcedureCounters, reads: reads, cpus: 64, want: [4]uint32{1, counters, tasks, names}},
-		{name: "beyond 64 CPUs", storage: export.FeatureStatsNFS, reads: reads, cpus: 192, want: [4]uint32{histogram, counters, beyond, names}},
+		{name: "disabled", reads: reads, cpus: 64, want: [5]uint32{1, 1, 1, 1, 1}},
+		{name: "the histogram never reads the cgroups", storage: export.FeatureStatsNFSClientProcedureDuration, reads: reads, cpus: 64, want: [5]uint32{histogram, 1, 1, 1, 1}},
+		{name: "the counters of the node", storage: export.FeatureStatsNFSClientProcedureCount, cpus: 64, want: [5]uint32{1, counters, 1, 1, 1}},
+		{name: "the counters per workload", storage: export.FeatureStatsNFSClientProcedureCounters, reads: reads, cpus: 64, want: [5]uint32{1, counters, tasks, names, 1}},
+		{name: "the bytes per workload", storage: export.FeatureStatsNFSClientIO, reads: reads, cpus: 64, want: [5]uint32{1, 1, tasks, names, io}},
+		{name: "beyond 64 CPUs", storage: export.FeatureStatsNFS, reads: reads, cpus: 192, want: [5]uint32{histogram, counters, beyond, names, io}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec, err := LoadStats()
 			require.NoError(t, err)
 			sizeStorageMaps(spec, tc.storage, tc.reads, tc.cpus)
-			var got [4]uint32
-			for i, name := range []string{"nfs_procedure_accum", "nfs_procedure_cgroup_accum", "nfs_task_cgroup", "disk_cgroup_names"} {
+			var got [5]uint32
+			for i, name := range []string{"nfs_procedure_accum", "nfs_procedure_cgroup_accum", "nfs_task_cgroup", "disk_cgroup_names", "nfs_io_accum"} {
 				got[i] = spec.Maps[name].MaxEntries
 			}
 			assert.Equal(t, tc.want, got)

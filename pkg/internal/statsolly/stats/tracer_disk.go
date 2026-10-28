@@ -57,13 +57,13 @@ type DiskMapTracer struct {
 // AccumMaps are the kernel maps that the DiskMapTracer reads: the accumulation maps, nil for the
 // disabled features, and the names of the cgroups that they are charged to
 type AccumMaps struct {
-	Disk, FsSync, NFSProcedure, NFSProcedureCgroup *ciliumebpf.Map
-	CgroupNames                                    *ciliumebpf.Map
+	Disk, FsSync, NFSProcedure, NFSProcedureCgroup, NFSIO *ciliumebpf.Map
+	CgroupNames                                           *ciliumebpf.Map
 }
 
 // Any tells whether there is an accumulation map to read
 func (m AccumMaps) Any() bool {
-	return m.Disk != nil || m.FsSync != nil || m.NFSProcedure != nil || m.NFSProcedureCgroup != nil
+	return m.Disk != nil || m.FsSync != nil || m.NFSProcedure != nil || m.NFSProcedureCgroup != nil || m.NFSIO != nil
 }
 
 // NewDiskMapTracer reads the accumulation maps that are not nil
@@ -92,6 +92,10 @@ func NewDiskMapTracer(maps AccumMaps, statusIsBlkStatus bool, cfg *config.EBPFTr
 	if maps.NFSProcedureCgroup != nil {
 		accum := ebpfAccum[ebpf.StatsNfsProcedureCgroupKeyT, ebpf.StatsNfsProcedureCgroupAccumT]{accum: maps.NFSProcedureCgroup}
 		tracer.readers = append(tracer.readers, newNFSProcedureCgroupReader(accum, containers, interval).readStats)
+	}
+	if maps.NFSIO != nil {
+		accum := ebpfAccum[ebpf.StatsNfsIoKeyT, uint64]{accum: maps.NFSIO}
+		tracer.readers = append(tracer.readers, newNFSIOReader(accum, containers, interval).readStats)
 	}
 	return tracer
 }
@@ -269,6 +273,22 @@ func newNFSProcedureCgroupReader(accum accumMap[ebpf.StatsNfsProcedureCgroupKeyT
 		procedure.Count = count
 		procedure.Time = float64(current.SumNs-previous.SumNs) / float64(time.Second)
 		return &ebpf.Stat{Type: ebpf.StatTypeNFSProcedureCgroup, NFSProcedure: procedure}
+	}, interval)
+}
+
+// newNFSIOReader reads the accumulation map of the bytes of the NFS client reads and writes
+func newNFSIOReader(accum accumMap[ebpf.StatsNfsIoKeyT, uint64], containers *cgroupContainers, interval time.Duration,
+) *accumReader[ebpf.StatsNfsIoKeyT, uint64] {
+	return newAccumReader(ebpf.StatsMapNfsIoAccum, accum, func(key ebpf.StatsNfsIoKeyT, current, previous uint64) *ebpf.Stat {
+		return &ebpf.Stat{
+			Type: ebpf.StatTypeNFSIO,
+			NFSIO: &ebpf.NFSIO{
+				Server:      unix.ByteSliceToString(key.Server[:]),
+				Direction:   ebpf.NetworkIoDirectionCode(key.Direction),
+				ContainerID: containers.containerID(key.CgroupId),
+				Bytes:       current - previous,
+			},
+		}
 	}, interval)
 }
 

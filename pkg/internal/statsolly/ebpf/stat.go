@@ -23,6 +23,7 @@ const (
 	StatTypeFsSync                  = StatType(StatsStatTypeK_statTypeFsSync)
 	StatTypeNFSProcedure            = StatType(StatsStatTypeK_statTypeNfsProcedure)
 	StatTypeNFSProcedureCgroup      = StatType(StatsStatTypeK_statTypeNfsProcedureCgroup)
+	StatTypeNFSIO                   = StatType(StatsStatTypeK_statTypeNfsIo)
 )
 
 // CgroupReads tells which storage probes read the cgroups that the kernel charges the operations
@@ -128,6 +129,7 @@ type Stat struct {
 	DiskIO                  *DiskIO                  `json:"-"`
 	FsSync                  *FsSync                  `json:"-"`
 	NFSProcedure            *NFSProcedure            `json:"-"`
+	NFSIO                   *NFSIO                   `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -203,6 +205,17 @@ type NFSProcedure struct {
 	Count       uint64
 	// Time is the sum of the execute times of the RPCs, in seconds
 	Time float64
+}
+
+// NFSIO is the bytes that the READs or the WRITEs of the NFS client of a workload transferred with a
+// server since the previous read of the kernel map
+type NFSIO struct {
+	Server string
+	// Direction is receive for the reads, and transmit for the writes
+	Direction NetworkIoDirectionCode
+	// ContainerID is the container of the threads that started the RPCs, empty for none
+	ContainerID string
+	Bytes       uint64
 }
 
 // LatencyHistogram counts block requests, file syncs or NFS RPCs in the buckets of export.DiskLatencyBounds

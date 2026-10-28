@@ -106,6 +106,7 @@ type statMetricsExporter struct {
 	nfsProcedureDuration     *kernelHistogram
 	nfsProcedureCount        *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	nfsProcedureTime         *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
+	nfsIO                    *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	kernelHistograms         *kernelHistogramProducer
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
@@ -336,6 +337,15 @@ func newStatMetricsExporter(
 		nme.nfsProcedureTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, nfsProcedureTime, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StatsNFSClientIO() {
+		nfsIO, err := ebpfEvents.Int64Counter(attributes.StatNFSClientIO.OTEL, metric2.WithUnit(attributes.StatNFSClientIO.Unit))
+		if err != nil {
+			return nil, fmt.Errorf("creating stats nfs client io counter: %w", err)
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatNFSClientIO))
+		nme.nfsIO = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, nfsIO, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -371,6 +381,10 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			}
 			if v.NFSProcedure != nil {
 				me.recordNFSProcedure(ctx, v)
+			}
+			if me.nfsIO != nil && v.NFSIO != nil {
+				nfsIO, attrs := me.nfsIO.ForRecord(v)
+				nfsIO.Add(ctx, int64(v.NFSIO.Bytes), metric2.WithAttributeSet(attrs))
 			}
 		}
 	}
