@@ -2631,6 +2631,8 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsNFSClientProcedureCount
 		case statsFeatureNFSClientProcedureTime:
 			out |= export.FeatureStatsNFSClientProcedureTime
+		case statsFeatureNFSClientIO:
+			out |= export.FeatureStatsNFSClientIO
 		}
 	}
 	return out

@@ -208,6 +208,18 @@ func getDefinitions(
 		nil,
 	)
 
+	// the bytes of the NFS client reads (receive) and writes (transmit) with a server
+	statsNFSIOAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:              false,
+			attr.ServerAddr:         true,
+			attr.NetworkIoDirection: true,
+		},
+		nil,
+	)
+
 	// the Kubernetes workload that the storage operation is charged to, and the cluster, which is
 	// the same on every series of a node: a series per workload by default, not per pod
 	statsStorageKubeAttributes := NewAttrReportGroup(
@@ -1118,6 +1130,12 @@ func getDefinitions(
 			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsStorageKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType:   true,
+				attr.ContainerID: false,
+			},
+		},
+		StatNFSClientIO.Section: {
+			SubGroups: []*AttrReportGroup{&statsNFSIOAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
 				attr.ContainerID: false,
 			},
 		},

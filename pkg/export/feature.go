@@ -87,6 +87,7 @@ const (
 	FeatureStatsNFSClientProcedureDuration
 	FeatureStatsNFSClientProcedureCount
 	FeatureStatsNFSClientProcedureTime
+	FeatureStatsNFSClientIO
 	// FeatureAll preserves the legacy all-features behavior while keeping connection info opt-in.
 	FeatureAll = Features(^uint(0)) &^ (FeatureConnectionInfo | FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFS)
 )
@@ -103,10 +104,10 @@ const FeatureStatsFsSync = FeatureStatsFsSyncDuration | FeatureStatsFsSyncOperat
 const FeatureStatsNFSClientProcedureCounters = FeatureStatsNFSClientProcedureCount | FeatureStatsNFSClientProcedureTime
 
 // FeatureStatsNFSClientWorkloads groups the NFS client stat features that charge the RPCs to workloads
-const FeatureStatsNFSClientWorkloads = FeatureStatsNFSClientProcedureCounters
+const FeatureStatsNFSClientWorkloads = FeatureStatsNFSClientProcedureCounters | FeatureStatsNFSClientIO
 
 // FeatureStatsNFS groups the NFS client stat features, whose probes are attached together
-const FeatureStatsNFS = FeatureStatsNFSClientProcedureDuration | FeatureStatsNFSClientProcedureCounters
+const FeatureStatsNFS = FeatureStatsNFSClientProcedureDuration | FeatureStatsNFSClientProcedureCounters | FeatureStatsNFSClientIO
 
 // FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -153,6 +154,7 @@ var v2OnlyFeatures = map[string]Features{
 	"stats_nfs_client_procedure_duration": FeatureStatsNFSClientProcedureDuration,
 	"stats_nfs_client_procedure_count":    FeatureStatsNFSClientProcedureCount,
 	"stats_nfs_client_procedure_time":     FeatureStatsNFSClientProcedureTime,
+	"stats_nfs_client_io":                 FeatureStatsNFSClientIO,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -558,6 +560,10 @@ func (f Features) StatsNFSClientProcedureCount() bool {
 
 func (f Features) StatsNFSClientProcedureTime() bool {
 	return f.any(FeatureStatsNFSClientProcedureTime)
+}
+
+func (f Features) StatsNFSClientIO() bool {
+	return f.any(FeatureStatsNFSClientIO)
 }
 
 func (f Features) StatsNFS() bool {

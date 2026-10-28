@@ -53,6 +53,7 @@ type statMetricsReporter struct {
 	nfsProcedureDuration     *kernelHistogramVec
 	nfsProcedureCount        *Expirer[prometheus.Counter]
 	nfsProcedureTime         *Expirer[prometheus.Counter]
+	nfsIO                    *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -72,6 +73,7 @@ type statMetricsReporter struct {
 	nfsProcedureDurationAttrs     []attributes.Field[*ebpf.Stat, string]
 	nfsProcedureCountAttrs        []attributes.Field[*ebpf.Stat, string]
 	nfsProcedureTimeAttrs         []attributes.Field[*ebpf.Stat, string]
+	nfsIOAttrs                    []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -316,6 +318,17 @@ func newStatsReporter(
 		register = append(register, mr.nfsProcedureTime)
 	}
 
+	if cfg.CommonCfg.Features.StatsNFSClientIO() {
+		log.Debug("registering stat nfs client io metric")
+
+		mr.nfsIOAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatNFSClientIO))
+		mr.nfsIO = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatNFSClientIO.Prom,
+			Help: "bytes that the reads and writes of the kernel NFS client transferred",
+		}, labelNames(mr.nfsIOAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.nfsIO)
+	}
+
 	mr.promConnect.Register(cfg.Config.Port, cfg.Config.Path, register...)
 
 	mr.input = input.Subscribe(msg.SubscriberName("prom.StatsReporterInput"))
@@ -338,6 +351,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeDisk(stat)
 			r.observeFsSync(stat)
 			r.observeNFSProcedure(stat)
+			r.observeNFSIO(stat)
 		}
 	}
 }
@@ -436,6 +450,13 @@ func (r *statMetricsReporter) observeNFSProcedure(stat *ebpf.Stat) {
 	if r.nfsProcedureTime != nil {
 		r.nfsProcedureTime.WithLabelValues(labelValues(stat, r.nfsProcedureTimeAttrs)...).Metric.Add(stat.NFSProcedure.Time)
 	}
+}
+
+func (r *statMetricsReporter) observeNFSIO(stat *ebpf.Stat) {
+	if r.nfsIO == nil || stat.NFSIO == nil {
+		return
+	}
+	r.nfsIO.WithLabelValues(labelValues(stat, r.nfsIOAttrs)...).Metric.Add(float64(stat.NFSIO.Bytes))
 }
 
 func (r *statMetricsReporter) observeFsSync(stat *ebpf.Stat) {

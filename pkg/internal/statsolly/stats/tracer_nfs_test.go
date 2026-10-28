@@ -90,3 +90,31 @@ func TestNFSProcedureCgroupReader(t *testing.T) {
 	assert.Equal(t, uint64(2), stats[0].NFSProcedure.Count)
 	assert.InDelta(t, 0.0004, stats[0].NFSProcedure.Time, 1e-12)
 }
+
+// The reader of the bytes forwards what each server, direction and workload transferred since the
+// previous read
+func TestNFSIOReader(t *testing.T) {
+	const containerID = "8e5e2d4ef4e0ec0ee80e1b7f86c2b8dbdc5a6e1db8c3d2d1b0a19f8e7d6c5b4a"
+	read := ebpf.StatsNfsIoKeyT{Direction: ebpf.StatsNetworkIoDirectionDirectionReceive}
+	written := ebpf.StatsNfsIoKeyT{Direction: ebpf.StatsNetworkIoDirectionDirectionTransmit, CgroupId: 10}
+	copy(read.Server[:], "nas")
+	copy(written.Server[:], "nas")
+	src := &fakeAccum[ebpf.StatsNfsIoKeyT, uint64]{entries: map[ebpf.StatsNfsIoKeyT]uint64{read: 1 << 20, written: 1 << 16}}
+	containers := newCgroupContainers(func(cgroupID uint64) (string, string, bool) {
+		return "cri-containerd-" + containerID + ".scope", "kubepods.slice", cgroupID == 10
+	}, 16)
+	r := newNFSIOReader(src, containers, defaultDiskReadInterval)
+
+	stats := r.readStats()
+	require.Len(t, stats, 2)
+	assert.ElementsMatch(t, []ebpf.NFSIO{
+		{Server: "nas", Direction: ebpf.CodeDirectionReceive, Bytes: 1 << 20},
+		{Server: "nas", Direction: ebpf.CodeDirectionTransmit, ContainerID: containerID, Bytes: 1 << 16},
+	}, []ebpf.NFSIO{*stats[0].NFSIO, *stats[1].NFSIO})
+
+	src.entries[written] = 3 << 16
+	stats = r.readStats()
+	require.Len(t, stats, 1, "only what changed")
+	assert.Equal(t, ebpf.StatTypeNFSIO, stats[0].Type)
+	assert.Equal(t, uint64(2<<16), stats[0].NFSIO.Bytes)
+}

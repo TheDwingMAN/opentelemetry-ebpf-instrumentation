@@ -375,6 +375,7 @@ func TestDefault_StatStorage(t *testing.T) {
 		// and per workload, which the counters of its RPCs give
 		StatNFSClientProcedureCount: slices.Concat(nfs, workload),
 		StatNFSClientProcedureTime:  slices.Concat(nfs, workload),
+		StatNFSClientIO:             slices.Concat(workload, []attr.Name{attr.ServerAddr, attr.NetworkIoDirection}),
 	} {
 		assert.ElementsMatch(t, want, p.For(metric), metric.OTEL)
 	}

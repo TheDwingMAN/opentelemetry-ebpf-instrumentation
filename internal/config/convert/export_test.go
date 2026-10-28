@@ -1074,6 +1074,7 @@ func TestRuntimeToV2StatsEnablementAndFeatures(t *testing.T) {
 			"nfs_client_procedure_duration",
 			"nfs_client_procedure_count",
 			"nfs_client_procedure_time",
+			"nfs_client_io",
 		}, value(t, ext.Capture.Network, "stats", "features"))
 	})
 

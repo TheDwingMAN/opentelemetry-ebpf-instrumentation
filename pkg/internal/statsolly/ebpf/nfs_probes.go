@@ -33,8 +33,26 @@ func kernelRPCTypes(kernel *btf.Spec) error {
 	return nil
 }
 
+// kernelPgioTypes checks that the vmlinux BTF describes the struct of the NFS client reads and writes
+// that the probes of their bytes read
+func kernelPgioTypes(kernel *btf.Spec) error {
+	if !hasStruct(kernel, "nfs_pgio_header") {
+		return errors.New("the vmlinux BTF doesn't describe the NFS client I/O: it has no struct nfs_pgio_header")
+	}
+	return nil
+}
+
 // nfsRPCFeatures are the NFS client features that the probe of the completed RPCs measures
 const nfsRPCFeatures = export.FeatureStatsNFSClientProcedureDuration | export.FeatureStatsNFSClientProcedureCounters
+
+// nfsModules returns the kernel modules of the tracepoints of the NFS client probes: sunrpc, and the
+// nfs client for the bytes of its reads and writes
+func nfsModules(storage export.Features) []string {
+	if storage.StatsNFSClientIO() {
+		return []string{"sunrpc", "nfs"}
+	}
+	return []string{"sunrpc"}
+}
 
 // nfsReadsCgroup tells whether the NFS client probes read the cgroup of the threads that start the
 // RPCs, for the attributes of their workloads: the histogram of the node never reads it
@@ -51,13 +69,29 @@ func nfsProgramsToDisable(storage export.Features, readsCgroup bool) []string {
 	if storage&nfsRPCFeatures == 0 {
 		toDisable = append(toDisable, StatsProgObiStatsRawTpRpcStatsLatency)
 	}
+	if !storage.StatsNFSClientIO() {
+		toDisable = append(toDisable, StatsProgObiStatsRawTpNfsReadpageDone, StatsProgObiStatsRawTpNfsWritebackDone)
+	}
 	return toDisable
 }
 
 // nfsProbes returns the NFS client probes in their attach order, each with the features that it
-// measures
+// measures: those of the nfs module first, so that a node with sunrpc but without the nfs client,
+// as an NFS server, waits for it without attaching the others again at every refresh
 func nfsProbes(objects *StatsObjects, storage export.Features, readsCgroup bool) []probe {
 	return []probe{
+		{
+			name:    RawTracepointNFSReadpageDone,
+			program: objects.ObiStatsRawTpNfsReadpageDone,
+			enabled: storage.StatsNFSClientIO(),
+			feature: export.FeatureStatsNFSClientIO,
+		},
+		{
+			name:    RawTracepointNFSWritebackDone,
+			program: objects.ObiStatsRawTpNfsWritebackDone,
+			enabled: storage.StatsNFSClientIO(),
+			feature: export.FeatureStatsNFSClientIO,
+		},
 		{
 			name:    RawTracepointRPCTaskBegin,
 			program: objects.ObiStatsRawTpRpcTaskBegin,
@@ -80,6 +114,9 @@ func sizeNFSMaps(spec *ebpf.CollectionSpec, storage export.Features) {
 	}
 	if storage&export.FeatureStatsNFSClientProcedureCounters == 0 {
 		spec.Maps["nfs_procedure_cgroup_accum"].MaxEntries = 1
+	}
+	if !storage.StatsNFSClientIO() {
+		spec.Maps["nfs_io_accum"].MaxEntries = 1
 	}
 }
 

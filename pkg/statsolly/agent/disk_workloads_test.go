@@ -75,6 +75,7 @@ func TestCgroupReads(t *testing.T) {
 			selection: selecting(attributes.StatNFSClientProcedureTime, "container.id"), want: nfs,
 		},
 		{name: "NFS client RPC counters in Kubernetes", groups: attributes.GroupKubernetes, features: export.FeatureStatsNFSClientProcedureCount, want: nfs},
+		{name: "NFS client bytes in Kubernetes", groups: attributes.GroupKubernetes, features: export.FeatureStatsNFSClientIO, want: nfs},
 		{
 			name: "NFS client RPC histogram filtered", features: export.FeatureStatsNFSClientProcedureDuration,
 			filters: filter.AttributeFamilyConfig{"container.id": {Match: "a1*"}},

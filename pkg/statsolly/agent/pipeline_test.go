@@ -284,7 +284,10 @@ func TestNFSStats(t *testing.T) {
 	commit := &ebpf.Stat{Type: ebpf.StatTypeNFSProcedureCgroup, NFSProcedure: &ebpf.NFSProcedure{
 		Server: "nas", Procedure: "COMMIT", Version: 4, ContainerID: "0123abcd", Count: 2, Time: 0.5,
 	}}
-	rpcs <- []*ebpf.Stat{fakeNFSRecord("WRITE", 4, 2), lookup, commit}
+	written := &ebpf.Stat{Type: ebpf.StatTypeNFSIO, NFSIO: &ebpf.NFSIO{
+		Server: "nas", Direction: ebpf.CodeDirectionTransmit, ContainerID: "0123abcd", Bytes: 65536,
+	}}
+	rpcs <- []*ebpf.Stat{fakeNFSRecord("WRITE", 4, 2), lookup, commit, written}
 
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
 		allMetrics, err := promtest.Scrape(promURL)
@@ -306,9 +309,13 @@ func TestNFSStats(t *testing.T) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
 			{Name: "obi_stat_nfs_client_procedure_count_total", Value: 2, Labels: labels},
 			{Name: "obi_stat_nfs_client_procedure_time_seconds_total", Value: 0.5, Labels: labels},
-		}, slices.DeleteFunc(allMetrics, func(m promtest.ScrapedMetric) bool {
+		}, slices.DeleteFunc(slices.Clone(allMetrics), func(m promtest.ScrapedMetric) bool {
 			return !strings.HasPrefix(m.Name, "obi_stat_nfs_client_procedure_count") && !strings.HasPrefix(m.Name, "obi_stat_nfs_client_procedure_time")
 		}))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{{
+			Name: "obi_stat_nfs_client_io_bytes_total", Value: 65536,
+			Labels: map[string]string{"server_address": "nas", "network_io_direction": "transmit"},
+		}}, slices.DeleteFunc(allMetrics, func(m promtest.ScrapedMetric) bool { return m.Name != "obi_stat_nfs_client_io_bytes_total" }))
 	}, timeout, 100*time.Millisecond)
 }
 
@@ -375,6 +382,7 @@ func TestStorageContainerID(t *testing.T) {
 		"disk": {Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{ContainerID: "disk"}},
 		"sync": {Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{ContainerID: "sync"}},
 		"rpcs": {Type: ebpf.StatTypeNFSProcedureCgroup, NFSProcedure: &ebpf.NFSProcedure{ContainerID: "rpcs"}},
+		"io":   {Type: ebpf.StatTypeNFSIO, NFSIO: &ebpf.NFSIO{ContainerID: "io"}},
 		"":     fakeNFSRecord("READ", 4, 1),
 	} {
 		assert.Equal(t, want, storageContainerID(stat))

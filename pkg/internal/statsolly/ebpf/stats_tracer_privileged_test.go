@@ -73,6 +73,7 @@ func TestNFSProbes(t *testing.T) {
 	off := load(export.FeatureStatsDiskServiceDuration)
 	assert.Nil(t, off.NFSProcedureAccumMap())
 	assert.Nil(t, off.NFSProcedureCgroupAccumMap())
+	assert.Nil(t, off.NFSIOAccumMap())
 	assert.Equal(t, uint32(1), off.objects.NfsProcedureAccum.MaxEntries())
 
 	kernel, err := btf.LoadKernelSpec()
@@ -86,8 +87,10 @@ func TestNFSProbes(t *testing.T) {
 	on := load(export.FeatureStatsNFS)
 	require.NotNil(t, on.NFSProcedureAccumMap())
 	require.NotNil(t, on.NFSProcedureCgroupAccumMap())
-	_, err = os.Stat("/sys/module/sunrpc")
-	assert.Equal(t, err != nil, len(on.nfsPending) > 0, "the probes wait for the sunrpc module, and only for it")
+	require.NotNil(t, on.NFSIOAccumMap())
+	_, sunrpcErr := os.Stat("/sys/module/sunrpc")
+	_, nfsErr := os.Stat("/sys/module/nfs")
+	assert.Equal(t, sunrpcErr != nil || nfsErr != nil, len(on.nfsPending) > 0, "the probes wait for the sunrpc and nfs modules, and only for them")
 }
 
 // Every supported kernel has REQ_OP_ZONE_APPEND, without which the probes would not measure the zone
