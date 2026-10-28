@@ -165,6 +165,8 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 				containerID = s.DiskIO.ContainerID
 			case s.FsSync != nil:
 				containerID = s.FsSync.ContainerID
+			case s.NFSProcedure != nil:
+				containerID = s.NFSProcedure.ContainerID
 			}
 			if containerID == "" {
 				return attribute.KeyValue{}
@@ -177,7 +179,8 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			value := s.CommonAttrs.Metadata[name]
 			// the storage stats leave out the metadata that they don't have, like the Kubernetes
 			// attributes of the I/O charged to no pod: an invalid KeyValue isn't exported
-			if value == "" && (s.Type == StatTypeDiskIO || s.Type == StatTypeFsSync || s.Type == StatTypeNFSProcedure) {
+			if value == "" && (s.Type == StatTypeDiskIO || s.Type == StatTypeFsSync || s.Type == StatTypeNFSProcedure ||
+				s.Type == StatTypeNFSProcedureCgroup) {
 				return attribute.KeyValue{}
 			}
 			return attribute.String(string(name), value)

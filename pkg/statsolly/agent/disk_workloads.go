@@ -59,6 +59,11 @@ func cgroupReads(features export.Features, attrSel *attributes.AttrSelector, fil
 			{enabled: features.StatsFsSyncOperations(), name: attributes.StatFsSyncOperations},
 			{enabled: features.StatsFsSyncTime(), name: attributes.StatFsSyncTime},
 		}),
+		// the histogram of the NFS client RPCs is that of the whole node
+		NFS: readsCgroup(features&export.FeatureStatsNFSClientWorkloads != 0, []storageMetric{
+			{enabled: features.StatsNFSClientProcedureCount(), name: attributes.StatNFSClientProcedureCount},
+			{enabled: features.StatsNFSClientProcedureTime(), name: attributes.StatNFSClientProcedureTime},
+		}),
 	}
 }
 

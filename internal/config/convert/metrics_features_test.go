@@ -30,6 +30,8 @@ func TestV2MetricFeatures(t *testing.T) {
 	features["stats_fs_sync_operations"] = export.FeatureStatsFsSyncOperations
 	features["stats_fs_sync_time"] = export.FeatureStatsFsSyncTime
 	features["stats_nfs_client_procedure_duration"] = export.FeatureStatsNFSClientProcedureDuration
+	features["stats_nfs_client_procedure_count"] = export.FeatureStatsNFSClientProcedureCount
+	features["stats_nfs_client_procedure_time"] = export.FeatureStatsNFSClientProcedureTime
 	for name, feature := range features {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -179,7 +181,7 @@ version: '2.0'
 network:
   stats:
     features: [disk_service_duration, disk_io, disk_operations, disk_service_time, disk_flush_duration, fs_sync_duration, fs_sync_operations, fs_sync_time,
-      nfs_client_procedure_duration]
+      nfs_client_procedure_duration, nfs_client_procedure_count, nfs_client_procedure_time]
 `
 	for _, test := range []struct {
 		name     string

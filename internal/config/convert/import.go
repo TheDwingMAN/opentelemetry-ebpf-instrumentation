@@ -2627,6 +2627,10 @@ func statsFeatureMask(features []string) export.Features {
 			out |= export.FeatureStatsFsSyncTime
 		case statsFeatureNFSClientProcedureDuration:
 			out |= export.FeatureStatsNFSClientProcedureDuration
+		case statsFeatureNFSClientProcedureCount:
+			out |= export.FeatureStatsNFSClientProcedureCount
+		case statsFeatureNFSClientProcedureTime:
+			out |= export.FeatureStatsNFSClientProcedureTime
 		}
 	}
 	return out

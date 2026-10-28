@@ -103,6 +103,8 @@ func TestPrometheusNames(t *testing.T) {
 		{StatFsSyncOperations, "obi_stat_fs_sync_operations_total"},
 		{StatFsSyncTime, "obi_stat_fs_sync_time_seconds_total"},
 		{StatNFSClientProcedureDuration, "obi_stat_nfs_client_procedure_duration_seconds"},
+		{StatNFSClientProcedureCount, "obi_stat_nfs_client_procedure_count_total"},
+		{StatNFSClientProcedureTime, "obi_stat_nfs_client_procedure_time_seconds_total"},
 		{V8JSGCDuration, "v8js_gc_duration_seconds"},
 		{V8JSMemoryHeapLimit, "v8js_memory_heap_limit_bytes"},
 		{V8JSMemoryHeapUsed, "v8js_memory_heap_used_bytes"},

@@ -68,11 +68,18 @@ func TestStatGetters_NFSProcedure(t *testing.T) {
 	v3 := &Stat{Type: StatTypeNFSProcedure, NFSProcedure: &NFSProcedure{Server: "nas", Procedure: "LOOKUP", Version: 3, ErrorType: "ENOENT"}}
 	v4 := &Stat{Type: StatTypeNFSProcedure, NFSProcedure: &NFSProcedure{Server: "10.0.0.5", Procedure: "READ", Version: 4}}
 	write := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "vda", Op: CodeDiskOpWrite}}
+	workload := &Stat{Type: StatTypeNFSProcedureCgroup, NFSProcedure: &NFSProcedure{
+		Server: "nas", Procedure: "WRITE", Version: 4, ContainerID: "0123abcd", Count: 2,
+	}}
 	for _, tc := range []struct {
 		name attr.Name
 		stat *Stat
 		want attribute.KeyValue
 	}{
+		{name: attr.ContainerID, stat: workload, want: attribute.String("container.id", "0123abcd")},
+		{name: attr.ContainerID, stat: v4},
+		{name: attr.NfsOperationName, stat: workload, want: attribute.String("nfs.operation.name", "WRITE")},
+		{name: attr.K8sNamespaceName, stat: workload},
 		{name: attr.ServerAddr, stat: v3, want: attribute.String("server.address", "nas")},
 		{name: attr.ServerAddr, stat: v4, want: attribute.String("server.address", "10.0.0.5")},
 		// NFSv2 and NFSv3 RPCs are ONC RPC procedures, the NFSv4 ones are named after their main operation

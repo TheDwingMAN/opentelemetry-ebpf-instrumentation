@@ -151,6 +151,8 @@ var v2OnlyFeatures = map[string]Features{
 	"stats_fs_sync_operations":            FeatureStatsFsSyncOperations,
 	"stats_fs_sync_time":                  FeatureStatsFsSyncTime,
 	"stats_nfs_client_procedure_duration": FeatureStatsNFSClientProcedureDuration,
+	"stats_nfs_client_procedure_count":    FeatureStatsNFSClientProcedureCount,
+	"stats_nfs_client_procedure_time":     FeatureStatsNFSClientProcedureTime,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -548,6 +550,14 @@ func (f Features) StatsFsSync() bool {
 
 func (f Features) StatsNFSClientProcedureDuration() bool {
 	return f.any(FeatureStatsNFSClientProcedureDuration)
+}
+
+func (f Features) StatsNFSClientProcedureCount() bool {
+	return f.any(FeatureStatsNFSClientProcedureCount)
+}
+
+func (f Features) StatsNFSClientProcedureTime() bool {
+	return f.any(FeatureStatsNFSClientProcedureTime)
 }
 
 func (f Features) StatsNFS() bool {

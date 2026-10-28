@@ -1534,6 +1534,30 @@ Time that threads waited for file syncs, per sync type and outcome: the sum of `
 | `obi.fs.sync.type` | enum | `recommended` | development | The system call that synced files, or, for the syncs within other calls (O_SYNC and O_DSYNC writes, msync, io_uring), `fsync` or `fdatasync`, depending on whether the metadata is synced too. | fsync; fdatasync; sync; syncfs; sync_file_range |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 
+## `obi.stat.nfs.client.procedure.count`
+
+RPCs of the kernel NFS client, per server, procedure, NFS version and outcome, charged to the workload of the thread that started each RPC: the count of `obi.stat.nfs.client.procedure.duration` per workload.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | {procedure} | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the RPC failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `recommended`: if Kubernetes decoration is enabled and the RPC is charged to a pod | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the RPC is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the RPC is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `nfs.operation.name` | string | `conditionally_required`: if the NFS version is 4 | development | NFSv4+ operation name. | OPEN; READ; GETATTR |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `onc_rpc.procedure.name` | string | `conditionally_required`: if the NFS version is 2 or 3 | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
 ## `obi.stat.nfs.client.procedure.duration`
 
 Execute time of the RPCs of the kernel NFS client on the whole node, per server, procedure, NFS version and outcome, from the start of each RPC to its completion, as `/proc/self/mountstats` counts it. An RPC that the client restarts is counted once per attempt, and the NULL ping of each new client is counted too. NFSv4 RPCs are COMPOUND requests, which the client names after their main operation.
@@ -1546,6 +1570,30 @@ Execute time of the RPCs of the kernel NFS client on the whole node, per server,
 | --- | --- | --- | --- | --- | --- |
 | `error.type` | string | `conditionally_required`: if the RPC failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `nfs.operation.name` | string | `conditionally_required`: if the NFS version is 4 | development | NFSv4+ operation name. | OPEN; READ; GETATTR |
+| `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
+| `onc_rpc.procedure.name` | string | `conditionally_required`: if the NFS version is 2 or 3 | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |
+| `onc_rpc.version` | int | `recommended` | development | ONC/Sun RPC program version. |  |
+| `server.address` | string | `recommended` | stable | Server domain name if available without reverse DNS lookup; otherwise, IP address or Unix domain socket name. | example.com; 10.1.2.80; /tmp/my.sock |
+
+## `obi.stat.nfs.client.procedure.time`
+
+Execute time of the RPCs of the kernel NFS client, per server, procedure, NFS version and outcome, charged to the workload of the thread that started each RPC: the sum of `obi.stat.nfs.client.procedure.duration` per workload. Divided by `obi.stat.nfs.client.procedure.count`, it is the mean execute time.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | s | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
+| `error.type` | string | `conditionally_required`: if the RPC failed | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
+| `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `recommended`: if Kubernetes decoration is enabled and the RPC is charged to a pod | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the RPC is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the RPC is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
 | `nfs.operation.name` | string | `conditionally_required`: if the NFS version is 4 | development | NFSv4+ operation name. | OPEN; READ; GETATTR |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `onc_rpc.procedure.name` | string | `conditionally_required`: if the NFS version is 2 or 3 | development | ONC/Sun RPC procedure name. | OPEN; READ; GETATTR |

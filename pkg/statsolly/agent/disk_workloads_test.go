@@ -21,6 +21,7 @@ func TestCgroupReads(t *testing.T) {
 		return attributes.Selection{metric.Section: attributes.InclusionLists{Include: include}}
 	}
 	disk, fsSync, both := ebpf.CgroupReads{Disk: true}, ebpf.CgroupReads{FsSync: true}, ebpf.CgroupReads{Disk: true, FsSync: true}
+	nfs := ebpf.CgroupReads{NFS: true}
 	for _, tc := range []struct {
 		name             string
 		groups           attributes.AttrGroups
@@ -69,6 +70,15 @@ func TestCgroupReads(t *testing.T) {
 			filters: filter.AttributeFamilyConfig{"k8s.owner.name": {Match: "db"}}, want: both,
 		},
 		{name: "both under dynamic selection", features: export.FeatureStatsDisk | export.FeatureStatsFsSync, dynamicSelection: true, want: both},
+		{
+			name: "NFS client RPC time selected", features: export.FeatureStatsNFS,
+			selection: selecting(attributes.StatNFSClientProcedureTime, "container.id"), want: nfs,
+		},
+		{name: "NFS client RPC counters in Kubernetes", groups: attributes.GroupKubernetes, features: export.FeatureStatsNFSClientProcedureCount, want: nfs},
+		{
+			name: "NFS client RPC histogram filtered", features: export.FeatureStatsNFSClientProcedureDuration,
+			filters: filter.AttributeFamilyConfig{"container.id": {Match: "a1*"}},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			attrSel, err := attributes.NewAttrSelector(tc.groups, &attributes.SelectorConfig{SelectionCfg: tc.selection})
