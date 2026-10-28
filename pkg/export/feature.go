@@ -82,9 +82,11 @@ const (
 	FeatureStatsFsSyncDuration
 	FeatureStatsFsSyncOperations
 	FeatureStatsFsSyncTime
-	// The NFS client stat features are in neither `stats` nor `all`, as their probe fires on every
+	// The NFS client stat features are in neither `stats` nor `all`, as their probes fire on every
 	// RPC of the kernel NFS client
 	FeatureStatsNFSClientProcedureDuration
+	FeatureStatsNFSClientProcedureCount
+	FeatureStatsNFSClientProcedureTime
 	// FeatureAll preserves the legacy all-features behavior while keeping connection info opt-in.
 	FeatureAll = Features(^uint(0)) &^ (FeatureConnectionInfo | FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFS)
 )
@@ -96,8 +98,15 @@ const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | 
 // FeatureStatsFsSync groups the file sync stat features, which the same probes measure
 const FeatureStatsFsSync = FeatureStatsFsSyncDuration | FeatureStatsFsSyncOperations | FeatureStatsFsSyncTime
 
-// FeatureStatsNFS groups the NFS client stat features, which the same probes measure
-const FeatureStatsNFS = FeatureStatsNFSClientProcedureDuration
+// FeatureStatsNFSClientProcedureCounters groups the counters of the NFS client RPCs, which charge
+// each RPC to the workload that started it
+const FeatureStatsNFSClientProcedureCounters = FeatureStatsNFSClientProcedureCount | FeatureStatsNFSClientProcedureTime
+
+// FeatureStatsNFSClientWorkloads groups the NFS client stat features that charge the RPCs to workloads
+const FeatureStatsNFSClientWorkloads = FeatureStatsNFSClientProcedureCounters
+
+// FeatureStatsNFS groups the NFS client stat features, whose probes are attached together
+const FeatureStatsNFS = FeatureStatsNFSClientProcedureDuration | FeatureStatsNFSClientProcedureCounters
 
 // FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly

@@ -27,7 +27,7 @@ const (
 // CgroupReads tells which storage probes read the cgroups that the kernel charges the operations
 // to, for the attributes of their workloads
 type CgroupReads struct {
-	Disk, FsSync bool
+	Disk, FsSync, NFS bool
 }
 
 type TCPFailReasonType string

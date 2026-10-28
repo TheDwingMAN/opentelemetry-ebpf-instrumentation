@@ -349,7 +349,7 @@ func TestDiskStatsUnderDynamicSelection(t *testing.T) {
 	}, time.Second, 100*time.Millisecond)
 }
 
-// The NFS client probe is attached on each refresh until it no longer waits for the sunrpc module
+// The NFS client probes are attached on each refresh until they no longer wait for their modules
 func TestRefreshNFSProbesUntilNoneWaits(t *testing.T) {
 	const waitingRefreshes = 3
 	refreshes := 0

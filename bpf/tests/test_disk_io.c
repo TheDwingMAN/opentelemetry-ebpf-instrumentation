@@ -123,6 +123,15 @@ static void test_nfs_status(void) {
                 "the most negative tk_status is the other status");
 }
 
+static void test_nfs_charged_cgroup(void) {
+    assert_true(nfs_charged_cgroup(42, 1000, 1000) == 42,
+                "an RPC is charged to the cgroup that its task started in");
+    assert_true(nfs_charged_cgroup(42, 1000, 2000) == 0,
+                "the entry of an earlier task of another process is not charged");
+    assert_true(nfs_charged_cgroup(7, 1000, 1000) == 7,
+                "the entry of an earlier task of the same process is charged to that process");
+}
+
 static void test_fs_sync_attempted(void) {
     assert_true(!fs_sync_attempted(-9), "an invalid file descriptor is not a file sync");
     assert_true(!fs_sync_attempted(-22),
@@ -150,6 +159,7 @@ int main(void) {
     test_accounted_start_ns();
     test_status_code();
     test_nfs_status();
+    test_nfs_charged_cgroup();
     test_fs_sync_attempted();
     test_sync_file_range_waits();
 

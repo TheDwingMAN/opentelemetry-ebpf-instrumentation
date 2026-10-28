@@ -44,6 +44,10 @@ func (m *StatsFetcher) NFSProcedureAccumMap() *ciliumebpf.Map {
 	return nil
 }
 
+func (m *StatsFetcher) NFSProcedureCgroupAccumMap() *ciliumebpf.Map {
+	return nil
+}
+
 func (m *StatsFetcher) RefreshNFSProbes() bool {
 	return false
 }
