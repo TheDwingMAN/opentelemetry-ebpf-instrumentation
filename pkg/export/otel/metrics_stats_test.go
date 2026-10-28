@@ -126,9 +126,14 @@ func TestStatMetricsExporter_FsSync(t *testing.T) {
 }
 
 // The NFS client RPCs are exported with their server, and their procedure under the attribute of their
-// NFS version. Over OTLP, they leave out an unknown cluster name.
+// NFS version: the histogram those of the node, and the counters those of the workloads. Over OTLP,
+// they leave out the unknown Kubernetes metadata.
 func TestStatMetricsExporter_NFSProcedure(t *testing.T) {
 	stats, records := startStatExporter(t, export.FeatureStatsNFS, attributes.GroupKubernetes)
+	commit := &ebpf.Stat{Type: ebpf.StatTypeNFSProcedureCgroup, NFSProcedure: &ebpf.NFSProcedure{
+		Server: "nas", Procedure: "COMMIT", Version: 4, Count: 1, Time: 0.002,
+	}}
+	commit.CommonAttrs.Metadata = map[attr.Name]string{attr.K8sNamespaceName: "ns", attr.K8sOwnerName: "db", attr.K8sKind: "StatefulSet"}
 	stats.Send([]*ebpf.Stat{
 		{Type: ebpf.StatTypeNFSProcedure, NFSProcedure: &ebpf.NFSProcedure{
 			Server: "nas", Procedure: "WRITE", Version: 4, Latency: *latency(0.004, 0, 2),
@@ -136,21 +141,32 @@ func TestStatMetricsExporter_NFSProcedure(t *testing.T) {
 		{Type: ebpf.StatTypeNFSProcedure, NFSProcedure: &ebpf.NFSProcedure{
 			Server: "nas", Procedure: "LOOKUP", Version: 3, ErrorType: "ENOENT", Latency: *latency(0.001, 1),
 		}},
+		commit,
 	})
 
-	want := []map[string]string{
-		{"server.address": "nas", "nfs.operation.name": "WRITE", "onc_rpc.version": "4"},
-		{"server.address": "nas", "onc_rpc.procedure.name": "LOOKUP", "onc_rpc.version": "3", "error.type": "ENOENT"},
+	commitAttrs := map[string]string{
+		"server.address": "nas", "nfs.operation.name": "COMMIT", "onc_rpc.version": "4",
+		"k8s.namespace.name": "ns", "k8s.owner.name": "db", "k8s.kind": "StatefulSet",
 	}
-	var got []map[string]string
+	want := map[string][]map[string]string{
+		attributes.StatNFSClientProcedureDuration.OTEL: {
+			{"server.address": "nas", "nfs.operation.name": "WRITE", "onc_rpc.version": "4"},
+			{"server.address": "nas", "onc_rpc.procedure.name": "LOOKUP", "onc_rpc.version": "3", "error.type": "ENOENT"},
+		},
+		attributes.StatNFSClientProcedureCount.OTEL: {commitAttrs},
+		attributes.StatNFSClientProcedureTime.OTEL:  {commitAttrs},
+	}
+	got := map[string][]map[string]string{}
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
 		receive(records, func(record collector.MetricRecord) {
-			if record.Name == attributes.StatNFSClientProcedureDuration.OTEL &&
-				!slices.ContainsFunc(got, func(attrs map[string]string) bool { return maps.Equal(attrs, record.Attributes) }) {
-				got = append(got, record.Attributes)
+			if _, ok := want[record.Name]; ok &&
+				!slices.ContainsFunc(got[record.Name], func(attrs map[string]string) bool { return maps.Equal(attrs, record.Attributes) }) {
+				got[record.Name] = append(got[record.Name], record.Attributes)
 			}
 		})
-		assert.ElementsMatch(ct, want, got)
+		for name := range want {
+			assert.ElementsMatch(ct, want[name], got[name], name)
+		}
 	}, timeout, 100*time.Millisecond)
 }
 

@@ -94,6 +94,7 @@ type ebpFetcher interface {
 	DiskIOAccumMap() *ciliumebpf.Map
 	FsSyncAccumMap() *ciliumebpf.Map
 	NFSProcedureAccumMap() *ciliumebpf.Map
+	NFSProcedureCgroupAccumMap() *ciliumebpf.Map
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
 	RefreshNFSProbes() bool
@@ -134,8 +135,8 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	}
 	probed := cfg.Metrics.Features
 	if ctxInfo.DynamicSelector != nil && probed.StatsNFSClientProcedureDuration() {
-		alog.Warn("the NFS client RPCs are not reported under dynamic application selection: the kernel measures "+
-			"them for the whole node, charged to no container", "metric", attributes.StatNFSClientProcedureDuration.OTEL)
+		alog.Warn("the histogram of the NFS client RPCs is not reported under dynamic application selection: the "+
+			"kernel measures it for the whole node, charged to no container", "metric", attributes.StatNFSClientProcedureDuration.OTEL)
 		probed &^= export.FeatureStatsNFSClientProcedureDuration
 	}
 	reads := cgroupReads(cfg.Metrics.Features, attrSel, cfg.Filters.Stats, ctxInfo.DynamicSelector != nil)
@@ -163,11 +164,15 @@ func statsAgent(
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
 	var diskTracer *stats.DiskMapTracer
-	diskAccum, fsSyncAccum, nfsProcedureAccum := statsFetcher.DiskIOAccumMap(), statsFetcher.FsSyncAccumMap(),
-		statsFetcher.NFSProcedureAccumMap()
-	if diskAccum != nil || fsSyncAccum != nil || nfsProcedureAccum != nil {
-		diskTracer = stats.NewDiskMapTracer(diskAccum, fsSyncAccum, nfsProcedureAccum, statsFetcher.DiskCgroupNamesMap(),
-			statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
+	maps := stats.AccumMaps{
+		Disk:               statsFetcher.DiskIOAccumMap(),
+		FsSync:             statsFetcher.FsSyncAccumMap(),
+		NFSProcedure:       statsFetcher.NFSProcedureAccumMap(),
+		NFSProcedureCgroup: statsFetcher.NFSProcedureCgroupAccumMap(),
+		CgroupNames:        statsFetcher.DiskCgroupNamesMap(),
+	}
+	if maps.Any() {
+		diskTracer = stats.NewDiskMapTracer(maps, statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
 	}
 
 	return &Stats{

@@ -274,6 +274,7 @@ func TestDefault_StatStorage(t *testing.T) {
 	require.NoError(t, err)
 	device := []attr.Name{attr.DiskIODirection, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice}
 	workload := []attr.Name{attr.K8sClusterName, attr.K8sNamespaceName, attr.K8sOwnerName, attr.K8sKind}
+	nfs := []attr.Name{attr.ServerAddr, attr.OncRPCProcedureName, attr.NfsOperationName, attr.OncRPCVersion, attr.ErrorType}
 	for metric, want := range map[Name][]attr.Name{
 		// a series per bucket: the workload is opt-in
 		StatDiskServiceDuration: slices.Concat(device, []attr.Name{attr.ErrorType, attr.K8sClusterName}),
@@ -286,9 +287,10 @@ func TestDefault_StatStorage(t *testing.T) {
 		StatFsSyncOperations:  slices.Concat(workload, []attr.Name{attr.ErrorType, attr.FsSyncType}),
 		StatFsSyncTime:        slices.Concat(workload, []attr.Name{attr.ErrorType, attr.FsSyncType}),
 		// the NFS client RPCs of the whole node: the procedure under the attribute of its NFS version
-		StatNFSClientProcedureDuration: {
-			attr.ServerAddr, attr.OncRPCProcedureName, attr.NfsOperationName, attr.OncRPCVersion, attr.ErrorType, attr.K8sClusterName,
-		},
+		StatNFSClientProcedureDuration: slices.Concat(nfs, []attr.Name{attr.K8sClusterName}),
+		// and per workload, which the counters of its RPCs give
+		StatNFSClientProcedureCount: slices.Concat(nfs, workload),
+		StatNFSClientProcedureTime:  slices.Concat(nfs, workload),
 	} {
 		assert.ElementsMatch(t, want, p.For(metric), metric.OTEL)
 	}

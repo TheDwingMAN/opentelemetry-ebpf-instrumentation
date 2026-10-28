@@ -82,6 +82,8 @@ func TestFeatureStatsDisk(t *testing.T) {
 		{name: "fs_sync_duration", load: LoadV2Features, wantErr: true},
 		{name: "stats_nfs_client_procedure_duration", load: LoadFeatures, wantErr: true},
 		{name: "stats_nfs_client_procedure_duration", load: LoadV2Features, want: FeatureStatsNFSClientProcedureDuration},
+		{name: "stats_nfs_client_procedure_count", load: LoadV2Features, want: FeatureStatsNFSClientProcedureCount},
+		{name: "stats_nfs_client_procedure_time", load: LoadV2Features, want: FeatureStatsNFSClientProcedureTime},
 	} {
 		features, err := tc.load([]string{tc.name})
 		if tc.wantErr {
@@ -95,7 +97,7 @@ func TestFeatureStatsDisk(t *testing.T) {
 	assert.True(t, FeatureStatsFsSyncDuration.StatMetrics(), "each enables the stats pipeline on its own")
 	assert.True(t, FeatureStatsNFSClientProcedureDuration.StatMetrics(), "each enables the stats pipeline on its own")
 
-	features := FeatureAll | FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFSClientProcedureDuration
+	features := FeatureAll | FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFS
 	loaded, err := LoadV2Features(features.Names())
 	require.NoError(t, err)
 	assert.Equal(t, features, loaded, "Config v2 loads the names that it renders")

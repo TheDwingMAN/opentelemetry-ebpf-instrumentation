@@ -55,3 +55,38 @@ func TestNFSProcedureReader(t *testing.T) {
 	require.Len(t, stats, 1, "only what changed")
 	assertLatency(t, stats[0].NFSProcedure.Latency, 0.0004, 0, 2)
 }
+
+// The reader of the counters forwards what each workload, server, procedure, version and outcome
+// completed since the previous read, with the container of the cgroup
+func TestNFSProcedureCgroupReader(t *testing.T) {
+	const containerID = "8e5e2d4ef4e0ec0ee80e1b7f86c2b8dbdc5a6e1db8c3d2d1b0a19f8e7d6c5b4a"
+	inContainer := ebpf.StatsNfsProcedureCgroupKeyT{Rpc: nfsProcedureKey("READ", 4, 0), CgroupId: 10}
+	noWorkload := ebpf.StatsNfsProcedureCgroupKeyT{Rpc: nfsProcedureKey("", 4, 2)}
+	src := &fakeAccum[ebpf.StatsNfsProcedureCgroupKeyT, ebpf.StatsNfsProcedureCgroupAccumT]{
+		entries: map[ebpf.StatsNfsProcedureCgroupKeyT]ebpf.StatsNfsProcedureCgroupAccumT{
+			inContainer: {Count: 4, SumNs: 800_000}, noWorkload: {Count: 1, SumNs: 200_000},
+		},
+	}
+	containers := newCgroupContainers(func(cgroupID uint64) (string, string, bool) {
+		return "cri-containerd-" + containerID + ".scope", "kubepods-besteffort.slice", cgroupID == 10
+	}, 16)
+	r := newNFSProcedureCgroupReader(src, containers, defaultDiskReadInterval)
+
+	procedures := map[string]*ebpf.NFSProcedure{}
+	for _, stat := range r.readStats() {
+		require.Equal(t, ebpf.StatTypeNFSProcedureCgroup, stat.Type)
+		procedures[stat.NFSProcedure.Procedure] = stat.NFSProcedure
+	}
+	require.Len(t, procedures, 2)
+	assert.Equal(t, containerID, procedures["READ"].ContainerID)
+	assert.Equal(t, uint64(4), procedures["READ"].Count)
+	assert.InDelta(t, 0.0008, procedures["READ"].Time, 1e-12)
+	assert.Empty(t, procedures["NULL"].ContainerID)
+	assert.Equal(t, "ENOENT", procedures["NULL"].ErrorType)
+
+	src.entries[inContainer] = ebpf.StatsNfsProcedureCgroupAccumT{Count: 6, SumNs: 1_200_000}
+	stats := r.readStats()
+	require.Len(t, stats, 1, "only what changed")
+	assert.Equal(t, uint64(2), stats[0].NFSProcedure.Count)
+	assert.InDelta(t, 0.0004, stats[0].NFSProcedure.Time, 1e-12)
+}
