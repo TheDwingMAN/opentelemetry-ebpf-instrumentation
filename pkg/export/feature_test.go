@@ -95,7 +95,7 @@ func TestFeatureStatsDisk(t *testing.T) {
 	assert.True(t, FeatureStatsFsSyncDuration.StatMetrics(), "each enables the stats pipeline on its own")
 	assert.True(t, FeatureStatsNFSClientProcedureDuration.StatMetrics(), "each enables the stats pipeline on its own")
 
-	features := FeatureAll | FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFS
+	features := FeatureAll | FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFSClientProcedureDuration
 	loaded, err := LoadV2Features(features.Names())
 	require.NoError(t, err)
 	assert.Equal(t, features, loaded, "Config v2 loads the names that it renders")

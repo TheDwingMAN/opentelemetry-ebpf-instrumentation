@@ -9,23 +9,33 @@
 
 #include <common/scratch_mem.h>
 
+#include <statsolly/cgroup_names.h>
 #include <statsolly/disk_io.h>
 #include <statsolly/types.h>
 #include <statsolly/maps/nfs_procedure_accum.h>
+#include <statsolly/maps/nfs_procedure_cgroup_accum.h>
+#include <statsolly/maps/nfs_task_cgroup.h>
+
+// Set by userspace: the maps that the RPCs are counted in, the histogram of the node and the
+// counters per workload
+volatile const bool nfs_procedure_histogram;
+volatile const bool nfs_procedure_counters;
 
 // Force structs into the ELF for automatic creation of Golang struct
 const nfs_procedure_key_t *unused_nfs_procedure_key __attribute__((unused));
 const nfs_procedure_accum_t *unused_nfs_procedure_accum __attribute__((unused));
+const nfs_procedure_cgroup_key_t *unused_nfs_procedure_cgroup_key __attribute__((unused));
+const nfs_procedure_cgroup_accum_t *unused_nfs_procedure_cgroup_accum __attribute__((unused));
 
 SCRATCH_MEM_TYPED(nfs_procedure_accum_init, nfs_procedure_accum_t)
 
 // ONC RPC program number of NFS
 enum { k_nfs_program = 100003 };
 
-// The sunrpc types are only known to the kernels whose BTF describes them. The probe checks for
-// those that it reads first, so that the reads that CO-RE could not relocate are dead code that the
-// verifier skips, and the program loads when every program is loaded, as in the verifier test. OBI
-// itself loads a stub in its place where the vmlinux BTF lacks them.
+// The sunrpc types are only known to the kernels whose BTF describes them. The probes check for
+// those that they read first, so that the reads that CO-RE could not relocate are dead code that
+// the verifier skips, and the programs load when every program is loaded, as in the verifier test.
+// OBI itself loads stubs in their place where the vmlinux BTF lacks them.
 static __always_inline bool has_rpc_types(void) {
     return bpf_core_type_exists(struct rpc_task) && bpf_core_type_exists(struct rpc_clnt) &&
            bpf_core_type_exists(struct rpc_procinfo) && bpf_core_type_exists(struct rpc_xprt);
@@ -60,6 +70,75 @@ lookup_or_init_nfs_procedure_accum(const nfs_procedure_key_t *key) {
     return bpf_map_lookup_elem(&nfs_procedure_accum, key);
 }
 
+static __always_inline void count_nfs_procedure(const nfs_procedure_key_t *key,
+                                                const u64 execute_ns) {
+    nfs_procedure_accum_t *accum = lookup_or_init_nfs_procedure_accum(key);
+    if (!accum) {
+        return;
+    }
+    const u32 bucket = disk_latency_bucket(disk_latency_bounds_ns, execute_ns);
+    __sync_fetch_and_add(&accum->latency_count[bucket], 1);
+    __sync_fetch_and_add(&accum->latency_sum_ns, execute_ns);
+}
+
+static __always_inline void count_nfs_procedure_cgroup(const nfs_procedure_cgroup_key_t *key,
+                                                       const u64 execute_ns) {
+    nfs_procedure_cgroup_accum_t *accum = bpf_map_lookup_elem(&nfs_procedure_cgroup_accum, key);
+    if (!accum) {
+        const nfs_procedure_cgroup_accum_t zero = {};
+        // BPF_NOEXIST: another CPU may have created the entry since the lookup above
+        bpf_map_update_elem(&nfs_procedure_cgroup_accum, key, &zero, BPF_NOEXIST);
+        accum = bpf_map_lookup_elem(&nfs_procedure_cgroup_accum, key);
+        if (!accum) {
+            return;
+        }
+    }
+    __sync_fetch_and_add(&accum->count, 1);
+    __sync_fetch_and_add(&accum->sum_ns, execute_ns);
+}
+
+// The cgroup of the thread that started a task, or 0 when its start wasn't seen
+static __always_inline u64 nfs_task_cgroup_id(const struct rpc_task *task) {
+    const u64 task_addr = (u64)task;
+    const nfs_task_cgroup_t *entry = bpf_map_lookup_elem(&nfs_task_cgroup, &task_addr);
+    if (!entry) {
+        return 0;
+    }
+    return nfs_charged_cgroup(entry->cgroup_id, entry->owner, (u32)BPF_CORE_READ(task, tk_owner));
+}
+
+// rpc_task_begin(task, action) fires when rpc_execute starts a task, before it queues an
+// asynchronous task on rpciod: the current thread is the one that the RPC is charged to. A task
+// that the client restarts doesn't begin again. Userspace attaches the program only when it reads
+// the cgroups.
+SEC("raw_tracepoint/rpc_task_begin")
+int obi_stats_raw_tp_rpc_task_begin(struct bpf_raw_tracepoint_args *ctx) {
+    if (!has_rpc_types()) {
+        return 0;
+    }
+    const struct rpc_task *task = (const struct rpc_task *)ctx->args[0];
+    if (!is_nfs_task(task)) {
+        return 0;
+    }
+    struct cgroup *cgrp = current_io_cgroup();
+    const u64 task_addr = (u64)task;
+    const nfs_task_cgroup_t started = {
+        .cgroup_id = cgroup_id_of(cgrp),
+        .owner = (u32)BPF_CORE_READ(task, tk_owner),
+    };
+    nfs_task_cgroup_t *entry = bpf_map_lookup_elem(&nfs_task_cgroup, &task_addr);
+    if (entry) {
+        // in place: an update of an LRU entry would take a free node of the map, as an insert does
+        *entry = started;
+    } else {
+        bpf_map_update_elem(&nfs_task_cgroup, &task_addr, &started, BPF_NOEXIST);
+    }
+    if (cgrp) {
+        record_cgroup_name(started.cgroup_id, cgrp);
+    }
+    return 0;
+}
+
 // rpc_stats_latency(task, backlog, rtt, execute) fires when the RPC client counts a completed RPC
 // in its statistics, as /proc/self/mountstats shows them. execute is the time from the start of the
 // task to its completion: its execute time there. A task that the client restarts, as when the
@@ -78,20 +157,25 @@ int obi_stats_raw_tp_rpc_stats_latency(struct bpf_raw_tracepoint_args *ctx) {
         return 0;
     }
 
-    nfs_procedure_key_t key = {
-        .version = BPF_CORE_READ(task, tk_client, cl_vers),
-        .status = nfs_status(BPF_CORE_READ(task, tk_status)),
+    nfs_procedure_cgroup_key_t key = {
+        .rpc =
+            {
+                .version = BPF_CORE_READ(task, tk_client, cl_vers),
+                .status = nfs_status(BPF_CORE_READ(task, tk_status)),
+            },
     };
-    read_server(&key, task);
+    read_server(&key.rpc, task);
     bpf_probe_read_kernel_str(
-        key.procedure, sizeof(key.procedure), BPF_CORE_READ(task, tk_msg.rpc_proc, p_name));
+        key.rpc.procedure, sizeof(key.rpc.procedure), BPF_CORE_READ(task, tk_msg.rpc_proc, p_name));
 
-    nfs_procedure_accum_t *accum = lookup_or_init_nfs_procedure_accum(&key);
-    if (!accum) {
-        return 0;
+    // each map on its own, so that neither a full map of the counters nor a missing entry of the
+    // histogram keeps the RPC from the other
+    if (nfs_procedure_histogram) {
+        count_nfs_procedure(&key.rpc, (u64)execute_ns);
     }
-    const u32 bucket = disk_latency_bucket(disk_latency_bounds_ns, execute_ns);
-    __sync_fetch_and_add(&accum->latency_count[bucket], 1);
-    __sync_fetch_and_add(&accum->latency_sum_ns, execute_ns);
+    if (nfs_procedure_counters) {
+        key.cgroup_id = nfs_task_cgroup_id(task);
+        count_nfs_procedure_cgroup(&key, (u64)execute_ns);
+    }
     return 0;
 }

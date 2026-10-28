@@ -161,7 +161,8 @@ func diskIssueProgram(objects *StatsObjects, issueHasQueueArg bool) *ebpf.Progra
 // keep for themselves: once those hold most of a map, a CPU that needs an entry evicts one in
 // flight, until the fix of Linux 6.16 (and 6.12.39, 6.6.99).
 func sizeStorageMaps(spec *ebpf.CollectionSpec, storage export.Features, reads CgroupReads, cpus int) {
-	if readsCgroup := storage.StatsDisk() && reads.Disk || storage.StatsFsSync() && reads.FsSync; !readsCgroup {
+	nfsReads := nfsReadsCgroup(storage, reads)
+	if readsCgroup := storage.StatsDisk() && reads.Disk || storage.StatsFsSync() && reads.FsSync || nfsReads; !readsCgroup {
 		spec.Maps["disk_cgroup_names"].MaxEntries = 1
 	}
 	for _, maps := range []struct {
@@ -170,18 +171,19 @@ func sizeStorageMaps(spec *ebpf.CollectionSpec, storage export.Features, reads C
 	}{
 		{enabled: storage.StatsDisk(), inFlight: "disk_rq_start", accum: "disk_io_accum"},
 		{enabled: storage.StatsFsSync(), inFlight: "fs_sync_start", accum: "fs_sync_accum"},
+		{enabled: nfsReads, inFlight: "nfs_task_cgroup"},
 	} {
 		inFlight := spec.Maps[maps.inFlight]
 		if !maps.enabled {
 			inFlight.MaxEntries = 1
-			spec.Maps[maps.accum].MaxEntries = 1
+			if maps.accum != "" {
+				spec.Maps[maps.accum].MaxEntries = 1
+			}
 			continue
 		}
 		inFlight.MaxEntries = max(inFlight.MaxEntries, uint32(2*lruLocalFreeTarget*cpus))
 	}
-	if !storage.StatsNFS() {
-		spec.Maps["nfs_procedure_accum"].MaxEntries = 1
-	}
+	sizeNFSMaps(spec, storage)
 }
 
 func diskLatencyBoundsNs() [diskLatencyBuckets - 1]uint64 {

@@ -56,12 +56,12 @@ func TestStorageFeatureDisabledAfterAnAttachFailure(t *testing.T) {
 	assert.Equal(t, uint32(1), fetcher.objects.DiskIoAccum.MaxEntries())
 }
 
-// The NFS client probe and its map are only loaded with its feature, and the probe is attached where
-// the kernel BTF describes the sunrpc types, once the sunrpc module is loaded
+// The NFS client probes and their maps are only loaded with their features, and the probes are
+// attached where the kernel BTF describes the sunrpc types, once the sunrpc module is loaded
 func TestNFSProbes(t *testing.T) {
 	require.NoError(t, rlimit.RemoveMemlock())
 	load := func(features export.Features) *StatsFetcher {
-		fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{}, CgroupReads{})
+		fetcher, err := NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{}, CgroupReads{NFS: true})
 		require.NoError(t, err)
 		t.Cleanup(func() {
 			fetcher.Close()
@@ -72,6 +72,7 @@ func TestNFSProbes(t *testing.T) {
 
 	off := load(export.FeatureStatsDiskServiceDuration)
 	assert.Nil(t, off.NFSProcedureAccumMap())
+	assert.Nil(t, off.NFSProcedureCgroupAccumMap())
 	assert.Equal(t, uint32(1), off.objects.NfsProcedureAccum.MaxEntries())
 
 	kernel, err := btf.LoadKernelSpec()
@@ -79,10 +80,14 @@ func TestNFSProbes(t *testing.T) {
 	if err := kernelRPCTypes(kernel); err != nil {
 		t.Skipf("the NFS client probe doesn't run on this kernel: %v", err)
 	}
+	counters := load(export.FeatureStatsNFSClientProcedureCounters)
+	assert.Nil(t, counters.NFSProcedureAccumMap(), "the histogram has a feature of its own")
+	assert.NotNil(t, counters.NFSProcedureCgroupAccumMap())
 	on := load(export.FeatureStatsNFS)
 	require.NotNil(t, on.NFSProcedureAccumMap())
+	require.NotNil(t, on.NFSProcedureCgroupAccumMap())
 	_, err = os.Stat("/sys/module/sunrpc")
-	assert.Equal(t, err != nil, on.nfsWaiting, "the probe waits for the sunrpc module, and only for it")
+	assert.Equal(t, err != nil, len(on.nfsPending) > 0, "the probes wait for the sunrpc module, and only for it")
 }
 
 // Every supported kernel has REQ_OP_ZONE_APPEND, without which the probes would not measure the zone

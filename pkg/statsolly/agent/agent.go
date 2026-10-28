@@ -63,8 +63,8 @@ func (s Status) String() string {
 
 var errShutdownTimeout = errors.New("graceful shutdown has timed out while waiting for eBPF statsolly to finish")
 
-// nfsProbesRefresh is how often the NFS client probe that waits for the sunrpc module is attached, if
-// the module is loaded
+// nfsProbesRefresh is how often the NFS client probes that wait for their kernel modules are attached,
+// if the modules are loaded
 const nfsProbesRefresh = 30 * time.Second
 
 // Stats reporting agent
@@ -223,8 +223,8 @@ func (s *Stats) Run(ctx context.Context) error {
 	return nil
 }
 
-// refreshNFSProbes attaches the NFS client probe that waits for its kernel module, every period,
-// until it no longer waits: refresh attaches it, and tells whether it still waits
+// refreshNFSProbes attaches the NFS client probes that wait for their kernel modules, every period,
+// until they no longer wait: refresh attaches them, and tells whether they still wait
 func refreshNFSProbes(ctx context.Context, refresh func() bool, period time.Duration) {
 	ticker := time.NewTicker(period)
 	defer ticker.Stop()
