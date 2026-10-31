@@ -107,6 +107,15 @@ static __always_inline u16 nfs_status(const s32 tk_status) {
     return error < k_nfs_status_other ? (u16)error : (u16)k_nfs_status_other;
 }
 
+// The cgroup that an RPC is charged to, from the entry of its task's address. When the kernel
+// skipped the start of the task, the entry is that of an earlier task at the same address, which is
+// charged only if the same process started it.
+static __always_inline u64 nfs_charged_cgroup(const u64 entry_cgroup_id,
+                                              const u32 entry_owner,
+                                              const u32 task_owner) {
+    return entry_owner == task_owner ? entry_cgroup_id : 0;
+}
+
 // The errnos of the syncs that sync nothing
 enum {
     k_errno_ebadf = 9,

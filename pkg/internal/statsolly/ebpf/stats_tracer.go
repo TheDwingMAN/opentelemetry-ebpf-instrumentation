@@ -66,11 +66,14 @@ const (
 	RawTracepointTCPRetransmitSkb = "tcp_retransmit_skb"
 	RawTracepointBlockRqIssue     = "block_rq_issue"
 	RawTracepointBlockRqComplete  = "block_rq_complete"
+	RawTracepointRPCTaskBegin     = "rpc_task_begin"
 	RawTracepointRPCStatsLatency  = "rpc_stats_latency"
+	RawTracepointNFSReadpageDone  = "nfs_readpage_done"
+	RawTracepointNFSWritebackDone = "nfs_writeback_done"
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type fs_sync_type -type fs_sync_key_t -type fs_sync_accum_t -type nfs_procedure_key_t -type nfs_procedure_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type fs_sync_type -type fs_sync_key_t -type fs_sync_accum_t -type nfs_procedure_key_t -type nfs_procedure_accum_t -type nfs_procedure_cgroup_key_t -type nfs_procedure_cgroup_accum_t -type nfs_io_key_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -80,8 +83,8 @@ type StatsFetcher struct {
 	// the storage features whose probes are attached, or wait for their kernel module
 	storage               export.Features
 	diskStatusIsBlkStatus bool
-	// the NFS client probe waits for the sunrpc module, and RefreshNFSProbes attaches it
-	nfsWaiting bool
+	// the NFS client probes that wait for their kernel modules, which RefreshNFSProbes attaches
+	nfsPending []probe
 }
 
 func tlog() *slog.Logger {
@@ -137,8 +140,9 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	fetcher, err := loadDegradingStorage(tlog, planStorage(tlog, features), func(storage storagePlan) (*StatsFetcher, error) {
 		return loadAndAttach(cfg, features, toDisable, connRoleUsed, storage, reads)
 	})
-	if err == nil && fetcher.nfsWaiting {
-		tlog.Info("the NFS client stats wait for the sunrpc kernel module: their probe is attached when it is loaded")
+	if err == nil && len(fetcher.nfsPending) > 0 {
+		tlog.Info("the NFS client stats wait for their kernel modules: their probes are attached when they are loaded",
+			"modules", nfsModules(fetcher.storage))
 	}
 	return fetcher, err
 }
@@ -187,6 +191,11 @@ func planStorage(log *slog.Logger, features *export.Features) storagePlan {
 		}
 		if err != nil {
 			storage.drop(log, export.FeatureStatsNFS, err)
+		}
+	}
+	if storage.features.StatsNFSClientIO() {
+		if err := kernelPgioTypes(kernel); err != nil {
+			storage.drop(log, export.FeatureStatsNFSClientIO, err)
 		}
 	}
 	return storage
@@ -248,9 +257,9 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 
 	diskEnabled := storage.features.StatsDisk()
 	fsSyncEnabled := storage.features.StatsFsSync()
-	nfsEnabled := storage.features.StatsNFS()
+	nfsReads := nfsReadsCgroup(storage.features, reads)
 	toDisable = slices.Concat(toDisable, diskProgramsToDisable(diskEnabled, storage.issueHasQueueArg),
-		fsSyncProgramsToDisable(fsSyncEnabled, storage.fsSyncTracing), nfsProgramsToDisable(nfsEnabled))
+		fsSyncProgramsToDisable(fsSyncEnabled, storage.fsSyncTracing), nfsProgramsToDisable(storage.features, nfsReads))
 
 	setFsSyncTracingTargets(spec)
 	if err := fixupSpec(spec, toDisable); err != nil {
@@ -273,6 +282,8 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 		"disk_rqf_flush_seq":        storage.rqfFlushSeq,
 		"disk_req_op_zone_append":   storage.zoneAppendOp,
 		"fs_sync_read_cgroup":       reads.FsSync,
+		"nfs_procedure_histogram":   storage.features.StatsNFSClientProcedureDuration(),
+		"nfs_procedure_counters":    storage.features&export.FeatureStatsNFSClientProcedureCounters != 0,
 	}, sharedMaps, &mu, "", nil); err != nil {
 		err = fmt.Errorf("loading stats eBPF spec: %w", err)
 		if storage.features != 0 {
@@ -415,17 +426,16 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 		closables = append(closables, l)
 	}
 
-	var nfsWaiting bool
-	if nfsEnabled {
-		l, waiting, err := attachNFS(&objects)
-		if err != nil {
-			closeAll(closables)
-			return nil, &storageError{features: export.FeatureStatsNFS, err: err}
-		}
-		if !waiting {
-			closables = append(closables, l)
-		}
-		nfsWaiting = waiting
+	nfs := nfsProbes(&objects, storage.features, nfsReads)
+	nfsLinks, nfsWaiting, err := attachNFS(nfs)
+	if err != nil {
+		closeAll(closables)
+		return nil, err
+	}
+	closables = append(closables, nfsLinks...)
+	var nfsPending []probe
+	if nfsWaiting {
+		nfsPending = nfs
 	}
 
 	if fsSyncEnabled {
@@ -445,7 +455,7 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 
 		storage:               storage.features,
 		diskStatusIsBlkStatus: storage.completeReportsBlkStatus,
-		nfsWaiting:            nfsWaiting,
+		nfsPending:            nfsPending,
 	}, nil
 }
 
@@ -499,16 +509,35 @@ func (m *StatsFetcher) FsSyncAccumMap() *ebpf.Map {
 }
 
 // NFSProcedureAccumMap returns the map where the kernel accumulates the durations of the NFS client
-// RPCs, or nil when the NFS client stats are disabled. Its probe may be attached later.
+// RPCs on the node, or nil when their histogram is disabled. Its probes may be attached later.
 func (m *StatsFetcher) NFSProcedureAccumMap() *ebpf.Map {
-	if !m.storage.StatsNFS() {
+	if !m.storage.StatsNFSClientProcedureDuration() {
 		return nil
 	}
 	return m.objects.NfsProcedureAccum
 }
 
+// NFSProcedureCgroupAccumMap returns the map where the kernel counts the NFS client RPCs and their
+// execute time per workload, or nil when their counters are disabled. Its probes may be attached
+// later.
+func (m *StatsFetcher) NFSProcedureCgroupAccumMap() *ebpf.Map {
+	if m.storage&export.FeatureStatsNFSClientProcedureCounters == 0 {
+		return nil
+	}
+	return m.objects.NfsProcedureCgroupAccum
+}
+
+// NFSIOAccumMap returns the map where the kernel accumulates the bytes of the NFS client reads and
+// writes per workload, or nil when they are disabled. Its probes may be attached later.
+func (m *StatsFetcher) NFSIOAccumMap() *ebpf.Map {
+	if !m.storage.StatsNFSClientIO() {
+		return nil
+	}
+	return m.objects.NfsIoAccum
+}
+
 // DiskCgroupNamesMap returns the map where the kernel records the names of the cgroups that block
-// I/O and file syncs are charged to, or nil when the storage stats are disabled
+// I/O, file syncs and NFS RPCs are charged to, or nil when the storage stats are disabled
 func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
 	if m.storage == 0 {
 		return nil

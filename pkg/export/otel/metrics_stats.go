@@ -104,6 +104,9 @@ type statMetricsExporter struct {
 	fsSyncOperations         *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	fsSyncTime               *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
 	nfsProcedureDuration     *kernelHistogram
+	nfsProcedureCount        *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
+	nfsProcedureTime         *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
+	nfsIO                    *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	kernelHistograms         *kernelHistogramProducer
 	expireTTL                time.Duration
 	in                       <-chan []*ebpf.Stat
@@ -314,6 +317,35 @@ func newStatMetricsExporter(
 		nme.nfsProcedureDuration = kernelHistograms.histogram(attributes.StatNFSClientProcedureDuration, export.DiskLatencyBounds, attrs)
 	}
 
+	if cfg.CommonCfg.Features.StatsNFSClientProcedureCount() {
+		nfsProcedureCount, err := ebpfEvents.Int64Counter(attributes.StatNFSClientProcedureCount.OTEL,
+			metric2.WithUnit(attributes.StatNFSClientProcedureCount.Unit))
+		if err != nil {
+			return nil, fmt.Errorf("creating stats nfs client procedure count counter: %w", err)
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatNFSClientProcedureCount))
+		nme.nfsProcedureCount = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, nfsProcedureCount, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if cfg.CommonCfg.Features.StatsNFSClientProcedureTime() {
+		nfsProcedureTime, err := ebpfEvents.Float64Counter(attributes.StatNFSClientProcedureTime.OTEL,
+			metric2.WithUnit(attributes.StatNFSClientProcedureTime.Unit))
+		if err != nil {
+			return nil, fmt.Errorf("creating stats nfs client procedure time counter: %w", err)
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatNFSClientProcedureTime))
+		nme.nfsProcedureTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, nfsProcedureTime, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
+	if cfg.CommonCfg.Features.StatsNFSClientIO() {
+		nfsIO, err := ebpfEvents.Int64Counter(attributes.StatNFSClientIO.OTEL, metric2.WithUnit(attributes.StatNFSClientIO.Unit))
+		if err != nil {
+			return nil, fmt.Errorf("creating stats nfs client io counter: %w", err)
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatNFSClientIO))
+		nme.nfsIO = NewExpirer[*ebpf.Stat, metric2.Int64Counter, int64](ctx, nfsIO, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	nme.in = input.Subscribe(msg.SubscriberName("otel.StatMetricsExporter"))
 	return nme, nil
 }
@@ -347,8 +379,12 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 			if v.FsSync != nil {
 				me.recordFsSync(ctx, v)
 			}
-			if me.nfsProcedureDuration != nil && v.NFSProcedure != nil {
-				me.kernelHistograms.record(me.nfsProcedureDuration, v, &v.NFSProcedure.Latency)
+			if v.NFSProcedure != nil {
+				me.recordNFSProcedure(ctx, v)
+			}
+			if me.nfsIO != nil && v.NFSIO != nil {
+				nfsIO, attrs := me.nfsIO.ForRecord(v)
+				nfsIO.Add(ctx, int64(v.NFSIO.Bytes), metric2.WithAttributeSet(attrs))
 			}
 		}
 	}
@@ -375,6 +411,25 @@ func (me *statMetricsExporter) recordDiskIO(ctx context.Context, v *ebpf.Stat) {
 	if me.diskServiceTime != nil {
 		diskServiceTime, attrs := me.diskServiceTime.ForRecord(v)
 		diskServiceTime.Add(ctx, v.DiskIO.Latency.Sum, metric2.WithAttributeSet(attrs))
+	}
+}
+
+// recordNFSProcedure records the RPCs of the node in the histogram, and those of a workload in the
+// counters
+func (me *statMetricsExporter) recordNFSProcedure(ctx context.Context, v *ebpf.Stat) {
+	if v.Type == ebpf.StatTypeNFSProcedure {
+		if me.nfsProcedureDuration != nil {
+			me.kernelHistograms.record(me.nfsProcedureDuration, v, &v.NFSProcedure.Latency)
+		}
+		return
+	}
+	if me.nfsProcedureCount != nil {
+		nfsProcedureCount, attrs := me.nfsProcedureCount.ForRecord(v)
+		nfsProcedureCount.Add(ctx, int64(v.NFSProcedure.Count), metric2.WithAttributeSet(attrs))
+	}
+	if me.nfsProcedureTime != nil {
+		nfsProcedureTime, attrs := me.nfsProcedureTime.ForRecord(v)
+		nfsProcedureTime.Add(ctx, v.NFSProcedure.Time, metric2.WithAttributeSet(attrs))
 	}
 }
 

@@ -192,9 +192,9 @@ func getDefinitions(
 		nil,
 	)
 
-	// the NFS client RPCs of the whole node: the server, and the procedure under the attribute of its NFS
-	// version, onc_rpc.procedure.name for NFSv2 and NFSv3, and nfs.operation.name for NFSv4, whose
-	// RPCs are COMPOUND requests that the client names after their main operation
+	// the NFS client RPCs: the server, and the procedure under the attribute of its NFS version,
+	// onc_rpc.procedure.name for NFSv2 and NFSv3, and nfs.operation.name for NFSv4, whose RPCs are
+	// COMPOUND requests that the client names after their main operation
 	statsNFSProcedureAttributes := NewAttrReportGroup(
 		false,
 		nil,
@@ -208,7 +208,19 @@ func getDefinitions(
 		nil,
 	)
 
-	// the Kubernetes workload that the block I/O or the sync is charged to, and the cluster, which is
+	// the bytes of the NFS client reads (receive) and writes (transmit) with a server
+	statsNFSIOAttributes := NewAttrReportGroup(
+		false,
+		nil,
+		map[attr.Name]Default{
+			attr.OBIIP:              false,
+			attr.ServerAddr:         true,
+			attr.NetworkIoDirection: true,
+		},
+		nil,
+	)
+
+	// the Kubernetes workload that the storage operation is charged to, and the cluster, which is
 	// the same on every series of a node: a series per workload by default, not per pod
 	statsStorageKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
@@ -241,7 +253,7 @@ func getDefinitions(
 	)
 
 	// the storage stats of the whole node, charged to no workload: the cache flushes, which the block
-	// layer sends itself, and the NFS client RPCs
+	// layer sends itself, and the histogram of the NFS client RPCs
 	statsStorageNodeKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
 		nil,
@@ -1104,6 +1116,27 @@ func getDefinitions(
 			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsStorageNodeKubeAttributes},
 			Attributes: map[attr.Name]Default{
 				attr.ErrorType: true,
+			},
+		},
+		// the counters charge each RPC to the workload that started it
+		StatNFSClientProcedureCount.Section: {
+			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType:   true,
+				attr.ContainerID: false,
+			},
+		},
+		StatNFSClientProcedureTime.Section: {
+			SubGroups: []*AttrReportGroup{&statsNFSProcedureAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType:   true,
+				attr.ContainerID: false,
+			},
+		},
+		StatNFSClientIO.Section: {
+			SubGroups: []*AttrReportGroup{&statsNFSIOAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ContainerID: false,
 			},
 		},
 

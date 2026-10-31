@@ -46,7 +46,7 @@ func dtlog() *slog.Logger {
 	return slog.With("component", "stat.DiskMapTracer")
 }
 
-// DiskMapTracer periodically reads the block request, file sync and NFS client RPC durations that the
+// DiskMapTracer periodically reads the stats of the block requests, file syncs and NFS client RPCs that the
 // kernel accumulates, and forwards what each key gained since the previous read.
 type DiskMapTracer struct {
 	// the readStats of the accumulation maps that the kernel fills
@@ -54,30 +54,48 @@ type DiskMapTracer struct {
 	interval time.Duration
 }
 
+// AccumMaps are the kernel maps that the DiskMapTracer reads: the accumulation maps, nil for the
+// disabled features, and the names of the cgroups that they are charged to
+type AccumMaps struct {
+	Disk, FsSync, NFSProcedure, NFSProcedureCgroup, NFSIO *ciliumebpf.Map
+	CgroupNames                                           *ciliumebpf.Map
+}
+
+// Any tells whether there is an accumulation map to read
+func (m AccumMaps) Any() bool {
+	return m.Disk != nil || m.FsSync != nil || m.NFSProcedure != nil || m.NFSProcedureCgroup != nil || m.NFSIO != nil
+}
+
 // NewDiskMapTracer reads the accumulation maps that are not nil
-func NewDiskMapTracer(diskAccum, fsSyncAccum, nfsProcedureAccum, cgroupNames *ciliumebpf.Map, statusIsBlkStatus bool,
-	cfg *config.EBPFTracer,
-) *DiskMapTracer {
+func NewDiskMapTracer(maps AccumMaps, statusIsBlkStatus bool, cfg *config.EBPFTracer) *DiskMapTracer {
 	interval := cfg.BatchTimeout
 	if interval <= 0 {
 		interval = defaultDiskReadInterval
 	}
-	containers := ebpfCgroupContainers(cgroupNames)
+	containers := ebpfCgroupContainers(maps.CgroupNames)
 	tracer := &DiskMapTracer{interval: interval}
-	if diskAccum != nil {
-		reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: diskAccum},
+	if maps.Disk != nil {
+		reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: maps.Disk},
 			&blockDevices{sysRoot: "/sys", procRoot: "/proc"}, interval)
 		reader.statusIsBlkStatus = statusIsBlkStatus
 		reader.containers = containers
 		tracer.readers = append(tracer.readers, reader.readStats)
 	}
-	if fsSyncAccum != nil {
-		accum := ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: fsSyncAccum}
+	if maps.FsSync != nil {
+		accum := ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: maps.FsSync}
 		tracer.readers = append(tracer.readers, newFsSyncReader(accum, containers, interval).readStats)
 	}
-	if nfsProcedureAccum != nil {
-		accum := ebpfAccum[ebpf.StatsNfsProcedureKeyT, ebpf.StatsNfsProcedureAccumT]{accum: nfsProcedureAccum}
+	if maps.NFSProcedure != nil {
+		accum := ebpfAccum[ebpf.StatsNfsProcedureKeyT, ebpf.StatsNfsProcedureAccumT]{accum: maps.NFSProcedure}
 		tracer.readers = append(tracer.readers, newNFSProcedureReader(accum, interval).readStats)
+	}
+	if maps.NFSProcedureCgroup != nil {
+		accum := ebpfAccum[ebpf.StatsNfsProcedureCgroupKeyT, ebpf.StatsNfsProcedureCgroupAccumT]{accum: maps.NFSProcedureCgroup}
+		tracer.readers = append(tracer.readers, newNFSProcedureCgroupReader(accum, containers, interval).readStats)
+	}
+	if maps.NFSIO != nil {
+		accum := ebpfAccum[ebpf.StatsNfsIoKeyT, uint64]{accum: maps.NFSIO}
+		tracer.readers = append(tracer.readers, newNFSIOReader(accum, containers, interval).readStats)
 	}
 	return tracer
 }
@@ -212,28 +230,63 @@ func newFsSyncReader(accum accumMap[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT
 // sends with each new RPC client, which the statistics of the kernel name NULL
 const nullProcedure = "NULL"
 
-// newNFSProcedureReader reads the accumulation map of the NFS client RPCs
+// nfsProcedure returns the server, procedure, version and outcome of the RPCs of a key, and logs
+// the statuses without a name
+func nfsProcedure(log *slog.Logger, key ebpf.StatsNfsProcedureKeyT, rpcs uint64) *ebpf.NFSProcedure {
+	errorType := nfsErrorType(key.Status)
+	if errorType == errtype.Other {
+		log.Debug("NFS RPCs completed with a status without a name", "status", key.Status, "rpcs", rpcs)
+	}
+	procedure := unix.ByteSliceToString(key.Procedure[:])
+	if procedure == "" {
+		procedure = nullProcedure
+	}
+	return &ebpf.NFSProcedure{
+		Server:    unix.ByteSliceToString(key.Server[:]),
+		Procedure: procedure,
+		Version:   key.Version,
+		ErrorType: errorType,
+	}
+}
+
+// newNFSProcedureReader reads the accumulation map of the NFS client RPCs of the node
 func newNFSProcedureReader(accum accumMap[ebpf.StatsNfsProcedureKeyT, ebpf.StatsNfsProcedureAccumT], interval time.Duration,
 ) *accumReader[ebpf.StatsNfsProcedureKeyT, ebpf.StatsNfsProcedureAccumT] {
 	log := dtlog()
 	return newAccumReader(ebpf.StatsMapNfsProcedureAccum, accum, func(key ebpf.StatsNfsProcedureKeyT, current, previous ebpf.StatsNfsProcedureAccumT) *ebpf.Stat {
 		latency := latencyDelta(current.LatencyCount[:], previous.LatencyCount[:], current.LatencySumNs, previous.LatencySumNs)
-		errorType := nfsErrorType(key.Status)
-		if errorType == errtype.Other {
-			log.Debug("NFS RPCs completed with a status without a name", "status", key.Status, "rpcs", latency.Count())
-		}
-		procedure := unix.ByteSliceToString(key.Procedure[:])
-		if procedure == "" {
-			procedure = nullProcedure
-		}
+		procedure := nfsProcedure(log, key, latency.Count())
+		procedure.Latency = latency
+		return &ebpf.Stat{Type: ebpf.StatTypeNFSProcedure, NFSProcedure: procedure}
+	}, interval)
+}
+
+// newNFSProcedureCgroupReader reads the accumulation map of the NFS client RPCs per workload
+func newNFSProcedureCgroupReader(accum accumMap[ebpf.StatsNfsProcedureCgroupKeyT, ebpf.StatsNfsProcedureCgroupAccumT],
+	containers *cgroupContainers, interval time.Duration,
+) *accumReader[ebpf.StatsNfsProcedureCgroupKeyT, ebpf.StatsNfsProcedureCgroupAccumT] {
+	log := dtlog()
+	return newAccumReader(ebpf.StatsMapNfsProcedureCgroupAccum, accum, func(key ebpf.StatsNfsProcedureCgroupKeyT, current, previous ebpf.StatsNfsProcedureCgroupAccumT) *ebpf.Stat {
+		count := current.Count - previous.Count
+		procedure := nfsProcedure(log, key.Rpc, count)
+		procedure.ContainerID = containers.containerID(key.CgroupId)
+		procedure.Count = count
+		procedure.Time = float64(current.SumNs-previous.SumNs) / float64(time.Second)
+		return &ebpf.Stat{Type: ebpf.StatTypeNFSProcedureCgroup, NFSProcedure: procedure}
+	}, interval)
+}
+
+// newNFSIOReader reads the accumulation map of the bytes of the NFS client reads and writes
+func newNFSIOReader(accum accumMap[ebpf.StatsNfsIoKeyT, uint64], containers *cgroupContainers, interval time.Duration,
+) *accumReader[ebpf.StatsNfsIoKeyT, uint64] {
+	return newAccumReader(ebpf.StatsMapNfsIoAccum, accum, func(key ebpf.StatsNfsIoKeyT, current, previous uint64) *ebpf.Stat {
 		return &ebpf.Stat{
-			Type: ebpf.StatTypeNFSProcedure,
-			NFSProcedure: &ebpf.NFSProcedure{
-				Server:    unix.ByteSliceToString(key.Server[:]),
-				Procedure: procedure,
-				Version:   key.Version,
-				ErrorType: errorType,
-				Latency:   latency,
+			Type: ebpf.StatTypeNFSIO,
+			NFSIO: &ebpf.NFSIO{
+				Server:      unix.ByteSliceToString(key.Server[:]),
+				Direction:   ebpf.NetworkIoDirectionCode(key.Direction),
+				ContainerID: containers.containerID(key.CgroupId),
+				Bytes:       current - previous,
 			},
 		}
 	}, interval)

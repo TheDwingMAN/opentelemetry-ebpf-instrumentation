@@ -51,6 +51,9 @@ type statMetricsReporter struct {
 	fsSyncOperations         *Expirer[prometheus.Counter]
 	fsSyncTime               *Expirer[prometheus.Counter]
 	nfsProcedureDuration     *kernelHistogramVec
+	nfsProcedureCount        *Expirer[prometheus.Counter]
+	nfsProcedureTime         *Expirer[prometheus.Counter]
+	nfsIO                    *Expirer[prometheus.Counter]
 
 	promConnect *connector.PrometheusManager
 
@@ -68,6 +71,9 @@ type statMetricsReporter struct {
 	fsSyncOperationsAttrs         []attributes.Field[*ebpf.Stat, string]
 	fsSyncTimeAttrs               []attributes.Field[*ebpf.Stat, string]
 	nfsProcedureDurationAttrs     []attributes.Field[*ebpf.Stat, string]
+	nfsProcedureCountAttrs        []attributes.Field[*ebpf.Stat, string]
+	nfsProcedureTimeAttrs         []attributes.Field[*ebpf.Stat, string]
+	nfsIOAttrs                    []attributes.Field[*ebpf.Stat, string]
 
 	input <-chan []*ebpf.Stat
 }
@@ -290,6 +296,39 @@ func newStatsReporter(
 		register = append(register, mr.nfsProcedureDuration)
 	}
 
+	if cfg.CommonCfg.Features.StatsNFSClientProcedureCount() {
+		log.Debug("registering stat nfs client procedure count metric")
+
+		mr.nfsProcedureCountAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatNFSClientProcedureCount))
+		mr.nfsProcedureCount = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatNFSClientProcedureCount.Prom,
+			Help: "number of completed RPCs of the kernel NFS client",
+		}, labelNames(mr.nfsProcedureCountAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.nfsProcedureCount)
+	}
+
+	if cfg.CommonCfg.Features.StatsNFSClientProcedureTime() {
+		log.Debug("registering stat nfs client procedure time metric")
+
+		mr.nfsProcedureTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatNFSClientProcedureTime))
+		mr.nfsProcedureTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatNFSClientProcedureTime.Prom,
+			Help: "sum of the execute times of the completed RPCs of the kernel NFS client, from their start until their completion, in seconds",
+		}, labelNames(mr.nfsProcedureTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.nfsProcedureTime)
+	}
+
+	if cfg.CommonCfg.Features.StatsNFSClientIO() {
+		log.Debug("registering stat nfs client io metric")
+
+		mr.nfsIOAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatNFSClientIO))
+		mr.nfsIO = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatNFSClientIO.Prom,
+			Help: "bytes that the reads and writes of the kernel NFS client transferred",
+		}, labelNames(mr.nfsIOAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.nfsIO)
+	}
+
 	mr.promConnect.Register(cfg.Config.Port, cfg.Config.Path, register...)
 
 	mr.input = input.Subscribe(msg.SubscriberName("prom.StatsReporterInput"))
@@ -312,6 +351,7 @@ func (r *statMetricsReporter) collectMetrics(_ context.Context) {
 			r.observeDisk(stat)
 			r.observeFsSync(stat)
 			r.observeNFSProcedure(stat)
+			r.observeNFSIO(stat)
 		}
 	}
 }
@@ -392,11 +432,31 @@ func (r *statMetricsReporter) observeDiskCounters(stat *ebpf.Stat) {
 	}
 }
 
+// observeNFSProcedure observes the RPCs of the node in the histogram, and those of a workload in the
+// counters
 func (r *statMetricsReporter) observeNFSProcedure(stat *ebpf.Stat) {
-	if r.nfsProcedureDuration == nil || stat.NFSProcedure == nil {
+	if stat.NFSProcedure == nil {
 		return
 	}
-	r.nfsProcedureDuration.observe(labelValues(stat, r.nfsProcedureDurationAttrs), &stat.NFSProcedure.Latency)
+	if stat.Type == ebpf.StatTypeNFSProcedure {
+		if r.nfsProcedureDuration != nil {
+			r.nfsProcedureDuration.observe(labelValues(stat, r.nfsProcedureDurationAttrs), &stat.NFSProcedure.Latency)
+		}
+		return
+	}
+	if r.nfsProcedureCount != nil {
+		r.nfsProcedureCount.WithLabelValues(labelValues(stat, r.nfsProcedureCountAttrs)...).Metric.Add(float64(stat.NFSProcedure.Count))
+	}
+	if r.nfsProcedureTime != nil {
+		r.nfsProcedureTime.WithLabelValues(labelValues(stat, r.nfsProcedureTimeAttrs)...).Metric.Add(stat.NFSProcedure.Time)
+	}
+}
+
+func (r *statMetricsReporter) observeNFSIO(stat *ebpf.Stat) {
+	if r.nfsIO == nil || stat.NFSIO == nil {
+		return
+	}
+	r.nfsIO.WithLabelValues(labelValues(stat, r.nfsIOAttrs)...).Metric.Add(float64(stat.NFSIO.Bytes))
 }
 
 func (r *statMetricsReporter) observeFsSync(stat *ebpf.Stat) {

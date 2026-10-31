@@ -142,6 +142,9 @@ func TestFeatureStatsDisk(t *testing.T) {
 		{name: "fs_sync_duration", load: LoadV2Features, wantErr: true},
 		{name: "stats_nfs_client_procedure_duration", load: LoadFeatures, wantErr: true},
 		{name: "stats_nfs_client_procedure_duration", load: LoadV2Features, want: FeatureStatsNFSClientProcedureDuration},
+		{name: "stats_nfs_client_procedure_count", load: LoadV2Features, want: FeatureStatsNFSClientProcedureCount},
+		{name: "stats_nfs_client_procedure_time", load: LoadV2Features, want: FeatureStatsNFSClientProcedureTime},
+		{name: "stats_nfs_client_io", load: LoadV2Features, want: FeatureStatsNFSClientIO},
 	} {
 		features, err := tc.load([]string{tc.name})
 		if tc.wantErr {

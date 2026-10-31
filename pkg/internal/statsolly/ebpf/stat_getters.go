@@ -70,6 +70,9 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			if s.TCPIo != nil {
 				direction = s.TCPIo.Direction
 			}
+			if s.NFSIO != nil {
+				direction = uint8(s.NFSIO.Direction)
+			}
 			return attribute.String(string(attr.NetworkIoDirection), networkIoDirectionStr(NetworkIoDirectionCode(direction)))
 		}
 	case attr.SystemDevice:
@@ -106,6 +109,9 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 		}
 	case attr.ServerAddr:
 		getter = func(s *Stat) attribute.KeyValue {
+			if s.NFSIO != nil {
+				return attribute.String(string(attr.ServerAddr), s.NFSIO.Server)
+			}
 			if s.NFSProcedure == nil {
 				return attribute.KeyValue{}
 			}
@@ -165,6 +171,10 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 				containerID = s.DiskIO.ContainerID
 			case s.FsSync != nil:
 				containerID = s.FsSync.ContainerID
+			case s.NFSProcedure != nil:
+				containerID = s.NFSProcedure.ContainerID
+			case s.NFSIO != nil:
+				containerID = s.NFSIO.ContainerID
 			}
 			if containerID == "" {
 				return attribute.KeyValue{}
@@ -177,7 +187,8 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			value := s.CommonAttrs.Metadata[name]
 			// the storage stats leave out the metadata that they don't have, like the Kubernetes
 			// attributes of the I/O charged to no pod: an invalid KeyValue isn't exported
-			if value == "" && (s.Type == StatTypeDiskIO || s.Type == StatTypeFsSync || s.Type == StatTypeNFSProcedure) {
+			if value == "" && (s.Type == StatTypeDiskIO || s.Type == StatTypeFsSync || s.Type == StatTypeNFSProcedure ||
+				s.Type == StatTypeNFSProcedureCgroup || s.Type == StatTypeNFSIO) {
 				return attribute.KeyValue{}
 			}
 			return attribute.String(string(name), value)

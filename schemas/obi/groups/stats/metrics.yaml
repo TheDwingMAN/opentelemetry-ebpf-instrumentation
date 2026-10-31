@@ -715,3 +715,129 @@ metrics:
       - ref: error.type
         requirement_level:
           conditionally_required: if the RPC failed
+
+  - name: obi.stat.nfs.client.procedure.count
+    instrument: counter
+    unit: "{procedure}"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      RPCs of the kernel NFS client, per server, procedure, NFS version and
+      outcome, charged to the workload of the thread that started each RPC:
+      the count of `obi.stat.nfs.client.procedure.duration` per workload.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: server.address
+        requirement_level: recommended
+      - ref: onc_rpc.procedure.name
+        requirement_level:
+          conditionally_required: if the NFS version is 2 or 3
+      - ref: nfs.operation.name
+        requirement_level:
+          conditionally_required: if the NFS version is 4
+      - ref: onc_rpc.version
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the RPC is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the RPC is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the RPC is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the RPC failed
+
+  - name: obi.stat.nfs.client.procedure.time
+    instrument: counter
+    unit: "s"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      Execute time of the RPCs of the kernel NFS client, per server, procedure,
+      NFS version and outcome, charged to the workload of the thread that
+      started each RPC: the sum of `obi.stat.nfs.client.procedure.duration`
+      per workload. Divided by `obi.stat.nfs.client.procedure.count`, it is
+      the mean execute time.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: server.address
+        requirement_level: recommended
+      - ref: onc_rpc.procedure.name
+        requirement_level:
+          conditionally_required: if the NFS version is 2 or 3
+      - ref: nfs.operation.name
+        requirement_level:
+          conditionally_required: if the NFS version is 4
+      - ref: onc_rpc.version
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the RPC is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the RPC is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the RPC is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the RPC failed
+
+  - name: obi.stat.nfs.client.io
+    instrument: counter
+    unit: "By"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      Bytes that the READ and WRITE RPCs of the kernel NFS client transferred,
+      as `/proc/self/mountstats` counts them in the server bytes of its
+      mounts, per server and direction (receive for reads, transmit for
+      writes), charged to the workload of the thread that started each RPC.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: server.address
+        requirement_level: recommended
+      - ref: network.io.direction
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the RPC is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the RPC is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the RPC is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in

@@ -36,6 +36,12 @@ func storageContainerID(s *ebpf.Stat) string {
 	if s.DiskIO != nil {
 		return s.DiskIO.ContainerID
 	}
+	if s.NFSProcedure != nil {
+		return s.NFSProcedure.ContainerID
+	}
+	if s.NFSIO != nil {
+		return s.NFSIO.ContainerID
+	}
 	return ""
 }
 

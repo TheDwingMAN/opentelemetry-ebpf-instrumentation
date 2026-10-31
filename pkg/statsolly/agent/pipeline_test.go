@@ -269,12 +269,25 @@ func TestDiskStats(t *testing.T) {
 }
 
 // The NFS client stats are exported with their server, and their procedure under the attribute of
-// their NFS version
+// their NFS version: the histogram those of the node, and the counters those of the workloads
 func TestNFSStats(t *testing.T) {
-	rpcs, promURL := startDiskPipeline(t, func(s *Stats) { s.cfg.Metrics.Features = export.FeatureStatsNFS })
+	rpcs, promURL := startDiskPipeline(t, func(s *Stats) {
+		s.cfg.Metrics.Features = export.FeatureStatsNFS
+		s.cfg.Attributes.Select = attributes.Selection{
+			"obi_stat_nfs_client_procedure_count_total":   attributes.InclusionLists{Include: []string{"*"}},
+			attributes.StatNFSClientProcedureTime.Section: attributes.InclusionLists{Include: []string{"*"}},
+		}
+		s.cfg.Attributes.Select.Normalize()
+	})
 	lookup := fakeNFSRecord("LOOKUP", 3, 1)
 	lookup.NFSProcedure.ErrorType = "ENOENT"
-	rpcs <- []*ebpf.Stat{fakeNFSRecord("WRITE", 4, 2), lookup}
+	commit := &ebpf.Stat{Type: ebpf.StatTypeNFSProcedureCgroup, NFSProcedure: &ebpf.NFSProcedure{
+		Server: "nas", Procedure: "COMMIT", Version: 4, ContainerID: "0123abcd", Count: 2, Time: 0.5,
+	}}
+	written := &ebpf.Stat{Type: ebpf.StatTypeNFSIO, NFSIO: &ebpf.NFSIO{
+		Server: "nas", Direction: ebpf.CodeDirectionTransmit, ContainerID: "0123abcd", Bytes: 65536,
+	}}
+	rpcs <- []*ebpf.Stat{fakeNFSRecord("WRITE", 4, 2), lookup, commit, written}
 
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
 		allMetrics, err := promtest.Scrape(promURL)
@@ -286,9 +299,23 @@ func TestNFSStats(t *testing.T) {
 			{Name: "obi_stat_nfs_client_procedure_duration_seconds_count", Value: 1, Labels: map[string]string{
 				"server_address": "nas", "nfs_operation_name": "", "onc_rpc_procedure_name": "LOOKUP", "onc_rpc_version": "3", "error_type": "ENOENT",
 			}},
-		}, slices.DeleteFunc(allMetrics, func(m promtest.ScrapedMetric) bool {
+		}, slices.DeleteFunc(slices.Clone(allMetrics), func(m promtest.ScrapedMetric) bool {
 			return m.Name != "obi_stat_nfs_client_procedure_duration_seconds_count"
 		}))
+		labels := map[string]string{
+			"server_address": "nas", "nfs_operation_name": "COMMIT", "onc_rpc_procedure_name": "", "onc_rpc_version": "4", "error_type": "",
+			"obi_ip": "1.2.3.4", "container_id": "0123abcd",
+		}
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_nfs_client_procedure_count_total", Value: 2, Labels: labels},
+			{Name: "obi_stat_nfs_client_procedure_time_seconds_total", Value: 0.5, Labels: labels},
+		}, slices.DeleteFunc(slices.Clone(allMetrics), func(m promtest.ScrapedMetric) bool {
+			return !strings.HasPrefix(m.Name, "obi_stat_nfs_client_procedure_count") && !strings.HasPrefix(m.Name, "obi_stat_nfs_client_procedure_time")
+		}))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{{
+			Name: "obi_stat_nfs_client_io_bytes_total", Value: 65536,
+			Labels: map[string]string{"server_address": "nas", "network_io_direction": "transmit"},
+		}}, slices.DeleteFunc(allMetrics, func(m promtest.ScrapedMetric) bool { return m.Name != "obi_stat_nfs_client_io_bytes_total" }))
 	}, timeout, 100*time.Millisecond)
 }
 
@@ -349,7 +376,20 @@ func TestDiskStatsUnderDynamicSelection(t *testing.T) {
 	}, time.Second, 100*time.Millisecond)
 }
 
-// The NFS client probe is attached on each refresh until it no longer waits for the sunrpc module
+// The storage stats are selected and decorated by the container that the kernel charged them to
+func TestStorageContainerID(t *testing.T) {
+	for want, stat := range map[string]*ebpf.Stat{
+		"disk": {Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{ContainerID: "disk"}},
+		"sync": {Type: ebpf.StatTypeFsSync, FsSync: &ebpf.FsSync{ContainerID: "sync"}},
+		"rpcs": {Type: ebpf.StatTypeNFSProcedureCgroup, NFSProcedure: &ebpf.NFSProcedure{ContainerID: "rpcs"}},
+		"io":   {Type: ebpf.StatTypeNFSIO, NFSIO: &ebpf.NFSIO{ContainerID: "io"}},
+		"":     fakeNFSRecord("READ", 4, 1),
+	} {
+		assert.Equal(t, want, storageContainerID(stat))
+	}
+}
+
+// The NFS client probes are attached on each refresh until they no longer wait for their modules
 func TestRefreshNFSProbesUntilNoneWaits(t *testing.T) {
 	const waitingRefreshes = 3
 	refreshes := 0

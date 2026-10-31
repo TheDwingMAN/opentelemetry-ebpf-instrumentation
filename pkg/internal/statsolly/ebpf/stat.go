@@ -22,12 +22,14 @@ const (
 	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
 	StatTypeFsSync                  = StatType(StatsStatTypeK_statTypeFsSync)
 	StatTypeNFSProcedure            = StatType(StatsStatTypeK_statTypeNfsProcedure)
+	StatTypeNFSProcedureCgroup      = StatType(StatsStatTypeK_statTypeNfsProcedureCgroup)
+	StatTypeNFSIO                   = StatType(StatsStatTypeK_statTypeNfsIo)
 )
 
 // CgroupReads tells which storage probes read the cgroups that the kernel charges the operations
 // to, for the attributes of their workloads
 type CgroupReads struct {
-	Disk, FsSync bool
+	Disk, FsSync, NFS bool
 }
 
 type TCPFailReasonType string
@@ -127,6 +129,7 @@ type Stat struct {
 	DiskIO                  *DiskIO                  `json:"-"`
 	FsSync                  *FsSync                  `json:"-"`
 	NFSProcedure            *NFSProcedure            `json:"-"`
+	NFSIO                   *NFSIO                   `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -183,8 +186,9 @@ type FsSync struct {
 	Latency     LatencyHistogram
 }
 
-// NFSProcedure is the RPCs of an NFS client procedure that completed with an outcome on a server, on
-// the whole node, since the previous read of the kernel map
+// NFSProcedure is the RPCs of an NFS client procedure that completed with an outcome on a server
+// since the previous read of a kernel map: on the whole node in Latency (StatTypeNFSProcedure), or
+// for a workload in Count and Time (StatTypeNFSProcedureCgroup)
 type NFSProcedure struct {
 	// Server is the server as its first mount on the node names it
 	Server string
@@ -196,6 +200,22 @@ type NFSProcedure struct {
 	// ErrorType names the status that the RPCs failed with, and is empty for successful RPCs
 	ErrorType string
 	Latency   LatencyHistogram
+	// ContainerID is the container of the threads that started the RPCs, empty for none
+	ContainerID string
+	Count       uint64
+	// Time is the sum of the execute times of the RPCs, in seconds
+	Time float64
+}
+
+// NFSIO is the bytes that the READs or the WRITEs of the NFS client of a workload transferred with a
+// server since the previous read of the kernel map
+type NFSIO struct {
+	Server string
+	// Direction is receive for the reads, and transmit for the writes
+	Direction NetworkIoDirectionCode
+	// ContainerID is the container of the threads that started the RPCs, empty for none
+	ContainerID string
+	Bytes       uint64
 }
 
 // LatencyHistogram counts block requests, file syncs or NFS RPCs in the buckets of export.DiskLatencyBounds

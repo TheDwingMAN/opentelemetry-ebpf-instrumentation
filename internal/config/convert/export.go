@@ -390,6 +390,9 @@ const (
 	statsFeatureFsSyncOperations           = "fs_sync_operations"
 	statsFeatureFsSyncTime                 = "fs_sync_time"
 	statsFeatureNFSClientProcedureDuration = "nfs_client_procedure_duration"
+	statsFeatureNFSClientProcedureCount    = "nfs_client_procedure_count"
+	statsFeatureNFSClientProcedureTime     = "nfs_client_procedure_time"
+	statsFeatureNFSClientIO                = "nfs_client_io"
 )
 
 func statsFeatures(features featureexport.Features) []string {
@@ -435,6 +438,15 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsNFSClientProcedureDuration() {
 		out = append(out, statsFeatureNFSClientProcedureDuration)
+	}
+	if features.StatsNFSClientProcedureCount() {
+		out = append(out, statsFeatureNFSClientProcedureCount)
+	}
+	if features.StatsNFSClientProcedureTime() {
+		out = append(out, statsFeatureNFSClientProcedureTime)
+	}
+	if features.StatsNFSClientIO() {
+		out = append(out, statsFeatureNFSClientIO)
 	}
 	return out
 }

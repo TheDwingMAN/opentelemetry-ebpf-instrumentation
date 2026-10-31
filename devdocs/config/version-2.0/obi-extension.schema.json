@@ -977,7 +977,10 @@
                       "stats_fs_sync_duration",
                       "stats_fs_sync_operations",
                       "stats_fs_sync_time",
+                      "stats_nfs_client_io",
+                      "stats_nfs_client_procedure_count",
                       "stats_nfs_client_procedure_duration",
+                      "stats_nfs_client_procedure_time",
                       "stats_tcp_failed_connections",
                       "stats_tcp_io",
                       "stats_tcp_retransmits",
@@ -997,7 +1000,7 @@
                 ]
               },
               "type": "array",
-              "description": "Metric features using the same names as Config v1, plus stats_disk_service_duration, stats_disk_io, stats_disk_operations, stats_disk_service_time, stats_disk_flush_duration, stats_fs_sync_duration, stats_fs_sync_operations, stats_fs_sync_time and stats_nfs_client_procedure_duration, which only Config v2 enables and which stats, all and * don't include. An explicit list replaces the selection inferred from protocol and network switches; [] disables all metric features. When omitted, protocol and network enablement determines the features."
+              "description": "Metric features using the same names as Config v1, plus stats_disk_service_duration, stats_disk_io, stats_disk_operations, stats_disk_service_time, stats_disk_flush_duration, stats_fs_sync_duration, stats_fs_sync_operations, stats_fs_sync_time, stats_nfs_client_procedure_duration, stats_nfs_client_procedure_count, stats_nfs_client_procedure_time and stats_nfs_client_io, which only Config v2 enables and which stats, all and * don't include. An explicit list replaces the selection inferred from protocol and network switches; [] disables all metric features. When omitted, protocol and network enablement determines the features."
             }
           }
         }
@@ -2183,11 +2186,14 @@
                   "fs_sync_duration",
                   "fs_sync_operations",
                   "fs_sync_time",
-                  "nfs_client_procedure_duration"
+                  "nfs_client_procedure_duration",
+                  "nfs_client_procedure_count",
+                  "nfs_client_procedure_time",
+                  "nfs_client_io"
                 ]
               },
               "default": [],
-              "description": "Enabled stats families: the TCP ones, the block I/O (disk) ones: disk_service_duration, disk_io, disk_operations, disk_service_time and disk_flush_duration, the file sync ones: fs_sync_duration, fs_sync_operations and fs_sync_time, and the NFS client one: nfs_client_procedure_duration.\nIf omitted, no stats families are enabled.\n"
+              "description": "Enabled stats families: the TCP ones, the block I/O (disk) ones: disk_service_duration, disk_io, disk_operations, disk_service_time and disk_flush_duration, the file sync ones: fs_sync_duration, fs_sync_operations and fs_sync_time, and the NFS client ones: nfs_client_procedure_duration, nfs_client_procedure_count, nfs_client_procedure_time and nfs_client_io.\nIf omitted, no stats families are enabled.\n"
             },
             "endpoint_identity": {
               "type": "object",

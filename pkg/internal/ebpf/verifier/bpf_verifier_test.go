@@ -341,6 +341,12 @@ func TestBPFVerifierWithConstants(t *testing.T) {
 		{"fs_sync_read_cgroup", []any{false, true}},
 		{"disk_rqf_io_stat", []any{uint32(0), uint32(1 << 8)}},
 	})
+	// the maps that the NFS client RPCs are counted in, in a matrix of their own, as they share no
+	// code with the constants above
+	forEachCombination(t, "statsolly/StatsNFS", loadStats, []constOption{
+		{"nfs_procedure_histogram", []any{false, true}},
+		{"nfs_procedure_counters", []any{false, true}},
+	})
 }
 
 // loadStats loads the stats programs with the fentry and fexit programs of every file sync function
