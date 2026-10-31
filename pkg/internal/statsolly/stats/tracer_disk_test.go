@@ -5,9 +5,11 @@ package stats
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,7 +52,7 @@ func assertLatency(t *testing.T, latency ebpf.LatencyHistogram, sumSeconds float
 }
 
 func newTestDiskReader(src *fakeDiskAccum) *diskReader {
-	return newDiskReader(src.read, &blockDevices{sysRoot: "/nonexistent"})
+	return newDiskReader(src.read, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"})
 }
 
 func TestDiskReaderForwardsDeltas(t *testing.T) {
@@ -91,12 +93,56 @@ func TestDiskReaderForwardsWhatItReads(t *testing.T) {
 	assertLatency(t, stats[0].DiskIO.Latency, 2*0.0005, 2)
 }
 
-// fakeBlockDevice adds a block device to a fake sysfs, linked from /sys/dev/block by its numbers
-func fakeBlockDevice(t *testing.T, sysRoot, numbers, name string) {
-	t.Helper()
-	dir := filepath.Join(sysRoot, "dev", "block", numbers)
-	require.NoError(t, os.MkdirAll(dir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "uevent"), []byte("DEVNAME="+name+"\nDEVTYPE=disk\n"), 0o644))
+// fakeBlockDevices is a fake sysfs, with block devices linked from /sys/dev/block by their numbers,
+// and a fake /proc/diskstats
+type fakeBlockDevices struct {
+	t                 *testing.T
+	sysRoot, procRoot string
+	diskstats         []string
+}
+
+func newFakeBlockDevices(t *testing.T) *fakeBlockDevices {
+	return &fakeBlockDevices{t: t, sysRoot: t.TempDir(), procRoot: t.TempDir()}
+}
+
+func (f *fakeBlockDevices) blockDevices() *blockDevices {
+	return &blockDevices{sysRoot: f.sysRoot, procRoot: f.procRoot}
+}
+
+func (f *fakeBlockDevices) add(numbers, name string) {
+	f.file(name, "uevent", "DEVNAME="+name+"\nDEVTYPE=disk")
+	f.link(filepath.Join("dev", "block", numbers), name)
+}
+
+// hidden adds a device that /proc/diskstats lists, but that sysfs doesn't link from /sys/dev/block,
+// as the path devices of NVMe native multipath
+func (f *fakeBlockDevices) hidden(numbers, name string) {
+	major, minor, _ := strings.Cut(numbers, ":")
+	f.diskstats = append(f.diskstats, fmt.Sprintf("%4s %7s %s 0 0 80 5 0 0 160 9 0 12 14 0 0 0 0 0 0", major, minor, name))
+	diskstats := []byte(strings.Join(f.diskstats, "\n") + "\n")
+	require.NoError(f.t, os.WriteFile(filepath.Join(f.procRoot, "diskstats"), diskstats, 0o644))
+}
+
+// file writes a file of the sysfs directory of a device
+func (f *fakeBlockDevices) file(device, path, content string) {
+	file := filepath.Join(f.sysRoot, "block", device, path)
+	require.NoError(f.t, os.MkdirAll(filepath.Dir(file), 0o755))
+	require.NoError(f.t, os.WriteFile(file, []byte(content+"\n"), 0o644))
+}
+
+// stack builds a device on others: sysfs lists them as its slaves, and it as their holder
+func (f *fakeBlockDevices) stack(device string, below ...string) {
+	for _, disk := range below {
+		f.link(filepath.Join("block", device, "slaves", disk), disk)
+		f.link(filepath.Join("block", disk, "holders", device), device)
+	}
+}
+
+// link links a path of the fake sysfs to the directory of a device
+func (f *fakeBlockDevices) link(path, device string) {
+	link := filepath.Join(f.sysRoot, path)
+	require.NoError(f.t, os.MkdirAll(filepath.Dir(link), 0o755))
+	require.NoError(f.t, os.Symlink(filepath.Join(f.sysRoot, "block", device), link))
 }
 
 func TestDeviceNames(t *testing.T) {
@@ -105,19 +151,127 @@ func TestDeviceNames(t *testing.T) {
 	timeNow = func() time.Time { return now }
 	t.Cleanup(func() { timeNow = previousClock })
 
-	sysRoot := t.TempDir()
-	fakeBlockDevice(t, sysRoot, "259:0", "nvme0n1")
-	names := &blockDevices{sysRoot: sysRoot}
-	assert.Equal(t, "nvme0n1", names.name(259, 0))
-	assert.Equal(t, "8:0", names.name(8, 0), "named after its numbers when sysfs doesn't know it")
+	fake := newFakeBlockDevices(t)
+	fake.add("253:0", "dm-0")
+	fake.file("dm-0", "dm/name", "vg0-data")
+	devices := fake.blockDevices()
+	assert.Equal(t, blockDevice{name: "dm-0", volumeName: "vg0-data", stacked: true}, devices.device(253, 0))
+	assert.Equal(t, blockDevice{name: "8:0"}, devices.device(8, 0), "named after its numbers when sysfs doesn't know it")
 
-	// the device was detached, and its numbers given to another one
-	fakeBlockDevice(t, sysRoot, "259:0", "nvme1n1")
-	assert.Equal(t, "nvme0n1", names.name(259, 0), "cached")
+	// the volume was removed, and its numbers given to a new one, and a hidden NVMe path appeared
+	fake.file("dm-0", "dm/name", "vg0-new")
+	fake.hidden("259:1", "nvme1c0n1")
+	assert.Equal(t, "vg0-data", devices.device(253, 0).volumeName, "cached")
+	assert.Equal(t, "259:1", devices.device(259, 1).name, "/proc/diskstats is read once per cache period")
 	now = now.Add(blockDevicesCachePeriod)
-	assert.Equal(t, "nvme1n1", names.name(259, 0), "read again once the cache expired")
+	assert.Equal(t, "vg0-new", devices.device(253, 0).volumeName, "read again once the cache expired")
+	assert.Equal(t, "nvme1c0n1", devices.device(259, 1).name, "read again once the cache expired")
 
 	// the numbers of unknown devices are not cached: a new device is named at its first I/O
-	fakeBlockDevice(t, sysRoot, "8:0", "sda")
-	assert.Equal(t, "sda", names.name(8, 0))
+	fake.add("8:0", "sda")
+	assert.Equal(t, blockDevice{name: "sda"}, devices.device(8, 0))
+}
+
+func TestDeviceNamesOfHiddenNVMePaths(t *testing.T) {
+	fake := newFakeBlockDevices(t)
+	fake.add("259:2", "nvme1n1")
+	fake.hidden("259:1", "nvme1c0n1")
+	fake.hidden("259:0", "nvme1c1n1")
+	// before Linux 6.1, the kernel lists the hidden paths without their numbers
+	fake.hidden("0:0", "nvme2c0n1")
+	fake.hidden("0:0", "nvme2c1n1")
+	devices := fake.blockDevices()
+	for numbers, name := range map[devNum]string{
+		{259, 2}: "nvme1n1",
+		{259, 1}: "nvme1c0n1",
+		{259, 0}: "nvme1c1n1",
+		{259, 3}: "259:3",
+		{0, 0}:   "0:0",
+	} {
+		assert.Equal(t, blockDevice{name: name}, devices.device(numbers.major, numbers.minor))
+	}
+}
+
+func TestStackedDevices(t *testing.T) {
+	fake := newFakeBlockDevices(t)
+	fake.add("259:0", "nvme0n1")
+	fake.add("8:16", "sdb")
+	fake.add("8:32", "sdc")
+	fake.add("8:48", "sdd")
+	fake.add("7:0", "loop0")
+	fake.file("loop0", "loop/backing_file", "/var/lib/images/disk.img")
+	fake.add("253:0", "dm-0")
+	fake.file("dm-0", "dm/name", "vg0-data")
+	fake.stack("dm-0", "nvme0n1")
+	fake.add("9:0", "md0")
+	fake.file("md0", "md/level", "raid1")
+	fake.stack("md0", "sdb", "sdc")
+	fake.add("252:0", "bcache0")
+	fake.stack("bcache0", "sdd")
+
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{}}
+	for _, numbers := range []devNum{{259, 0}, {8, 16}, {7, 0}, {253, 0}, {9, 0}, {252, 0}, {8, 99}} {
+		src.entries[writeKey(numbers.major, numbers.minor)] = accum([]uint64{1}, []uint64{100_000})
+	}
+	type labels struct {
+		volumeName string
+		stacked    bool
+	}
+	devices := map[string]labels{}
+	for _, stat := range newDiskReader(src.read, fake.blockDevices()).readStats() {
+		devices[stat.DiskIO.Device] = labels{volumeName: stat.DiskIO.VolumeName, stacked: stat.DiskIO.Stacked}
+	}
+	assert.Equal(t, map[string]labels{
+		"nvme0n1": {},
+		"sdb":     {},
+		"loop0":   {stacked: true},
+		"dm-0":    {volumeName: "vg0-data", stacked: true},
+		"md0":     {stacked: true},
+		"bcache0": {stacked: true},
+		"8:99":    {},
+	}, devices)
+}
+
+// The paths of a measured dm-multipath device report nothing, as the multipath device reports the
+// same requests, so the multipath device is not stacked
+func TestDiskReaderLeavesOutTheMultipathPaths(t *testing.T) {
+	fake := newFakeBlockDevices(t)
+	fake.add("8:16", "sdb")
+	fake.add("8:32", "sdc")
+	fake.add("8:48", "sdd")
+	fake.add("8:64", "sde")
+	// a blk-mq dm-multipath device over sdb
+	fake.add("253:1", "dm-1")
+	fake.file("dm-1", "dm/uuid", "mpath-3600a098038303053453f463045727a51")
+	fake.file("dm-1", "mq/0/nr_tags", "256")
+	fake.stack("dm-1", "sdb")
+	// a request-based one of an older kernel, without blk-mq, over sdc
+	fake.add("253:3", "dm-3")
+	fake.file("dm-3", "dm/uuid", "mpath-3600a098038303053453f463045727a53")
+	fake.file("dm-3", "queue/scheduler", "noop deadline [cfq]")
+	fake.stack("dm-3", "sdc")
+	// a bio-based one over sdd
+	fake.add("253:2", "dm-2")
+	fake.file("dm-2", "dm/uuid", "mpath-3600a098038303053453f463045727a52")
+	fake.file("dm-2", "queue/scheduler", "none")
+	fake.stack("dm-2", "sdd")
+	// an LVM volume over sde
+	fake.add("253:0", "dm-0")
+	fake.file("dm-0", "dm/uuid", "LVM-Jx5HfWYhjVTJlsk1Bm5uXPejJ6Np1HMpbTzX1bz9tJw0ZDhIrb3nG5zhpzbBgJpQ")
+	fake.stack("dm-0", "sde")
+
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{}}
+	for _, numbers := range []devNum{{8, 16}, {8, 32}, {8, 48}, {8, 64}, {253, 0}, {253, 1}, {253, 2}, {253, 3}} {
+		src.entries[writeKey(numbers.major, numbers.minor)] = accum([]uint64{1}, []uint64{100_000})
+	}
+	r := newDiskReader(src.read, fake.blockDevices())
+	stacked := map[string]bool{}
+	for _, stat := range r.readStats() {
+		stacked[stat.DiskIO.Device] = stat.DiskIO.Stacked
+	}
+	assert.Equal(t, map[string]bool{
+		"sdd": false, "sde": false, "dm-1": false, "dm-3": false,
+		"dm-0": true, "dm-2": true,
+	}, stacked, "the paths of dm-1 and dm-3 report nothing")
+	assert.Equal(t, src.entries, r.previous, "a path reports none of the requests it served while it was one")
 }

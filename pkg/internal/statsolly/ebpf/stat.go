@@ -131,7 +131,11 @@ type TCPIo struct {
 // DiskIO is the block I/O that completed on a device in one direction since the previous read of
 // the kernel map
 type DiskIO struct {
-	Device  string
+	Device string
+	// VolumeName is the device mapper name of Device, empty for other devices
+	VolumeName string
+	// Stacked devices are built on other block devices, which also report their I/O
+	Stacked bool
 	Op      DiskOpCode
 	Latency LatencyHistogram
 }

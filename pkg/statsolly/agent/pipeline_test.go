@@ -263,9 +263,12 @@ func TestDiskStats(t *testing.T) {
 			return m.Name != "obi_stat_disk_service_duration_seconds_count"
 		})
 		assert.Equal(ct, []promtest.ScrapedMetric{{
-			Name:   "obi_stat_disk_service_duration_seconds_count",
-			Value:  6,
-			Labels: map[string]string{"obi_ip": "1.2.3.4", "system_device": "nvme0n1", "disk_io_direction": "write"},
+			Name:  "obi_stat_disk_service_duration_seconds_count",
+			Value: 6,
+			Labels: map[string]string{
+				"obi_ip": "1.2.3.4", "system_device": "nvme0n1", "obi_disk_stacked": "false", "obi_disk_volume_name": "",
+				"disk_io_direction": "write",
+			},
 		}}, counts)
 	}, timeout, 100*time.Millisecond)
 }
