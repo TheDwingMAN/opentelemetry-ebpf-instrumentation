@@ -197,10 +197,12 @@ func TestTracepointConstantFormat(t *testing.T) {
 }
 
 // A storage feature whose probes fail is disabled, and the probes are loaded again without it, while
-// a failure of the TCP probes is returned. A failed load first moves the file syncs to kprobes.
+// a failure of the TCP probes is returned. A failed load first moves the file syncs to kprobes, then
+// drops the bio devices and tries the fexit programs again, then the rest.
 func TestStorageDegrade(t *testing.T) {
 	disk := export.FeatureStatsDiskServiceDuration | export.FeatureStatsDiskIO
-	storage := disk | export.FeatureStatsFsSyncDuration
+	bio := export.FeatureStatsDiskBioDevices
+	storage := disk | bio | export.FeatureStatsFsSyncDuration
 	loadErr := &storageError{features: storage, load: true, err: errors.New("load program: invalid argument")}
 	tcpErr := errors.New("failed kprobe attachment tcp_close: not found")
 	// what a load plans: its storage features, and whether fexit programs time the file syncs
@@ -220,9 +222,14 @@ func TestStorageDegrade(t *testing.T) {
 			wantLoads: []load{{storage, true}, {storage, false}},
 		},
 		{
-			name:      "a failed load with kprobes disables the storage features",
+			name:      "a failed load with kprobes disables the bio devices and tries the fexit programs again",
 			errs:      []error{loadErr, loadErr},
-			wantLoads: []load{{storage, true}, {storage, false}, {0, false}},
+			wantLoads: []load{{storage, true}, {storage, false}, {storage &^ bio, true}},
+		},
+		{
+			name:      "a failed load without the bio devices disables the storage features",
+			errs:      []error{loadErr, loadErr, loadErr, loadErr},
+			wantLoads: []load{{storage, true}, {storage, false}, {storage &^ bio, true}, {storage &^ bio, false}, {0, false}},
 		},
 		{
 			name:      "a disk probe that can't be attached disables the disk stats",
@@ -230,9 +237,14 @@ func TestStorageDegrade(t *testing.T) {
 			wantLoads: []load{{storage, true}, {export.FeatureStatsFsSyncDuration, true}},
 		},
 		{
+			name:      "a bio probe that can't be attached disables the bio devices only",
+			errs:      []error{&storageError{features: bio, err: errors.New("block_bio_queue")}},
+			wantLoads: []load{{storage, true}, {storage &^ bio, true}},
+		},
+		{
 			name:      "vfs_fsync_range probes that can't be attached disable the file syncs",
 			errs:      []error{&storageError{features: export.FeatureStatsFsSync, err: errors.New("vfs_fsync_range")}},
-			wantLoads: []load{{storage, true}, {disk, true}},
+			wantLoads: []load{{storage, true}, {disk | bio, true}},
 		},
 		{
 			name:      "a TCP failure is returned",
@@ -242,8 +254,8 @@ func TestStorageDegrade(t *testing.T) {
 		},
 		{
 			name:      "a TCP failure without the storage features is returned",
-			errs:      []error{loadErr, loadErr, tcpErr},
-			wantLoads: []load{{storage, true}, {storage, false}, {0, false}},
+			errs:      []error{loadErr, loadErr, loadErr, loadErr, tcpErr},
+			wantLoads: []load{{storage, true}, {storage, false}, {storage &^ bio, true}, {storage &^ bio, false}, {0, false}},
 			wantErr:   tcpErr,
 		},
 	} {

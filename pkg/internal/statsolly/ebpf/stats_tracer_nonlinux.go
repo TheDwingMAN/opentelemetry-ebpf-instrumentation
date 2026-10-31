@@ -63,3 +63,7 @@ func (m *StatsFetcher) DiskCgroupNamesMap() *ciliumebpf.Map {
 func (m *StatsFetcher) DiskStatusIsBlkStatus() bool {
 	return false
 }
+
+func (m *StatsFetcher) DiskBioDevicesMeasured() bool {
+	return false
+}

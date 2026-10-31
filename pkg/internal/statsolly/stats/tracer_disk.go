@@ -364,8 +364,8 @@ func latencyDelta(counts, previousCounts []uint64, sumNs, previousSumNs uint64) 
 	return latency
 }
 
-// stat returns the requests that completed on the device and in the direction of a key since the
-// previous read
+// stat returns the requests, or the bios of a bio-based device, that completed on the device and in
+// the direction of a key since the previous read. The status of a bio is a blk_status_t on every kernel.
 func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.StatsDiskIoAccumT) *ebpf.Stat {
 	device := r.devices.device(key.Major, key.Minor)
 	latency := latencyDelta(current.LatencyCount[:], previous.LatencyCount[:], current.LatencySumNs, previous.LatencySumNs)
@@ -377,7 +377,7 @@ func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.Stats
 			Stacked:    device.stacked,
 			Op:         ebpf.DiskOpCode(key.Op),
 			Latency:    latency,
-			ErrorType:  diskErrorType(key.Status, r.statusIsBlkStatus),
+			ErrorType:  diskErrorType(key.Status, r.statusIsBlkStatus || key.Bio != 0),
 			Bytes:      current.Bytes - previous.Bytes,
 
 			ContainerID:   r.containers.containerID(key.CgroupId),

@@ -66,6 +66,8 @@ const (
 	RawTracepointTCPRetransmitSkb = "tcp_retransmit_skb"
 	RawTracepointBlockRqIssue     = "block_rq_issue"
 	RawTracepointBlockRqComplete  = "block_rq_complete"
+	RawTracepointBlockBioQueue    = "block_bio_queue"
+	RawTracepointBlockBioComplete = "block_bio_complete"
 	RawTracepointRPCTaskBegin     = "rpc_task_begin"
 	RawTracepointRPCStatsLatency  = "rpc_stats_latency"
 	RawTracepointNFSReadpageDone  = "nfs_readpage_done"
@@ -177,13 +179,23 @@ func planStorage(log *slog.Logger, features *export.Features) storagePlan {
 				fmt.Errorf("reading the block tracepoint prototypes in the kernel BTF: %w", err))
 		}
 	}
-	if !storage.features.StatsFsSync() && !storage.features.StatsNFS() {
+	if !storage.features.StatsFsSync() && !storage.features.StatsNFS() && !storage.features.StatsDiskBioDevices() {
 		return storage
 	}
 	kernel, err := btf.LoadKernelSpec()
 	// without the kernel BTF, the kprobes time every file sync hook
 	if storage.features.StatsFsSync() && err == nil {
 		storage.fsSyncTracing = fsSyncTracingHooks(kernel)
+	}
+	if storage.features.StatsDiskBioDevices() {
+		bioErr := err
+		if bioErr == nil {
+			storage.bioQueueHasQueueArg, bioErr = blockBioQueueHasQueueArg(kernel)
+		}
+		if bioErr != nil {
+			storage.drop(log, export.FeatureStatsDiskBioDevices,
+				fmt.Errorf("reading the block_bio_queue prototype in the kernel BTF: %w", bioErr))
+		}
 	}
 	if storage.features.StatsNFS() {
 		if err == nil {
@@ -210,10 +222,14 @@ func (s *storagePlan) drop(log *slog.Logger, group export.Features, err error) {
 
 // loadDegradingStorage loads and attaches the probes, and disables the storage features of each
 // storageError until the rest load and attach. A failed load first moves the file syncs from the
-// fentry and fexit programs to the kprobes, which every supported kernel loads.
+// fentry and fexit programs to the kprobes, which every supported kernel loads, then disables the
+// bio-based devices, whose programs hold the only bounded loop and global function of the stats
+// programs, with the file syncs back on their fentry and fexit programs, and then the rest: the
+// kernel's error doesn't tell which program it can't load.
 func loadDegradingStorage(log *slog.Logger, storage storagePlan,
 	loadAndAttach func(storagePlan) (*StatsFetcher, error),
 ) (*StatsFetcher, error) {
+	fsSyncTracing := storage.fsSyncTracing
 	for {
 		fetcher, err := loadAndAttach(storage)
 		var failed *storageError
@@ -224,6 +240,9 @@ func loadDegradingStorage(log *slog.Logger, storage storagePlan,
 			log.Debug("can't load the stats programs with the fentry and fexit programs of the file syncs: "+
 				"probing the file syncs with kprobes", "error", err)
 			storage.fsSyncTracing = nil
+		case failed.load && storage.features.StatsDiskBioDevices():
+			storage.drop(log, export.FeatureStatsDiskBioDevices, err)
+			storage.fsSyncTracing = fsSyncTracing
 		// each other storageError disables a planned feature, so that the loop ends
 		case storage.features&failed.features == 0:
 			return fetcher, err
@@ -256,9 +275,11 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 	}
 
 	diskEnabled := storage.features.StatsDisk()
+	bioEnabled := storage.features.StatsDiskBioDevices()
 	fsSyncEnabled := storage.features.StatsFsSync()
 	nfsReads := nfsReadsCgroup(storage.features, reads)
 	toDisable = slices.Concat(toDisable, diskProgramsToDisable(diskEnabled, storage.issueHasQueueArg),
+		bioProgramsToDisable(bioEnabled, storage.bioQueueHasQueueArg),
 		fsSyncProgramsToDisable(fsSyncEnabled, storage.fsSyncTracing), nfsProgramsToDisable(storage.features, nfsReads))
 
 	setFsSyncTracingTargets(spec)
@@ -387,8 +408,8 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 	}
 
 	// raw tracepoints
-	// The block request completion is attached before the issue, so that no request is recorded
-	// without its completion being seen.
+	// The block completions are attached before the issues and the bio submissions, so that no
+	// request or bio is recorded without its completion being seen.
 	for _, t := range []probe{
 		{
 			name:    RawTracepointTCPRetransmitSkb,
@@ -406,6 +427,24 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 			program: diskIssueProgram(&objects, storage.issueHasQueueArg),
 			enabled: diskEnabled,
 			feature: export.FeatureStatsDisk,
+		},
+		{
+			name:    RawTracepointBlockBioComplete,
+			program: objects.ObiStatsRawTpBlockBioComplete,
+			enabled: bioEnabled,
+			feature: export.FeatureStatsDiskBioDevices,
+		},
+		{
+			name:    RawTracepointBlockRqComplete,
+			program: objects.ObiStatsRawTpBlockRqCompleteBios,
+			enabled: bioEnabled,
+			feature: export.FeatureStatsDiskBioDevices,
+		},
+		{
+			name:    RawTracepointBlockBioQueue,
+			program: bioQueueProgram(&objects, storage.bioQueueHasQueueArg),
+			enabled: bioEnabled,
+			feature: export.FeatureStatsDiskBioDevices,
 		},
 	} {
 		if !t.enabled {
@@ -549,6 +588,12 @@ func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
 // values (Linux 5.16+) instead of errnos
 func (m *StatsFetcher) DiskStatusIsBlkStatus() bool {
 	return m.diskStatusIsBlkStatus
+}
+
+// DiskBioDevicesMeasured tells whether the bios of the bio-based block devices are measured on the
+// disk stats too
+func (m *StatsFetcher) DiskBioDevicesMeasured() bool {
+	return m.storage.StatsDiskBioDevices()
 }
 
 // fixupSpec replaces disabled programs with no-op stubs before loading,

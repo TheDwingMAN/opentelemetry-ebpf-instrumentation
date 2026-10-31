@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"slices"
 	"strings"
@@ -386,6 +387,31 @@ func TestStorageContainerID(t *testing.T) {
 		"":     fakeNFSRecord("READ", 4, 1),
 	} {
 		assert.Equal(t, want, storageContainerID(stat))
+	}
+}
+
+// The features whose probes are loaded leave out, with a warning each, the NFS histogram under
+// dynamic application selection and the bio-based devices without a disk metric
+func TestProbedFeatures(t *testing.T) {
+	disk, bio := export.FeatureStatsDiskOperations, export.FeatureStatsDiskBioDevices
+	for _, tc := range []struct {
+		name             string
+		features         export.Features
+		dynamicSelection bool
+		want             export.Features
+		warnings         int
+	}{
+		{name: "the metrics", features: disk | export.FeatureStatsNFS, want: disk | export.FeatureStatsNFS},
+		{name: "the NFS histogram under dynamic selection", features: export.FeatureStatsNFS, dynamicSelection: true, want: export.FeatureStatsNFSClientWorkloads, warnings: 1},
+		{name: "the bio devices with a metric", features: disk | bio, want: disk | bio},
+		{name: "the bio devices alone", features: bio | export.FeatureStatsFsSync, want: export.FeatureStatsFsSync, warnings: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var log strings.Builder
+			got := probedFeatures(slog.New(slog.NewTextHandler(&log, nil)), tc.features, tc.dynamicSelection)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.warnings, strings.Count(log.String(), "level=WARN"), log.String())
+		})
 	}
 }
 

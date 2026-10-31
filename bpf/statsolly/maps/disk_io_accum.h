@@ -17,9 +17,12 @@ typedef struct disk_io_key {
     u32 major;
     u32 minor;
     enum disk_op op;
-    // 0 on success, or else a blk_status_t or an errno (disk_status_code)
+    // 0 on success, or else a blk_status_t or an errno (disk_status_code); always a blk_status_t
+    // for a bio
     u8 status;
-    u8 _pad[6];
+    // 1 for the bios of the bio-based devices, 0 for the requests
+    u8 bio;
+    u8 _pad[5];
 } disk_io_key_t;
 
 // Cumulative values: userspace reads them periodically and computes the deltas
