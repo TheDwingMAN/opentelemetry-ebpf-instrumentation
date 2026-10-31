@@ -46,16 +46,29 @@ static void test_latency_bucket_is_upper_inclusive(void) {
 }
 
 static void test_op_from_req_op(void) {
-    assert_true(disk_op_from_req_op(k_req_op_read) == disk_op_read, "REQ_OP_READ is a read");
-    assert_true(disk_op_from_req_op(k_req_op_write) == disk_op_write, "REQ_OP_WRITE is a write");
-    assert_true(disk_op_from_req_op(k_req_op_write_zeroes) == disk_op_write,
+    assert_true(disk_op_from_req_op(k_req_op_read, 7) == disk_op_read, "REQ_OP_READ is a read");
+    assert_true(disk_op_from_req_op(k_req_op_write, 7) == disk_op_write, "REQ_OP_WRITE is a write");
+    assert_true(disk_op_from_req_op(k_req_op_write_zeroes, 7) == disk_op_write,
                 "REQ_OP_WRITE_ZEROES is a write");
-    assert_true(disk_op_from_req_op(2) == disk_op_unknown, "REQ_OP_FLUSH is not measured");
-    assert_true(disk_op_from_req_op(3) == disk_op_unknown, "REQ_OP_DISCARD is not measured");
-    assert_true(disk_op_from_req_op(7) == disk_op_unknown,
-                "a zone append (6.1+) or WRITE_SAME (5.8) is not measured");
-    assert_true(disk_op_from_req_op(34) == disk_op_unknown,
+    assert_true(disk_op_from_req_op(k_req_op_flush, 7) == disk_op_flush, "REQ_OP_FLUSH is a flush");
+    assert_true(disk_op_from_req_op(3, 7) == disk_op_unknown, "REQ_OP_DISCARD is not measured");
+    assert_true(disk_op_from_req_op(34, 7) == disk_op_unknown,
                 "driver private operations (passthrough) are not measured");
+}
+
+// REQ_OP_ZONE_APPEND is 13 on Linux 5.8 and RHEL 8, 21 on 5.10, and 7 from 6.1 and on RHEL 9
+static void test_zone_append(void) {
+    assert_true(disk_op_from_req_op(13, 13) == disk_op_write, "a 5.8 zone append is a write");
+    assert_true(disk_op_from_req_op(7, 13) == disk_op_unknown, "a 5.8 WRITE_SAME is not measured");
+    assert_true(disk_op_from_req_op(21, 21) == disk_op_write, "a 5.10 zone append is a write");
+    assert_true(disk_op_from_req_op(13, 21) == disk_op_unknown,
+                "a 5.10 zone close is not measured");
+    assert_true(disk_op_from_req_op(7, 7) == disk_op_write, "a 6.1 zone append is a write");
+    assert_true(disk_op_from_req_op(13, 7) == disk_op_unknown, "a 6.1 zone reset is not measured");
+    assert_true(disk_op_from_req_op(7, 0) == disk_op_unknown,
+                "without REQ_OP_ZONE_APPEND, no operation is a zone append");
+    assert_true(disk_op_from_req_op(k_req_op_read, 0) == disk_op_read,
+                "without REQ_OP_ZONE_APPEND, reads stay reads");
 }
 
 static void test_final_completion(void) {
@@ -66,6 +79,21 @@ static void test_final_completion(void) {
     assert_true(disk_rq_final_completion(0, 0),
                 "the end of a request without bytes left is final, as at the end of a flush "
                 "sequence");
+}
+
+static void test_accounted_start_ns(void) {
+    const u32 io_stat = 1 << 8;
+    const u32 flush_seq = 1 << 1;
+    assert_true(disk_accounted_start_ns(1000, 0, 0, 0) == 1000,
+                "a kernel that writes the start at every allocation needs no flag");
+    assert_true(disk_accounted_start_ns(0, 0, 0, 0) == 0,
+                "a request that such a kernel doesn't time has no start");
+    assert_true(disk_accounted_start_ns(1000, io_stat, io_stat, flush_seq) == 1000,
+                "the start of an accounted request");
+    assert_true(disk_accounted_start_ns(1000, 1 << 4, io_stat, flush_seq) == 0,
+                "a request that is not accounted may keep the start of an earlier use");
+    assert_true(disk_accounted_start_ns(1000, flush_seq, io_stat, flush_seq) == 1000,
+                "the flush of a flush sequence is accounted without RQF_IO_STAT");
 }
 
 static void test_status_code(void) {
@@ -102,7 +130,9 @@ static void test_sync_file_range_waits(void) {
 int main(void) {
     test_latency_bucket_is_upper_inclusive();
     test_op_from_req_op();
+    test_zone_append();
     test_final_completion();
+    test_accounted_start_ns();
     test_status_code();
     test_fs_sync_attempted();
     test_sync_file_range_waits();

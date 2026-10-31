@@ -99,6 +99,7 @@ type statMetricsExporter struct {
 	diskIO                   *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskOperations           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskServiceTime          *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
+	diskFlushDuration        *kernelHistogram
 	fsSyncDuration           *kernelHistogram
 	fsSyncOperations         *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	fsSyncTime               *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
@@ -277,6 +278,11 @@ func newStatMetricsExporter(
 		nme.diskServiceTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, diskServiceTime, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskFlushDuration() {
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskFlushDuration))
+		nme.diskFlushDuration = kernelHistograms.histogram(attributes.StatDiskFlushDuration, export.DiskLatencyBounds, attrs)
+	}
+
 	if cfg.CommonCfg.Features.StatsFsSyncDuration() {
 		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatFsSyncDuration))
 		nme.fsSyncDuration = kernelHistograms.histogram(attributes.StatFsSyncDuration, export.DiskLatencyBounds, attrs)
@@ -340,6 +346,12 @@ func (me *statMetricsExporter) Do(ctx context.Context) {
 }
 
 func (me *statMetricsExporter) recordDiskIO(ctx context.Context, v *ebpf.Stat) {
+	if v.DiskIO.Op == ebpf.CodeDiskOpFlush {
+		if me.diskFlushDuration != nil && !v.DiskIO.MultipathPath {
+			me.kernelHistograms.record(me.diskFlushDuration, v, &v.DiskIO.Latency)
+		}
+		return
+	}
 	if me.diskServiceDuration != nil && !v.DiskIO.MultipathPath {
 		me.kernelHistograms.record(me.diskServiceDuration, v, &v.DiskIO.Latency)
 	}
