@@ -264,6 +264,7 @@ func TestDiskStats(t *testing.T) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{{
 			Name: "obi_stat_disk_flush_duration_seconds_count", Value: 4, Labels: map[string]string{
 				"obi_ip": "1.2.3.4", "system_device": "nvme0n1", "obi_disk_stacked": "false", "obi_disk_volume_name": "", "error_type": "",
+				"container_id": "",
 			},
 		}}, named("obi_stat_disk_flush_duration_seconds_count"))
 	}, timeout, 100*time.Millisecond)
@@ -388,6 +389,13 @@ func TestStorageContainerID(t *testing.T) {
 	} {
 		assert.Equal(t, want, storageContainerID(stat))
 	}
+}
+
+// The warning about the cache flushes under dynamic application selection names the bio-based devices
+// only when their flushes are measured
+func TestFlushesUnderDynamicSelection(t *testing.T) {
+	assert.NotContains(t, flushesUnderDynamicSelection(false), "bio-based devices")
+	assert.Contains(t, flushesUnderDynamicSelection(true), "bio-based devices")
 }
 
 // The features whose probes are loaded leave out, with a warning each, the NFS histogram under

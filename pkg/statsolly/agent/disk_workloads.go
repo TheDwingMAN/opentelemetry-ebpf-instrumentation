@@ -53,6 +53,8 @@ func cgroupReads(features export.Features, attrSel *attributes.AttrSelector, fil
 			{enabled: features.StatsDiskIO(), name: attributes.StatDiskIO},
 			{enabled: features.StatsDiskOperations(), name: attributes.StatDiskOperations},
 			{enabled: features.StatsDiskServiceTime(), name: attributes.StatDiskServiceTime},
+			// the flushes submitted to the bio-based devices are the ones that carry a workload
+			{enabled: features.StatsDiskFlushDuration() && features.StatsDiskBioDevices(), name: attributes.StatDiskFlushDuration},
 		}),
 		FsSync: readsCgroup(features.StatsFsSync(), []storageMetric{
 			{enabled: features.StatsFsSyncDuration(), name: attributes.StatFsSyncDuration},
@@ -79,6 +81,7 @@ func perPodHistograms(features export.Features, attrSel *attributes.AttrSelector
 	perPod := map[string][]attr.Name{}
 	for _, histogram := range []storageMetric{
 		{enabled: features.StatsDiskServiceDuration(), name: attributes.StatDiskServiceDuration},
+		{enabled: features.StatsDiskFlushDuration() && features.StatsDiskBioDevices(), name: attributes.StatDiskFlushDuration},
 		{enabled: features.StatsFsSyncDuration(), name: attributes.StatFsSyncDuration},
 	} {
 		names := slices.DeleteFunc(attrSel.For(histogram.name), func(name attr.Name) bool {

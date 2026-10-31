@@ -169,7 +169,7 @@ func getDefinitions(
 		nil,
 	)
 
-	// the cache flushes have neither a direction nor a container
+	// the cache flushes have no direction
 	statsDiskAttributes := NewAttrReportGroup(
 		false,
 		[]*AttrReportGroup{&statsDiskDeviceAttributes},
@@ -252,8 +252,7 @@ func getDefinitions(
 		nil,
 	)
 
-	// the storage stats of the whole node, charged to no workload: the cache flushes, which the block
-	// layer sends itself, and the histogram of the NFS client RPCs
+	// the storage stats of the whole node, charged to no workload: the histogram of the NFS client RPCs
 	statsStorageNodeKubeAttributes := NewAttrReportGroup(
 		!kubeEnabled,
 		nil,
@@ -1089,9 +1088,10 @@ func getDefinitions(
 			},
 		},
 		StatDiskFlushDuration.Section: {
-			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes, &statsStorageNodeKubeAttributes},
+			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes, &statsStorageKubeOptInAttributes},
 			Attributes: map[attr.Name]Default{
-				attr.ErrorType: true,
+				attr.ErrorType:   true,
+				attr.ContainerID: false,
 			},
 		},
 		StatFsSyncDuration.Section: {

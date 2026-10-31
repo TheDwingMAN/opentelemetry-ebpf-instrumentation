@@ -60,6 +60,15 @@ func TestCgroupReads(t *testing.T) {
 		},
 		{name: "dynamic selection", features: export.FeatureStatsDiskServiceDuration, dynamicSelection: true, want: disk},
 		{
+			name: "flushes selected per container", features: export.FeatureStatsDiskFlushDuration | export.FeatureStatsDiskBioDevices,
+			selection: selecting(attributes.StatDiskFlushDuration, "container.id"), want: disk,
+		},
+		{
+			name: "flushes selected per container without the bio-based devices", features: export.FeatureStatsDiskFlushDuration,
+			selection: selecting(attributes.StatDiskFlushDuration, "container.id"),
+		},
+		{name: "flush histogram in Kubernetes", groups: attributes.GroupKubernetes, features: export.FeatureStatsDiskFlushDuration},
+		{
 			name: "file syncs selected", features: export.FeatureStatsDisk | export.FeatureStatsFsSync,
 			selection: selecting(attributes.StatFsSyncDuration, "container.id"), want: fsSync,
 		},
@@ -109,6 +118,14 @@ func TestPerPodHistograms(t *testing.T) {
 		},
 		{
 			name: "counters per pod", features: export.FeatureStatsDiskOperations, metric: attributes.StatDiskOperations,
+			include: []string{"k8s.pod.name"},
+		},
+		{
+			name: "flushes per pod", features: export.FeatureStatsDiskFlushDuration | export.FeatureStatsDiskBioDevices, metric: attributes.StatDiskFlushDuration,
+			include: []string{"k8s.pod.name"}, want: map[string][]attr.Name{"obi.stat.disk.flush.duration": {attr.K8sPodName}},
+		},
+		{
+			name: "flushes per pod without the bio-based devices", features: export.FeatureStatsDiskFlushDuration, metric: attributes.StatDiskFlushDuration,
 			include: []string{"k8s.pod.name"},
 		},
 		{
