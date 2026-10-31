@@ -381,6 +381,14 @@ const (
 	statsFeatureTCPSuccessfulConnections = "tcp_successful_connections"
 	statsFeatureTCPRetransmits           = "tcp_retransmits"
 	statsFeatureTCPIo                    = "tcp_io"
+	statsFeatureDiskServiceDuration      = "disk_service_duration"
+	statsFeatureDiskIO                   = "disk_io"
+	statsFeatureDiskOperations           = "disk_operations"
+	statsFeatureDiskServiceTime          = "disk_service_time"
+	statsFeatureDiskFlushDuration        = "disk_flush_duration"
+	statsFeatureFsSyncDuration           = "fs_sync_duration"
+	statsFeatureFsSyncOperations         = "fs_sync_operations"
+	statsFeatureFsSyncTime               = "fs_sync_time"
 )
 
 func statsFeatures(features featureexport.Features) []string {
@@ -399,6 +407,30 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsTCPIo() {
 		out = append(out, statsFeatureTCPIo)
+	}
+	if features.StatsDiskServiceDuration() {
+		out = append(out, statsFeatureDiskServiceDuration)
+	}
+	if features.StatsDiskIO() {
+		out = append(out, statsFeatureDiskIO)
+	}
+	if features.StatsDiskOperations() {
+		out = append(out, statsFeatureDiskOperations)
+	}
+	if features.StatsDiskServiceTime() {
+		out = append(out, statsFeatureDiskServiceTime)
+	}
+	if features.StatsDiskFlushDuration() {
+		out = append(out, statsFeatureDiskFlushDuration)
+	}
+	if features.StatsFsSyncDuration() {
+		out = append(out, statsFeatureFsSyncDuration)
+	}
+	if features.StatsFsSyncOperations() {
+		out = append(out, statsFeatureFsSyncOperations)
+	}
+	if features.StatsFsSyncTime() {
+		out = append(out, statsFeatureFsSyncTime)
 	}
 	return out
 }

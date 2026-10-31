@@ -21,6 +21,15 @@ OBI's own meta-telemetry: the `target.info` / `host.info` family of per-target m
 | `obi.version` | string | development | OBI build version, e.g. the release tag the instrumenter was built from. Carried as a resource attribute on every signal. | v0.42.0 |
 | `source` | string | development | Identifier of the vendor / SDK that produced the metric. OBI sets this to `obi`. Used by the spanmetrics and service-graph emissions to disambiguate from collector-contrib connector output. | obi |
 
+## `registry.obi.disk`
+
+Attributes of OBI's block I/O (disk) statistics that the semantic conventions don't define.
+
+| Attribute | Type | Stability | Description | Examples |
+| --- | --- | --- | --- | --- |
+| `obi.disk.stacked` | boolean | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID and loop devices are. A dm-multipath device is not, as its paths don't report its latency histograms. To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, without `obi.disk.volume.name`. | true |
+| `obi.disk.volume.name` | string | development | Device mapper name of the block device (`system.device`), as `/dev/mapper` lists it. Absent for the other devices. | mpatha |
+
 ## `registry.obi.exception`
 
 Exception attributes OBI's Go SDK tracer sets on relayed manual spans.
@@ -28,6 +37,14 @@ Exception attributes OBI's Go SDK tracer sets on relayed manual spans.
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
 | `exception.message` | string | stable | The exception message. | Division by zero; Can't convert 'int' object to str implicitly |
+
+## `registry.obi.fs.sync`
+
+Attributes of OBI's file sync statistics that the semantic conventions don't define.
+
+| Attribute | Type | Stability | Description | Examples |
+| --- | --- | --- | --- | --- |
+| `obi.fs.sync.type` | enum | development | The system call that synced files, or, for the syncs within other calls (O_SYNC and O_DSYNC writes, msync, io_uring), `fsync` or `fdatasync`, depending on whether the metadata is synced too. | fsync; fdatasync; sync; syncfs; sync_file_range |
 
 ## `registry.obi.gen_ai`
 
@@ -85,7 +102,7 @@ Kubernetes metadata OBI's k8s decorator (pkg/transform/k8s.go) attaches to the r
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
-| `k8s.kind` | string | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.kind` | string | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
 | `k8s.owner.name` | string | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 
 ## `registry.obi.network`

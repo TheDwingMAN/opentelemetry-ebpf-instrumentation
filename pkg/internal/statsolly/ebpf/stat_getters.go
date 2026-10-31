@@ -5,6 +5,7 @@ package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
 	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
@@ -71,9 +72,86 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.NetworkIoDirection), networkIoDirectionStr(NetworkIoDirectionCode(direction)))
 		}
+	case attr.SystemDevice:
+		getter = func(s *Stat) attribute.KeyValue {
+			var device string
+			if s.DiskIO != nil {
+				device = s.DiskIO.Device
+			}
+			return attribute.String(string(attr.SystemDevice), device)
+		}
+	case attr.DiskStacked:
+		getter = func(s *Stat) attribute.KeyValue {
+			var stacked bool
+			if s.DiskIO != nil {
+				stacked = s.DiskIO.Stacked
+			}
+			return attribute.Bool(string(attr.DiskStacked), stacked)
+		}
+	case attr.DiskVolumeName:
+		getter = func(s *Stat) attribute.KeyValue {
+			// the devices that aren't device mapper volumes have none: an invalid KeyValue isn't exported
+			if s.DiskIO == nil || s.DiskIO.VolumeName == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.DiskVolumeName), s.DiskIO.VolumeName)
+		}
+	case attr.DiskIODirection:
+		getter = func(s *Stat) attribute.KeyValue {
+			var op DiskOpCode
+			if s.DiskIO != nil {
+				op = s.DiskIO.Op
+			}
+			return attribute.String(string(attr.DiskIODirection), diskIODirectionStr(op))
+		}
+	case attr.FsSyncType:
+		getter = func(s *Stat) attribute.KeyValue {
+			var syncType FsSyncTypeCode
+			if s.FsSync != nil {
+				syncType = s.FsSync.Type
+			}
+			return attribute.String(string(attr.FsSyncType), fsSyncTypeStr(syncType))
+		}
+	case attr.ErrorType:
+		getter = func(s *Stat) attribute.KeyValue {
+			var errorType string
+			switch {
+			case s.DiskIO != nil:
+				errorType = s.DiskIO.ErrorType
+			case s.FsSync != nil:
+				errorType = s.FsSync.ErrorType
+			}
+			// the successful operations have none: an invalid KeyValue isn't exported
+			if errorType == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.ErrorType), errorType)
+		}
+	case attr.ContainerID:
+		getter = func(s *Stat) attribute.KeyValue {
+			var containerID string
+			switch {
+			case s.DiskIO != nil:
+				containerID = s.DiskIO.ContainerID
+			case s.FsSync != nil:
+				containerID = s.FsSync.ContainerID
+			}
+			if containerID == "" {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(attr.ContainerID), containerID)
+		}
 
 	default:
-		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
+		getter = func(s *Stat) attribute.KeyValue {
+			value := s.CommonAttrs.Metadata[name]
+			// the disk and file sync stats leave out the metadata that they don't have, like the
+			// Kubernetes attributes of the I/O charged to no pod: an invalid KeyValue isn't exported
+			if value == "" && (s.Type == StatTypeDiskIO || s.Type == StatTypeFsSync) {
+				return attribute.KeyValue{}
+			}
+			return attribute.String(string(name), value)
+		}
 	}
 	return getter, getter != nil
 }
@@ -121,6 +199,32 @@ func networkIoDirectionStr(d NetworkIoDirectionCode) string {
 		return string(DirectionTransmit)
 	case CodeDirectionReceive:
 		return string(DirectionReceive)
+	}
+	return ""
+}
+
+func diskIODirectionStr(op DiskOpCode) string {
+	switch op {
+	case CodeDiskOpRead:
+		return semconv.DiskIODirectionRead.Value.AsString()
+	case CodeDiskOpWrite:
+		return semconv.DiskIODirectionWrite.Value.AsString()
+	}
+	return ""
+}
+
+func fsSyncTypeStr(syncType FsSyncTypeCode) string {
+	switch syncType {
+	case CodeFsSyncFsync:
+		return "fsync"
+	case CodeFsSyncFdatasync:
+		return "fdatasync"
+	case CodeFsSyncSync:
+		return "sync"
+	case CodeFsSyncSyncfs:
+		return "syncfs"
+	case CodeFsSyncSyncFileRange:
+		return "sync_file_range"
 	}
 	return ""
 }

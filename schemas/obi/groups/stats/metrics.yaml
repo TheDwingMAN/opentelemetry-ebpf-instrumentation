@@ -374,3 +374,312 @@ metrics:
         requirement_level: opt_in
       - ref: service.peer.namespace
         requirement_level: opt_in
+
+  - name: obi.stat.disk.service.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      Service time of the block reads and writes, per disk and direction, from
+      their last issue to the device until their final completion, or from the
+      kernel's start of the requests that complete without an issue. The
+      requests are counted as in /proc/diskstats, but for those in flight at
+      startup or missed by the probes, and the I/O of bio-based devices (LVM,
+      dm-crypt, md RAID, NVMe native multipath heads) is not measured. The
+      paths of dm-multipath devices report nothing: the multipath device
+      reports the same requests.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
+      - ref: obi.disk.volume.name
+        requirement_level:
+          conditionally_required: if the block device is a device mapper device
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the request ended in an error
+
+  - name: obi.stat.disk.io
+    instrument: counter
+    unit: "By"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      Bytes of the successful block reads and writes of
+      `obi.stat.disk.service.duration`, at their issue to the device, per disk
+      and direction. The paths of dm-multipath devices report them too.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
+      - ref: obi.disk.volume.name
+        requirement_level:
+          conditionally_required: if the block device is a device mapper device
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+
+  - name: obi.stat.disk.operations
+    instrument: counter
+    unit: "{operation}"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      Completed block reads and writes, per disk, direction and outcome: the
+      count of `obi.stat.disk.service.duration`. The paths of dm-multipath
+      devices report them too.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
+      - ref: obi.disk.volume.name
+        requirement_level:
+          conditionally_required: if the block device is a device mapper device
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the request ended in an error
+
+  - name: obi.stat.disk.service_time
+    instrument: counter
+    unit: "s"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      Service time of the block reads and writes, per disk, direction and
+      outcome: the sum of `obi.stat.disk.service.duration`. Divided by
+      `obi.stat.disk.operations`, it is the mean service time. The paths of
+      dm-multipath devices report it too.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
+      - ref: obi.disk.volume.name
+        requirement_level:
+          conditionally_required: if the block device is a device mapper device
+      - ref: disk.io.direction
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the I/O is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the request ended in an error
+
+  - name: obi.stat.disk.flush.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      Duration of the cache flushes that the block devices with a volatile
+      write cache are sent, per disk and outcome, from their last issue to the
+      device until their completion, or from the kernel's start of those that
+      fail before their issue. One flush serves the file syncs and
+      journal commits pending when the kernel sends it. Bio-based devices
+      pass theirs down to the devices below them, and the paths of
+      dm-multipath devices report nothing: the multipath device reports the
+      same flushes.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: system.device
+        requirement_level: recommended
+      - ref: obi.disk.stacked
+        requirement_level: recommended
+      - ref: obi.disk.volume.name
+        requirement_level:
+          conditionally_required: if the block device is a device mapper device
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the flush ended in an error
+
+  - name: obi.stat.fs.sync.duration
+    instrument: histogram
+    unit: "s"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      Duration of the file syncs, per sync type and outcome, from the sync
+      call until it returns: fsync, fdatasync, sync, syncfs, sync_file_range
+      when it waits for the writeback, and the syncs of O_SYNC and O_DSYNC
+      writes and msync. The calls that sync nothing (EBADF, EINVAL, ESPIPE)
+      are not counted.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: obi.fs.sync.type
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the sync failed
+
+  - name: obi.stat.fs.sync.operations
+    instrument: counter
+    unit: "{operation}"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      File syncs, per sync type and outcome: the count of
+      `obi.stat.fs.sync.duration`.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: obi.fs.sync.type
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the sync is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the sync is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the sync is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the sync failed
+
+  - name: obi.stat.fs.sync.time
+    instrument: counter
+    unit: "s"
+    stability: development
+    requirement_level: recommended
+    brief: >
+      Time that threads waited for file syncs, per sync type and outcome: the
+      sum of `obi.stat.fs.sync.duration`. Divided by
+      `obi.stat.fs.sync.operations`, it is the mean sync time.
+    attributes:
+      - ref: obi.ip
+        requirement_level: opt_in
+      - ref: obi.fs.sync.type
+        requirement_level: recommended
+      - ref: container.id
+        requirement_level: opt_in
+      - ref: k8s.cluster.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the sync is charged to a pod
+      - ref: k8s.owner.name
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the sync is charged to a pod
+      - ref: k8s.kind
+        requirement_level:
+          recommended: if Kubernetes decoration is enabled and the sync is charged to a pod
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
+      - ref: error.type
+        requirement_level:
+          conditionally_required: if the sync failed

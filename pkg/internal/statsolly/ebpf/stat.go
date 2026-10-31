@@ -19,7 +19,15 @@ const (
 	StatTypeTCPRetransmit           = StatType(StatsStatTypeK_statTypeTcpRetransmit)
 	StatTypeTCPIo                   = StatType(StatsStatTypeK_statTypeTcpIo)
 	StatTypeTCPSuccessfulConnection = StatType(StatsStatTypeK_statTypeTcpSuccessfulConnection)
+	StatTypeDiskIO                  = StatType(StatsStatTypeK_statTypeDiskIo)
+	StatTypeFsSync                  = StatType(StatsStatTypeK_statTypeFsSync)
 )
+
+// CgroupReads tells which storage probes read the cgroups that the kernel charges the operations
+// to, for the attributes of their workloads
+type CgroupReads struct {
+	Disk, FsSync bool
+}
 
 type TCPFailReasonType string
 
@@ -81,6 +89,28 @@ const (
 	CodeDirectionTransmit = NetworkIoDirectionCode(StatsNetworkIoDirectionDirectionTransmit)
 )
 
+// DiskOpCode aliases the bpf2go-generated constants derived from enum disk_op in
+// bpf/statsolly/types.h.
+type DiskOpCode uint8
+
+const (
+	CodeDiskOpRead  = DiskOpCode(StatsDiskOpDiskOpRead)
+	CodeDiskOpWrite = DiskOpCode(StatsDiskOpDiskOpWrite)
+	CodeDiskOpFlush = DiskOpCode(StatsDiskOpDiskOpFlush)
+)
+
+// FsSyncTypeCode aliases the bpf2go-generated constants derived from enum fs_sync_type in
+// bpf/statsolly/types.h.
+type FsSyncTypeCode uint8
+
+const (
+	CodeFsSyncFsync         = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeFsync)
+	CodeFsSyncFdatasync     = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeFdatasync)
+	CodeFsSyncSync          = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeSync)
+	CodeFsSyncSyncfs        = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeSyncfs)
+	CodeFsSyncSyncFileRange = FsSyncTypeCode(StatsFsSyncTypeFsSyncTypeSyncFileRange)
+)
+
 // Stat contains accumulated metrics from a stat, with extra metadata
 // that is added from the user space
 // REMINDER: any attribute here must be also added to the functions StatGetters
@@ -93,6 +123,8 @@ type Stat struct {
 	TCPSuccessfulConnection *TCPSuccessfulConnection `json:"-"`
 	TCPRetransmit           bool                     `json:"-"`
 	TCPIo                   *TCPIo                   `json:"-"`
+	DiskIO                  *DiskIO                  `json:"-"`
+	FsSync                  *FsSync                  `json:"-"`
 
 	// Attrs of the flow record: source/destination, OBI IP, etc...
 	CommonAttrs pipe.CommonAttrs
@@ -115,6 +147,55 @@ type TCPSuccessfulConnection struct {
 type TCPIo struct {
 	Direction uint8  `json:"direction"`
 	Bytes     uint32 `json:"bytes"`
+}
+
+// DiskIO is the block I/O that completed on a device in one direction, with one outcome, since the
+// previous read of the kernel map
+type DiskIO struct {
+	Device string
+	// VolumeName is the device mapper name of Device, empty for other devices
+	VolumeName string
+	// Stacked devices are built on other block devices, which also report their I/O
+	Stacked bool
+	Op      DiskOpCode
+	Latency LatencyHistogram
+	// ErrorType names the errno that the requests failed with, and is empty for successful requests
+	ErrorType string
+	// Bytes of the successful requests, at their issue
+	Bytes uint64
+	// ContainerID is the container that the kernel charges the I/O to, empty for none
+	ContainerID string
+	// MultipathPath is set on the paths of a dm-multipath device, which serve the requests that the
+	// multipath device reports: the histogram exporters leave them out
+	MultipathPath bool
+}
+
+// FsSync is the file syncs of a type that completed with an outcome since the previous read of the
+// kernel map
+type FsSync struct {
+	Type FsSyncTypeCode
+	// ErrorType names the errno that the syncs failed with, and is empty for successful syncs
+	ErrorType string
+	// ContainerID is the container of the threads that synced, empty for none
+	ContainerID string
+	Latency     LatencyHistogram
+}
+
+// LatencyHistogram counts block requests or file syncs in the buckets of export.DiskLatencyBounds
+type LatencyHistogram struct {
+	// BucketCounts has a count per bound, then the count of the overflow bucket
+	BucketCounts []uint64
+	// Sum of the latencies, in seconds
+	Sum float64
+}
+
+// Count is the number of operations of the histogram
+func (h LatencyHistogram) Count() uint64 {
+	var count uint64
+	for _, bucketCount := range h.BucketCounts {
+		count += bucketCount
+	}
+	return count
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.

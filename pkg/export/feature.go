@@ -6,6 +6,7 @@ package export // import "go.opentelemetry.io/obi/pkg/export"
 import (
 	"cmp"
 	"fmt"
+	stdmaps "maps"
 	"math/bits"
 	"slices"
 	"strings"
@@ -69,11 +70,30 @@ const (
 	FeatureApplicationRuntime
 	FeatureEBPF
 	FeatureConnectionInfo
+	// The disk stat features are in neither `stats` nor `all`, as their probes fire on every block
+	// request: they must be named. Config v1 is frozen and has no name for them.
+	FeatureStatsDiskServiceDuration
+	FeatureStatsDiskIO
+	FeatureStatsDiskOperations
+	FeatureStatsDiskServiceTime
+	FeatureStatsDiskFlushDuration
+	// The file sync stat features are in neither `stats` nor `all`, as their probes fire on every
+	// file sync
+	FeatureStatsFsSyncDuration
+	FeatureStatsFsSyncOperations
+	FeatureStatsFsSyncTime
 	// FeatureAll preserves the legacy all-features behavior while keeping connection info opt-in.
-	FeatureAll = Features(^uint(0)) &^ FeatureConnectionInfo
+	FeatureAll = Features(^uint(0)) &^ (FeatureConnectionInfo | FeatureStatsDisk | FeatureStatsFsSync)
 )
 
-// FeatureStats enables all stat metrics, including TCP IO.
+// FeatureStatsDisk groups the disk stat features, which the same probes measure
+const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations |
+	FeatureStatsDiskServiceTime | FeatureStatsDiskFlushDuration
+
+// FeatureStatsFsSync groups the file sync stat features, which the same probes measure
+const FeatureStatsFsSync = FeatureStatsFsSyncDuration | FeatureStatsFsSyncOperations | FeatureStatsFsSyncTime
+
+// FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
 // higher event volume than the other stat metrics (which fire on close, failure, or retransmit).
 // If overhead is a concern, enable the lower-frequency metrics individually and opt into stats_tcp_io explicitly.
@@ -102,6 +122,19 @@ var FeatureMapper = map[string]Features{
 	"ebpf":                             FeatureEBPF,
 	"all":                              FeatureAll,
 	"*":                                FeatureAll,
+}
+
+// v2OnlyFeatures are the capture.metrics.features names of the stats features that only Config v2
+// enables, as Config v1 is frozen: `stats_` followed by their capture.network.stats.features name
+var v2OnlyFeatures = map[string]Features{
+	"stats_disk_service_duration": FeatureStatsDiskServiceDuration,
+	"stats_disk_io":               FeatureStatsDiskIO,
+	"stats_disk_operations":       FeatureStatsDiskOperations,
+	"stats_disk_service_time":     FeatureStatsDiskServiceTime,
+	"stats_disk_flush_duration":   FeatureStatsDiskFlushDuration,
+	"stats_fs_sync_duration":      FeatureStatsFsSyncDuration,
+	"stats_fs_sync_operations":    FeatureStatsFsSyncOperations,
+	"stats_fs_sync_time":          FeatureStatsFsSyncTime,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -157,7 +190,7 @@ func deprecatedSchemaDescription() string {
 }
 
 func (Features) JSONSchema() *jsonschema.Schema {
-	names := validFeatureNames()
+	names := validFeatureNames(FeatureMapper)
 	supported := make([]any, 0, len(names)+1)
 	deprecated := make([]any, 0, len(deprecatedFeatures))
 	for _, name := range names {
@@ -197,9 +230,9 @@ var AppO11yFeatures = FeatureApplicationRED |
 	FeatureSpanSizes |
 	FeatureGraph
 
-func validFeatureNames() []string {
-	names := make([]string, 0, len(FeatureMapper))
-	for name := range FeatureMapper {
+func validFeatureNames(named map[string]Features) []string {
+	names := make([]string, 0, len(named))
+	for name := range named {
 		if name == "*" {
 			continue
 		}
@@ -209,12 +242,23 @@ func validFeatureNames() []string {
 	return names
 }
 
+// v2FeatureNames returns the Config v1 feature names and the names of the stats features that only
+// Config v2 enables.
+func v2FeatureNames() map[string]Features {
+	named := stdmaps.Clone(FeatureMapper)
+	stdmaps.Copy(named, v2OnlyFeatures)
+	return named
+}
+
 // Names returns the enabled feature names: aggregate names (e.g. "all", "stats")
-// when all of their bits are enabled, then the remaining single-bit names in declaration order.
+// when all of their bits are enabled, then the remaining single-bit names in declaration order,
+// including the names of the features that only Config v2 enables.
 func (f Features) Names() []string {
-	singles := make([]string, 0, len(FeatureMapper))
-	aggregates := make([]string, 0, len(FeatureMapper))
-	for name, feature := range FeatureMapper {
+	named := v2FeatureNames()
+
+	singles := make([]string, 0, len(named))
+	aggregates := make([]string, 0, len(named))
+	for name, feature := range named {
 		// FeatureAll is emitted under its "all" alias
 		if name == "*" {
 			continue
@@ -227,16 +271,16 @@ func (f Features) Names() []string {
 	}
 	// widest aggregate first, so "all" wins over "stats" when both apply
 	slices.SortFunc(aggregates, func(a, b string) int {
-		return bits.OnesCount(uint(FeatureMapper[b])) - bits.OnesCount(uint(FeatureMapper[a]))
+		return bits.OnesCount(uint(named[b])) - bits.OnesCount(uint(named[a]))
 	})
 	slices.SortFunc(singles, func(a, b string) int {
-		return cmp.Compare(FeatureMapper[a], FeatureMapper[b])
+		return cmp.Compare(named[a], named[b])
 	})
 
 	names := make([]string, 0, len(singles))
 	remaining := f
 	for _, name := range slices.Concat(aggregates, singles) {
-		feature := FeatureMapper[name]
+		feature := named[name]
 		if remaining.has(feature) {
 			names = append(names, name)
 			remaining = Features(maps.Bits(remaining) &^ maps.Bits(feature))
@@ -249,7 +293,8 @@ func (f Features) Names() []string {
 }
 
 // MarshalYAML renders the bitmask as the list of enabled feature names, so a logged
-// configuration shows the same values that can be written in the YAML.
+// configuration shows the same values that can be written in the YAML. The features that only
+// Config v2 enables are shown with their Config v2 name.
 func (f Features) MarshalYAML() (any, error) {
 	if f.Undefined() {
 		return nil, nil
@@ -277,7 +322,11 @@ func loadFeatures(features []string, allowV2 bool) (Features, error) {
 	}
 	// convert the public data type to the internal representation
 	feats := Features(0)
-	validNames := validFeatureNames()
+	named := FeatureMapper
+	if allowV2 {
+		named = v2FeatureNames()
+	}
+	validNames := validFeatureNames(named)
 	if allowV2 {
 		validNames = append(validNames, "application_service_graph_connection_info")
 	}
@@ -290,7 +339,7 @@ func loadFeatures(features []string, allowV2 bool) (Features, error) {
 			feats |= FeatureConnectionInfo
 			continue
 		}
-		feature, ok := FeatureMapper[name]
+		feature, ok := named[name]
 		if !ok {
 			return Features(0), fmt.Errorf("unknown metrics feature %q (valid features: %s)",
 				name, strings.Join(validNames, ", "))
@@ -418,7 +467,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats)
+	return f.any(FeatureStats | FeatureStatsDisk | FeatureStatsFsSync)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -439,6 +488,46 @@ func (f Features) StatsTCPRetransmits() bool {
 
 func (f Features) StatsTCPIo() bool {
 	return f.any(FeatureStatsTCPIo)
+}
+
+func (f Features) StatsDiskServiceDuration() bool {
+	return f.any(FeatureStatsDiskServiceDuration)
+}
+
+func (f Features) StatsDiskIO() bool {
+	return f.any(FeatureStatsDiskIO)
+}
+
+func (f Features) StatsDiskOperations() bool {
+	return f.any(FeatureStatsDiskOperations)
+}
+
+func (f Features) StatsDiskServiceTime() bool {
+	return f.any(FeatureStatsDiskServiceTime)
+}
+
+func (f Features) StatsDiskFlushDuration() bool {
+	return f.any(FeatureStatsDiskFlushDuration)
+}
+
+func (f Features) StatsDisk() bool {
+	return f.any(FeatureStatsDisk)
+}
+
+func (f Features) StatsFsSyncDuration() bool {
+	return f.any(FeatureStatsFsSyncDuration)
+}
+
+func (f Features) StatsFsSyncOperations() bool {
+	return f.any(FeatureStatsFsSyncOperations)
+}
+
+func (f Features) StatsFsSyncTime() bool {
+	return f.any(FeatureStatsFsSyncTime)
+}
+
+func (f Features) StatsFsSync() bool {
+	return f.any(FeatureStatsFsSync)
 }
 
 func (f Features) NetworkInterZone() bool {
