@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	ciliumebpf "github.com/cilium/ebpf"
@@ -62,6 +63,10 @@ func (s Status) String() string {
 
 var errShutdownTimeout = errors.New("graceful shutdown has timed out while waiting for eBPF statsolly to finish")
 
+// nfsProbesRefresh is how often the NFS client probe that waits for the sunrpc module is attached, if
+// the module is loaded
+const nfsProbesRefresh = 30 * time.Second
+
 // Stats reporting agent
 type Stats struct {
 	cfg     *obi.Config
@@ -73,7 +78,7 @@ type Stats struct {
 
 	// stat metrics
 	rbTracer *stats.RingBufTracer
-	// nil unless the disk or file sync probes are attached
+	// nil unless storage stats are enabled
 	diskTracer *stats.DiskMapTracer
 
 	// focuses on TCP/UDP stack internals (kprobes/tracepoints)
@@ -88,8 +93,10 @@ type ebpFetcher interface {
 	DebugEventsMap() *ciliumebpf.Map
 	DiskIOAccumMap() *ciliumebpf.Map
 	FsSyncAccumMap() *ciliumebpf.Map
+	NFSProcedureAccumMap() *ciliumebpf.Map
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
+	RefreshNFSProbes() bool
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -125,8 +132,14 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		alog.Warn("the cache flushes are not reported under dynamic application selection: the block layer sends "+
 			"them charged to no container", "metric", attributes.StatDiskFlushDuration.OTEL)
 	}
+	probed := cfg.Metrics.Features
+	if ctxInfo.DynamicSelector != nil && probed.StatsNFSClientProcedureDuration() {
+		alog.Warn("the NFS client RPCs are not reported under dynamic application selection: the kernel measures "+
+			"them for the whole node, charged to no container", "metric", attributes.StatNFSClientProcedureDuration.OTEL)
+		probed &^= export.FeatureStatsNFSClientProcedureDuration
+	}
 	reads := cgroupReads(cfg.Metrics.Features, attrSel, cfg.Filters.Stats, ctxInfo.DynamicSelector != nil)
-	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, reads)
+	statsFetcher, err = newFetcher(&cfg.EBPF, &probed, selectorCfg, reads)
 	if err != nil {
 		return nil, err
 	}
@@ -150,9 +163,10 @@ func statsAgent(
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
 	var diskTracer *stats.DiskMapTracer
-	diskAccum, fsSyncAccum := statsFetcher.DiskIOAccumMap(), statsFetcher.FsSyncAccumMap()
-	if diskAccum != nil || fsSyncAccum != nil {
-		diskTracer = stats.NewDiskMapTracer(diskAccum, fsSyncAccum, statsFetcher.DiskCgroupNamesMap(),
+	diskAccum, fsSyncAccum, nfsProcedureAccum := statsFetcher.DiskIOAccumMap(), statsFetcher.FsSyncAccumMap(),
+		statsFetcher.NFSProcedureAccumMap()
+	if diskAccum != nil || fsSyncAccum != nil || nfsProcedureAccum != nil {
+		diskTracer = stats.NewDiskMapTracer(diskAccum, fsSyncAccum, nfsProcedureAccum, statsFetcher.DiskCgroupNamesMap(),
 			statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
 	}
 
@@ -191,15 +205,39 @@ func (s *Stats) Run(ctx context.Context) error {
 	s.graph.Start(ctx, swarm.WithCancelTimeout(tracefs.EffectiveShutdownTimeout(s.cfg.ShutdownTimeout)))
 	s.status = StatusStarted
 
+	// the refreshes end before stop closes the fetcher
+	var wg sync.WaitGroup
+	if s.cfg.Metrics.Features.StatsNFS() {
+		wg.Go(func() { refreshNFSProbes(runCtx, s.fetcher.RefreshNFSProbes, nfsProbesRefresh) })
+	}
+
 	alog.Info("Stats agent successfully started")
 
 	<-ctx.Done()
+	wg.Wait()
 
 	if err := s.stop(); err != nil {
 		return fmt.Errorf("failed to stop Stats agent: %w", err)
 	}
 
 	return nil
+}
+
+// refreshNFSProbes attaches the NFS client probe that waits for its kernel module, every period,
+// until it no longer waits: refresh attaches it, and tells whether it still waits
+func refreshNFSProbes(ctx context.Context, refresh func() bool, period time.Duration) {
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !refresh() {
+				return
+			}
+		}
+	}
 }
 
 func (s *Stats) stop() error {

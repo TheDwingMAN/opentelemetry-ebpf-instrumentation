@@ -108,6 +108,21 @@ static void test_status_code(void) {
                 "an errno that doesn't fit in a status, like ERESTARTSYS, is not a success");
 }
 
+static void test_nfs_status(void) {
+    assert_true(nfs_status(0) == 0, "a successful RPC has no status");
+    assert_true(nfs_status(4096) == 0, "a positive tk_status is a success");
+    assert_true(nfs_status(-5) == 5, "-EIO is status 5");
+    assert_true(nfs_status(-512) == 512, "a kernel-internal errno, like ERESTARTSYS, is kept");
+    assert_true(nfs_status(-10008) == 10008,
+                "an NFSv4 status that the client didn't translate, like NFS4ERR_DELAY, is kept");
+    assert_true(nfs_status(-k_nfs_status_other) == k_nfs_status_other,
+                "a status at the limit is the other status");
+    assert_true(nfs_status(-(k_nfs_status_other + 1)) == k_nfs_status_other,
+                "a status that doesn't fit is the other status, not a truncated one");
+    assert_true(nfs_status((s32)0x80000000) == k_nfs_status_other,
+                "the most negative tk_status is the other status");
+}
+
 static void test_fs_sync_attempted(void) {
     assert_true(!fs_sync_attempted(-9), "an invalid file descriptor is not a file sync");
     assert_true(!fs_sync_attempted(-22),
@@ -134,6 +149,7 @@ int main(void) {
     test_final_completion();
     test_accounted_start_ns();
     test_status_code();
+    test_nfs_status();
     test_fs_sync_attempted();
     test_sync_file_range_waits();
 

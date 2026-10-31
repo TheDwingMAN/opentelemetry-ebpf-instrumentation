@@ -125,6 +125,35 @@ func TestStatMetricsExporter_FsSync(t *testing.T) {
 	}, timeout, 100*time.Millisecond)
 }
 
+// The NFS client RPCs are exported with their server, and their procedure under the attribute of their
+// NFS version. Over OTLP, they leave out an unknown cluster name.
+func TestStatMetricsExporter_NFSProcedure(t *testing.T) {
+	stats, records := startStatExporter(t, export.FeatureStatsNFS, attributes.GroupKubernetes)
+	stats.Send([]*ebpf.Stat{
+		{Type: ebpf.StatTypeNFSProcedure, NFSProcedure: &ebpf.NFSProcedure{
+			Server: "nas", Procedure: "WRITE", Version: 4, Latency: *latency(0.004, 0, 2),
+		}},
+		{Type: ebpf.StatTypeNFSProcedure, NFSProcedure: &ebpf.NFSProcedure{
+			Server: "nas", Procedure: "LOOKUP", Version: 3, ErrorType: "ENOENT", Latency: *latency(0.001, 1),
+		}},
+	})
+
+	want := []map[string]string{
+		{"server.address": "nas", "nfs.operation.name": "WRITE", "onc_rpc.version": "4"},
+		{"server.address": "nas", "onc_rpc.procedure.name": "LOOKUP", "onc_rpc.version": "3", "error.type": "ENOENT"},
+	}
+	var got []map[string]string
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		receive(records, func(record collector.MetricRecord) {
+			if record.Name == attributes.StatNFSClientProcedureDuration.OTEL &&
+				!slices.ContainsFunc(got, func(attrs map[string]string) bool { return maps.Equal(attrs, record.Attributes) }) {
+				got = append(got, record.Attributes)
+			}
+		})
+		assert.ElementsMatch(ct, want, got)
+	}, timeout, 100*time.Millisecond)
+}
+
 // Over OTLP, the disk stats leave out the Kubernetes metadata of the I/O charged to no pod, instead
 // of exporting it empty
 func TestStatMetricsExporter_DiskStatsOmitAbsentKubernetesMetadata(t *testing.T) {

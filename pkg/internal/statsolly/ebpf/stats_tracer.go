@@ -66,19 +66,22 @@ const (
 	RawTracepointTCPRetransmitSkb = "tcp_retransmit_skb"
 	RawTracepointBlockRqIssue     = "block_rq_issue"
 	RawTracepointBlockRqComplete  = "block_rq_complete"
+	RawTracepointRPCStatsLatency  = "rpc_stats_latency"
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type fs_sync_type -type fs_sync_key_t -type fs_sync_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type fs_sync_type -type fs_sync_key_t -type fs_sync_accum_t -type nfs_procedure_key_t -type nfs_procedure_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
 	objects   *StatsObjects
 	closables []io.Closer
 
-	// the storage features whose probes are attached
+	// the storage features whose probes are attached, or wait for their kernel module
 	storage               export.Features
 	diskStatusIsBlkStatus bool
+	// the NFS client probe waits for the sunrpc module, and RefreshNFSProbes attaches it
+	nfsWaiting bool
 }
 
 func tlog() *slog.Logger {
@@ -131,9 +134,13 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 
-	return loadDegradingStorage(tlog, planStorage(tlog, features), func(storage storagePlan) (*StatsFetcher, error) {
+	fetcher, err := loadDegradingStorage(tlog, planStorage(tlog, features), func(storage storagePlan) (*StatsFetcher, error) {
 		return loadAndAttach(cfg, features, toDisable, connRoleUsed, storage, reads)
 	})
+	if err == nil && fetcher.nfsWaiting {
+		tlog.Info("the NFS client stats wait for the sunrpc kernel module: their probe is attached when it is loaded")
+	}
+	return fetcher, err
 }
 
 // storagePlan is what the storage probes load: the enabled storage features but those disabled,
@@ -158,7 +165,7 @@ func (e *storageError) Error() string { return e.err.Error() }
 func (e *storageError) Unwrap() error { return e.err }
 
 func planStorage(log *slog.Logger, features *export.Features) storagePlan {
-	storage := storagePlan{features: *features & (export.FeatureStatsDisk | export.FeatureStatsFsSync)}
+	storage := storagePlan{features: *features & (export.FeatureStatsDisk | export.FeatureStatsFsSync | export.FeatureStatsNFS)}
 	if storage.features.StatsDisk() {
 		var err error
 		if storage.blockLayout, err = kernelBlockLayout(); err != nil {
@@ -166,10 +173,20 @@ func planStorage(log *slog.Logger, features *export.Features) storagePlan {
 				fmt.Errorf("reading the block tracepoint prototypes in the kernel BTF: %w", err))
 		}
 	}
-	if storage.features.StatsFsSync() {
-		// without the kernel BTF, the kprobes time every file sync hook
-		if kernel, err := btf.LoadKernelSpec(); err == nil {
-			storage.fsSyncTracing = fsSyncTracingHooks(kernel)
+	if !storage.features.StatsFsSync() && !storage.features.StatsNFS() {
+		return storage
+	}
+	kernel, err := btf.LoadKernelSpec()
+	// without the kernel BTF, the kprobes time every file sync hook
+	if storage.features.StatsFsSync() && err == nil {
+		storage.fsSyncTracing = fsSyncTracingHooks(kernel)
+	}
+	if storage.features.StatsNFS() {
+		if err == nil {
+			err = kernelRPCTypes(kernel)
+		}
+		if err != nil {
+			storage.drop(log, export.FeatureStatsNFS, err)
 		}
 	}
 	return storage
@@ -231,8 +248,9 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 
 	diskEnabled := storage.features.StatsDisk()
 	fsSyncEnabled := storage.features.StatsFsSync()
+	nfsEnabled := storage.features.StatsNFS()
 	toDisable = slices.Concat(toDisable, diskProgramsToDisable(diskEnabled, storage.issueHasQueueArg),
-		fsSyncProgramsToDisable(fsSyncEnabled, storage.fsSyncTracing))
+		fsSyncProgramsToDisable(fsSyncEnabled, storage.fsSyncTracing), nfsProgramsToDisable(nfsEnabled))
 
 	setFsSyncTracingTargets(spec)
 	if err := fixupSpec(spec, toDisable); err != nil {
@@ -397,6 +415,19 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 		closables = append(closables, l)
 	}
 
+	var nfsWaiting bool
+	if nfsEnabled {
+		l, waiting, err := attachNFS(&objects)
+		if err != nil {
+			closeAll(closables)
+			return nil, &storageError{features: export.FeatureStatsNFS, err: err}
+		}
+		if !waiting {
+			closables = append(closables, l)
+		}
+		nfsWaiting = waiting
+	}
+
 	if fsSyncEnabled {
 		links, mechanisms, err := attachFsSync(tlog(), &objects, storage.fsSyncTracing)
 		if err != nil {
@@ -414,6 +445,7 @@ func loadAndAttach(cfg *config.EBPFTracer, features *export.Features, toDisable 
 
 		storage:               storage.features,
 		diskStatusIsBlkStatus: storage.completeReportsBlkStatus,
+		nfsWaiting:            nfsWaiting,
 	}, nil
 }
 
@@ -466,8 +498,17 @@ func (m *StatsFetcher) FsSyncAccumMap() *ebpf.Map {
 	return m.objects.FsSyncAccum
 }
 
+// NFSProcedureAccumMap returns the map where the kernel accumulates the durations of the NFS client
+// RPCs, or nil when the NFS client stats are disabled. Its probe may be attached later.
+func (m *StatsFetcher) NFSProcedureAccumMap() *ebpf.Map {
+	if !m.storage.StatsNFS() {
+		return nil
+	}
+	return m.objects.NfsProcedureAccum
+}
+
 // DiskCgroupNamesMap returns the map where the kernel records the names of the cgroups that block
-// I/O and file syncs are charged to, or nil when the disk and file sync stats are disabled
+// I/O and file syncs are charged to, or nil when the storage stats are disabled
 func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
 	if m.storage == 0 {
 		return nil

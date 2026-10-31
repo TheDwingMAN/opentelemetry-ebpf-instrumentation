@@ -63,3 +63,32 @@ func TestStatGetters_DiskIO(t *testing.T) {
 		assert.Equal(t, tc.want, get(tc.stat), "%s of %+v %+v", tc.name, tc.stat.DiskIO, tc.stat.FsSync)
 	}
 }
+
+func TestStatGetters_NFSProcedure(t *testing.T) {
+	v3 := &Stat{Type: StatTypeNFSProcedure, NFSProcedure: &NFSProcedure{Server: "nas", Procedure: "LOOKUP", Version: 3, ErrorType: "ENOENT"}}
+	v4 := &Stat{Type: StatTypeNFSProcedure, NFSProcedure: &NFSProcedure{Server: "10.0.0.5", Procedure: "READ", Version: 4}}
+	write := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "vda", Op: CodeDiskOpWrite}}
+	for _, tc := range []struct {
+		name attr.Name
+		stat *Stat
+		want attribute.KeyValue
+	}{
+		{name: attr.ServerAddr, stat: v3, want: attribute.String("server.address", "nas")},
+		{name: attr.ServerAddr, stat: v4, want: attribute.String("server.address", "10.0.0.5")},
+		// NFSv2 and NFSv3 RPCs are ONC RPC procedures, the NFSv4 ones are named after their main operation
+		{name: attr.OncRPCProcedureName, stat: v3, want: attribute.String("onc_rpc.procedure.name", "LOOKUP")},
+		{name: attr.OncRPCProcedureName, stat: v4},
+		{name: attr.NfsOperationName, stat: v4, want: attribute.String("nfs.operation.name", "READ")},
+		{name: attr.NfsOperationName, stat: v3},
+		{name: attr.OncRPCVersion, stat: v3, want: attribute.Int("onc_rpc.version", 3)},
+		{name: attr.ErrorType, stat: v3, want: attribute.String("error.type", "ENOENT")},
+		{name: attr.ErrorType, stat: v4},
+		{name: attr.K8sClusterName, stat: v4},
+		{name: attr.ServerAddr, stat: write},
+		{name: attr.OncRPCVersion, stat: write},
+	} {
+		get, ok := StatGetters(tc.name)
+		require.True(t, ok)
+		assert.Equal(t, tc.want, get(tc.stat), "%s of %+v", tc.name, tc.stat.NFSProcedure)
+	}
+}

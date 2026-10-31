@@ -46,8 +46,8 @@ func dtlog() *slog.Logger {
 	return slog.With("component", "stat.DiskMapTracer")
 }
 
-// DiskMapTracer periodically reads the block request and file sync durations that the kernel
-// accumulates, and forwards what each key gained since the previous read.
+// DiskMapTracer periodically reads the block request, file sync and NFS client RPC durations that the
+// kernel accumulates, and forwards what each key gained since the previous read.
 type DiskMapTracer struct {
 	// the readStats of the accumulation maps that the kernel fills
 	readers  []func() []*ebpf.Stat
@@ -55,7 +55,7 @@ type DiskMapTracer struct {
 }
 
 // NewDiskMapTracer reads the accumulation maps that are not nil
-func NewDiskMapTracer(diskAccum, fsSyncAccum, cgroupNames *ciliumebpf.Map, statusIsBlkStatus bool,
+func NewDiskMapTracer(diskAccum, fsSyncAccum, nfsProcedureAccum, cgroupNames *ciliumebpf.Map, statusIsBlkStatus bool,
 	cfg *config.EBPFTracer,
 ) *DiskMapTracer {
 	interval := cfg.BatchTimeout
@@ -74,6 +74,10 @@ func NewDiskMapTracer(diskAccum, fsSyncAccum, cgroupNames *ciliumebpf.Map, statu
 	if fsSyncAccum != nil {
 		accum := ebpfAccum[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT]{accum: fsSyncAccum}
 		tracer.readers = append(tracer.readers, newFsSyncReader(accum, containers, interval).readStats)
+	}
+	if nfsProcedureAccum != nil {
+		accum := ebpfAccum[ebpf.StatsNfsProcedureKeyT, ebpf.StatsNfsProcedureAccumT]{accum: nfsProcedureAccum}
+		tracer.readers = append(tracer.readers, newNFSProcedureReader(accum, interval).readStats)
 	}
 	return tracer
 }
@@ -199,6 +203,37 @@ func newFsSyncReader(accum accumMap[ebpf.StatsFsSyncKeyT, ebpf.StatsFsSyncAccumT
 				ErrorType:   diskErrorType(key.Status, false),
 				ContainerID: containers.containerID(key.CgroupId),
 				Latency:     latencyDelta(current.LatencyCount[:], previous.LatencyCount[:], current.LatencySumNs, previous.LatencySumNs),
+			},
+		}
+	}, interval)
+}
+
+// nullProcedure names the procedure that the kernel leaves unnamed: the NULL ping that the NFS client
+// sends with each new RPC client, which the statistics of the kernel name NULL
+const nullProcedure = "NULL"
+
+// newNFSProcedureReader reads the accumulation map of the NFS client RPCs
+func newNFSProcedureReader(accum accumMap[ebpf.StatsNfsProcedureKeyT, ebpf.StatsNfsProcedureAccumT], interval time.Duration,
+) *accumReader[ebpf.StatsNfsProcedureKeyT, ebpf.StatsNfsProcedureAccumT] {
+	log := dtlog()
+	return newAccumReader(ebpf.StatsMapNfsProcedureAccum, accum, func(key ebpf.StatsNfsProcedureKeyT, current, previous ebpf.StatsNfsProcedureAccumT) *ebpf.Stat {
+		latency := latencyDelta(current.LatencyCount[:], previous.LatencyCount[:], current.LatencySumNs, previous.LatencySumNs)
+		errorType := nfsErrorType(key.Status)
+		if errorType == errtype.Other {
+			log.Debug("NFS RPCs completed with a status without a name", "status", key.Status, "rpcs", latency.Count())
+		}
+		procedure := unix.ByteSliceToString(key.Procedure[:])
+		if procedure == "" {
+			procedure = nullProcedure
+		}
+		return &ebpf.Stat{
+			Type: ebpf.StatTypeNFSProcedure,
+			NFSProcedure: &ebpf.NFSProcedure{
+				Server:    unix.ByteSliceToString(key.Server[:]),
+				Procedure: procedure,
+				Version:   key.Version,
+				ErrorType: errorType,
+				Latency:   latency,
 			},
 		}
 	}, interval)
@@ -353,6 +388,21 @@ func diskErrorType(status uint8, isBlkStatus bool) string {
 		errno = blkStatusErrno[status]
 	}
 	if name := unix.ErrnoName(errno); name != "" {
+		return name
+	}
+	return errtype.Other
+}
+
+// nfsErrorType names the status of failed NFS RPCs after its errno, or else after nfsStatusNames, and
+// is empty on success
+func nfsErrorType(status uint16) string {
+	if status == 0 {
+		return ""
+	}
+	if name := unix.ErrnoName(syscall.Errno(status)); name != "" {
+		return name
+	}
+	if name, ok := nfsStatusNames[status]; ok {
 		return name
 	}
 	return errtype.Other
