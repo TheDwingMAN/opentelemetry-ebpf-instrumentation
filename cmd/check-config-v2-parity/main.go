@@ -409,6 +409,15 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsDiskServiceDuration() {
 		want = append(want, "disk_service_duration")
 	}
+	if features.StatsDiskIO() {
+		want = append(want, "disk_io")
+	}
+	if features.StatsDiskOperations() {
+		want = append(want, "disk_operations")
+	}
+	if features.StatsDiskServiceTime() {
+		want = append(want, "disk_service_time")
+	}
 
 	got := toStringSlice(featuresValue)
 	if !sameStringSet(got, want) {

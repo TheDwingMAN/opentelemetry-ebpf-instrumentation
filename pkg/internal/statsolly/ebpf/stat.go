@@ -140,6 +140,13 @@ type DiskIO struct {
 	Latency LatencyHistogram
 	// ErrorType names the errno that the requests failed with, and is empty for successful requests
 	ErrorType string
+	// Bytes of the successful requests, at their issue
+	Bytes uint64
+	// ContainerID is the container that the kernel charges the I/O to, empty for none
+	ContainerID string
+	// MultipathPath is set on the paths of a dm-multipath device, which serve the requests that the
+	// multipath device reports: the histogram exporters leave them out
+	MultipathPath bool
 }
 
 // LatencyHistogram counts requests in the buckets of export.DiskLatencyBounds
@@ -148,6 +155,15 @@ type LatencyHistogram struct {
 	BucketCounts []uint64
 	// Sum of the latencies, in seconds
 	Sum float64
+}
+
+// Count is the number of requests of the histogram
+func (h LatencyHistogram) Count() uint64 {
+	var count uint64
+	for _, bucketCount := range h.BucketCounts {
+		count += bucketCount
+	}
+	return count
 }
 
 // Conn mirrors connection_info_t from bpf/common/connection_info.h.

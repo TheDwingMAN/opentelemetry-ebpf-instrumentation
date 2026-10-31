@@ -65,21 +65,23 @@ func TestBlockRqCompleteReportsBlkStatus(t *testing.T) {
 
 func TestSizeDiskMaps(t *testing.T) {
 	for _, tc := range []struct {
-		name                    string
-		enabled                 bool
-		cpus                    int
-		wantInFlight, wantAccum uint32
+		name                               string
+		enabled, readsCgroup               bool
+		cpus                               int
+		wantInFlight, wantAccum, wantNames uint32
 	}{
-		{name: "disabled", cpus: 192, wantInFlight: 1, wantAccum: 1},
-		{name: "up to 64 CPUs", enabled: true, cpus: 64, wantInFlight: 1 << 14, wantAccum: 1 << 12},
-		{name: "beyond", enabled: true, cpus: 192, wantInFlight: 2 * lruLocalFreeTarget * 192, wantAccum: 1 << 12},
+		{name: "disabled", readsCgroup: true, cpus: 192, wantInFlight: 1, wantAccum: 1, wantNames: 1},
+		{name: "up to 64 CPUs", enabled: true, cpus: 64, wantInFlight: 1 << 14, wantAccum: 1 << 12, wantNames: 1},
+		{name: "beyond", enabled: true, cpus: 192, wantInFlight: 2 * lruLocalFreeTarget * 192, wantAccum: 1 << 12, wantNames: 1},
+		{name: "reading the cgroups", enabled: true, readsCgroup: true, cpus: 64, wantInFlight: 1 << 14, wantAccum: 1 << 12, wantNames: 1 << 13},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec, err := LoadStats()
 			require.NoError(t, err)
-			sizeDiskMaps(spec, tc.enabled, tc.cpus)
+			sizeDiskMaps(spec, tc.enabled, tc.readsCgroup, tc.cpus)
 			assert.Equal(t, tc.wantInFlight, spec.Maps["disk_rq_start"].MaxEntries)
 			assert.Equal(t, tc.wantAccum, spec.Maps["disk_io_accum"].MaxEntries)
+			assert.Equal(t, tc.wantNames, spec.Maps["disk_cgroup_names"].MaxEntries)
 		})
 	}
 }

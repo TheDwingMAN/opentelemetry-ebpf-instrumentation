@@ -116,10 +116,14 @@ func diskIssueProgram(objects *StatsObjects, issueHasQueueArg bool) *ebpf.Progra
 }
 
 // sizeDiskMaps gives the disk maps a single entry when the disk stats are disabled, as StatsObjects
-// creates them anyway. Otherwise, it gives the LRU map of the requests in flight room for twice the
-// free entries that the CPUs can keep for themselves: once those hold most of the map, a CPU that
-// needs an entry evicts a request in flight, until the fix of Linux 6.16 (and 6.12.39, 6.6.99).
-func sizeDiskMaps(spec *ebpf.CollectionSpec, enabled bool, cpus int) {
+// creates them anyway, and the cgroup names one when the probes don't read the cgroups. Otherwise,
+// it gives the LRU map of the requests in flight room for twice the free entries that the CPUs can
+// keep for themselves: once those hold most of the map, a CPU that needs an entry evicts a request
+// in flight, until the fix of Linux 6.16 (and 6.12.39, 6.6.99).
+func sizeDiskMaps(spec *ebpf.CollectionSpec, enabled, readsCgroup bool, cpus int) {
+	if !enabled || !readsCgroup {
+		spec.Maps["disk_cgroup_names"].MaxEntries = 1
+	}
 	inFlight := spec.Maps["disk_rq_start"]
 	if !enabled {
 		inFlight.MaxEntries = 1

@@ -7,6 +7,7 @@ import (
 	"context"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/obi/internal/test/integration/components/promtest"
+	"go.opentelemetry.io/obi/pkg/appolly/discover"
 	"go.opentelemetry.io/obi/pkg/export"
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
@@ -209,8 +211,74 @@ func fakeIoRecord(srcPort, dstPort uint16, direction uint8, bytes uint32) *ebpf.
 	}
 }
 
-// The disk stats get the OBI IP, go through the stats filters and are exported
+// The disk stats get the OBI IP, go through the stats filters and are exported. The paths of a
+// dm-multipath device have the counters, but not the histogram
 func TestDiskStats(t *testing.T) {
+	disk, promURL := startDiskPipeline(t, func(s *Stats) {
+		s.cfg.Attributes.Select = attributes.Selection{"obi.stat.disk.*": attributes.InclusionLists{Include: []string{"*"}}}
+		s.cfg.Filters.Stats = filter.AttributeFamilyConfig{"system.device": {NotMatch: "vda"}}
+	})
+
+	disk <- []*ebpf.Stat{fakeDiskRecord("nvme0n1", 5), fakeDiskRecord("vda", 1)}
+	disk <- []*ebpf.Stat{fakeDiskRecord("nvme0n1", 1)}
+	failed := fakeDiskRecord("nvme0n1", 2)
+	failed.DiskIO.ErrorType, failed.DiskIO.Bytes = "EIO", 0
+	path := fakeDiskRecord("sdb", 3)
+	path.DiskIO.MultipathPath = true
+	disk <- []*ebpf.Stat{failed, path}
+
+	labels := func(device, errorType string) map[string]string {
+		return map[string]string{
+			"obi_ip": "1.2.3.4", "system_device": device, "obi_disk_stacked": "false", "obi_disk_volume_name": "",
+			"disk_io_direction": "write", "error_type": errorType, "container_id": "",
+		}
+	}
+	ioLabels := func(device string) map[string]string {
+		labels := labels(device, "")
+		delete(labels, "error_type")
+		return labels
+	}
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		allMetrics, err := promtest.Scrape(promURL)
+		require.NoError(ct, err)
+		named := func(name string) []promtest.ScrapedMetric {
+			return slices.DeleteFunc(slices.Clone(allMetrics), func(m promtest.ScrapedMetric) bool { return m.Name != name })
+		}
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_service_duration_seconds_count", Value: 6, Labels: labels("nvme0n1", "")},
+			{Name: "obi_stat_disk_service_duration_seconds_count", Value: 2, Labels: labels("nvme0n1", "EIO")},
+		}, named("obi_stat_disk_service_duration_seconds_count"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_operations_total", Value: 6, Labels: labels("nvme0n1", "")},
+			{Name: "obi_stat_disk_operations_total", Value: 2, Labels: labels("nvme0n1", "EIO")},
+			{Name: "obi_stat_disk_operations_total", Value: 3, Labels: labels("sdb", "")},
+		}, named("obi_stat_disk_operations_total"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_io_bytes_total", Value: 6 * 4096, Labels: ioLabels("nvme0n1")},
+			{Name: "obi_stat_disk_io_bytes_total", Value: 3 * 4096, Labels: ioLabels("sdb")},
+		}, named("obi_stat_disk_io_bytes_total"))
+	}, timeout, 100*time.Millisecond)
+}
+
+// Under dynamic application selection, the disk stats are those of the containers of the selected
+// applications: none while nothing is selected
+func TestDiskStatsUnderDynamicSelection(t *testing.T) {
+	disk, promURL := startDiskPipeline(t, func(s *Stats) { s.ctxInfo.DynamicSelector = discover.NewDynamicSelector() })
+	inContainer := fakeDiskRecord("vda", 1)
+	inContainer.DiskIO.ContainerID = "0123abcd"
+	disk <- []*ebpf.Stat{inContainer, fakeDiskRecord("vda", 1)}
+
+	assert.Never(t, func() bool {
+		allMetrics, err := promtest.Scrape(promURL)
+		return err == nil && slices.ContainsFunc(allMetrics, func(m promtest.ScrapedMetric) bool {
+			return strings.HasPrefix(m.Name, "obi_stat_disk_")
+		})
+	}, time.Second, 100*time.Millisecond)
+}
+
+// startDiskPipeline runs the stats pipeline of the disk stats, as configure changes it, exporting to
+// Prometheus. The disk tracer forwards what the returned channel gets.
+func startDiskPipeline(t *testing.T, configure func(*Stats)) (chan<- []*ebpf.Stat, string) {
 	promServer := testutil.NewPrometheusServer(t)
 
 	stats := Stats{
@@ -220,14 +288,11 @@ func TestDiskStats(t *testing.T) {
 		},
 		cfg: &obi.Config{
 			Prometheus: prom.PrometheusConfig{Port: promServer.Port, Path: "/metrics", TTL: time.Hour},
-			Metrics:    perapp.GlobalMetricsConfig{Features: export.FeatureStatsDiskServiceDuration},
-			Attributes: obi.Attributes{Select: attributes.Selection{
-				attributes.StatDiskServiceDuration.Section: attributes.InclusionLists{Include: []string{"*"}},
-			}},
-			Filters: filter.AttributesConfig{Stats: filter.AttributeFamilyConfig{"system.device": {Match: "nvme0n1"}}},
+			Metrics:    perapp.GlobalMetricsConfig{Features: export.FeatureStatsDisk},
 		},
 		diskTracer: &statstracers.DiskMapTracer{},
 	}
+	configure(&stats)
 
 	ringBuf := make(chan []*ebpf.Stat)
 	disk := make(chan []*ebpf.Stat, 10)
@@ -252,39 +317,13 @@ func TestDiskStats(t *testing.T) {
 	runner, err := stats.buildPipeline(t.Context())
 	require.NoError(t, err)
 	go runner.Start(t.Context())
-
-	disk <- []*ebpf.Stat{fakeDiskRecord("nvme0n1", 5), fakeDiskRecord("vda", 1)}
-	disk <- []*ebpf.Stat{fakeDiskRecord("nvme0n1", 1)}
-	failed := fakeDiskRecord("nvme0n1", 2)
-	failed.DiskIO.ErrorType = "EIO"
-	disk <- []*ebpf.Stat{failed}
-
-	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		allMetrics, err := promtest.Scrape(promServer.URL)
-		require.NoError(ct, err)
-		counts := slices.DeleteFunc(allMetrics, func(m promtest.ScrapedMetric) bool {
-			return m.Name != "obi_stat_disk_service_duration_seconds_count"
-		})
-		assert.ElementsMatch(ct, []promtest.ScrapedMetric{{
-			Name:  "obi_stat_disk_service_duration_seconds_count",
-			Value: 6,
-			Labels: map[string]string{
-				"obi_ip": "1.2.3.4", "system_device": "nvme0n1", "obi_disk_stacked": "false", "obi_disk_volume_name": "",
-				"disk_io_direction": "write", "error_type": "",
-			},
-		}, {
-			Name:  "obi_stat_disk_service_duration_seconds_count",
-			Value: 2,
-			Labels: map[string]string{
-				"obi_ip": "1.2.3.4", "system_device": "nvme0n1", "obi_disk_stacked": "false", "obi_disk_volume_name": "",
-				"disk_io_direction": "write", "error_type": "EIO",
-			},
-		}}, counts)
-	}, timeout, 100*time.Millisecond)
+	return disk, promServer.URL
 }
 
 func fakeDiskRecord(device string, writes uint64) *ebpf.Stat {
 	latency := ebpf.LatencyHistogram{BucketCounts: make([]uint64, len(export.DiskLatencyBounds)+1)}
 	latency.BucketCounts[0] = writes
-	return &ebpf.Stat{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{Device: device, Op: ebpf.CodeDiskOpWrite, Latency: latency}}
+	return &ebpf.Stat{Type: ebpf.StatTypeDiskIO, DiskIO: &ebpf.DiskIO{
+		Device: device, Op: ebpf.CodeDiskOpWrite, Latency: latency, Bytes: writes * 4096,
+	}}
 }

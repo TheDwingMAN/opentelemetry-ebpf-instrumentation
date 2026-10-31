@@ -66,7 +66,7 @@ const (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
+//go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type stat_type -type tcp_fail_reason -type tcp_handshake_role -type network_io_direction -type disk_op -type disk_io_key_t -type disk_io_accum_t -type disk_cgroup_name_t -type tcp_io_t -type tcp_rtt_t -type tcp_failed_connection_t -type tcp_retransmit_t -type tcp_successful_connection_t -target $BPF_TARGETS Stats ../../../../bpf/statsolly/stats.c -- -I../../../../bpf
 
 type StatsFetcher struct {
 	log       *slog.Logger
@@ -80,7 +80,11 @@ func tlog() *slog.Logger {
 	return slog.With("component", "ebpf.StatFetcher")
 }
 
-func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig) (*StatsFetcher, error) {
+// NewStatsFetcher loads and attaches the probes of the enabled stat features. The disk probes read
+// the cgroup that the I/O is charged to when diskReadsCgroup is set.
+func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig,
+	diskReadsCgroup bool,
+) (*StatsFetcher, error) {
 	tlog := tlog()
 	if err := rlimit.RemoveMemlock(); err != nil {
 		tlog.Warn("can't remove mem lock. The agent could not be able to start eBPF programs",
@@ -127,7 +131,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		toDisable = append(toDisable, progObiStatsKprobeTCPSendmsg, progObiStatsKretprobeTCPSendmsg, progObiStatsKprobeTCPCleanupRbuf, progObiStatsKprobeTCPCloseIoFlush)
 	}
 
-	diskEnabled := features.StatsDiskServiceDuration()
+	diskEnabled := features.StatsDisk()
 	var issueHasQueueArg, completeReportsBlkStatus bool
 	if diskEnabled {
 		if issueHasQueueArg, completeReportsBlkStatus, err = kernelBlockTracepoints(); err != nil {
@@ -143,7 +147,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	ebpfconvenience.SetupMapSizes(spec, cfg.MapsConfig.GlobalScaleFactor)
 	// without the number of CPUs, the in-flight map keeps its size
 	cpus, _ := ebpf.PossibleCPU()
-	sizeDiskMaps(spec, diskEnabled, cpus)
+	sizeDiskMaps(spec, diskEnabled, diskReadsCgroup, cpus)
 
 	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
@@ -152,6 +156,7 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		"stats_wakeup_data_bytes":   uint32(cfg.StatsWakeupDataBytes),
 		"disk_latency_bounds_ns":    diskLatencyBoundsNs(),
 		"disk_status_is_blk_status": completeReportsBlkStatus,
+		"disk_read_cgroup":          diskReadsCgroup,
 	}, sharedMaps, &mu, "", nil); err != nil {
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
@@ -326,6 +331,12 @@ func (m *StatsFetcher) DebugEventsMap() *ebpf.Map {
 // DiskIOAccumMap returns the map where the kernel accumulates the block request durations
 func (m *StatsFetcher) DiskIOAccumMap() *ebpf.Map {
 	return m.objects.DiskIoAccum
+}
+
+// DiskCgroupNamesMap returns the map where the kernel records the names of the cgroups that block
+// I/O is charged to
+func (m *StatsFetcher) DiskCgroupNamesMap() *ebpf.Map {
+	return m.objects.DiskCgroupNames
 }
 
 // DiskStatusIsBlkStatus tells whether the statuses in the keys of DiskIOAccumMap are blk_status_t

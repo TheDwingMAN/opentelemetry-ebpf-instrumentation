@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	ciliumebpf "github.com/cilium/ebpf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -22,10 +23,33 @@ import (
 type fakeDiskAccum struct {
 	entries map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT
 	err     error
+	// afterRead replaces entries once they are read, as the kernel adds to them meanwhile
+	afterRead map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT
+	// lookupAndDeleteErr is the error of lookupAndDelete, as before Linux 5.14
+	lookupAndDeleteErr error
 }
 
 func (f *fakeDiskAccum) read() (map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT, error) {
-	return maps.Clone(f.entries), f.err
+	entries := maps.Clone(f.entries)
+	maps.Copy(f.entries, f.afterRead)
+	f.afterRead = nil
+	return entries, f.err
+}
+
+func (f *fakeDiskAccum) lookupAndDelete(key ebpf.StatsDiskIoKeyT) (ebpf.StatsDiskIoAccumT, error) {
+	if f.lookupAndDeleteErr != nil {
+		return ebpf.StatsDiskIoAccumT{}, f.lookupAndDeleteErr
+	}
+	last := f.entries[key]
+	return last, f.delete(key)
+}
+
+func (f *fakeDiskAccum) delete(key ebpf.StatsDiskIoKeyT) error {
+	if _, ok := f.entries[key]; !ok {
+		return ciliumebpf.ErrKeyNotExist
+	}
+	delete(f.entries, key)
+	return nil
 }
 
 func writeKey(major, minor uint32) ebpf.StatsDiskIoKeyT {
@@ -52,13 +76,13 @@ func assertLatency(t *testing.T, latency ebpf.LatencyHistogram, sumSeconds float
 }
 
 func newTestDiskReader(src *fakeDiskAccum) *diskReader {
-	return newDiskReader(src.read, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"})
+	return newDiskReader(src, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"}, defaultDiskReadInterval)
 }
 
 func TestDiskReaderForwardsDeltas(t *testing.T) {
-	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
-		writeKey(259, 0): accum([]uint64{0, 3}, []uint64{0, 2_000_000}),
-	}}
+	written := accum([]uint64{0, 3}, []uint64{0, 2_000_000})
+	written.Bytes = 3 * 4096
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{writeKey(259, 0): written}}
 	r := newTestDiskReader(src)
 
 	stats := r.readStats()
@@ -67,12 +91,16 @@ func TestDiskReaderForwardsDeltas(t *testing.T) {
 	assert.Equal(t, "259:0", stats[0].DiskIO.Device, "named after its numbers when sysfs doesn't know it")
 	assert.Equal(t, ebpf.CodeDiskOpWrite, stats[0].DiskIO.Op)
 	assertLatency(t, stats[0].DiskIO.Latency, 3*0.002, 0, 3)
+	assert.Equal(t, uint64(3*4096), stats[0].DiskIO.Bytes)
 
 	// two more requests in the same bucket, one in a higher bucket
-	src.entries[writeKey(259, 0)] = accum([]uint64{0, 5, 1}, []uint64{0, 2_000_000, 50_000_000})
+	written = accum([]uint64{0, 5, 1}, []uint64{0, 2_000_000, 50_000_000})
+	written.Bytes = 6 * 4096
+	src.entries[writeKey(259, 0)] = written
 	stats = r.readStats()
 	require.Len(t, stats, 1)
 	assertLatency(t, stats[0].DiskIO.Latency, 2*0.002+0.05, 0, 2, 1)
+	assert.Equal(t, uint64(3*4096), stats[0].DiskIO.Bytes)
 
 	assert.Empty(t, r.readStats(), "nothing changed, nothing forwarded")
 }
@@ -91,6 +119,87 @@ func TestDiskReaderForwardsWhatItReads(t *testing.T) {
 	stats := r.readStats()
 	require.Len(t, stats, 1)
 	assertLatency(t, stats[0].DiskIO.Latency, 2*0.0005, 2)
+}
+
+// An entry that stays unchanged is deleted, with what the kernel added to it since its last read when
+// the kernel can look it up and delete it at once, and a request that creates it again counts from zero
+func TestDiskReaderDeletesIdleEntries(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		lookupAndDeleteErr error
+		lastGrowth         []uint64
+	}{
+		{name: "lookup and delete", lastGrowth: []uint64{1}},
+		{name: "delete before Linux 5.14", lookupAndDeleteErr: ciliumebpf.ErrNotSupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := writeKey(8, 0)
+			src := &fakeDiskAccum{
+				entries:            map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{key: accum([]uint64{2}, []uint64{100_000})},
+				lookupAndDeleteErr: tc.lookupAndDeleteErr,
+			}
+			r := newDiskReader(src, &blockDevices{sysRoot: "/nonexistent", procRoot: "/nonexistent"}, diskIdleTime/2)
+			require.Len(t, r.readStats(), 1)
+			assert.Empty(t, r.readStats())
+			assert.Contains(t, src.entries, key, "idle for less than diskIdleTime")
+
+			// a request completes after the read that finds the entry idle long enough
+			src.afterRead = map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{key: accum([]uint64{3}, []uint64{100_000})}
+			var lastGrowth []uint64
+			for _, stat := range r.readStats() {
+				lastGrowth = stat.DiskIO.Latency.BucketCounts[:1]
+			}
+			assert.Equal(t, tc.lastGrowth, lastGrowth)
+			assert.NotContains(t, src.entries, key)
+			assert.NotContains(t, r.entries, key)
+
+			src.entries[key] = accum([]uint64{1}, []uint64{100_000})
+			stats := r.readStats()
+			require.Len(t, stats, 1)
+			assertLatency(t, stats[0].DiskIO.Latency, 0.0001, 1)
+		})
+	}
+}
+
+// The reader names the container of the cgroup that I/O is charged to, from the names that the kernel
+// recorded, once it recorded them
+func TestDiskReaderNamesTheContainers(t *testing.T) {
+	const (
+		containerID      = "8e5e2d4ef4e0ec0ee80e1b7f86c2b8dbdc5a6e1db8c3d2d1b0a19f8e7d6c5b4a"
+		otherContainerID = "d36686f9785534531160dc936aec9d711a26eb37f4fc7752a2ae27d0a24345c1"
+	)
+	chargedTo := func(cgroupID uint64) ebpf.StatsDiskIoKeyT {
+		key := writeKey(8, 0)
+		key.CgroupId = cgroupID
+		return key
+	}
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{}}
+	for _, cgroupID := range []uint64{0, 10, 11, 12} {
+		src.entries[chargedTo(cgroupID)] = accum([]uint64{1}, []uint64{100_000})
+	}
+	names := map[uint64][2]string{10: {"docker-" + containerID + ".scope", "system.slice"}, 11: {"user.slice", ""}}
+	lookups := 0
+	r := newTestDiskReader(src)
+	r.containers = newCgroupContainers(func(cgroupID uint64) (string, string, bool) {
+		lookups++
+		name, ok := names[cgroupID]
+		return name[0], name[1], ok
+	}, 16)
+	containers := func() []string {
+		var ids []string
+		for _, stat := range r.readStats() {
+			ids = append(ids, stat.DiskIO.ContainerID)
+		}
+		return ids
+	}
+
+	assert.ElementsMatch(t, []string{"", containerID, "", ""}, containers(),
+		"no cgroup, the containers of 10, of 11 which isn't a container, and of 12 whose names aren't recorded yet")
+	names[12] = [2]string{otherContainerID, "docker"}
+	src.entries[chargedTo(10)] = accum([]uint64{2}, []uint64{100_000})
+	src.entries[chargedTo(12)] = accum([]uint64{2}, []uint64{100_000})
+	assert.ElementsMatch(t, []string{containerID, otherContainerID}, containers())
+	assert.Equal(t, 4, lookups, "the names of a cgroup are looked up until they are recorded")
 }
 
 // fakeBlockDevices is a fake sysfs, with block devices linked from /sys/dev/block by their numbers,
@@ -218,7 +327,7 @@ func TestStackedDevices(t *testing.T) {
 		stacked    bool
 	}
 	devices := map[string]labels{}
-	for _, stat := range newDiskReader(src.read, fake.blockDevices()).readStats() {
+	for _, stat := range newDiskReader(src, fake.blockDevices(), defaultDiskReadInterval).readStats() {
 		devices[stat.DiskIO.Device] = labels{volumeName: stat.DiskIO.VolumeName, stacked: stat.DiskIO.Stacked}
 	}
 	assert.Equal(t, map[string]labels{
@@ -232,9 +341,9 @@ func TestStackedDevices(t *testing.T) {
 	}, devices)
 }
 
-// The paths of a measured dm-multipath device report nothing, as the multipath device reports the
-// same requests, so the multipath device is not stacked
-func TestDiskReaderLeavesOutTheMultipathPaths(t *testing.T) {
+// The paths of a measured dm-multipath device are marked, so that the histogram exporters leave them
+// out, as the multipath device reports the same requests: the multipath device is not stacked
+func TestDiskReaderMarksTheMultipathPaths(t *testing.T) {
 	fake := newFakeBlockDevices(t)
 	fake.add("8:16", "sdb")
 	fake.add("8:32", "sdc")
@@ -264,14 +373,14 @@ func TestDiskReaderLeavesOutTheMultipathPaths(t *testing.T) {
 	for _, numbers := range []devNum{{8, 16}, {8, 32}, {8, 48}, {8, 64}, {253, 0}, {253, 1}, {253, 2}, {253, 3}} {
 		src.entries[writeKey(numbers.major, numbers.minor)] = accum([]uint64{1}, []uint64{100_000})
 	}
-	r := newDiskReader(src.read, fake.blockDevices())
-	stacked := map[string]bool{}
-	for _, stat := range r.readStats() {
-		stacked[stat.DiskIO.Device] = stat.DiskIO.Stacked
+	type marks struct{ stacked, multipathPath bool }
+	devices := map[string]marks{}
+	for _, stat := range newDiskReader(src, fake.blockDevices(), defaultDiskReadInterval).readStats() {
+		devices[stat.DiskIO.Device] = marks{stacked: stat.DiskIO.Stacked, multipathPath: stat.DiskIO.MultipathPath}
 	}
-	assert.Equal(t, map[string]bool{
-		"sdd": false, "sde": false, "dm-1": false, "dm-3": false,
-		"dm-0": true, "dm-2": true,
-	}, stacked, "the paths of dm-1 and dm-3 report nothing")
-	assert.Equal(t, src.entries, r.previous, "a path reports none of the requests it served while it was one")
+	assert.Equal(t, map[string]marks{
+		"sdb": {multipathPath: true}, "sdc": {multipathPath: true},
+		"sdd": {}, "sde": {}, "dm-1": {}, "dm-3": {},
+		"dm-0": {stacked: true}, "dm-2": {stacked: true},
+	}, devices, "sdb and sdc are the paths of dm-1 and dm-3")
 }

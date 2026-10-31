@@ -1,4 +1,4 @@
-# Config v2 only enables the disk stats: their feature has no Config v1 name. A v2 document takes
+# Config v2 only enables the disk stats: their features have no Config v1 name. A v2 document takes
 # no OTEL_EBPF_* overrides, so the settings of the suite live here.
 file_format: "1.0"
 log_level: debug
@@ -24,7 +24,7 @@ extensions:
         default_action: exclude
       network:
         stats:
-          features: [disk_service_duration]
+          features: [disk_service_duration, disk_io, disk_operations, disk_service_time]
       engine:
         batching:
           batch_timeout: 10ms

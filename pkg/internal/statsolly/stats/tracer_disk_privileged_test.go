@@ -6,6 +6,7 @@
 package stats
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"maps"
@@ -35,6 +36,9 @@ const (
 	loopBackingFileSize = 64 << 20
 	directIOBlockSize   = 64 << 10
 	directIOBlocks      = 256
+
+	// how TestDiskWriterProcess writes: "<O_DIRECT> <path> <blocks>"
+	envDiskWriter = "OBI_TEST_DISK_WRITER"
 )
 
 // TestDiskLatencyIsAccumulatedPerDevice drives O_DIRECT, sequential I/O at queue depth 1 on a loop
@@ -42,7 +46,7 @@ const (
 // one sample per request, in the buckets of the bounds that userspace gives it.
 func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	devPath := attachLoopDevice(t, t.TempDir())
-	reader := attachDiskReader(t)
+	reader := attachDiskReader(t, export.FeatureStatsDiskServiceDuration, false)
 
 	f, err := os.OpenFile(devPath, os.O_RDWR|unix.O_DIRECT, 0)
 	require.NoError(t, err)
@@ -61,7 +65,9 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 	misses := float64(diskProgramMisses(t))
 	for _, op := range []ebpf.DiskOpCode{ebpf.CodeDiskOpWrite, ebpf.CodeDiskOpRead} {
 		latency := deviceLatency(stats, filepath.Base(devPath), op)
-		assert.InDelta(t, directIOBlocks, requests(latency), misses, "one sample per request of op %d", op)
+		assert.InDelta(t, directIOBlocks, latency.Count(), misses, "one sample per request of op %d", op)
+		assert.InDelta(t, directIOBlocks*directIOBlockSize, deviceBytes(stats, filepath.Base(devPath), op),
+			misses*directIOBlockSize, "the bytes of op %d", op)
 		assert.Positive(t, latency.Sum)
 		// without the bounds, the kernel would put every request above the last one
 		assert.Zero(t, latency.BucketCounts[len(export.DiskLatencyBounds)], "no request takes longer than the last bound")
@@ -80,13 +86,13 @@ func TestDiskRequestsAreTimedFromTheirIssue(t *testing.T) {
 		// the time the loop device needs to serve the writes ahead of it, well within the hold
 		hold = time.Second
 	)
-	mountPoint := mountExt4(t)
+	mountPoint, _ := mountExt4(t)
 	devPath := attachLoopDevice(t, mountPoint)
 	device := filepath.Base(devPath)
 	useScheduler(t, device, "mq-deadline")
 	tags, err := strconv.Atoi(readSysFile(t, filepath.Join("/sys/block", device, "mq", "0", "nr_tags")))
 	require.NoError(t, err)
-	reader := attachDiskReader(t)
+	reader := attachDiskReader(t, export.FeatureStatsDiskServiceDuration, false)
 
 	thaw := freeze(t, mountPoint)
 	before := readKernelDiskStats(t, device)
@@ -100,7 +106,7 @@ func TestDiskRequestsAreTimedFromTheirIssue(t *testing.T) {
 	latency := deviceLatency(reader.readStats(), device, ebpf.CodeDiskOpWrite)
 	misses := float64(diskProgramMisses(t))
 	require.Equal(t, uint64(tags+held), after.writes-before.writes)
-	require.InDelta(t, tags+held, requests(latency), misses)
+	require.InDelta(t, tags+held, latency.Count(), misses)
 	leftOut := (after.writeTime - before.writeTime).Seconds() - latency.Sum
 	assert.Greater(t, leftOut, 0.9*held*hold.Seconds(), "OBI leaves the wait of the held writes out")
 	// the writes in flight wait out the hold, so only the held ones can be timed within it
@@ -116,7 +122,7 @@ func TestDiskFailedRequestsAreNamedAfterTheirErrno(t *testing.T) {
 	require.NoError(t, unix.Mount("tmpfs", tmpfs, "tmpfs", 0, fmt.Sprintf("size=%d", fitting*directIOBlockSize)))
 	t.Cleanup(func() { _ = unix.Unmount(tmpfs, unix.MNT_DETACH) })
 	devPath := attachLoopDevice(t, tmpfs)
-	reader := attachDiskReader(t)
+	reader := attachDiskReader(t, export.FeatureStatsDiskServiceDuration, false)
 
 	f, err := os.OpenFile(devPath, os.O_WRONLY|unix.O_DIRECT, 0)
 	require.NoError(t, err)
@@ -136,7 +142,7 @@ func TestDiskFailedRequestsAreNamedAfterTheirErrno(t *testing.T) {
 	measured := map[string]uint64{}
 	for _, stat := range reader.readStats() {
 		if stat.DiskIO.Device == filepath.Base(devPath) && stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
-			measured[stat.DiskIO.ErrorType] += requests(stat.DiskIO.Latency)
+			measured[stat.DiskIO.ErrorType] += stat.DiskIO.Latency.Count()
 		}
 	}
 	misses := float64(diskProgramMisses(t))
@@ -144,6 +150,39 @@ func TestDiskFailedRequestsAreNamedAfterTheirErrno(t *testing.T) {
 	for errorType, writes := range written {
 		assert.InDelta(t, writes, measured[errorType], misses, "writes with error type %q", errorType)
 	}
+}
+
+// TestDiskIdleEntriesAreDeleted checks that the reader deletes the kernel's entry of a device that
+// stays idle, and that the I/O that creates it again is counted from zero
+func TestDiskIdleEntriesAreDeleted(t *testing.T) {
+	devPath := attachLoopDevice(t, t.TempDir())
+	device := filepath.Base(devPath)
+	major, minor := deviceNumbers(t, device)
+	reader := attachDiskReader(t, export.FeatureStatsDiskServiceDuration, false)
+	reader.idleReadsBeforeDelete = 1
+	_, err := reader.accum.lookupAndDelete(ebpf.StatsDiskIoKeyT{})
+	t.Logf("the kernel looks up and deletes the entries at once: %t (%v)", errors.Is(err, ciliumebpf.ErrKeyNotExist), err)
+
+	f, err := os.OpenFile(devPath, os.O_WRONLY|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	block := alignedBuffer(t)
+	write := func(blocks int) ebpf.LatencyHistogram {
+		for i := range blocks {
+			_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+			require.NoError(t, err)
+		}
+		return deviceLatency(reader.readStats(), device, ebpf.CodeDiskOpWrite)
+	}
+
+	assert.InDelta(t, directIOBlocks, write(directIOBlocks).Count(), float64(diskProgramMisses(t)))
+	reader.readStats()
+	entries, err := reader.accum.read()
+	require.NoError(t, err)
+	for key := range entries {
+		assert.False(t, key.Major == major && key.Minor == minor, "the entries of the idle device are deleted")
+	}
+	assert.InDelta(t, directIOBlocks/4, write(directIOBlocks/4).Count(), float64(diskProgramMisses(t)))
 }
 
 // TestDiskStackedDevicesInSysfs checks what OBI reads in sysfs of a loop device, and of a device
@@ -158,10 +197,10 @@ func TestDiskStackedDevicesInSysfs(t *testing.T) {
 	assert.Equal(t, blockDevice{name: dm, volumeName: volume, stacked: true}, devices.device(deviceNumbers(t, dm)))
 }
 
-// TestDiskMultipathPathsReportNothing writes to a dm-multipath volume over a loop device, its only
-// path, as multipathd sets one up over a LUN: the volume reports the writes, and the path, which
-// serves the same requests, reports nothing
-func TestDiskMultipathPathsReportNothing(t *testing.T) {
+// TestDiskMultipathPathsAreMarked writes to a dm-multipath volume over a loop device, its only path,
+// as multipathd sets one up over a LUN: the volume and the path report the writes, and the path is
+// marked, so that the histogram exporters leave it out
+func TestDiskMultipathPathsAreMarked(t *testing.T) {
 	if out, err := exec.Command("modprobe", "-a", "dm_multipath", "dm_round_robin").CombinedOutput(); err != nil {
 		t.Skipf("needs dm-multipath: %v: %s", err, out)
 	}
@@ -174,7 +213,7 @@ func TestDiskMultipathPathsReportNothing(t *testing.T) {
 	if !exists(filepath.Join("/sys/block", dm, "mq")) {
 		t.Skipf("the multipath volume %s is not request-based on this kernel", dm)
 	}
-	reader := attachDiskReader(t)
+	reader := attachDiskReader(t, export.FeatureStatsDiskServiceDuration, false)
 
 	f, err := os.OpenFile(deviceNode(t, dm), os.O_WRONLY|unix.O_DIRECT, 0)
 	require.NoError(t, err)
@@ -185,26 +224,196 @@ func TestDiskMultipathPathsReportNothing(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	var written *ebpf.DiskIO
+	written := map[string]*ebpf.DiskIO{}
 	for _, stat := range reader.readStats() {
-		assert.NotEqual(t, filepath.Base(loopPath), stat.DiskIO.Device, "the path reports nothing")
-		if stat.DiskIO.Device == dm && stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
-			written = stat.DiskIO
+		if stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
+			written[stat.DiskIO.Device] = stat.DiskIO
 		}
 	}
-	require.NotNil(t, written)
-	assert.Equal(t, volume, written.VolumeName)
-	assert.False(t, written.Stacked, "its path reports nothing")
-	assert.InDelta(t, directIOBlocks, requests(written.Latency), float64(diskProgramMisses(t)))
+	misses := float64(diskProgramMisses(t))
+	require.Contains(t, written, dm)
+	assert.Equal(t, volume, written[dm].VolumeName)
+	assert.False(t, written[dm].Stacked, "its path doesn't report its histogram")
+	assert.False(t, written[dm].MultipathPath)
+	assert.InDelta(t, directIOBlocks, written[dm].Latency.Count(), misses)
+	path := filepath.Base(loopPath)
+	require.Contains(t, written, path)
+	assert.True(t, written[path].MultipathPath)
+	assert.InDelta(t, directIOBlocks, written[path].Latency.Count(), misses)
 }
 
-func attachDiskReader(t *testing.T) *diskReader {
+// TestDiskServiceTimeOfAKnownLatency writes and reads, one request at a time, a null_blk device that
+// completes each request a known delay after it receives it: the service time counts that delay for
+// each request, and the requests never overlap
+func TestDiskServiceTimeOfAKnownLatency(t *testing.T) {
+	const (
+		delay  = 2 * time.Millisecond
+		blocks = 50
+	)
+	device := slowNullBlockDevice(t, delay)
+	reader := attachDiskReader(t, export.FeatureStatsDiskServiceDuration, false)
+
+	f, err := os.OpenFile(device, os.O_RDWR|unix.O_DIRECT, 0)
+	require.NoError(t, err)
+	defer f.Close()
+	block := alignedBuffer(t)
+	start := time.Now()
+	for i := range blocks {
+		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+		_, err = f.ReadAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+	}
+	elapsed := time.Since(start)
+
+	var requests uint64
+	var serviceTime float64
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device == filepath.Base(device) {
+			requests += stat.DiskIO.Latency.Count()
+			serviceTime += stat.DiskIO.Latency.Sum
+		}
+	}
+	require.InDelta(t, 2*blocks, requests, float64(diskProgramMisses(t)))
+	assert.GreaterOrEqual(t, serviceTime/float64(requests), delay.Seconds(), "the device completes each request after the delay")
+	assert.LessOrEqual(t, serviceTime, elapsed.Seconds(), "one request at a time: they never overlap")
+}
+
+// TestDiskIOIsChargedPerCgroup writes to a loop device from processes in the cgroups of three
+// containers, the third in a child cgroup of its scope, as crun runs them on cgroup v2: each
+// container is charged its own writes
+func TestDiskIOIsChargedPerCgroup(t *testing.T) {
+	root := ioCgroupRoot(t)
+	// a counter alone loads the disk probes
+	reader := attachDiskReader(t, export.FeatureStatsDiskOperations, true)
+	devPath := attachLoopDevice(t, t.TempDir())
+	systemd, cgroupfs, crun := strings.Repeat("a1", 32), strings.Repeat("b2", 32), strings.Repeat("c3", 32)
+	written := map[string]int{systemd: 64, cgroupfs: 32, crun: 16}
+	runInCgroup(t, filepath.Join(root, "docker-"+systemd+".scope"), true, devPath, written[systemd])
+	runInCgroup(t, filepath.Join(root, cgroupfs), true, devPath, written[cgroupfs])
+	scope := filepath.Join(root, "libpod-"+crun+".scope")
+	require.NoError(t, os.Mkdir(scope, 0o755))
+	t.Cleanup(func() { _ = os.Remove(scope) })
+	if subtreeControl := filepath.Join(scope, "cgroup.subtree_control"); exists(subtreeControl) {
+		require.NoError(t, os.WriteFile(subtreeControl, []byte("+io"), 0o644))
+	}
+	runInCgroup(t, filepath.Join(scope, "container"), true, devPath, written[crun])
+
+	charged := map[string]uint64{}
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device == filepath.Base(devPath) && stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
+			charged[stat.DiskIO.ContainerID] += stat.DiskIO.Latency.Count()
+		}
+	}
+	misses := float64(diskProgramMisses(t))
+	require.Len(t, charged, len(written), "%v", charged)
+	for containerID, blocks := range written {
+		assert.InDelta(t, blocks, charged[containerID], misses, containerID)
+	}
+}
+
+// TestDiskBufferedWritesAreChargedToTheirCgroup writes a file through the page cache from a process
+// in the cgroup of a container. Kernel threads write the pages back, but cgroup v2 charges that I/O
+// to the cgroup that dirtied them: only the journal and metadata of the filesystem are charged to
+// no container.
+func TestDiskBufferedWritesAreChargedToTheirCgroup(t *testing.T) {
+	const writtenBlocks = 256
+	controllers, err := os.ReadFile("/sys/fs/cgroup/cgroup.controllers")
+	if err != nil || !slices.Contains(strings.Fields(string(controllers)), "io") ||
+		!slices.Contains(strings.Fields(string(controllers)), "memory") {
+		t.Skip("the writeback of a cgroup is charged to it with the cgroup v2 io and memory controllers")
+	}
+	require.NoError(t, os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+io +memory"), 0o644))
+	mountPoint, device := mountExt4(t)
+	reader := attachDiskReader(t, export.FeatureStatsDiskIO, true)
+
+	containerID := strings.Repeat("d4", 32)
+	runInCgroup(t, filepath.Join("/sys/fs/cgroup", "docker-"+containerID+".scope"), false,
+		filepath.Join(mountPoint, "written"), writtenBlocks)
+
+	charged := map[string]uint64{}
+	for _, stat := range reader.readStats() {
+		if stat.DiskIO.Device == device && stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
+			charged[stat.DiskIO.ContainerID] += stat.DiskIO.Bytes
+		}
+	}
+	assert.GreaterOrEqual(t, charged[containerID], uint64(writtenBlocks*directIOBlockSize), "the file is charged to the container")
+	assert.GreaterOrEqual(t, float64(charged[containerID]), 0.9*float64(charged[containerID]+charged[""]),
+		"the rest is the filesystem's own I/O")
+	delete(charged, containerID)
+	delete(charged, "")
+	assert.Empty(t, charged, "no other container is charged")
+}
+
+// TestDiskWriterProcess is not a test: runInCgroup runs it as a child process in a cgroup, where it
+// writes blocks to a file, with O_DIRECT or through the page cache, and syncs it
+func TestDiskWriterProcess(t *testing.T) {
+	var direct bool
+	var path string
+	var blocks int
+	if _, err := fmt.Sscan(os.Getenv(envDiskWriter), &direct, &path, &blocks); err != nil {
+		t.Skip("only runs as a child process of runInCgroup")
+	}
+	// the parent writes a line once it moved the process to the cgroup
+	_, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	require.NoError(t, err)
+
+	flags, block := os.O_WRONLY|os.O_CREATE, make([]byte, directIOBlockSize)
+	if direct {
+		flags, block = os.O_WRONLY|unix.O_DIRECT, alignedBuffer(t)
+	}
+	f, err := os.OpenFile(path, flags, 0o644)
+	require.NoError(t, err)
+	defer f.Close()
+	for i := range blocks {
+		_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+		require.NoError(t, err)
+	}
+	require.NoError(t, f.Sync())
+}
+
+// runInCgroup creates a cgroup and runs TestDiskWriterProcess in it, with its arguments
+func runInCgroup(t *testing.T, cgroup string, direct bool, path string, blocks int) {
 	t.Helper()
-	features := export.FeatureStatsDiskServiceDuration
-	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{})
+	require.NoError(t, os.Mkdir(cgroup, 0o755))
+	t.Cleanup(func() { _ = os.Remove(cgroup) })
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestDiskWriterProcess$")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%t %s %d", envDiskWriter, direct, path, blocks))
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	start, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	require.NoError(t, os.WriteFile(filepath.Join(cgroup, "cgroup.procs"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644))
+	_, err = start.Write([]byte("start\n"))
+	require.NoError(t, err)
+	require.NoError(t, cmd.Wait())
+}
+
+// ioCgroupRoot returns the root of the cgroup v2 hierarchy with the io controller enabled for its
+// children, or else of the cgroup v1 blkio hierarchy
+func ioCgroupRoot(t *testing.T) string {
+	t.Helper()
+	if controllers, err := os.ReadFile("/sys/fs/cgroup/cgroup.controllers"); err == nil {
+		if !slices.Contains(strings.Fields(string(controllers)), "io") {
+			t.Skip("the cgroup v2 io controller is not available")
+		}
+		require.NoError(t, os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+io"), 0o644))
+		return "/sys/fs/cgroup"
+	}
+	if !exists("/sys/fs/cgroup/blkio/cgroup.procs") {
+		t.Skip("no io or blkio cgroup controller")
+	}
+	return "/sys/fs/cgroup/blkio"
+}
+
+func attachDiskReader(t *testing.T, features export.Features, readsCgroup bool) *diskReader {
+	t.Helper()
+	fetcher, err := ebpf.NewStatsFetcher(&config.EBPFTracer{}, &features, &attributes.SelectorConfig{}, readsCgroup)
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
-	reader := NewDiskMapTracer(fetcher.DiskIOAccumMap(), fetcher.DiskStatusIsBlkStatus(), &config.EBPFTracer{}).reader
+	reader := NewDiskMapTracer(fetcher.DiskIOAccumMap(), fetcher.DiskCgroupNamesMap(), fetcher.DiskStatusIsBlkStatus(),
+		&config.EBPFTracer{}).reader
 	// forget the I/O that happened before
 	reader.readStats()
 	return reader
@@ -233,6 +442,16 @@ func diskProgramMisses(t *testing.T) uint64 {
 	return misses
 }
 
+func deviceBytes(stats []*ebpf.Stat, device string, op ebpf.DiskOpCode) uint64 {
+	var bytes uint64
+	for _, stat := range stats {
+		if stat.DiskIO.Device == device && stat.DiskIO.Op == op {
+			bytes += stat.DiskIO.Bytes
+		}
+	}
+	return bytes
+}
+
 func deviceLatency(stats []*ebpf.Stat, device string, op ebpf.DiskOpCode) ebpf.LatencyHistogram {
 	for _, stat := range stats {
 		if stat.DiskIO.Device == device && stat.DiskIO.Op == op {
@@ -240,14 +459,6 @@ func deviceLatency(stats []*ebpf.Stat, device string, op ebpf.DiskOpCode) ebpf.L
 		}
 	}
 	return ebpf.LatencyHistogram{BucketCounts: make([]uint64, len(export.DiskLatencyBounds)+1)}
-}
-
-func requests(latency ebpf.LatencyHistogram) uint64 {
-	var count uint64
-	for _, bucketCount := range latency.BucketCounts {
-		count += bucketCount
-	}
-	return count
 }
 
 func requestsWithin(latency ebpf.LatencyHistogram, seconds float64) uint64 {
@@ -332,7 +543,43 @@ func deviceNode(t *testing.T, name string) string {
 	return node
 }
 
-func mountExt4(t *testing.T) string {
+// slowNullBlockDevice creates a null_blk device that completes each request after the given delay,
+// and returns the path of its node. It skips the test if null_blk can't be configured.
+func slowNullBlockDevice(t *testing.T, delay time.Duration) string {
+	t.Helper()
+	_ = exec.Command("modprobe", "null_blk", "nr_devices=0").Run()
+	dir := filepath.Join("/sys/kernel/config/nullb", fmt.Sprintf("obi-test-%d", os.Getpid()))
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Skipf("null_blk can't be configured through configfs: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.WriteFile(filepath.Join(dir, "power"), []byte("0"), 0o644)
+		_ = os.Remove(dir)
+	})
+	for name, value := range map[string]string{
+		"irqmode":         "2", // complete the requests from a timer
+		"completion_nsec": strconv.FormatInt(delay.Nanoseconds(), 10),
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(value), 0o644), name)
+	}
+	// null_blk names the device nullb<index> on older kernels, and after the configfs directory on
+	// newer ones: take the block device that appears when it's powered on
+	before, err := os.ReadDir("/sys/class/block")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "power"), []byte("1"), 0o644))
+	after, err := os.ReadDir("/sys/class/block")
+	require.NoError(t, err)
+	for _, entry := range after {
+		if !slices.ContainsFunc(before, func(existing os.DirEntry) bool { return existing.Name() == entry.Name() }) {
+			return deviceNode(t, entry.Name())
+		}
+	}
+	require.FailNow(t, "no block device appeared when powering on the null_blk device")
+	return ""
+}
+
+// mountExt4 mounts a new ext4 filesystem on a loop device, and returns its mount point and its device
+func mountExt4(t *testing.T) (mountPoint, device string) {
 	t.Helper()
 	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
 		t.Skip("needs mkfs.ext4")
@@ -340,10 +587,10 @@ func mountExt4(t *testing.T) string {
 	fsDev := attachLoopDevice(t, t.TempDir())
 	out, err := exec.Command("mkfs.ext4", "-q", "-F", "-E", "lazy_itable_init=0,lazy_journal_init=0", fsDev).CombinedOutput()
 	require.NoError(t, err, "mkfs.ext4: %s", out)
-	mountPoint := t.TempDir()
+	mountPoint = t.TempDir()
 	require.NoError(t, unix.Mount(fsDev, mountPoint, "ext4", 0, ""))
 	t.Cleanup(func() { _ = unix.Unmount(mountPoint, 0) })
-	return mountPoint
+	return mountPoint, filepath.Base(fsDev)
 }
 
 // from include/uapi/linux/fs.h

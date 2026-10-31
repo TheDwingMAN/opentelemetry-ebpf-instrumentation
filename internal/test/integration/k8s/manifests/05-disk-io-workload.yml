@@ -1,0 +1,28 @@
+# A workload whose block I/O is charged to its container
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: disk-io
+  labels:
+    app: disk-io
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: disk-io
+  template:
+    metadata:
+      labels:
+        app: disk-io
+    spec:
+      volumes:
+        # emptyDir is on the node's disk, so the O_DIRECT I/O reaches a block device
+        - name: data
+          emptyDir: {}
+      containers:
+        - name: writer
+          image: go-disk-io:dev
+          imagePullPolicy: Never # loaded into Kind from localhost
+          volumeMounts:
+            - mountPath: /data
+              name: data

@@ -27,7 +27,7 @@ Attributes of OBI's block I/O (disk) statistics that the semantic conventions do
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
-| `obi.disk.stacked` | boolean | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID and loop devices are. A dm-multipath device is not, as its paths report nothing. To count the I/O once, add up the devices where it is `false`. | true |
+| `obi.disk.stacked` | boolean | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID and loop devices are. A dm-multipath device is not, as its paths don't report its latency histogram. To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, without `obi.disk.volume.name`. | true |
 | `obi.disk.volume.name` | string | development | Device mapper name of the block device (`system.device`), as `/dev/mapper` lists it. Absent for the other devices. | mpatha |
 
 ## `registry.obi.exception`
@@ -94,7 +94,7 @@ Kubernetes metadata OBI's k8s decorator (pkg/transform/k8s.go) attaches to the r
 
 | Attribute | Type | Stability | Description | Examples |
 | --- | --- | --- | --- | --- |
-| `k8s.kind` | string | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). Deliberately never `Pod`, to bound label cardinality. | Deployment; StatefulSet |
+| `k8s.kind` | string | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
 | `k8s.owner.name` | string | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 
 ## `registry.obi.network`
