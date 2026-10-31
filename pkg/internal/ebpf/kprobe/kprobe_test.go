@@ -93,7 +93,7 @@ func TestAttach(t *testing.T) {
 }
 
 func TestTraceFSRetrySyscallPrefix(t *testing.T) {
-	require.NotEmpty(t, syscallPrefix(), "OBI supports amd64 and arm64")
+	require.NotEmpty(t, SyscallPrefix(), "OBI supports amd64 and arm64")
 	for _, ret := range []bool{false, true} {
 		for _, firstErr := range []error{unix.ENOENT, unix.EINVAL, unix.EACCES, unix.EPERM} {
 			t.Run(fmt.Sprintf("%s/return=%t", firstErr, ret), func(t *testing.T) {
@@ -113,7 +113,7 @@ func TestTraceFSRetrySyscallPrefix(t *testing.T) {
 				if errors.Is(firstErr, unix.ENOENT) || errors.Is(firstErr, unix.EINVAL) {
 					require.NoError(t, err)
 					assert.Same(t, want, got)
-					assert.Equal(t, []string{"sys_connect", syscallPrefix() + "sys_connect"}, targets)
+					assert.Equal(t, []string{"sys_connect", SyscallPrefix() + "sys_connect"}, targets)
 				} else {
 					require.ErrorIs(t, err, firstErr)
 					assert.Nil(t, got)

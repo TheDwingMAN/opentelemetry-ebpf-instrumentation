@@ -76,12 +76,20 @@ const (
 	FeatureStatsDiskIO
 	FeatureStatsDiskOperations
 	FeatureStatsDiskServiceTime
+	// The file sync stat features are in neither `stats` nor `all`, as their probes fire on every
+	// file sync
+	FeatureStatsFsSyncDuration
+	FeatureStatsFsSyncOperations
+	FeatureStatsFsSyncTime
 	// FeatureAll preserves the legacy all-features behavior while keeping connection info opt-in.
-	FeatureAll = Features(^uint(0)) &^ (FeatureConnectionInfo | FeatureStatsDisk)
+	FeatureAll = Features(^uint(0)) &^ (FeatureConnectionInfo | FeatureStatsDisk | FeatureStatsFsSync)
 )
 
 // FeatureStatsDisk groups the disk stat features, which the same probes measure
 const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations | FeatureStatsDiskServiceTime
+
+// FeatureStatsFsSync groups the file sync stat features, which the same probes measure
+const FeatureStatsFsSync = FeatureStatsFsSyncDuration | FeatureStatsFsSyncOperations | FeatureStatsFsSyncTime
 
 // FeatureStats enables all TCP stat metrics, including TCP IO.
 // Note: FeatureStatsTCPIo fires on every tcp_sendmsg and tcp_cleanup_rbuf call — significantly
@@ -121,6 +129,9 @@ var v2OnlyFeatures = map[string]Features{
 	"stats_disk_io":               FeatureStatsDiskIO,
 	"stats_disk_operations":       FeatureStatsDiskOperations,
 	"stats_disk_service_time":     FeatureStatsDiskServiceTime,
+	"stats_fs_sync_duration":      FeatureStatsFsSyncDuration,
+	"stats_fs_sync_operations":    FeatureStatsFsSyncOperations,
+	"stats_fs_sync_time":          FeatureStatsFsSyncTime,
 }
 
 // deprecatedFeatures maps each deprecated feature name to the feature that supersedes it.
@@ -453,7 +464,7 @@ func (f Features) NetworkFlowPackets() bool {
 }
 
 func (f Features) StatMetrics() bool {
-	return f.any(FeatureStats | FeatureStatsDisk)
+	return f.any(FeatureStats | FeatureStatsDisk | FeatureStatsFsSync)
 }
 
 func (f Features) StatsTCPRtt() bool {
@@ -494,6 +505,22 @@ func (f Features) StatsDiskServiceTime() bool {
 
 func (f Features) StatsDisk() bool {
 	return f.any(FeatureStatsDisk)
+}
+
+func (f Features) StatsFsSyncDuration() bool {
+	return f.any(FeatureStatsFsSyncDuration)
+}
+
+func (f Features) StatsFsSyncOperations() bool {
+	return f.any(FeatureStatsFsSyncOperations)
+}
+
+func (f Features) StatsFsSyncTime() bool {
+	return f.any(FeatureStatsFsSyncTime)
+}
+
+func (f Features) StatsFsSync() bool {
+	return f.any(FeatureStatsFsSync)
 }
 
 func (f Features) NetworkInterZone() bool {

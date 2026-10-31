@@ -73,7 +73,7 @@ type Stats struct {
 
 	// stat metrics
 	rbTracer *stats.RingBufTracer
-	// nil unless the disk stats are enabled
+	// nil unless the disk or file sync probes are attached
 	diskTracer *stats.DiskMapTracer
 
 	// focuses on TCP/UDP stack internals (kprobes/tracepoints)
@@ -87,6 +87,7 @@ type ebpFetcher interface {
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
 	DiskIOAccumMap() *ciliumebpf.Map
+	FsSyncAccumMap() *ciliumebpf.Map
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
 }
@@ -116,13 +117,12 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating attr selector: %w", err)
 	}
-	if perPod := perPodHistogramAttributes(cfg.Metrics.Features, attrSel); len(perPod) > 0 {
-		alog.Warn("the disk latency histogram is reported per pod or container, at a series per bucket for each: "+
-			"the operations and service time counters give their mean service time at a series each",
-			"metric", attributes.StatDiskServiceDuration.OTEL, "attributes", perPod)
+	for metric, perPod := range perPodHistograms(cfg.Metrics.Features, attrSel) {
+		alog.Warn("a latency histogram is reported per pod or container, at a series per bucket for each: "+
+			"its operations and time counters give the mean at a series each", "metric", metric, "attributes", perPod)
 	}
-	readsCgroup := diskReadsCgroup(cfg.Metrics.Features, attrSel, cfg.Filters.Stats, ctxInfo.DynamicSelector != nil)
-	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, readsCgroup)
+	reads := cgroupReads(cfg.Metrics.Features, attrSel, cfg.Filters.Stats, ctxInfo.DynamicSelector != nil)
+	statsFetcher, err = newFetcher(&cfg.EBPF, &cfg.Metrics.Features, selectorCfg, reads)
 	if err != nil {
 		return nil, err
 	}
@@ -131,9 +131,9 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 }
 
 func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig,
-	diskReadsCgroup bool,
+	reads ebpf.CgroupReads,
 ) (ebpFetcher, error) {
-	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, diskReadsCgroup)
+	return ebpf.NewStatsFetcher(cfg, features, selectorCfg, reads)
 }
 
 // statsAgent is a private constructor with injectable dependencies, usable for tests
@@ -146,8 +146,9 @@ func statsAgent(
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
 	var diskTracer *stats.DiskMapTracer
-	if cfg.Metrics.Features.StatsDisk() {
-		diskTracer = stats.NewDiskMapTracer(statsFetcher.DiskIOAccumMap(), statsFetcher.DiskCgroupNamesMap(),
+	diskAccum, fsSyncAccum := statsFetcher.DiskIOAccumMap(), statsFetcher.FsSyncAccumMap()
+	if diskAccum != nil || fsSyncAccum != nil {
+		diskTracer = stats.NewDiskMapTracer(diskAccum, fsSyncAccum, statsFetcher.DiskCgroupNamesMap(),
 			statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
 	}
 

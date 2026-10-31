@@ -115,22 +115,30 @@ func diskIssueProgram(objects *StatsObjects, issueHasQueueArg bool) *ebpf.Progra
 	return objects.ObiStatsRawTpBlockRqIssue
 }
 
-// sizeDiskMaps gives the disk maps a single entry when the disk stats are disabled, as StatsObjects
-// creates them anyway, and the cgroup names one when the probes don't read the cgroups. Otherwise,
-// it gives the LRU map of the requests in flight room for twice the free entries that the CPUs can
-// keep for themselves: once those hold most of the map, a CPU that needs an entry evicts a request
-// in flight, until the fix of Linux 6.16 (and 6.12.39, 6.6.99).
-func sizeDiskMaps(spec *ebpf.CollectionSpec, enabled, readsCgroup bool, cpus int) {
-	if !enabled || !readsCgroup {
+// sizeStorageMaps gives the maps of a disabled storage feature a single entry, as StatsObjects
+// creates them anyway, and the cgroup names one when no probe reads the cgroups. Otherwise, it gives
+// the LRU maps of the requests and syncs in flight room for twice the free entries that the CPUs can
+// keep for themselves: once those hold most of a map, a CPU that needs an entry evicts one in
+// flight, until the fix of Linux 6.16 (and 6.12.39, 6.6.99).
+func sizeStorageMaps(spec *ebpf.CollectionSpec, storage export.Features, reads CgroupReads, cpus int) {
+	if readsCgroup := storage.StatsDisk() && reads.Disk || storage.StatsFsSync() && reads.FsSync; !readsCgroup {
 		spec.Maps["disk_cgroup_names"].MaxEntries = 1
 	}
-	inFlight := spec.Maps["disk_rq_start"]
-	if !enabled {
-		inFlight.MaxEntries = 1
-		spec.Maps["disk_io_accum"].MaxEntries = 1
-		return
+	for _, maps := range []struct {
+		enabled         bool
+		inFlight, accum string
+	}{
+		{enabled: storage.StatsDisk(), inFlight: "disk_rq_start", accum: "disk_io_accum"},
+		{enabled: storage.StatsFsSync(), inFlight: "fs_sync_start", accum: "fs_sync_accum"},
+	} {
+		inFlight := spec.Maps[maps.inFlight]
+		if !maps.enabled {
+			inFlight.MaxEntries = 1
+			spec.Maps[maps.accum].MaxEntries = 1
+			continue
+		}
+		inFlight.MaxEntries = max(inFlight.MaxEntries, uint32(2*lruLocalFreeTarget*cpus))
 	}
-	inFlight.MaxEntries = max(inFlight.MaxEntries, uint32(2*lruLocalFreeTarget*cpus))
 }
 
 func diskLatencyBoundsNs() [diskLatencyBuckets - 1]uint64 {

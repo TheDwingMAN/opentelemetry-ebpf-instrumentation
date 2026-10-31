@@ -23,6 +23,8 @@ func TestStatGetters_DiskIO(t *testing.T) {
 	failed := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "sda", Op: CodeDiskOpRead, ErrorType: "EIO"}}
 	read.CommonAttrs = pipe.CommonAttrs{Metadata: map[attr.Name]string{attr.K8sNamespaceName: "storage"}}
 	rtt := &Stat{Type: StatTypeTCPRtt, TCPRtt: &TCPRtt{}}
+	fsync := &Stat{Type: StatTypeFsSync, FsSync: &FsSync{Type: CodeFsSyncFsync}}
+	failedSync := &Stat{Type: StatTypeFsSync, FsSync: &FsSync{Type: CodeFsSyncSyncFileRange, ErrorType: "EIO", ContainerID: "4567cdef"}}
 	for _, tc := range []struct {
 		name attr.Name
 		stat *Stat
@@ -47,9 +49,17 @@ func TestStatGetters_DiskIO(t *testing.T) {
 		{name: attr.DiskVolumeName, stat: rtt},
 		{name: attr.DiskIODirection, stat: rtt, want: attribute.String("disk.io.direction", "")},
 		{name: attr.ErrorType, stat: rtt},
+		{name: attr.FsSyncType, stat: fsync, want: attribute.String("obi.fs.sync.type", "fsync")},
+		{name: attr.FsSyncType, stat: failedSync, want: attribute.String("obi.fs.sync.type", "sync_file_range")},
+		{name: attr.FsSyncType, stat: write, want: attribute.String("obi.fs.sync.type", "")},
+		{name: attr.ErrorType, stat: fsync},
+		{name: attr.ErrorType, stat: failedSync, want: attribute.String("error.type", "EIO")},
+		{name: attr.ContainerID, stat: fsync},
+		{name: attr.ContainerID, stat: failedSync, want: attribute.String("container.id", "4567cdef")},
+		{name: attr.K8sNamespaceName, stat: fsync},
 	} {
 		get, ok := StatGetters(tc.name)
 		require.True(t, ok)
-		assert.Equal(t, tc.want, get(tc.stat), "%s of %+v", tc.name, tc.stat.DiskIO)
+		assert.Equal(t, tc.want, get(tc.stat), "%s of %+v %+v", tc.name, tc.stat.DiskIO, tc.stat.FsSync)
 	}
 }

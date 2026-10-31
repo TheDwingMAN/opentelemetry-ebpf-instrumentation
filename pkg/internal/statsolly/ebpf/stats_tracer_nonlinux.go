@@ -15,7 +15,7 @@ import (
 
 type StatsFetcher struct{}
 
-func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig, _ bool) (*StatsFetcher, error) {
+func NewStatsFetcher(_ *config.EBPFTracer, _ *export.Features, _ *attributes.SelectorConfig, _ CgroupReads) (*StatsFetcher, error) {
 	return nil, nil
 }
 
@@ -33,6 +33,10 @@ func (m *StatsFetcher) DebugEventsMap() *ciliumebpf.Map {
 }
 
 func (m *StatsFetcher) DiskIOAccumMap() *ciliumebpf.Map {
+	return nil
+}
+
+func (m *StatsFetcher) FsSyncAccumMap() *ciliumebpf.Map {
 	return nil
 }
 
