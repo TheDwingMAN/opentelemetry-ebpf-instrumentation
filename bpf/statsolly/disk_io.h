@@ -50,3 +50,18 @@ static __always_inline bool disk_rq_final_completion(const u32 nr_bytes,
                                                      const u32 remaining_bytes) {
     return nr_bytes >= remaining_bytes;
 }
+
+// The status of the errnos that don't fit in a u8, like the kernel-internal ERESTARTSYS (512),
+// which userspace names _OTHER
+enum { k_status_other = 0xff };
+
+// block_rq_complete reports a negative int errno before Linux 5.16, and a blk_status_t since. The
+// status of a request is the blk_status_t, or the errno: 0 on success either way.
+static __always_inline u8 disk_status_code(const u64 raw_status, const bool is_blk_status) {
+    if (is_blk_status) {
+        return (u8)raw_status;
+    }
+    // the raw tracepoint argument holds the negative int zero-extended
+    const u32 errno_value = -(u32)raw_status;
+    return errno_value < k_status_other ? (u8)errno_value : k_status_other;
+}

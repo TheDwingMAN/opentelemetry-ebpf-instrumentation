@@ -17,6 +17,7 @@ import (
 func TestStatGetters_DiskIO(t *testing.T) {
 	write := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "nvme0n1", Op: CodeDiskOpWrite}}
 	read := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "dm-0", VolumeName: "vg0-data", Stacked: true, Op: CodeDiskOpRead}}
+	failed := &Stat{Type: StatTypeDiskIO, DiskIO: &DiskIO{Device: "sda", Op: CodeDiskOpRead, ErrorType: "EIO"}}
 	rtt := &Stat{Type: StatTypeTCPRtt, TCPRtt: &TCPRtt{}}
 	for _, tc := range []struct {
 		name attr.Name
@@ -30,10 +31,13 @@ func TestStatGetters_DiskIO(t *testing.T) {
 		{name: attr.DiskVolumeName, stat: read, want: attribute.String("obi.disk.volume.name", "vg0-data")},
 		{name: attr.DiskIODirection, stat: write, want: attribute.String("disk.io.direction", "write")},
 		{name: attr.DiskIODirection, stat: read, want: attribute.String("disk.io.direction", "read")},
+		{name: attr.ErrorType, stat: write},
+		{name: attr.ErrorType, stat: failed, want: attribute.String("error.type", "EIO")},
 		{name: attr.SystemDevice, stat: rtt, want: attribute.String("system.device", "")},
 		{name: attr.DiskStacked, stat: rtt, want: attribute.Bool("obi.disk.stacked", false)},
 		{name: attr.DiskVolumeName, stat: rtt},
 		{name: attr.DiskIODirection, stat: rtt, want: attribute.String("disk.io.direction", "")},
+		{name: attr.ErrorType, stat: rtt},
 	} {
 		get, ok := StatGetters(tc.name)
 		require.True(t, ok)

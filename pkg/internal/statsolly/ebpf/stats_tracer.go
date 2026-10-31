@@ -72,6 +72,8 @@ type StatsFetcher struct {
 	log       *slog.Logger
 	objects   *StatsObjects
 	closables []io.Closer
+
+	diskStatusIsBlkStatus bool
 }
 
 func tlog() *slog.Logger {
@@ -126,10 +128,10 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	}
 
 	diskEnabled := features.StatsDiskServiceDuration()
-	var issueHasQueueArg bool
+	var issueHasQueueArg, completeReportsBlkStatus bool
 	if diskEnabled {
-		if issueHasQueueArg, err = kernelBlockRqIssueHasQueueArg(); err != nil {
-			return nil, fmt.Errorf("reading the block_rq_issue prototype in the kernel BTF: %w", err)
+		if issueHasQueueArg, completeReportsBlkStatus, err = kernelBlockTracepoints(); err != nil {
+			return nil, fmt.Errorf("reading the block tracepoint prototypes in the kernel BTF: %w", err)
 		}
 	}
 	toDisable = append(toDisable, diskProgramsToDisable(diskEnabled, issueHasQueueArg)...)
@@ -146,9 +148,10 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 	sharedMaps := map[string]*ebpf.Map{}
 	var mu sync.Mutex
 	if err := ebpfconvenience.LoadSpec(spec, &objects, map[string]any{
-		"g_bpf_debug":             cfg.BpfDebug,
-		"stats_wakeup_data_bytes": uint32(cfg.StatsWakeupDataBytes),
-		"disk_latency_bounds_ns":  diskLatencyBoundsNs(),
+		"g_bpf_debug":               cfg.BpfDebug,
+		"stats_wakeup_data_bytes":   uint32(cfg.StatsWakeupDataBytes),
+		"disk_latency_bounds_ns":    diskLatencyBoundsNs(),
+		"disk_status_is_blk_status": completeReportsBlkStatus,
 	}, sharedMaps, &mu, "", nil); err != nil {
 		return nil, fmt.Errorf("loading stats eBPF spec: %w", err)
 	}
@@ -284,6 +287,8 @@ func NewStatsFetcher(cfg *config.EBPFTracer, features *export.Features, selector
 		log:       tlog,
 		objects:   &objects,
 		closables: closables,
+
+		diskStatusIsBlkStatus: completeReportsBlkStatus,
 	}, nil
 }
 
@@ -321,6 +326,12 @@ func (m *StatsFetcher) DebugEventsMap() *ebpf.Map {
 // DiskIOAccumMap returns the map where the kernel accumulates the block request durations
 func (m *StatsFetcher) DiskIOAccumMap() *ebpf.Map {
 	return m.objects.DiskIoAccum
+}
+
+// DiskStatusIsBlkStatus tells whether the statuses in the keys of DiskIOAccumMap are blk_status_t
+// values (Linux 5.16+) instead of errnos
+func (m *StatsFetcher) DiskStatusIsBlkStatus() bool {
+	return m.diskStatusIsBlkStatus
 }
 
 // fixupSpec replaces disabled programs with no-op stubs before loading,

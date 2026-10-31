@@ -128,8 +128,8 @@ type TCPIo struct {
 	Bytes     uint32 `json:"bytes"`
 }
 
-// DiskIO is the block I/O that completed on a device in one direction since the previous read of
-// the kernel map
+// DiskIO is the block I/O that completed on a device in one direction, with one outcome, since the
+// previous read of the kernel map
 type DiskIO struct {
 	Device string
 	// VolumeName is the device mapper name of Device, empty for other devices
@@ -138,6 +138,8 @@ type DiskIO struct {
 	Stacked bool
 	Op      DiskOpCode
 	Latency LatencyHistogram
+	// ErrorType names the errno that the requests failed with, and is empty for successful requests
+	ErrorType string
 }
 
 // LatencyHistogram counts requests in the buckets of export.DiskLatencyBounds
