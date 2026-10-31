@@ -66,8 +66,9 @@ func (m AccumMaps) Any() bool {
 	return m.Disk != nil || m.FsSync != nil || m.NFSProcedure != nil || m.NFSProcedureCgroup != nil || m.NFSIO != nil
 }
 
-// NewDiskMapTracer reads the accumulation maps that are not nil
-func NewDiskMapTracer(maps AccumMaps, statusIsBlkStatus bool, cfg *config.EBPFTracer) *DiskMapTracer {
+// NewDiskMapTracer reads the accumulation maps that are not nil. bioDevicesMeasured tells whether the
+// bio-based block devices are measured, which decides their multipath rules.
+func NewDiskMapTracer(maps AccumMaps, statusIsBlkStatus, bioDevicesMeasured bool, cfg *config.EBPFTracer) *DiskMapTracer {
 	interval := cfg.BatchTimeout
 	if interval <= 0 {
 		interval = defaultDiskReadInterval
@@ -76,7 +77,7 @@ func NewDiskMapTracer(maps AccumMaps, statusIsBlkStatus bool, cfg *config.EBPFTr
 	tracer := &DiskMapTracer{interval: interval}
 	if maps.Disk != nil {
 		reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: maps.Disk},
-			&blockDevices{sysRoot: "/sys", procRoot: "/proc"}, interval)
+			&blockDevices{sysRoot: "/sys", procRoot: "/proc", bioMeasured: bioDevicesMeasured}, interval)
 		reader.statusIsBlkStatus = statusIsBlkStatus
 		reader.containers = containers
 		tracer.readers = append(tracer.readers, reader.readStats)
@@ -381,7 +382,7 @@ func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.Stats
 			Bytes:      current.Bytes - previous.Bytes,
 
 			ContainerID:   r.containers.containerID(key.CgroupId),
-			MultipathPath: device.dmMultipathPath,
+			MultipathPath: device.multipathPath,
 		},
 	}
 }
@@ -469,14 +470,18 @@ type blockDevice struct {
 	name       string
 	volumeName string
 	stacked    bool
-	// the histograms of the paths of a dm-multipath device would multiply its series
-	dmMultipathPath bool
+	// the histograms of the paths of a measured multipath device, dm-multipath or an NVMe native
+	// multipath head, would multiply its series
+	multipathPath bool
 }
 
 type blockDevices struct {
 	sysRoot, procRoot string
-	cachedAt          time.Time
-	devices           map[devNum]blockDevice
+	// the bio-based devices are measured: a bio-based dm-multipath device and the heads of NVMe
+	// native multipath report the I/O of their paths
+	bioMeasured bool
+	cachedAt    time.Time
+	devices     map[devNum]blockDevice
 	// diskstats names the devices that /proc/diskstats lists, read once per cache period
 	diskstats map[devNum]string
 }
@@ -497,15 +502,16 @@ func (d *blockDevices) device(major, minor uint32) blockDevice {
 	devNumbers := fmt.Sprintf("%d:%d", major, minor)
 	dir := filepath.Join(d.sysRoot, "dev", "block", devNumbers)
 	device := blockDevice{
-		name:            ueventDevName(filepath.Join(dir, "uevent")),
-		volumeName:      deviceMapperName(dir),
-		stacked:         isStacked(dir),
-		dmMultipathPath: heldByDMMultipath(dir),
+		name:          ueventDevName(filepath.Join(dir, "uevent")),
+		volumeName:    deviceMapperName(dir),
+		stacked:       isStacked(dir, d.bioMeasured),
+		multipathPath: heldByDMMultipath(dir, d.bioMeasured),
 	}
 	if device.name == "" {
 		// sysfs doesn't link the hidden path devices of NVMe native multipath (nvmeXcYnZ) from
 		// /sys/dev/block, but /proc/diskstats lists them
 		device.name = d.diskstatsName(numbers)
+		device.multipathPath = d.bioMeasured && d.underNVMeHead(device.name)
 	}
 	if device.name == "" {
 		return blockDevice{name: devNumbers}
@@ -514,11 +520,18 @@ func (d *blockDevices) device(major, minor uint32) blockDevice {
 	return device
 }
 
+// underNVMeHead tells whether a hidden path device of NVMe native multipath has its head, which
+// reports the I/O of its paths when the bio-based devices are measured
+func (d *blockDevices) underNVMeHead(name string) bool {
+	head := nvmePathHead(name)
+	return head != "" && exists(filepath.Join(d.sysRoot, "block", head))
+}
+
 func (d *blockDevices) diskstatsName(numbers devNum) string {
 	if d.diskstats == nil {
 		d.diskstats = map[devNum]string{}
 		for _, stat := range procDiskstats(d.procRoot, d.sysRoot) {
-			// before Linux 6.1, the kernel lists all the hidden NVMe paths as 0:0
+			// before Linux 6.1, except on RHEL 9.6, the kernel lists all the hidden NVMe paths as 0:0
 			if stat.MajorNumber != 0 {
 				d.diskstats[devNum{major: stat.MajorNumber, minor: stat.MinorNumber}] = stat.DeviceName
 			}

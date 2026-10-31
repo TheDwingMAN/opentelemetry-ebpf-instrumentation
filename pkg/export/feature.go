@@ -153,6 +153,7 @@ var v2OnlyFeatures = map[string]Features{
 	"stats_disk_operations":               FeatureStatsDiskOperations,
 	"stats_disk_service_time":             FeatureStatsDiskServiceTime,
 	"stats_disk_flush_duration":           FeatureStatsDiskFlushDuration,
+	"stats_disk_bio_devices":              FeatureStatsDiskBioDevices,
 	"stats_fs_sync_duration":              FeatureStatsFsSyncDuration,
 	"stats_fs_sync_operations":            FeatureStatsFsSyncOperations,
 	"stats_fs_sync_time":                  FeatureStatsFsSyncTime,

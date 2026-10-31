@@ -242,6 +242,52 @@ func TestDiskMultipathPathsAreMarked(t *testing.T) {
 	assert.InDelta(t, directIOBlocks, written[path].Latency.Count(), misses)
 }
 
+// TestDiskBioDevicesAreMeasured writes to a device mapper volume over a loop device, which issues no
+// requests of its own: with the bio devices, the volume reports the writes from its bios, as the
+// loop device does from its requests; without them, nothing
+func TestDiskBioDevicesAreMeasured(t *testing.T) {
+	loopPath := attachLoopDevice(t, t.TempDir())
+	volume, dm := deviceMapperVolume(t, loopPath, "", "linear "+loopPath+" 0")
+	for _, bioMeasured := range []bool{true, false} {
+		t.Run(fmt.Sprintf("bio devices %t", bioMeasured), func(t *testing.T) {
+			features := export.FeatureStatsDiskServiceDuration
+			if bioMeasured {
+				features |= export.FeatureStatsDiskBioDevices
+			}
+			reader := attachDiskReader(t, features, false)
+
+			f, err := os.OpenFile(deviceNode(t, dm), os.O_WRONLY|unix.O_DIRECT, 0)
+			require.NoError(t, err)
+			defer f.Close()
+			block := alignedBuffer(t)
+			for i := range directIOBlocks {
+				_, err := f.WriteAt(block, int64(i*directIOBlockSize))
+				require.NoError(t, err)
+			}
+
+			written := map[string]*ebpf.DiskIO{}
+			for _, stat := range reader.readStats() {
+				if stat.DiskIO.Op == ebpf.CodeDiskOpWrite {
+					written[stat.DiskIO.Device] = stat.DiskIO
+				}
+			}
+			misses := float64(programMisses(t, "obi_stats_raw_tp_block_"))
+			loop := filepath.Base(loopPath)
+			require.Contains(t, written, loop)
+			assert.InDelta(t, directIOBlocks, written[loop].Latency.Count(), misses)
+			if !bioMeasured {
+				assert.NotContains(t, written, dm)
+				return
+			}
+			require.Contains(t, written, dm)
+			assert.Equal(t, volume, written[dm].VolumeName)
+			assert.True(t, written[dm].Stacked)
+			assert.InDelta(t, directIOBlocks, written[dm].Latency.Count(), misses, "one sample per bio")
+			assert.InDelta(t, directIOBlocks*directIOBlockSize, written[dm].Bytes, misses*directIOBlockSize)
+		})
+	}
+}
+
 // TestDiskServiceTimeOfAKnownLatency writes and reads, one request at a time, a null_blk device that
 // completes each request a known delay after it receives it: the service time counts that delay for
 // each request, and the requests never overlap
@@ -488,7 +534,7 @@ func attachDiskReader(t *testing.T, features export.Features, readsCgroup bool) 
 	require.NoError(t, err)
 	t.Cleanup(func() { fetcher.Close() })
 	reader := newDiskReader(ebpfAccum[ebpf.StatsDiskIoKeyT, ebpf.StatsDiskIoAccumT]{accum: fetcher.DiskIOAccumMap()},
-		&blockDevices{sysRoot: "/sys", procRoot: "/proc"}, defaultDiskReadInterval)
+		&blockDevices{sysRoot: "/sys", procRoot: "/proc", bioMeasured: fetcher.DiskBioDevicesMeasured()}, defaultDiskReadInterval)
 	reader.statusIsBlkStatus = fetcher.DiskStatusIsBlkStatus()
 	reader.containers = ebpfCgroupContainers(fetcher.DiskCgroupNamesMap())
 	// forget the I/O that happened before

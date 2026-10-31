@@ -24,7 +24,7 @@ func TestV2ToRuntimeNetworkCaptureAndStatsRoundTrip(t *testing.T) {
 		export.FeatureStatsTCPFailedConnections |
 		export.FeatureStatsTCPIo |
 		export.FeatureStatsTCPSuccessfulConnections |
-		export.FeatureStatsDiskMetrics |
+		export.FeatureStatsDisk |
 		export.FeatureStatsFsSync
 
 	cfg.NetworkFlows.Enable = true
@@ -104,7 +104,7 @@ func TestV2ToRuntimeNetworkCaptureAndStatsRoundTrip(t *testing.T) {
 	require.Equal(t, 83, got.Stats.ReverseDNS.CacheLen)
 	require.Equal(t, 84*time.Second, got.Stats.ReverseDNS.CacheTTL)
 	require.True(t, got.Stats.Print)
-	require.Equal(t, export.FeatureNetwork|export.FeatureStatsTCPFailedConnections|export.FeatureStatsTCPIo|export.FeatureStatsTCPSuccessfulConnections|export.FeatureStatsDiskMetrics|export.FeatureStatsFsSync, got.Metrics.Features)
+	require.Equal(t, export.FeatureNetwork|export.FeatureStatsTCPFailedConnections|export.FeatureStatsTCPIo|export.FeatureStatsTCPSuccessfulConnections|export.FeatureStatsDisk|export.FeatureStatsFsSync, got.Metrics.Features)
 }
 
 // The stats features replace every feature that capture.network.stats controls, the disk ones too

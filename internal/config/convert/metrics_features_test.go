@@ -26,6 +26,7 @@ func TestV2MetricFeatures(t *testing.T) {
 	features["stats_disk_operations"] = export.FeatureStatsDiskOperations
 	features["stats_disk_service_time"] = export.FeatureStatsDiskServiceTime
 	features["stats_disk_flush_duration"] = export.FeatureStatsDiskFlushDuration
+	features["stats_disk_bio_devices"] = export.FeatureStatsDiskBioDevices
 	features["stats_fs_sync_duration"] = export.FeatureStatsFsSyncDuration
 	features["stats_fs_sync_operations"] = export.FeatureStatsFsSyncOperations
 	features["stats_fs_sync_time"] = export.FeatureStatsFsSyncTime
@@ -181,8 +182,8 @@ func TestV2MetricFeaturesDiskStatsAreOptIn(t *testing.T) {
 version: '2.0'
 network:
   stats:
-    features: [disk_service_duration, disk_io, disk_operations, disk_service_time, disk_flush_duration, fs_sync_duration, fs_sync_operations, fs_sync_time,
-      nfs_client_procedure_duration, nfs_client_procedure_count, nfs_client_procedure_time, nfs_client_io]
+    features: [disk_service_duration, disk_io, disk_operations, disk_service_time, disk_flush_duration, disk_bio_devices, fs_sync_duration,
+      fs_sync_operations, fs_sync_time, nfs_client_procedure_duration, nfs_client_procedure_count, nfs_client_procedure_time, nfs_client_io]
 `
 	for _, test := range []struct {
 		name     string

@@ -421,6 +421,9 @@ func mustMapStatsFeatureDefaults(ex map[string]any) error {
 	if features.StatsDiskFlushDuration() {
 		want = append(want, "disk_flush_duration")
 	}
+	if features.StatsDiskBioDevices() {
+		want = append(want, "disk_bio_devices")
+	}
 	if features.StatsFsSyncDuration() {
 		want = append(want, "fs_sync_duration")
 	}

@@ -134,6 +134,7 @@ func TestFeatureStatsDisk(t *testing.T) {
 		{name: "stats_disk_operations", load: LoadV2Features, want: FeatureStatsDiskOperations},
 		{name: "stats_disk_service_time", load: LoadV2Features, want: FeatureStatsDiskServiceTime},
 		{name: "stats_disk_flush_duration", load: LoadV2Features, want: FeatureStatsDiskFlushDuration},
+		{name: "stats_disk_bio_devices", load: LoadV2Features, want: FeatureStatsDiskBioDevices},
 		{name: "disk_service_duration", load: LoadV2Features, wantErr: true},
 		{name: "stats_fs_sync_duration", load: LoadFeatures, wantErr: true},
 		{name: "stats_fs_sync_duration", load: LoadV2Features, want: FeatureStatsFsSyncDuration},
@@ -158,7 +159,7 @@ func TestFeatureStatsDisk(t *testing.T) {
 	assert.True(t, FeatureStatsFsSyncDuration.StatMetrics(), "each enables the stats pipeline on its own")
 	assert.True(t, FeatureStatsNFSClientProcedureDuration.StatMetrics(), "each enables the stats pipeline on its own")
 
-	features := FeatureAll | FeatureStatsDiskMetrics | FeatureStatsFsSync | FeatureStatsNFS
+	features := FeatureAll | FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFS
 	loaded, err := LoadV2Features(features.Names())
 	require.NoError(t, err)
 	assert.Equal(t, features, loaded, "Config v2 loads the names that it renders")

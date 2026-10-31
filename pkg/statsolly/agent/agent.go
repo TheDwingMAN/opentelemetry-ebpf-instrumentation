@@ -98,6 +98,7 @@ type ebpFetcher interface {
 	NFSIOAccumMap() *ciliumebpf.Map
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
+	DiskBioDevicesMeasured() bool
 	RefreshNFSProbes() bool
 }
 
@@ -186,7 +187,7 @@ func statsAgent(
 		CgroupNames:        statsFetcher.DiskCgroupNamesMap(),
 	}
 	if maps.Any() {
-		diskTracer = stats.NewDiskMapTracer(maps, statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
+		diskTracer = stats.NewDiskMapTracer(maps, statsFetcher.DiskStatusIsBlkStatus(), statsFetcher.DiskBioDevicesMeasured(), &cfg.EBPF)
 	}
 
 	return &Stats{
