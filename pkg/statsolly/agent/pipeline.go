@@ -5,6 +5,7 @@ package agent // import "go.opentelemetry.io/obi/pkg/statsolly/agent"
 
 import (
 	"context"
+	"sync"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	"go.opentelemetry.io/obi/pkg/export/otel"
@@ -22,6 +23,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/internal/statsolly/export"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
+	"go.opentelemetry.io/obi/pkg/pipe/swarm/swarms"
 	"go.opentelemetry.io/obi/pkg/selection"
 )
 
@@ -30,6 +32,10 @@ func statAttrs(s *ebpf.Stat) *pipe.CommonAttrs { return &s.CommonAttrs }
 // mockable functions for testing
 var newRingBufTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
 	return s.rbTracer.TraceLoop(out)
+}
+
+var newDiskTracer = func(s *Stats, out *msg.Queue[[]*ebpf.Stat]) swarm.RunFunc {
+	return s.diskTracer.TraceLoop(out)
 }
 
 // buildPipeline defines the different nodes in the OBI's StatsO11y module,
@@ -85,11 +91,26 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		statAttrs, dynamicDecoratedStats, dynamicFilteredStats),
 		swarm.WithID("DynamicPIDFilter"))
 
+	// the disk stats have no network endpoints, so they join the TCP stats after the nodes that use
+	// them, and before the attribute filter
+	statsToFilter := dynamicFilteredStats
+	if s.diskTracer != nil {
+		diskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "diskStats")
+		swi.Add(swarm.DirectInstance(newDiskTracer(s, diskStats)), swarm.WithID("DiskMapTracer"))
+
+		decoratedDiskStats := msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "decoratedDiskStats")
+		swi.Add(decorate.Decorate(s.agentIP, statAttrs, diskStats, decoratedDiskStats),
+			swarm.WithID("DiskStatsDecorator"))
+
+		statsToFilter = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "mergedStats")
+		swi.Add(mergeStats(statsToFilter, dynamicFilteredStats, decoratedDiskStats), swarm.WithID("StatsMerger"))
+	}
+
 	filteredStats := s.ctxInfo.OverrideStatsExportQueue
 	if filteredStats == nil {
 		filteredStats = msgh.QueueFromConfig[[]*ebpf.Stat](s.cfg, s.ctxInfo.Metrics, "filteredStats")
 	}
-	swi.Add(filter.ByAttribute(s.cfg.Filters.Stats, nil, selectorCfg.ExtraGroupAttributesCfg, ebpf.StatStringGetters, dynamicFilteredStats, filteredStats),
+	swi.Add(filter.ByAttribute(s.cfg.Filters.Stats, nil, selectorCfg.ExtraGroupAttributesCfg, ebpf.StatStringGetters, statsToFilter, filteredStats),
 		swarm.WithID("AttributeFilter"))
 
 	// Terminal nodes export the stats record information out of the pipeline: OTEL, Prom and printer.
@@ -111,4 +132,27 @@ func (s *Stats) buildPipeline(ctx context.Context) (*swarm.Runner, error) {
 		swarm.WithID("StatPrinter"))
 
 	return swi.Instance(ctx)
+}
+
+// mergeStats forwards the stats of all the inputs to the output, and closes the output once all the
+// inputs are closed
+func mergeStats(out *msg.Queue[[]*ebpf.Stat], inputs ...*msg.Queue[[]*ebpf.Stat]) swarm.InstanceFunc {
+	return func(_ context.Context) (swarm.RunFunc, error) {
+		subscriptions := make([]<-chan []*ebpf.Stat, 0, len(inputs))
+		for _, input := range inputs {
+			subscriptions = append(subscriptions, input.Subscribe(msg.SubscriberName("StatsMerger")))
+		}
+		return func(ctx context.Context) {
+			defer out.Close()
+			var wg sync.WaitGroup
+			for _, in := range subscriptions {
+				wg.Go(func() {
+					swarms.ForEachInput(ctx, in, nil, func(stats []*ebpf.Stat) {
+						out.SendCtx(ctx, stats)
+					})
+				})
+			}
+			wg.Wait()
+		}, nil
+	}
 }

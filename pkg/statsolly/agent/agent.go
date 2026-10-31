@@ -73,6 +73,8 @@ type Stats struct {
 
 	// stat metrics
 	rbTracer *stats.RingBufTracer
+	// nil unless the disk stats are enabled
+	diskTracer *stats.DiskMapTracer
 
 	// focuses on TCP/UDP stack internals (kprobes/tracepoints)
 	fetcher ebpFetcher
@@ -84,6 +86,7 @@ type ebpFetcher interface {
 	io.Closer
 	StatsEventsMap() *ciliumebpf.Map
 	DebugEventsMap() *ciliumebpf.Map
+	DiskIOAccumMap() *ciliumebpf.Map
 }
 
 func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
@@ -128,12 +131,18 @@ func statsAgent(
 ) (*Stats, error) {
 	rbTracer := stats.NewRingBufTracer(statsFetcher.StatsEventsMap(), &cfg.EBPF)
 
+	var diskTracer *stats.DiskMapTracer
+	if cfg.Metrics.Features.StatsDiskServiceDuration() {
+		diskTracer = stats.NewDiskMapTracer(statsFetcher.DiskIOAccumMap(), &cfg.EBPF)
+	}
+
 	return &Stats{
-		ctxInfo:  ctxInfo,
-		cfg:      cfg,
-		rbTracer: rbTracer,
-		agentIP:  agentIP,
-		fetcher:  statsFetcher,
+		ctxInfo:    ctxInfo,
+		cfg:        cfg,
+		rbTracer:   rbTracer,
+		diskTracer: diskTracer,
+		agentIP:    agentIP,
+		fetcher:    statsFetcher,
 	}, nil
 }
 

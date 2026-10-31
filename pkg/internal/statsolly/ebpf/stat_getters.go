@@ -5,6 +5,7 @@ package ebpf // import "go.opentelemetry.io/obi/pkg/internal/statsolly/ebpf"
 
 import (
 	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 
 	"go.opentelemetry.io/obi/pkg/export/attributes"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
@@ -71,6 +72,22 @@ func StatGetters(name attr.Name) (attributes.Getter[*Stat, attribute.KeyValue], 
 			}
 			return attribute.String(string(attr.NetworkIoDirection), networkIoDirectionStr(NetworkIoDirectionCode(direction)))
 		}
+	case attr.SystemDevice:
+		getter = func(s *Stat) attribute.KeyValue {
+			var device string
+			if s.DiskIO != nil {
+				device = s.DiskIO.Device
+			}
+			return attribute.String(string(attr.SystemDevice), device)
+		}
+	case attr.DiskIODirection:
+		getter = func(s *Stat) attribute.KeyValue {
+			var op DiskOpCode
+			if s.DiskIO != nil {
+				op = s.DiskIO.Op
+			}
+			return attribute.String(string(attr.DiskIODirection), diskIODirectionStr(op))
+		}
 
 	default:
 		getter = func(s *Stat) attribute.KeyValue { return attribute.String(string(name), s.CommonAttrs.Metadata[name]) }
@@ -121,6 +138,16 @@ func networkIoDirectionStr(d NetworkIoDirectionCode) string {
 		return string(DirectionTransmit)
 	case CodeDirectionReceive:
 		return string(DirectionReceive)
+	}
+	return ""
+}
+
+func diskIODirectionStr(op DiskOpCode) string {
+	switch op {
+	case CodeDiskOpRead:
+		return semconv.DiskIODirectionRead.Value.AsString()
+	case CodeDiskOpWrite:
+		return semconv.DiskIODirectionWrite.Value.AsString()
 	}
 	return ""
 }

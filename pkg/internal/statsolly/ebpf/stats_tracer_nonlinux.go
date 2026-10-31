@@ -31,3 +31,7 @@ func (m *StatsFetcher) StatsEventsMap() *ciliumebpf.Map {
 func (m *StatsFetcher) DebugEventsMap() *ciliumebpf.Map {
 	return nil
 }
+
+func (m *StatsFetcher) DiskIOAccumMap() *ciliumebpf.Map {
+	return nil
+}

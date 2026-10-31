@@ -129,7 +129,23 @@ To add a new metric, follow these guidelines:
 
 12. Register the metric in the schema registry: add the metric to the `metrics:` list in [schemas/obi/groups/stats/metrics.yaml](../schemas/obi/groups/stats/metrics.yaml).
 
+### Disk service duration
+
+`obi.stat.disk.service.duration`, enabled by the Config v2 stats feature `disk_service_duration`, is the service time of the block reads and writes, per whole disk (`system.device`: the I/O of a partition is its disk's) and direction (`disk.io.direction`). A raw tracepoint program records the last `block_rq_issue` of each request on OBI's clock, and its final `block_rq_complete` adds the duration to a histogram per device and direction in the kernel, which `DiskMapTracer` reads every `capture.engine.batching.batch_timeout`. A request is counted only when its final completion takes the record of its issue, so it is counted once, without its wait in the I/O scheduler. Writes include write-zeroes. Cache flushes, discards, zone appends, passthrough commands and the I/O of bio-based devices (LVM, dm-crypt, md RAID, NVMe native multipath heads) are not measured.
+
+The buckets are fixed, from 100 µs to 60 s (`DiskLatencyBounds` in [bucket.go](../pkg/export/bucket.go)), as the kernel buckets the durations. Both exporters export them as explicit histograms: exponential and native histograms don't apply.
+
 ### Known limitations
+
+#### Disk service duration
+
+- Only the requests whose issue OBI recorded are counted, so the counts are not those of `/proc/diskstats`. Missed are the requests in flight at startup or evicted from the in-flight map, those whose issue or completion program the kernel skipped as nested (the programs' `recursion_misses`), the rare ones whose in-flight record the kernel refused to delete because another map operation was running on the same CPU (3 in 8,192 on RHEL 8.9 under emulation), and the empty writes of file syncs, which the kernel completes with a cache flush without issuing them, so fsync-heavy workloads show fewer writes.
+- Failed requests are counted too, timed from their last issue: a command that times out lands in the top buckets only if its last attempt does.
+- The I/O of request-based stacked devices (loop, dm-multipath) is also reported by the devices below them, as in `/proc/diskstats`, and each path of a dm-multipath device has its own series. To add up a node's I/O, leave out the stacked devices, e.g. `system_device!~"dm-.*|loop.*"`.
+- Devices are named from `/sys/dev/block`, refreshed every 30 seconds, or else by their `major:minor` numbers, as are the paths of NVMe native multipath. The kernel keeps an entry per device and direction until OBI restarts: once its entries (4096 by default) are full, the I/O of a new device or direction isn't counted, and OBI logs a warning.
+- The stats filters (`capture.network.stats.filters`) also apply to the disk stats: a filter on an attribute that only the TCP stats have drops the disk stats, and the other way around, unless the default value that a stat reads for an attribute it lacks (e.g. empty, `0` for a port, `::` for an address) passes the filter, as it does `match: "*"` or a `not_match` pattern that doesn't match it.
+- Dynamic application selection (`instrumenter.WithDynamicSelector`) doesn't apply to the disk stats, which are node-wide.
+- If the disk probes can't be loaded or attached, for example without `block_rq_issue` in the kernel BTF, OBI exits at startup, as it does when a TCP stats probe fails: disable the feature on such nodes.
 
 #### `src.port` may be reported as `0`
 
@@ -155,6 +171,7 @@ Some stat metrics attach to kernel functions that are called very frequently (e.
 
 - If you need RTT, failed connections, or retransmits **without** TCP IO overhead, enable those individually (`stats_tcp_rtt`, `stats_tcp_failed_connections`, `stats_tcp_successful_connections`, `stats_tcp_retransmits`) instead of using the `stats` aggregate feature — `stats` includes `stats_tcp_io`, which fires on every `tcp_sendmsg` and `tcp_cleanup_rbuf` call.
 - The `stats_events` ring buffer and the per-metric eBPF maps (e.g. `tcp_io_accum`) have default size limits; on nodes with a very large number of concurrent connections these can be resized via the `ebpf.*` configuration knobs if events start being dropped.
+- The disk probes fire on every block request issue and completion, so their cost grows with the IOPS of the node, at less than 1 µs of CPU per request on a 4-vCPU VM: `capture.network.stats.enabled: true` alone doesn't enable them. They send no event per request, so the export cost grows with the number of series. The requests in flight are kept in an LRU map of 16384 entries by default, and at least 256 per possible CPU.
 
 ### Final notes
 
