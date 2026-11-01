@@ -16,28 +16,46 @@ import (
 	"go.opentelemetry.io/obi/pkg/export"
 )
 
-func TestBlockRqIssueHasQueueArg(t *testing.T) {
+func TestBlockTracepointHasQueueArg(t *testing.T) {
 	param := btf.FuncParam{Type: &btf.Pointer{Target: &btf.Void{}}}
-	issue := func(params int) *btf.Typedef {
+	tracepoint := func(name string, params int) *btf.Typedef {
 		proto := &btf.FuncProto{Return: &btf.Void{}, Params: make([]btf.FuncParam, params)}
 		for i := range proto.Params {
 			proto.Params[i] = param
 		}
-		return &btf.Typedef{Name: "btf_trace_block_rq_issue", Type: &btf.Pointer{Target: proto}}
+		return &btf.Typedef{Name: "btf_trace_" + name, Type: &btf.Pointer{Target: proto}}
 	}
 
-	hasQueueArg, err := blockRqIssueHasQueueArg(issue(2))
+	hasQueueArg, err := blockTracepointHasQueueArg(tracepoint("block_rq_issue", 2), "block_rq_issue")
 	require.NoError(t, err)
 	assert.False(t, hasQueueArg, "(data, rq): Linux 5.11+, 5.10.137+, RHEL 8.6+")
 
-	hasQueueArg, err = blockRqIssueHasQueueArg(issue(3))
+	hasQueueArg, err = blockTracepointHasQueueArg(tracepoint("block_rq_issue", 3), "block_rq_issue")
 	require.NoError(t, err)
 	assert.True(t, hasQueueArg, "(data, q, rq)")
 
-	_, err = blockRqIssueHasQueueArg(issue(1))
-	require.Error(t, err, "an unexpected prototype is an error, not a guess")
-	_, err = blockRqIssueHasQueueArg(&btf.Typedef{Type: &btf.Int{Size: 4}})
+	_, err = blockTracepointHasQueueArg(tracepoint("block_rq_issue", 1), "block_rq_issue")
+	require.EqualError(t, err, "unexpected block_rq_issue prototype with 1 parameters", "an unexpected prototype is an error, not a guess")
+	_, err = blockTracepointHasQueueArg(&btf.Typedef{Type: &btf.Int{Size: 4}}, "block_rq_issue")
 	require.Error(t, err)
+
+	// block_bio_queue, read in the kernel BTF
+	hasQueueArg, err = blockBioQueueHasQueueArg(btfSpecOf(t, tracepoint("block_bio_queue", 2)))
+	require.NoError(t, err)
+	assert.False(t, hasQueueArg, "(data, bio): Linux 5.11+")
+	hasQueueArg, err = blockBioQueueHasQueueArg(btfSpecOf(t, tracepoint("block_bio_queue", 3)))
+	require.NoError(t, err)
+	assert.True(t, hasQueueArg, "(data, q, bio): 5.10 and RHEL 8, which backported only the block_rq_issue change")
+	_, err = blockBioQueueHasQueueArg(btfSpecOf(t, tracepoint("block_rq_issue", 2)))
+	require.Error(t, err, "a kernel BTF without the prototype")
+}
+
+// Without the bio devices, their programs are stubs; with them, the block_bio_queue program of the
+// other prototype is
+func TestBioProgramsToDisable(t *testing.T) {
+	assert.Len(t, bioProgramsToDisable(false, false), 4)
+	assert.Equal(t, []string{StatsProgObiStatsRawTpBlockBioQueue}, bioProgramsToDisable(true, true), "(q, bio)")
+	assert.Equal(t, []string{StatsProgObiStatsRawTpBlockBioQueueLegacy}, bioProgramsToDisable(true, false), "(bio)")
 }
 
 func TestBlockRqCompleteReportsBlkStatus(t *testing.T) {
@@ -135,6 +153,32 @@ func TestSizeStorageMaps(t *testing.T) {
 				got[i] = spec.Maps[name].MaxEntries
 			}
 			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// The bios in flight have an LRU map of their own, sized like the requests in flight, and with a
+// single entry when the bio devices are off
+func TestSizeBioMaps(t *testing.T) {
+	const inFlight, beyond = 1 << 14, 2 * lruLocalFreeTarget * 192
+	disk := export.FeatureStatsDiskServiceDuration
+	for _, tc := range []struct {
+		name    string
+		storage export.Features
+		cpus    int
+		// disk_rq_start and disk_bio_start
+		want [2]uint32
+	}{
+		{name: "disabled", cpus: 64, want: [2]uint32{1, 1}},
+		{name: "the requests alone", storage: disk, cpus: 64, want: [2]uint32{inFlight, 1}},
+		{name: "the bios too", storage: disk | export.FeatureStatsDiskBioDevices, cpus: 64, want: [2]uint32{inFlight, inFlight}},
+		{name: "beyond 64 CPUs", storage: disk | export.FeatureStatsDiskBioDevices, cpus: 192, want: [2]uint32{beyond, beyond}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, err := LoadStats()
+			require.NoError(t, err)
+			sizeStorageMaps(spec, tc.storage, CgroupReads{}, tc.cpus)
+			assert.Equal(t, tc.want, [2]uint32{spec.Maps["disk_rq_start"].MaxEntries, spec.Maps["disk_bio_start"].MaxEntries})
 		})
 	}
 }

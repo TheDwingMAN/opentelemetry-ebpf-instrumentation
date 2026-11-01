@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"slices"
 	"strings"
@@ -263,6 +264,7 @@ func TestDiskStats(t *testing.T) {
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{{
 			Name: "obi_stat_disk_flush_duration_seconds_count", Value: 4, Labels: map[string]string{
 				"obi_ip": "1.2.3.4", "system_device": "nvme0n1", "obi_disk_stacked": "false", "obi_disk_volume_name": "", "error_type": "",
+				"container_id": "",
 			},
 		}}, named("obi_stat_disk_flush_duration_seconds_count"))
 	}, timeout, 100*time.Millisecond)
@@ -386,6 +388,38 @@ func TestStorageContainerID(t *testing.T) {
 		"":     fakeNFSRecord("READ", 4, 1),
 	} {
 		assert.Equal(t, want, storageContainerID(stat))
+	}
+}
+
+// The warning about the cache flushes under dynamic application selection names the bio-based devices
+// only when their flushes are measured
+func TestFlushesUnderDynamicSelection(t *testing.T) {
+	assert.NotContains(t, flushesUnderDynamicSelection(false), "bio-based devices")
+	assert.Contains(t, flushesUnderDynamicSelection(true), "bio-based devices")
+}
+
+// The features whose probes are loaded leave out, with a warning each, the NFS histogram under
+// dynamic application selection and the bio-based devices without a disk metric
+func TestProbedFeatures(t *testing.T) {
+	disk, bio := export.FeatureStatsDiskOperations, export.FeatureStatsDiskBioDevices
+	for _, tc := range []struct {
+		name             string
+		features         export.Features
+		dynamicSelection bool
+		want             export.Features
+		warnings         int
+	}{
+		{name: "the metrics", features: disk | export.FeatureStatsNFS, want: disk | export.FeatureStatsNFS},
+		{name: "the NFS histogram under dynamic selection", features: export.FeatureStatsNFS, dynamicSelection: true, want: export.FeatureStatsNFSClientWorkloads, warnings: 1},
+		{name: "the bio devices with a metric", features: disk | bio, want: disk | bio},
+		{name: "the bio devices alone", features: bio | export.FeatureStatsFsSync, want: export.FeatureStatsFsSync, warnings: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var log strings.Builder
+			got := probedFeatures(slog.New(slog.NewTextHandler(&log, nil)), tc.features, tc.dynamicSelection)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.warnings, strings.Count(log.String(), "level=WARN"), log.String())
+		})
 	}
 }
 

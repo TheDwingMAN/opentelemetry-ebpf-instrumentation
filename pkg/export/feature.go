@@ -77,6 +77,8 @@ const (
 	FeatureStatsDiskOperations
 	FeatureStatsDiskServiceTime
 	FeatureStatsDiskFlushDuration
+	// FeatureStatsDiskBioDevices widens the disk stat metrics to the bio-based block devices
+	FeatureStatsDiskBioDevices
 	// The file sync stat features are in neither `stats` nor `all`, as their probes fire on every
 	// file sync
 	FeatureStatsFsSyncDuration
@@ -92,9 +94,12 @@ const (
 	FeatureAll = Features(^uint(0)) &^ (FeatureConnectionInfo | FeatureStatsDisk | FeatureStatsFsSync | FeatureStatsNFS)
 )
 
-// FeatureStatsDisk groups the disk stat features, which the same probes measure
-const FeatureStatsDisk = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations |
+// FeatureStatsDiskMetrics groups the disk stat metrics, which the same probes measure
+const FeatureStatsDiskMetrics = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations |
 	FeatureStatsDiskServiceTime | FeatureStatsDiskFlushDuration
+
+// FeatureStatsDisk groups the disk stat features: the metrics, and the bio-based devices measured on them
+const FeatureStatsDisk = FeatureStatsDiskMetrics | FeatureStatsDiskBioDevices
 
 // FeatureStatsFsSync groups the file sync stat features, which the same probes measure
 const FeatureStatsFsSync = FeatureStatsFsSyncDuration | FeatureStatsFsSyncOperations | FeatureStatsFsSyncTime
@@ -148,6 +153,7 @@ var v2OnlyFeatures = map[string]Features{
 	"stats_disk_operations":               FeatureStatsDiskOperations,
 	"stats_disk_service_time":             FeatureStatsDiskServiceTime,
 	"stats_disk_flush_duration":           FeatureStatsDiskFlushDuration,
+	"stats_disk_bio_devices":              FeatureStatsDiskBioDevices,
 	"stats_fs_sync_duration":              FeatureStatsFsSyncDuration,
 	"stats_fs_sync_operations":            FeatureStatsFsSyncOperations,
 	"stats_fs_sync_time":                  FeatureStatsFsSyncTime,
@@ -528,6 +534,10 @@ func (f Features) StatsDiskServiceTime() bool {
 
 func (f Features) StatsDiskFlushDuration() bool {
 	return f.any(FeatureStatsDiskFlushDuration)
+}
+
+func (f Features) StatsDiskBioDevices() bool {
+	return f.any(FeatureStatsDiskBioDevices)
 }
 
 func (f Features) StatsDisk() bool {

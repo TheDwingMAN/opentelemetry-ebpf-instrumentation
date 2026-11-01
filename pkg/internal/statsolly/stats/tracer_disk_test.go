@@ -221,6 +221,21 @@ func (f *fakeBlockDevices) blockDevices() *blockDevices {
 	return &blockDevices{sysRoot: f.sysRoot, procRoot: f.procRoot}
 }
 
+// marks are the stacking marks of the stats of a device
+type marks struct{ stacked, multipathPath bool }
+
+// readMarks reads the stats of src once through the fake devices, with or without the bio-based
+// devices measured, and returns the marks by device name
+func readMarks(src *fakeDiskAccum, fake *fakeBlockDevices, bioMeasured bool) map[string]marks {
+	devices := fake.blockDevices()
+	devices.bioMeasured = bioMeasured
+	marked := map[string]marks{}
+	for _, stat := range newDiskReader(src, devices, defaultDiskReadInterval).readStats() {
+		marked[stat.DiskIO.Device] = marks{stacked: stat.DiskIO.Stacked, multipathPath: stat.DiskIO.MultipathPath}
+	}
+	return marked
+}
+
 func (f *fakeBlockDevices) add(numbers, name string) {
 	f.file(name, "uevent", "DEVNAME="+name+"\nDEVTYPE=disk")
 	f.link(filepath.Join("dev", "block", numbers), name)
@@ -320,9 +335,19 @@ func TestStackedDevices(t *testing.T) {
 	fake.stack("md0", "sdb", "sdc")
 	fake.add("252:0", "bcache0")
 	fake.stack("bcache0", "sdd")
+	// DRBD links its backing device as a slave; the disks of the drivers that handle bios
+	// themselves, and the head of NVMe native multipath, are built on nothing that sysfs lists
+	fake.add("8:64", "sde")
+	fake.add("147:0", "drbd0")
+	fake.stack("drbd0", "sde")
+	fake.add("251:0", "zram0")
+	fake.add("259:4", "pmem0")
+	fake.add("1:0", "ram0")
+	fake.add("8:80", "scinia")
+	fake.add("259:2", "nvme1n1")
 
 	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{}}
-	for _, numbers := range []devNum{{259, 0}, {8, 16}, {7, 0}, {253, 0}, {9, 0}, {252, 0}, {8, 99}} {
+	for _, numbers := range []devNum{{259, 0}, {8, 16}, {7, 0}, {253, 0}, {9, 0}, {252, 0}, {8, 99}, {147, 0}, {251, 0}, {259, 4}, {1, 0}, {8, 80}, {259, 2}} {
 		src.entries[writeKey(numbers.major, numbers.minor)] = accum([]uint64{1}, []uint64{100_000})
 	}
 	type labels struct {
@@ -341,11 +366,18 @@ func TestStackedDevices(t *testing.T) {
 		"md0":     {stacked: true},
 		"bcache0": {stacked: true},
 		"8:99":    {},
+		"drbd0":   {stacked: true},
+		"zram0":   {},
+		"pmem0":   {},
+		"ram0":    {},
+		"scinia":  {},
+		"nvme1n1": {},
 	}, devices)
 }
 
 // The paths of a measured dm-multipath device are marked, so that the histogram exporters leave them
-// out, as the multipath device reports the same requests: the multipath device is not stacked
+// out, as the multipath device reports the same requests: the multipath device is not stacked. A
+// bio-based one is measured with the bio devices only.
 func TestDiskReaderMarksTheMultipathPaths(t *testing.T) {
 	fake := newFakeBlockDevices(t)
 	fake.add("8:16", "sdb")
@@ -376,14 +408,35 @@ func TestDiskReaderMarksTheMultipathPaths(t *testing.T) {
 	for _, numbers := range []devNum{{8, 16}, {8, 32}, {8, 48}, {8, 64}, {253, 0}, {253, 1}, {253, 2}, {253, 3}} {
 		src.entries[writeKey(numbers.major, numbers.minor)] = accum([]uint64{1}, []uint64{100_000})
 	}
-	type marks struct{ stacked, multipathPath bool }
-	devices := map[string]marks{}
-	for _, stat := range newDiskReader(src, fake.blockDevices(), defaultDiskReadInterval).readStats() {
-		devices[stat.DiskIO.Device] = marks{stacked: stat.DiskIO.Stacked, multipathPath: stat.DiskIO.MultipathPath}
-	}
 	assert.Equal(t, map[string]marks{
 		"sdb": {multipathPath: true}, "sdc": {multipathPath: true},
 		"sdd": {}, "sde": {}, "dm-1": {}, "dm-3": {},
 		"dm-0": {stacked: true}, "dm-2": {stacked: true},
-	}, devices, "sdb and sdc are the paths of dm-1 and dm-3")
+	}, readMarks(src, fake, false), "sdb and sdc are the paths of dm-1 and dm-3")
+	assert.Equal(t, map[string]marks{
+		"sdb": {multipathPath: true}, "sdc": {multipathPath: true}, "sdd": {multipathPath: true},
+		"sde": {}, "dm-1": {}, "dm-3": {}, "dm-2": {},
+		"dm-0": {stacked: true},
+	}, readMarks(src, fake, true), "sdd is the path of dm-2, measured from its bios")
+}
+
+// The hidden paths of an NVMe native multipath head, named from /proc/diskstats, are marked like
+// those of a dm-multipath device when the head is measured, from its bios: the head is not stacked
+func TestDiskReaderMarksTheNVMePaths(t *testing.T) {
+	fake := newFakeBlockDevices(t)
+	fake.add("259:2", "nvme1n1")
+	fake.hidden("259:1", "nvme1c0n1")
+	fake.hidden("259:0", "nvme1c1n1")
+	// a path whose head is gone, and a path that the kernel lists without its numbers, before 6.1
+	fake.hidden("259:9", "nvme5c0n1")
+	fake.hidden("0:0", "nvme2c0n1")
+
+	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{}}
+	for _, numbers := range []devNum{{259, 2}, {259, 1}, {259, 0}, {259, 9}, {0, 0}} {
+		src.entries[writeKey(numbers.major, numbers.minor)] = accum([]uint64{1}, []uint64{100_000})
+	}
+	assert.Equal(t, map[string]marks{"nvme1n1": {}, "nvme1c0n1": {}, "nvme1c1n1": {}, "nvme5c0n1": {}, "0:0": {}}, readMarks(src, fake, false))
+	assert.Equal(t, map[string]marks{
+		"nvme1n1": {}, "nvme1c0n1": {multipathPath: true}, "nvme1c1n1": {multipathPath: true}, "nvme5c0n1": {}, "0:0": {},
+	}, readMarks(src, fake, true), "the paths of nvme1n1 are marked, the path whose head is gone and the unnamed one are not")
 }

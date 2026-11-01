@@ -48,19 +48,25 @@ func TestNFSErrorType(t *testing.T) {
 	}
 }
 
+// The failed requests are forwarded apart, named after the errno that the kernel reports before Linux
+// 5.16; the status of a bio is a blk_status_t whatever the kernel reports for the requests
 func TestDiskReaderForwardsTheFailedRequestsApart(t *testing.T) {
 	failed := writeKey(8, 0)
-	failed.Status = 10
+	failed.Status = 5
+	failedBio := writeKey(253, 0)
+	failedBio.Status, failedBio.Bio = 2, 1
 	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{
 		writeKey(8, 0): accum([]uint64{2}, []uint64{100_000}),
 		failed:         accum([]uint64{0, 1}, []uint64{0, 2_000_000}),
+		failedBio:      accum([]uint64{0, 3}, []uint64{0, 2_000_000}),
 	}}
 	r := newTestDiskReader(src)
-	r.statusIsBlkStatus = true
+	r.statusIsBlkStatus = false
 
 	requests := map[string][]uint64{}
 	for _, stat := range r.readStats() {
 		requests[stat.DiskIO.ErrorType] = stat.DiskIO.Latency.BucketCounts[:2]
 	}
-	assert.Equal(t, map[string][]uint64{"": {2, 0}, "EIO": {0, 1}}, requests)
+	assert.Equal(t, map[string][]uint64{"": {2, 0}, "EIO": {0, 1}, "ETIMEDOUT": {0, 3}}, requests,
+		"-EIO is errno 5, and BLK_STS_TIMEOUT is 2")
 }

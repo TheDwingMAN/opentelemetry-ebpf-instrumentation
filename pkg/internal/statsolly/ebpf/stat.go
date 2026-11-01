@@ -170,8 +170,9 @@ type DiskIO struct {
 	Bytes uint64
 	// ContainerID is the container that the kernel charges the I/O to, empty for none
 	ContainerID string
-	// MultipathPath is set on the paths of a dm-multipath device, which serve the requests that the
-	// multipath device reports: the histogram exporters leave them out
+	// MultipathPath is set on the paths of a measured multipath device, dm-multipath or the head of
+	// NVMe native multipath, which serve the I/O that the multipath device reports: the histogram
+	// exporters leave them out
 	MultipathPath bool
 }
 

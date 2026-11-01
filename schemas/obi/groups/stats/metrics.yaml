@@ -385,10 +385,13 @@ metrics:
       their last issue to the device until their final completion, or from the
       kernel's start of the requests that complete without an issue. The
       requests are counted as in /proc/diskstats, but for those in flight at
-      startup or missed by the probes, and the I/O of bio-based devices (LVM,
-      dm-crypt, md RAID, NVMe native multipath heads) is not measured. The
-      paths of dm-multipath devices report nothing: the multipath device
-      reports the same requests.
+      startup or missed by the probes. The bio-based devices (LVM and the
+      other device mapper volumes, md RAID, DRBD, NVMe native multipath heads,
+      zram, pmem, brd) are measured from their bios, from their submission
+      until their completion, with the `disk_bio_devices` feature, and not
+      otherwise. The paths of a measured multipath device, dm-multipath or an
+      NVMe native multipath head, report nothing: the multipath device
+      reports the same I/O.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -428,7 +431,9 @@ metrics:
     brief: >
       Bytes of the successful block reads and writes of
       `obi.stat.disk.service.duration`, at their issue to the device, per disk
-      and direction. The paths of dm-multipath devices report them too.
+      and direction, and of the bios of the bio-based devices with the
+      `disk_bio_devices` feature. The paths of the measured multipath devices
+      report them too.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -467,8 +472,9 @@ metrics:
     requirement_level: recommended
     brief: >
       Completed block reads and writes, per disk, direction and outcome: the
-      count of `obi.stat.disk.service.duration`. The paths of dm-multipath
-      devices report them too.
+      count of `obi.stat.disk.service.duration`, the bios of the bio-based
+      devices included with the `disk_bio_devices` feature. The paths of the
+      measured multipath devices report them too.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -510,9 +516,10 @@ metrics:
     requirement_level: recommended
     brief: >
       Service time of the block reads and writes, per disk, direction and
-      outcome: the sum of `obi.stat.disk.service.duration`. Divided by
-      `obi.stat.disk.operations`, it is the mean service time. The paths of
-      dm-multipath devices report it too.
+      outcome: the sum of `obi.stat.disk.service.duration`, the bios of the
+      bio-based devices included with the `disk_bio_devices` feature. Divided
+      by `obi.stat.disk.operations`, it is the mean service time. The paths
+      of the measured multipath devices report it too.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -558,9 +565,12 @@ metrics:
       device until their completion, or from the kernel's start of those that
       fail before their issue. One flush serves the file syncs and
       journal commits pending when the kernel sends it. Bio-based devices
-      pass theirs down to the devices below them, and the paths of
-      dm-multipath devices report nothing: the multipath device reports the
-      same flushes.
+      pass theirs down to the devices below them, and report the flushes
+      submitted to them with the `disk_bio_devices` feature: empty writes
+      with a preflush, from their submission until their completion,
+      charged to the workload that submits them, as the empty flush of a
+      file sync is; the paths of a measured multipath device report
+      nothing: the multipath device reports the same flushes.
     attributes:
       - ref: obi.ip
         requirement_level: opt_in
@@ -571,9 +581,21 @@ metrics:
       - ref: obi.disk.volume.name
         requirement_level:
           conditionally_required: if the block device is a device mapper device
+      - ref: container.id
+        requirement_level: opt_in
       - ref: k8s.cluster.name
         requirement_level:
           recommended: if Kubernetes decoration is enabled
+      - ref: k8s.namespace.name
+        requirement_level: opt_in
+      - ref: k8s.owner.name
+        requirement_level: opt_in
+      - ref: k8s.kind
+        requirement_level: opt_in
+      - ref: k8s.pod.name
+        requirement_level: opt_in
+      - ref: k8s.container.name
+        requirement_level: opt_in
       - ref: error.type
         requirement_level:
           conditionally_required: if the flush ended in an error

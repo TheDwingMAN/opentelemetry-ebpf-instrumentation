@@ -380,16 +380,16 @@ func TestDefault_StatStorage(t *testing.T) {
 		assert.ElementsMatch(t, want, p.For(metric), metric.OTEL)
 	}
 
-	// a cache flush has no direction, and is charged to no workload
+	// a cache flush has no direction; the flushes submitted to the bio-based devices carry the workload
 	p, err = NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: Selection{
 		StatDiskFlushDuration.Section: InclusionLists{Include: []string{"*"}},
 	}})
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []attr.Name{
-		attr.OBIIP, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice, attr.ErrorType, attr.K8sClusterName,
-	}, p.For(StatDiskFlushDuration))
+	assert.ElementsMatch(t, slices.Concat([]attr.Name{
+		attr.OBIIP, attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice, attr.ErrorType, attr.ContainerID,
+	}, workload, []attr.Name{attr.K8sPodName, attr.K8sContainerName}), p.For(StatDiskFlushDuration))
 
-	// nor are the NFS client RPCs
+	// the NFS client RPCs of the node are charged to no workload
 	p, err = NewAttrSelector(GroupKubernetes, &SelectorConfig{SelectionCfg: Selection{
 		StatNFSClientProcedureDuration.Section: InclusionLists{Include: []string{"*"}},
 	}})

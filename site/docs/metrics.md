@@ -1361,7 +1361,7 @@ Ratio [0-1] between the unread messages of an internal Go channel and its total 
 
 ## `obi.stat.disk.flush.duration`
 
-Duration of the cache flushes that the block devices with a volatile write cache are sent, per disk and outcome, from their last issue to the device until their completion, or from the kernel's start of those that fail before their issue. One flush serves the file syncs and journal commits pending when the kernel sends it. Bio-based devices pass theirs down to the devices below them, and the paths of dm-multipath devices report nothing: the multipath device reports the same flushes.
+Duration of the cache flushes that the block devices with a volatile write cache are sent, per disk and outcome, from their last issue to the device until their completion, or from the kernel's start of those that fail before their issue. One flush serves the file syncs and journal commits pending when the kernel sends it. Bio-based devices pass theirs down to the devices below them, and report the flushes submitted to them with the `disk_bio_devices` feature: empty writes with a preflush, from their submission until their completion, charged to the workload that submits them, as the empty flush of a file sync is; the paths of a measured multipath device report nothing: the multipath device reports the same flushes.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1369,16 +1369,22 @@ Duration of the cache flushes that the block devices with a volatile write cache
 
 | Attribute | Type | Requirement level | Stability | Description | Examples |
 | --- | --- | --- | --- | --- | --- |
+| `container.id` | string | `opt_in` | release_candidate | Container ID. Usually a UUID, as for example used to [identify Docker containers](https://docs.docker.com/engine/containers/run/#container-identification). The UUID might be abbreviated. | a3bf90e006b2 |
 | `error.type` | string | `conditionally_required`: if the flush ended in an error | stable | Describes a class of error the operation ended with. | timeout; java.net.UnknownHostException; server_certificate_invalid; 500 |
 | `k8s.cluster.name` | string | `recommended`: if Kubernetes decoration is enabled | release_candidate | The name of the cluster. | opentelemetry-cluster |
-| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID and loop devices are. A dm-multipath device is not, as its paths don't report its latency histograms. To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, without `obi.disk.volume.name`. | true |
+| `k8s.container.name` | string | `opt_in` | release_candidate | The name of the Container from Pod specification, must be unique within a Pod. Container runtime usually uses different globally unique name (`container.name`). | redis |
+| `k8s.kind` | string | `opt_in` | development | Kind of the top-level Kubernetes owner of the decorated Pod (falls back to the direct owner's kind when no top-level owner is resolved). A Pod without an owner is its own owner (`Pod`), and the mirror Pod of a static Pod is owned by its `Node`. | Deployment; StatefulSet |
+| `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
+| `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
+| `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID, loop and DRBD devices are. A measured multipath device, dm-multipath or the head of NVMe native multipath, is not, as its paths don't report its latency histograms; nor are the disks of the drivers that handle bios themselves (zram, pmem, brd). To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, those without `obi.disk.volume.name` and not named like an NVMe path (`nvme<N>c<C>n<M>`). | true |
 | `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Device mapper name of the block device (`system.device`), as `/dev/mapper` lists it. Absent for the other devices. | mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.io`
 
-Bytes of the successful block reads and writes of `obi.stat.disk.service.duration`, at their issue to the device, per disk and direction. The paths of dm-multipath devices report them too.
+Bytes of the successful block reads and writes of `obi.stat.disk.service.duration`, at their issue to the device, per disk and direction, and of the bios of the bio-based devices with the `disk_bio_devices` feature. The paths of the measured multipath devices report them too.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1394,14 +1400,14 @@ Bytes of the successful block reads and writes of `obi.stat.disk.service.duratio
 | `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
-| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID and loop devices are. A dm-multipath device is not, as its paths don't report its latency histograms. To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, without `obi.disk.volume.name`. | true |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID, loop and DRBD devices are. A measured multipath device, dm-multipath or the head of NVMe native multipath, is not, as its paths don't report its latency histograms; nor are the disks of the drivers that handle bios themselves (zram, pmem, brd). To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, those without `obi.disk.volume.name` and not named like an NVMe path (`nvme<N>c<C>n<M>`). | true |
 | `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Device mapper name of the block device (`system.device`), as `/dev/mapper` lists it. Absent for the other devices. | mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.operations`
 
-Completed block reads and writes, per disk, direction and outcome: the count of `obi.stat.disk.service.duration`. The paths of dm-multipath devices report them too.
+Completed block reads and writes, per disk, direction and outcome: the count of `obi.stat.disk.service.duration`, the bios of the bio-based devices included with the `disk_bio_devices` feature. The paths of the measured multipath devices report them too.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1418,14 +1424,14 @@ Completed block reads and writes, per disk, direction and outcome: the count of 
 | `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
-| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID and loop devices are. A dm-multipath device is not, as its paths don't report its latency histograms. To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, without `obi.disk.volume.name`. | true |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID, loop and DRBD devices are. A measured multipath device, dm-multipath or the head of NVMe native multipath, is not, as its paths don't report its latency histograms; nor are the disks of the drivers that handle bios themselves (zram, pmem, brd). To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, those without `obi.disk.volume.name` and not named like an NVMe path (`nvme<N>c<C>n<M>`). | true |
 | `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Device mapper name of the block device (`system.device`), as `/dev/mapper` lists it. Absent for the other devices. | mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.service.duration`
 
-Service time of the block reads and writes, per disk and direction, from their last issue to the device until their final completion, or from the kernel's start of the requests that complete without an issue. The requests are counted as in /proc/diskstats, but for those in flight at startup or missed by the probes, and the I/O of bio-based devices (LVM, dm-crypt, md RAID, NVMe native multipath heads) is not measured. The paths of dm-multipath devices report nothing: the multipath device reports the same requests.
+Service time of the block reads and writes, per disk and direction, from their last issue to the device until their final completion, or from the kernel's start of the requests that complete without an issue. The requests are counted as in /proc/diskstats, but for those in flight at startup or missed by the probes. The bio-based devices (LVM and the other device mapper volumes, md RAID, DRBD, NVMe native multipath heads, zram, pmem, brd) are measured from their bios, from their submission until their completion, with the `disk_bio_devices` feature, and not otherwise. The paths of a measured multipath device, dm-multipath or an NVMe native multipath head, report nothing: the multipath device reports the same I/O.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1442,14 +1448,14 @@ Service time of the block reads and writes, per disk and direction, from their l
 | `k8s.namespace.name` | string | `opt_in` | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.owner.name` | string | `opt_in` | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
-| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID and loop devices are. A dm-multipath device is not, as its paths don't report its latency histograms. To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, without `obi.disk.volume.name`. | true |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID, loop and DRBD devices are. A measured multipath device, dm-multipath or the head of NVMe native multipath, is not, as its paths don't report its latency histograms; nor are the disks of the drivers that handle bios themselves (zram, pmem, brd). To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, those without `obi.disk.volume.name` and not named like an NVMe path (`nvme<N>c<C>n<M>`). | true |
 | `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Device mapper name of the block device (`system.device`), as `/dev/mapper` lists it. Absent for the other devices. | mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |
 
 ## `obi.stat.disk.service_time`
 
-Service time of the block reads and writes, per disk, direction and outcome: the sum of `obi.stat.disk.service.duration`. Divided by `obi.stat.disk.operations`, it is the mean service time. The paths of dm-multipath devices report it too.
+Service time of the block reads and writes, per disk, direction and outcome: the sum of `obi.stat.disk.service.duration`, the bios of the bio-based devices included with the `disk_bio_devices` feature. Divided by `obi.stat.disk.operations`, it is the mean service time. The paths of the measured multipath devices report it too.
 
 | Instrument | Unit | Stability |
 | --- | --- | --- |
@@ -1466,7 +1472,7 @@ Service time of the block reads and writes, per disk, direction and outcome: the
 | `k8s.namespace.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | release_candidate | The name of the namespace that the pod is running in. | default |
 | `k8s.owner.name` | string | `recommended`: if Kubernetes decoration is enabled and the I/O is charged to a pod | development | Name of the top-level Kubernetes owner (Deployment, StatefulSet, DaemonSet, CronJob, …) of the Pod OBI decorated the signal with. | frontend |
 | `k8s.pod.name` | string | `opt_in` | release_candidate | The name of the Pod. | opentelemetry-pod-autoconf |
-| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID and loop devices are. A dm-multipath device is not, as its paths don't report its latency histograms. To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, without `obi.disk.volume.name`. | true |
+| `obi.disk.stacked` | boolean | `recommended` | development | Whether the block device (`system.device`) is built on other block devices that also report its I/O, as device mapper, md RAID, loop and DRBD devices are. A measured multipath device, dm-multipath or the head of NVMe native multipath, is not, as its paths don't report its latency histograms; nor are the disks of the drivers that handle bios themselves (zram, pmem, brd). To count the I/O once, add up the devices where it is `false`, and on the disk counters, which the paths report, those without `obi.disk.volume.name` and not named like an NVMe path (`nvme<N>c<C>n<M>`). | true |
 | `obi.disk.volume.name` | string | `conditionally_required`: if the block device is a device mapper device | development | Device mapper name of the block device (`system.device`), as `/dev/mapper` lists it. Absent for the other devices. | mpatha |
 | `obi.ip` | string | `opt_in` | development | IP address of the host running OBI. | 10.0.0.5 |
 | `system.device` | string | `recommended` | development | The device identifier | (identifier) |

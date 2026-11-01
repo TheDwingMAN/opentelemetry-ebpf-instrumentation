@@ -52,6 +52,20 @@ static __always_inline enum disk_op disk_op_from_req_op(const u32 req_op,
     }
 }
 
+// disk_bio_op is the operation of a bio of size bytes, from its bi_opf: an empty write with the
+// preflush flag is the cache flush that a file sync sends a device (blkdev_issue_flush)
+static __always_inline enum disk_op disk_bio_op(const u32 opf,
+                                                const u32 op_mask,
+                                                const u32 preflush_flag,
+                                                const u32 zone_append_op,
+                                                const u32 size) {
+    const enum disk_op op = disk_op_from_req_op(opf & op_mask, zone_append_op);
+    if (op == disk_op_write && size == 0 && (opf & preflush_flag) != 0) {
+        return disk_op_flush;
+    }
+    return op;
+}
+
 // disk_accounted_start_ns is the start of a request (rq->start_time_ns) if the kernel accounts the
 // request in /proc/diskstats, and 0 otherwise. From Linux 6.13, the kernel writes the start only when
 // it accounts the request (io_stat_flag, RQF_IO_STAT), so a request of a device without I/O
@@ -91,6 +105,25 @@ static __always_inline u8 disk_status_code(const u64 raw_status, const bool is_b
     // the raw tracepoint argument holds the negative int zero-extended
     const u32 errno_value = -(u32)raw_status;
     return errno_value < k_status_other ? (u8)errno_value : k_status_other;
+}
+
+// disk_bio_status is the status of the bios that a block_rq_complete completes, which the kernel sets
+// in their bi_status after the tracepoint: the blk_status_t that it reports from Linux 5.16. Before,
+// it reports an errno, which is not mapped back: a failure is k_status_other then.
+static __always_inline u8 disk_bio_status(const u64 raw_status, const bool is_blk_status) {
+    const u8 status = disk_status_code(raw_status, is_blk_status);
+    if (is_blk_status || status == 0) {
+        return status;
+    }
+    return k_status_other;
+}
+
+// The kernel completes the bios of a request in order while they fit in the bytes that the
+// completion reports, and only advances a larger one (blk_update_request): disk_rq_completes_bio
+// tells whether the next bio, of bio_bytes, is completed. A completion without bytes completes an
+// empty bio, like the flush of a file sync.
+static __always_inline bool disk_rq_completes_bio(const u32 bio_bytes, const u32 bytes_left) {
+    return bio_bytes <= bytes_left;
 }
 
 // The status of the NFS RPCs whose error doesn't fit in a u16, which userspace names _OTHER

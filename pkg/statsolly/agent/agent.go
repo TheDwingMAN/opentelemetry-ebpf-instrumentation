@@ -98,6 +98,7 @@ type ebpFetcher interface {
 	NFSIOAccumMap() *ciliumebpf.Map
 	DiskCgroupNamesMap() *ciliumebpf.Map
 	DiskStatusIsBlkStatus() bool
+	DiskBioDevicesMeasured() bool
 	RefreshNFSProbes() bool
 }
 
@@ -130,23 +131,46 @@ func StatsAgent(ctxInfo *global.ContextInfo, cfg *obi.Config) (*Stats, error) {
 		alog.Warn("a latency histogram is reported per pod or container, at a series per bucket for each: "+
 			"its operations and time counters give the mean at a series each", "metric", metric, "attributes", perPod)
 	}
-	if ctxInfo.DynamicSelector != nil && cfg.Metrics.Features.StatsDiskFlushDuration() {
-		alog.Warn("the cache flushes are not reported under dynamic application selection: the block layer sends "+
-			"them charged to no container", "metric", attributes.StatDiskFlushDuration.OTEL)
-	}
-	probed := cfg.Metrics.Features
-	if ctxInfo.DynamicSelector != nil && probed.StatsNFSClientProcedureDuration() {
-		alog.Warn("the histogram of the NFS client RPCs is not reported under dynamic application selection: the "+
-			"kernel measures it for the whole node, charged to no container", "metric", attributes.StatNFSClientProcedureDuration.OTEL)
-		probed &^= export.FeatureStatsNFSClientProcedureDuration
-	}
+	probed := probedFeatures(alog, cfg.Metrics.Features, ctxInfo.DynamicSelector != nil)
 	reads := cgroupReads(cfg.Metrics.Features, attrSel, cfg.Filters.Stats, ctxInfo.DynamicSelector != nil)
 	statsFetcher, err = newFetcher(&cfg.EBPF, &probed, selectorCfg, reads)
 	if err != nil {
 		return nil, err
 	}
+	if ctxInfo.DynamicSelector != nil && cfg.Metrics.Features.StatsDiskFlushDuration() {
+		alog.Warn(flushesUnderDynamicSelection(statsFetcher.DiskBioDevicesMeasured()), "metric", attributes.StatDiskFlushDuration.OTEL)
+	}
 
 	return statsAgent(ctxInfo, cfg, statsFetcher, agentIP)
+}
+
+// flushesUnderDynamicSelection says which cache flushes dynamic application selection drops: the
+// block layer sends those of the request-based devices charged to no container, while a thread
+// submits those of the bio-based devices itself, when they are measured
+func flushesUnderDynamicSelection(bioDevicesMeasured bool) string {
+	warning := "the cache flushes of the request-based devices are not reported under dynamic application selection: " +
+		"the block layer sends them charged to no container"
+	if bioDevicesMeasured {
+		warning += "; those of the bio-based devices are reported for the selected containers"
+	}
+	return warning
+}
+
+// probedFeatures returns the features whose probes are loaded: the enabled ones, but the histogram
+// of the NFS client RPCs under dynamic application selection, and the bio-based devices without a
+// disk metric to report them on, which the probes would measure for nothing
+func probedFeatures(log *slog.Logger, features export.Features, dynamicSelection bool) export.Features {
+	probed := features
+	if dynamicSelection && probed.StatsNFSClientProcedureDuration() {
+		log.Warn("the histogram of the NFS client RPCs is not reported under dynamic application selection: the "+
+			"kernel measures it for the whole node, charged to no container", "metric", attributes.StatNFSClientProcedureDuration.OTEL)
+		probed &^= export.FeatureStatsNFSClientProcedureDuration
+	}
+	if probed.StatsDiskBioDevices() && probed&export.FeatureStatsDiskMetrics == 0 {
+		log.Warn("the bio-based block devices are not measured: disk_bio_devices has no effect without a disk metric")
+		probed &^= export.FeatureStatsDiskBioDevices
+	}
+	return probed
 }
 
 func newFetcher(cfg *config.EBPFTracer, features *export.Features, selectorCfg *attributes.SelectorConfig,
@@ -174,7 +198,7 @@ func statsAgent(
 		CgroupNames:        statsFetcher.DiskCgroupNamesMap(),
 	}
 	if maps.Any() {
-		diskTracer = stats.NewDiskMapTracer(maps, statsFetcher.DiskStatusIsBlkStatus(), &cfg.EBPF)
+		diskTracer = stats.NewDiskMapTracer(maps, statsFetcher.DiskStatusIsBlkStatus(), statsFetcher.DiskBioDevicesMeasured(), &cfg.EBPF)
 	}
 
 	return &Stats{

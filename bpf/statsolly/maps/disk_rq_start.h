@@ -12,7 +12,7 @@
 
 typedef struct disk_rq_start {
     u64 issued_ns;
-    // size of the request at its issue
+    // size of the request at its issue, or of the bio at its submission
     u32 bytes;
     // whole disk and operation
     u32 major;

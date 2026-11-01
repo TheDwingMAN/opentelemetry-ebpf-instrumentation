@@ -71,6 +71,28 @@ static void test_zone_append(void) {
                 "without REQ_OP_ZONE_APPEND, reads stay reads");
 }
 
+// The preflush flag, __REQ_PREFLUSH, is bit 18 on every supported kernel
+static void test_bio_op(void) {
+    const u32 op_mask = 0xff;
+    const u32 preflush = 1U << 18;
+    assert_true(disk_bio_op(k_req_op_write, op_mask, preflush, 7, 4096) == disk_op_write,
+                "a write bio is a write");
+    assert_true(disk_bio_op(k_req_op_write | preflush, op_mask, preflush, 7, 0) == disk_op_flush,
+                "an empty write with the preflush flag is the flush of a file sync");
+    assert_true(disk_bio_op(k_req_op_write | preflush, op_mask, preflush, 7, 4096) == disk_op_write,
+                "a write with data and the preflush flag, like a journal commit, is a write");
+    assert_true(disk_bio_op(k_req_op_write, op_mask, preflush, 7, 0) == disk_op_write,
+                "an empty write without the preflush flag is a write");
+    assert_true(disk_bio_op(k_req_op_read | preflush, op_mask, preflush, 7, 0) == disk_op_read,
+                "the preflush flag only turns writes into flushes");
+    assert_true(disk_bio_op(k_req_op_write_zeroes, op_mask, preflush, 7, 1 << 20) == disk_op_write,
+                "a write-zeroes bio is a write");
+    assert_true(disk_bio_op(7, op_mask, preflush, 7, 4096) == disk_op_write,
+                "a zone append bio is a write");
+    assert_true(disk_bio_op(3, op_mask, preflush, 7, 1 << 20) == disk_op_unknown,
+                "a discard bio is not measured");
+}
+
 static void test_final_completion(void) {
     assert_true(disk_rq_final_completion(4096, 4096), "completing all remaining bytes is final");
     assert_true(!disk_rq_final_completion(4096, 8192),
@@ -106,6 +128,27 @@ static void test_status_code(void) {
     assert_true(disk_status_code(0, false) == 0, "errno 0 is a success");
     assert_true(disk_status_code((u32)-512, false) == k_status_other,
                 "an errno that doesn't fit in a status, like ERESTARTSYS, is not a success");
+}
+
+static void test_bio_status(void) {
+    // a blk_status_t from Linux 5.16: BLK_STS_MEDIUM is 7
+    assert_true(disk_bio_status(7, true) == 7, "a blk_status_t is the status of the bios");
+    assert_true(disk_bio_status(0, true) == 0, "BLK_STS_OK is a success");
+    // an errno before, which is not mapped back to the blk_status_t
+    assert_true(disk_bio_status(0, false) == 0, "errno 0 is a success");
+    assert_true(disk_bio_status((u32)-5, false) == k_status_other,
+                "an errno is no blk_status_t: -EIO is a failure without a known status");
+}
+
+static void test_rq_completes_bio(void) {
+    assert_true(disk_rq_completes_bio(4096, 8192),
+                "a bio that fits in the bytes left is completed");
+    assert_true(disk_rq_completes_bio(4096, 4096), "a bio of all the bytes left is completed");
+    assert_true(!disk_rq_completes_bio(8192, 4096),
+                "a bio larger than the bytes left is only advanced, by a partial completion");
+    assert_true(disk_rq_completes_bio(0, 0),
+                "a completion without bytes completes an empty bio, the flush of a file sync");
+    assert_true(!disk_rq_completes_bio(4096, 0), "a completion without bytes completes no data");
 }
 
 static void test_nfs_status(void) {
@@ -155,9 +198,12 @@ int main(void) {
     test_latency_bucket_is_upper_inclusive();
     test_op_from_req_op();
     test_zone_append();
+    test_bio_op();
     test_final_completion();
     test_accounted_start_ns();
     test_status_code();
+    test_bio_status();
+    test_rq_completes_bio();
     test_nfs_status();
     test_nfs_charged_cgroup();
     test_fs_sync_attempted();

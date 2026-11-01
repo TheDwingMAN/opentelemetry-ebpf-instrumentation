@@ -28,9 +28,9 @@ const lruLocalFreeTarget = 128
 // Parameters of the btf_trace_<tracepoint> prototypes: the private data of the tracepoint, then
 // its arguments
 const (
-	blockRqIssueParams         = 2 // data, rq
-	blockRqIssueLegacyParams   = 3 // data, q, rq
-	blockRqCompleteStatusParam = 2 // data, rq, status, nr_bytes
+	blockTracepointParams       = 2 // data, the request or bio
+	blockTracepointLegacyParams = 3 // data, q, the request or bio
+	blockRqCompleteStatusParam  = 2 // data, rq, status, nr_bytes
 )
 
 // blkStatusSize is the size of a blk_status_t, a u8
@@ -40,6 +40,8 @@ const blkStatusSize = 1
 type blockLayout struct {
 	// block_rq_issue is (q, rq) instead of (rq)
 	issueHasQueueArg bool
+	// block_bio_queue is (q, bio) instead of (bio), read with the bio devices
+	bioQueueHasQueueArg bool
 	// block_rq_complete reports a blk_status_t instead of an int errno
 	completeReportsBlkStatus bool
 	// the RQF_IO_STAT and RQF_FLUSH_SEQ request flags, 0 where the kernel numbers them with macros
@@ -65,7 +67,7 @@ func kernelBlockLayout() (blockLayout, error) {
 	if err = spec.TypeByName("btf_trace_block_rq_complete", &complete); err != nil {
 		return layout, err
 	}
-	if layout.issueHasQueueArg, err = blockRqIssueHasQueueArg(issue); err != nil {
+	if layout.issueHasQueueArg, err = blockTracepointHasQueueArg(issue, "block_rq_issue"); err != nil {
 		return layout, err
 	}
 	if layout.completeReportsBlkStatus, err = blockRqCompleteReportsBlkStatus(complete); err != nil {
@@ -99,17 +101,28 @@ func (l *blockLayout) readEnums(spec *btf.Spec) error {
 	return nil
 }
 
-func blockRqIssueHasQueueArg(issue *btf.Typedef) (bool, error) {
-	proto := tracepointProto(issue)
+// blockTracepointHasQueueArg tells whether the tracepoint of a btf_trace_<name> typedef has the
+// request queue before its request or bio, as block_rq_issue and block_bio_queue had before Linux 5.11
+func blockTracepointHasQueueArg(typedef *btf.Typedef, name string) (bool, error) {
+	proto := tracepointProto(typedef)
 	switch {
 	case proto == nil:
-		return false, errors.New("btf_trace_block_rq_issue is not a function pointer")
-	case len(proto.Params) == blockRqIssueParams:
+		return false, fmt.Errorf("btf_trace_%s is not a function pointer", name)
+	case len(proto.Params) == blockTracepointParams:
 		return false, nil
-	case len(proto.Params) == blockRqIssueLegacyParams:
+	case len(proto.Params) == blockTracepointLegacyParams:
 		return true, nil
 	}
-	return false, fmt.Errorf("unexpected block_rq_issue prototype with %d parameters", len(proto.Params))
+	return false, fmt.Errorf("unexpected %s prototype with %d parameters", name, len(proto.Params))
+}
+
+// blockBioQueueHasQueueArg reads the prototype of block_bio_queue in the BTF of a kernel
+func blockBioQueueHasQueueArg(spec *btf.Spec) (bool, error) {
+	var queue *btf.Typedef
+	if err := spec.TypeByName("btf_trace_block_bio_queue", &queue); err != nil {
+		return false, err
+	}
+	return blockTracepointHasQueueArg(queue, "block_bio_queue")
 }
 
 // blockRqCompleteReportsBlkStatus tells whether the status of block_rq_complete is a blk_status_t,
@@ -155,6 +168,29 @@ func diskIssueProgram(objects *StatsObjects, issueHasQueueArg bool) *ebpf.Progra
 	return objects.ObiStatsRawTpBlockRqIssue
 }
 
+// bioProgramsToDisable returns the programs of the bio-based devices that must not be loaded: all of
+// them without the feature, and otherwise the block_bio_queue program of the other prototype
+func bioProgramsToDisable(enabled, queueHasQueueArg bool) []string {
+	switch {
+	case !enabled:
+		return []string{
+			StatsProgObiStatsRawTpBlockBioQueue, StatsProgObiStatsRawTpBlockBioQueueLegacy,
+			StatsProgObiStatsRawTpBlockBioComplete, StatsProgObiStatsRawTpBlockRqCompleteBios,
+		}
+	case queueHasQueueArg:
+		return []string{StatsProgObiStatsRawTpBlockBioQueue}
+	default:
+		return []string{StatsProgObiStatsRawTpBlockBioQueueLegacy}
+	}
+}
+
+func bioQueueProgram(objects *StatsObjects, queueHasQueueArg bool) *ebpf.Program {
+	if queueHasQueueArg {
+		return objects.ObiStatsRawTpBlockBioQueueLegacy
+	}
+	return objects.ObiStatsRawTpBlockBioQueue
+}
+
 // sizeStorageMaps gives the maps of a disabled storage feature a single entry, as StatsObjects
 // creates them anyway, and the cgroup names one when no probe reads the cgroups. Otherwise, it gives
 // the LRU maps of the requests and syncs in flight room for twice the free entries that the CPUs can
@@ -170,6 +206,7 @@ func sizeStorageMaps(spec *ebpf.CollectionSpec, storage export.Features, reads C
 		inFlight, accum string
 	}{
 		{enabled: storage.StatsDisk(), inFlight: "disk_rq_start", accum: "disk_io_accum"},
+		{enabled: storage.StatsDiskBioDevices(), inFlight: "disk_bio_start"},
 		{enabled: storage.StatsFsSync(), inFlight: "fs_sync_start", accum: "fs_sync_accum"},
 		{enabled: nfsReads, inFlight: "nfs_task_cgroup"},
 	} {

@@ -31,6 +31,7 @@ data:
                 - disk_io
                 - disk_operations
                 - disk_service_time
+                - disk_bio_devices
                 - fs_sync_duration
                 - fs_sync_operations
                 - fs_sync_time
