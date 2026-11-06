@@ -224,9 +224,9 @@ func TestDiskStats(t *testing.T) {
 	disk <- []*ebpf.Stat{fakeDiskRecord("nvme0n1", 5), fakeDiskRecord("vda", 1)}
 	disk <- []*ebpf.Stat{fakeDiskRecord("nvme0n1", 1)}
 	failed := fakeDiskRecord("nvme0n1", 2)
-	failed.DiskIO.ErrorType, failed.DiskIO.Bytes = "EIO", 0
+	failed.DiskIO.ErrorType, failed.DiskIO.Bytes, failed.DiskIO.QueueTime = "EIO", 0, 0.25
 	path := fakeDiskRecord("sdb", 3)
-	path.DiskIO.MultipathPath = true
+	path.DiskIO.MultipathPath, path.DiskIO.QueueTime = true, 0.5
 	flush, pathFlush := fakeDiskRecord("nvme0n1", 4), fakeDiskRecord("sdb", 1)
 	flush.DiskIO.Op, pathFlush.DiskIO.Op, pathFlush.DiskIO.MultipathPath = ebpf.CodeDiskOpFlush, ebpf.CodeDiskOpFlush, true
 	disk <- []*ebpf.Stat{failed, path, flush, pathFlush}
@@ -257,6 +257,11 @@ func TestDiskStats(t *testing.T) {
 			{Name: "obi_stat_disk_operations_total", Value: 2, Labels: labels("nvme0n1", "EIO")},
 			{Name: "obi_stat_disk_operations_total", Value: 3, Labels: labels("sdb", "")},
 		}, named("obi_stat_disk_operations_total"))
+		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
+			{Name: "obi_stat_disk_queue_time_seconds_total", Value: 0, Labels: labels("nvme0n1", "")},
+			{Name: "obi_stat_disk_queue_time_seconds_total", Value: 0.25, Labels: labels("nvme0n1", "EIO")},
+			{Name: "obi_stat_disk_queue_time_seconds_total", Value: 0.5, Labels: labels("sdb", "")},
+		}, named("obi_stat_disk_queue_time_seconds_total"))
 		assert.ElementsMatch(ct, []promtest.ScrapedMetric{
 			{Name: "obi_stat_disk_io_bytes_total", Value: 6 * 4096, Labels: ioLabels("nvme0n1")},
 			{Name: "obi_stat_disk_io_bytes_total", Value: 3 * 4096, Labels: ioLabels("sdb")},

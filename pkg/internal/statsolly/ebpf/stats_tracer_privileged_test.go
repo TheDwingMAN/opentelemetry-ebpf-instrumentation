@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 
@@ -100,6 +101,31 @@ func TestKernelBlockLayoutZoneAppendOp(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("REQ_OP_ZONE_APPEND is %d", layout.zoneAppendOp)
 	assert.NotZero(t, layout.zoneAppendOp)
+}
+
+// Where the kernel numbers its request flags in an enum, the probes find RQF_IO_STAT and
+// RQF_FLUSH_SEQ in it: without them, they would take the start that the kernel left in a request
+// that it doesn't account
+func TestKernelBlockLayoutRequestFlags(t *testing.T) {
+	kernel, err := btf.LoadKernelSpec()
+	require.NoError(t, err)
+	enumFlags := false
+	for typ, err := range kernel.All() {
+		require.NoError(t, err)
+		if enum, ok := typ.(*btf.Enum); ok && slices.ContainsFunc(enum.Values, func(value btf.EnumValue) bool {
+			return value.Name == "__RQF_STARTED"
+		}) {
+			enumFlags = true
+			break
+		}
+	}
+	if !enumFlags {
+		t.Skip("this kernel numbers its request flags with macros")
+	}
+	layout, err := kernelBlockLayout()
+	require.NoError(t, err)
+	assert.NotZero(t, layout.rqfIOStat)
+	assert.NotZero(t, layout.rqfFlushSeq)
 }
 
 // loadFsSyncPrograms loads the stats programs with the file sync kprobes, and the fentry and fexit

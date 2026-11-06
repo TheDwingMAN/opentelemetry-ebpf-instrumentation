@@ -99,6 +99,7 @@ type statMetricsExporter struct {
 	diskIO                   *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskOperations           *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
 	diskServiceTime          *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
+	diskQueueTime            *Expirer[*ebpf.Stat, metric2.Float64Counter, float64]
 	diskFlushDuration        *kernelHistogram
 	fsSyncDuration           *kernelHistogram
 	fsSyncOperations         *Expirer[*ebpf.Stat, metric2.Int64Counter, int64]
@@ -282,6 +283,16 @@ func newStatMetricsExporter(
 		nme.diskServiceTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, diskServiceTime, attrs, timeNow, cfg.Metrics.TTL)
 	}
 
+	if cfg.CommonCfg.Features.StatsDiskQueueTime() {
+		diskQueueTime, err := ebpfEvents.Float64Counter(attributes.StatDiskQueueTime.OTEL,
+			metric2.WithUnit(attributes.StatDiskQueueTime.Unit))
+		if err != nil {
+			return nil, fmt.Errorf("creating stats disk queue time counter: %w", err)
+		}
+		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskQueueTime))
+		nme.diskQueueTime = NewExpirer[*ebpf.Stat, metric2.Float64Counter, float64](ctx, diskQueueTime, attrs, timeNow, cfg.Metrics.TTL)
+	}
+
 	if cfg.CommonCfg.Features.StatsDiskFlushDuration() {
 		attrs := attributes.OpenTelemetryGetters(ebpf.StatGetters, attrProv.For(attributes.StatDiskFlushDuration))
 		nme.diskFlushDuration = kernelHistograms.histogram(attributes.StatDiskFlushDuration, export.DiskLatencyBounds, attrs)
@@ -411,6 +422,10 @@ func (me *statMetricsExporter) recordDiskIO(ctx context.Context, v *ebpf.Stat) {
 	if me.diskServiceTime != nil {
 		diskServiceTime, attrs := me.diskServiceTime.ForRecord(v)
 		diskServiceTime.Add(ctx, v.DiskIO.Latency.Sum, metric2.WithAttributeSet(attrs))
+	}
+	if me.diskQueueTime != nil {
+		diskQueueTime, attrs := me.diskQueueTime.ForRecord(v)
+		diskQueueTime.Add(ctx, v.DiskIO.QueueTime, metric2.WithAttributeSet(attrs))
 	}
 }
 

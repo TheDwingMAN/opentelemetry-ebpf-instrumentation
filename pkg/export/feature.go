@@ -76,6 +76,7 @@ const (
 	FeatureStatsDiskIO
 	FeatureStatsDiskOperations
 	FeatureStatsDiskServiceTime
+	FeatureStatsDiskQueueTime
 	FeatureStatsDiskFlushDuration
 	// FeatureStatsDiskBioDevices widens the disk stat metrics to the bio-based block devices
 	FeatureStatsDiskBioDevices
@@ -96,7 +97,7 @@ const (
 
 // FeatureStatsDiskMetrics groups the disk stat metrics, which the same probes measure
 const FeatureStatsDiskMetrics = FeatureStatsDiskServiceDuration | FeatureStatsDiskIO | FeatureStatsDiskOperations |
-	FeatureStatsDiskServiceTime | FeatureStatsDiskFlushDuration
+	FeatureStatsDiskServiceTime | FeatureStatsDiskQueueTime | FeatureStatsDiskFlushDuration
 
 // FeatureStatsDisk groups the disk stat features: the metrics, and the bio-based devices measured on them
 const FeatureStatsDisk = FeatureStatsDiskMetrics | FeatureStatsDiskBioDevices
@@ -152,6 +153,7 @@ var v2OnlyFeatures = map[string]Features{
 	"stats_disk_io":                       FeatureStatsDiskIO,
 	"stats_disk_operations":               FeatureStatsDiskOperations,
 	"stats_disk_service_time":             FeatureStatsDiskServiceTime,
+	"stats_disk_queue_time":               FeatureStatsDiskQueueTime,
 	"stats_disk_flush_duration":           FeatureStatsDiskFlushDuration,
 	"stats_disk_bio_devices":              FeatureStatsDiskBioDevices,
 	"stats_fs_sync_duration":              FeatureStatsFsSyncDuration,
@@ -530,6 +532,10 @@ func (f Features) StatsDiskOperations() bool {
 
 func (f Features) StatsDiskServiceTime() bool {
 	return f.any(FeatureStatsDiskServiceTime)
+}
+
+func (f Features) StatsDiskQueueTime() bool {
+	return f.any(FeatureStatsDiskQueueTime)
 }
 
 func (f Features) StatsDiskFlushDuration() bool {

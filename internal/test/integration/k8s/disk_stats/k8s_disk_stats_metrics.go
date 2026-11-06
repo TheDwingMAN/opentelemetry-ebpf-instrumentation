@@ -70,9 +70,14 @@ func testDiskIOOfTheContainer(ctx context.Context, t *testing.T, _ *envconf.Conf
 }
 
 func testDiskCountersOfTheWorkload(ctx context.Context, t *testing.T, _ *envconf.Config) context.Context {
-	for _, counter := range []string{"obi_stat_disk_operations_total", "obi_stat_disk_service_time_seconds_total"} {
+	// the requests of a disk without an I/O scheduler may not wait before their issue
+	for counter, condition := range map[string]string{
+		"obi_stat_disk_operations_total":           " > 0",
+		"obi_stat_disk_service_time_seconds_total": " > 0",
+		"obi_stat_disk_queue_time_seconds_total":   " >= 0",
+	} {
 		for _, direction := range []string{"read", "write"} {
-			for _, res := range queryResults(t, counter+`{`+workload+`,disk_io_direction="`+direction+`"} > 0`) {
+			for _, res := range queryResults(t, counter+`{`+workload+`,disk_io_direction="`+direction+`"}`+condition) {
 				assert.NotContains(t, res.Metric, "k8s_pod_name", "a series per workload, not per pod")
 				assert.NotContains(t, res.Metric, "container_id")
 			}

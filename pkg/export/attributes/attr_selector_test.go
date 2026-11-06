@@ -364,6 +364,7 @@ func TestDefault_StatStorage(t *testing.T) {
 		StatDiskServiceDuration: slices.Concat(device, []attr.Name{attr.ErrorType, attr.K8sClusterName}),
 		StatDiskOperations:      slices.Concat(device, workload, []attr.Name{attr.ErrorType}),
 		StatDiskServiceTime:     slices.Concat(device, workload, []attr.Name{attr.ErrorType}),
+		StatDiskQueueTime:       slices.Concat(device, workload, []attr.Name{attr.ErrorType}),
 		// the failed requests transfer no bytes
 		StatDiskIO:            slices.Concat(device, workload),
 		StatDiskFlushDuration: {attr.DiskStacked, attr.DiskVolumeName, attr.SystemDevice, attr.ErrorType, attr.K8sClusterName},

@@ -46,6 +46,7 @@ type statMetricsReporter struct {
 	diskIO                   *Expirer[prometheus.Counter]
 	diskOperations           *Expirer[prometheus.Counter]
 	diskServiceTime          *Expirer[prometheus.Counter]
+	diskQueueTime            *Expirer[prometheus.Counter]
 	diskFlushDuration        *kernelHistogramVec
 	fsSyncDuration           *kernelHistogramVec
 	fsSyncOperations         *Expirer[prometheus.Counter]
@@ -66,6 +67,7 @@ type statMetricsReporter struct {
 	diskIOAttrs                   []attributes.Field[*ebpf.Stat, string]
 	diskOperationsAttrs           []attributes.Field[*ebpf.Stat, string]
 	diskServiceTimeAttrs          []attributes.Field[*ebpf.Stat, string]
+	diskQueueTimeAttrs            []attributes.Field[*ebpf.Stat, string]
 	diskFlushDurationAttrs        []attributes.Field[*ebpf.Stat, string]
 	fsSyncDurationAttrs           []attributes.Field[*ebpf.Stat, string]
 	fsSyncOperationsAttrs         []attributes.Field[*ebpf.Stat, string]
@@ -242,6 +244,17 @@ func newStatsReporter(
 			Help: "sum of the service times of the completed block I/O requests, from their last issue to the device until their final completion, in seconds",
 		}, labelNames(mr.diskServiceTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
 		register = append(register, mr.diskServiceTime)
+	}
+
+	if cfg.CommonCfg.Features.StatsDiskQueueTime() {
+		log.Debug("registering stat disk queue time metric")
+
+		mr.diskQueueTimeAttrs = attributes.PrometheusGetters(ebpf.StatStringGetters, provider.For(attributes.StatDiskQueueTime))
+		mr.diskQueueTime = NewExpirer[prometheus.Counter](prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: attributes.StatDiskQueueTime.Prom,
+			Help: "sum of the times that the completed block I/O requests waited in the block layer, from their start until their last issue to the device, in seconds",
+		}, labelNames(mr.diskQueueTimeAttrs)).MetricVec, timeNow, cfg.Config.TTL)
+		register = append(register, mr.diskQueueTime)
 	}
 
 	if cfg.CommonCfg.Features.StatsDiskFlushDuration() {
@@ -429,6 +442,9 @@ func (r *statMetricsReporter) observeDiskCounters(stat *ebpf.Stat) {
 	}
 	if r.diskServiceTime != nil {
 		r.diskServiceTime.WithLabelValues(labelValues(stat, r.diskServiceTimeAttrs)...).Metric.Add(stat.DiskIO.Latency.Sum)
+	}
+	if r.diskQueueTime != nil {
+		r.diskQueueTime.WithLabelValues(labelValues(stat, r.diskQueueTimeAttrs)...).Metric.Add(stat.DiskIO.QueueTime)
 	}
 }
 

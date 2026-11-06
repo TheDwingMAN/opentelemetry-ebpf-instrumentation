@@ -83,6 +83,15 @@ static __always_inline u64 disk_accounted_start_ns(const u64 start_ns,
     return start_ns;
 }
 
+// disk_queue_ns is the time that a request waited in the block layer between its start (start_ns,
+// from disk_accounted_start_ns) and its issue to the device, or 0 when its start is unknown
+static __always_inline u64 disk_queue_ns(const u64 start_ns, const u64 issued_ns) {
+    if (start_ns == 0 || start_ns > issued_ns) {
+        return 0;
+    }
+    return issued_ns - start_ns;
+}
+
 // A request can complete in several block_rq_complete calls. Each call reports the bytes that it
 // completed while remaining_bytes (rq->__data_len) still holds the bytes left before it, so the call
 // that completes the rest is the final one. A failed call that leaves bytes is not: the kernel

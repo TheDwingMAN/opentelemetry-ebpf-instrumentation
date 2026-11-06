@@ -85,6 +85,7 @@ func newTestDiskReader(src *fakeDiskAccum) *diskReader {
 func TestDiskReaderForwardsDeltas(t *testing.T) {
 	written := accum([]uint64{0, 3}, []uint64{0, 2_000_000})
 	written.Bytes = 3 * 4096
+	written.QueueNs = 1_500_000
 	src := &fakeDiskAccum{entries: map[ebpf.StatsDiskIoKeyT]ebpf.StatsDiskIoAccumT{writeKey(259, 0): written}}
 	r := newTestDiskReader(src)
 
@@ -95,15 +96,18 @@ func TestDiskReaderForwardsDeltas(t *testing.T) {
 	assert.Equal(t, ebpf.CodeDiskOpWrite, stats[0].DiskIO.Op)
 	assertLatency(t, stats[0].DiskIO.Latency, 3*0.002, 0, 3)
 	assert.Equal(t, uint64(3*4096), stats[0].DiskIO.Bytes)
+	assert.InDelta(t, 0.0015, stats[0].DiskIO.QueueTime, 1e-12)
 
 	// two more requests in the same bucket, one in a higher bucket
 	written = accum([]uint64{0, 5, 1}, []uint64{0, 2_000_000, 50_000_000})
 	written.Bytes = 6 * 4096
+	written.QueueNs = 2_000_000
 	src.entries[writeKey(259, 0)] = written
 	stats = r.readStats()
 	require.Len(t, stats, 1)
 	assertLatency(t, stats[0].DiskIO.Latency, 2*0.002+0.05, 0, 2, 1)
 	assert.Equal(t, uint64(3*4096), stats[0].DiskIO.Bytes)
+	assert.InDelta(t, 0.0005, stats[0].DiskIO.QueueTime, 1e-12)
 
 	assert.Empty(t, r.readStats(), "nothing changed, nothing forwarded")
 }

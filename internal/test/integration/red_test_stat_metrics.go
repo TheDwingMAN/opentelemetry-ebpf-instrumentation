@@ -114,7 +114,7 @@ func testStatMetricsDiskServiceDuration(t *testing.T) {
 
 // testStatMetricsDiskCounters checks the counters of the O_DIRECT I/O of the disk-io container, which
 // they are charged to, and that the operations and their service time are the count and the sum of
-// the latency histogram
+// the latency histogram. The I/O may not wait before its issue, so its queue time may be 0.
 func testStatMetricsDiskCounters(t *testing.T, containerID string) {
 	pq := promtest.Client{HostPort: prometheusHostPort}
 	for _, direction := range []string{"read", "write"} {
@@ -128,6 +128,9 @@ func testStatMetricsDiskCounters(t *testing.T, containerID string) {
 					require.NoError(ct, err)
 					enoughPromResults(ct, results)
 				}
+				results, err := pq.Query(`obi_stat_disk_queue_time_seconds_total` + selector + ` >= 0`)
+				require.NoError(ct, err)
+				enoughPromResults(ct, results)
 				for _, mismatches := range []string{
 					`obi_stat_disk_service_duration_seconds_count` + selector + ` != obi_stat_disk_operations_total` + selector,
 					`abs(obi_stat_disk_service_duration_seconds_sum` + selector +

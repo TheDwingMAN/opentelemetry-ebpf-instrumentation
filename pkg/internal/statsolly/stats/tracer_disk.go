@@ -380,6 +380,7 @@ func (r *diskReader) stat(key ebpf.StatsDiskIoKeyT, current, previous ebpf.Stats
 			Latency:    latency,
 			ErrorType:  diskErrorType(key.Status, r.statusIsBlkStatus || key.Bio != 0),
 			Bytes:      current.Bytes - previous.Bytes,
+			QueueTime:  float64(current.QueueNs-previous.QueueNs) / float64(time.Second),
 
 			ContainerID:   r.containers.containerID(key.CgroupId),
 			MultipathPath: device.multipathPath,
