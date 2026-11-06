@@ -75,8 +75,8 @@ func TestDiskLatencyIsAccumulatedPerDevice(t *testing.T) {
 }
 
 // TestDiskRequestsAreTimedFromTheirIssue holds writes of a loop device in the I/O scheduler before
-// their issue, and checks that their durations leave that wait out, while the kernel's start of a
-// request, which /proc/diskstats times from, includes it. The backing file of the loop device is on
+// their issue, and checks that their durations leave that wait out and their queue time counts it,
+// while the kernel's start of a request, which /proc/diskstats times from, includes it. The backing file of the loop device is on
 // a frozen filesystem, so the writes that the loop driver takes block in it, keeping all its tags,
 // and the scheduler holds the other writes until the filesystem is thawed.
 func TestDiskRequestsAreTimedFromTheirIssue(t *testing.T) {
@@ -103,14 +103,50 @@ func TestDiskRequestsAreTimedFromTheirIssue(t *testing.T) {
 	require.NoError(t, written())
 	after := readKernelDiskStatsOnceWritten(t, device, before, tags+held)
 
-	latency := deviceLatency(reader.readStats(), device, ebpf.CodeDiskOpWrite)
+	stats := reader.readStats()
+	latency := deviceLatency(stats, device, ebpf.CodeDiskOpWrite)
 	misses := float64(diskProgramMisses(t))
 	require.Equal(t, uint64(tags+held), after.writes-before.writes)
 	require.InDelta(t, tags+held, latency.Count(), misses)
-	leftOut := (after.writeTime - before.writeTime).Seconds() - latency.Sum
+	kernelTime := (after.writeTime - before.writeTime).Seconds()
+	leftOut := kernelTime - latency.Sum
 	assert.Greater(t, leftOut, 0.9*held*hold.Seconds(), "OBI leaves the wait of the held writes out")
 	// the writes in flight wait out the hold, so only the held ones can be timed within it
 	assert.InDelta(t, held, requestsWithin(latency, hold.Seconds()), misses, "the held writes are timed from their issue")
+
+	queueTime := deviceQueueTime(stats, device, ebpf.CodeDiskOpWrite)
+	assert.Greater(t, queueTime, 0.9*held*hold.Seconds(), "the queue time counts the wait of the held writes")
+	// a missed write takes its time with it, and the kernel takes its clock a little after OBI at the
+	// completion, which a jiffy bounds on the kernels that account the time in jiffies
+	tolerance := float64(tags+held)*(4*time.Millisecond).Seconds() + misses*kernelTime/float64(tags+held)
+	assert.InDelta(t, kernelTime, queueTime+latency.Sum, tolerance, "the wait and the service of a write add up to its time from its start")
+}
+
+// TestDiskQueueTimeLeavesOutTheRequestsNotAccounted writes a loop device with its I/O statistics on,
+// so that the kernel writes the start of every request slot, then off: from Linux 6.13, the kernel no
+// longer writes the start of a request that it doesn't account, which keeps the start of an earlier
+// use of its slot, and no write may wait from it
+func TestDiskQueueTimeLeavesOutTheRequestsNotAccounted(t *testing.T) {
+	const age = time.Second
+	devPath := attachLoopDevice(t, t.TempDir())
+	device := filepath.Base(devPath)
+	// without a scheduler, the kernel before Linux 6.13 doesn't time the requests that it doesn't
+	// account
+	useScheduler(t, device, "none")
+	tags, err := strconv.Atoi(readSysFile(t, filepath.Join("/sys/block", device, "mq", "0", "nr_tags")))
+	require.NoError(t, err)
+	reader := attachDiskReader(t, export.FeatureStatsDiskQueueTime, false)
+
+	require.NoError(t, writeBlocksConcurrently(t, devPath, 2*tags)())
+	reader.readStats()
+	time.Sleep(age)
+	iostats := filepath.Join("/sys/block", device, "queue", "iostats")
+	require.NoError(t, os.WriteFile(iostats, []byte("0"), 0o644))
+	t.Cleanup(func() { _ = os.WriteFile(iostats, []byte("1"), 0o644) })
+	require.NoError(t, writeBlocksConcurrently(t, devPath, 2*tags)())
+
+	queueTime := deviceQueueTime(reader.readStats(), device, ebpf.CodeDiskOpWrite)
+	assert.Less(t, queueTime, age.Seconds(), "no write waits from the start of an earlier use of its slot")
 }
 
 // TestDiskFailedRequestsAreNamedAfterTheirErrno writes to a loop device whose backing file is on a
@@ -284,6 +320,7 @@ func TestDiskBioDevicesAreMeasured(t *testing.T) {
 			assert.True(t, written[dm].Stacked)
 			assert.InDelta(t, directIOBlocks, written[dm].Latency.Count(), misses, "one sample per bio")
 			assert.InDelta(t, directIOBlocks*directIOBlockSize, written[dm].Bytes, misses*directIOBlockSize)
+			assert.Zero(t, written[dm].QueueTime, "the bios don't wait in a queue of the block layer")
 		})
 	}
 }
@@ -589,6 +626,15 @@ func deviceLatency(stats []*ebpf.Stat, device string, op ebpf.DiskOpCode) ebpf.L
 		}
 	}
 	return ebpf.LatencyHistogram{BucketCounts: make([]uint64, len(export.DiskLatencyBounds)+1)}
+}
+
+func deviceQueueTime(stats []*ebpf.Stat, device string, op ebpf.DiskOpCode) float64 {
+	for _, stat := range stats {
+		if stat.DiskIO.Device == device && stat.DiskIO.Op == op {
+			return stat.DiskIO.QueueTime
+		}
+	}
+	return 0
 }
 
 func requestsWithin(latency ebpf.LatencyHistogram, seconds float64) uint64 {

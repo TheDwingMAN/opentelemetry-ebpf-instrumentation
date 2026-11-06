@@ -49,6 +49,11 @@ func TestCgroupReads(t *testing.T) {
 			filters: filter.AttributeFamilyConfig{"container.id": {Match: "a1*"}},
 		},
 		{name: "counters in Kubernetes", groups: attributes.GroupKubernetes, features: export.FeatureStatsDiskOperations, want: disk},
+		{name: "queue time in Kubernetes", groups: attributes.GroupKubernetes, features: export.FeatureStatsDiskQueueTime, want: disk},
+		{
+			name: "queue time selected", features: export.FeatureStatsDiskQueueTime,
+			selection: selecting(attributes.StatDiskQueueTime, "container.id"), want: disk,
+		},
 		{name: "histogram in Kubernetes", groups: attributes.GroupKubernetes, features: export.FeatureStatsDiskServiceDuration},
 		{
 			name: "Kubernetes namespace filtered", features: export.FeatureStatsDiskIO,

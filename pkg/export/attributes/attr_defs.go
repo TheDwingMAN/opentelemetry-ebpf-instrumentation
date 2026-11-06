@@ -1087,6 +1087,12 @@ func getDefinitions(
 				attr.ErrorType: true,
 			},
 		},
+		StatDiskQueueTime.Section: {
+			SubGroups: []*AttrReportGroup{&statsDiskAttributes, &statsStorageKubeAttributes},
+			Attributes: map[attr.Name]Default{
+				attr.ErrorType: true,
+			},
+		},
 		StatDiskFlushDuration.Section: {
 			SubGroups: []*AttrReportGroup{&statsDiskDeviceAttributes, &statsStorageKubeOptInAttributes},
 			Attributes: map[attr.Name]Default{

@@ -168,6 +168,9 @@ type DiskIO struct {
 	ErrorType string
 	// Bytes of the successful requests, at their issue
 	Bytes uint64
+	// QueueTime is the seconds that the requests waited in the block layer before their last issue,
+	// for those whose start the kernel accounts; 0 for the bios of a bio-based device
+	QueueTime float64
 	// ContainerID is the container that the kernel charges the I/O to, empty for none
 	ContainerID string
 	// MultipathPath is set on the paths of a measured multipath device, dm-multipath or the head of

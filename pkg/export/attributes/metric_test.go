@@ -98,6 +98,7 @@ func TestPrometheusNames(t *testing.T) {
 		{StatDiskIO, "obi_stat_disk_io_bytes_total"},
 		{StatDiskOperations, "obi_stat_disk_operations_total"},
 		{StatDiskServiceTime, "obi_stat_disk_service_time_seconds_total"},
+		{StatDiskQueueTime, "obi_stat_disk_queue_time_seconds_total"},
 		{StatDiskFlushDuration, "obi_stat_disk_flush_duration_seconds"},
 		{StatFsSyncDuration, "obi_stat_fs_sync_duration_seconds"},
 		{StatFsSyncOperations, "obi_stat_fs_sync_operations_total"},

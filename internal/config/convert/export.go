@@ -385,6 +385,7 @@ const (
 	statsFeatureDiskIO                     = "disk_io"
 	statsFeatureDiskOperations             = "disk_operations"
 	statsFeatureDiskServiceTime            = "disk_service_time"
+	statsFeatureDiskQueueTime              = "disk_queue_time"
 	statsFeatureDiskFlushDuration          = "disk_flush_duration"
 	statsFeatureDiskBioDevices             = "disk_bio_devices"
 	statsFeatureFsSyncDuration             = "fs_sync_duration"
@@ -424,6 +425,9 @@ func statsFeatures(features featureexport.Features) []string {
 	}
 	if features.StatsDiskServiceTime() {
 		out = append(out, statsFeatureDiskServiceTime)
+	}
+	if features.StatsDiskQueueTime() {
+		out = append(out, statsFeatureDiskQueueTime)
 	}
 	if features.StatsDiskFlushDuration() {
 		out = append(out, statsFeatureDiskFlushDuration)

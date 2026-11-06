@@ -720,6 +720,12 @@ var (
 		Unit:    "s",
 		Type:    InstrumentCounter,
 	})
+	StatDiskQueueTime = metric(Name{
+		Section: "obi.stat.disk.queue_time",
+		OTEL:    "obi.stat.disk.queue_time",
+		Unit:    "s",
+		Type:    InstrumentCounter,
+	})
 	StatDiskFlushDuration = metric(Name{
 		Section: "obi.stat.disk.flush.duration",
 		OTEL:    "obi.stat.disk.flush.duration",

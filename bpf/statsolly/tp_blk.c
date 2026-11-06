@@ -122,6 +122,18 @@ take_start(struct request *rq, const enum disk_op op, disk_rq_start_t *start) {
     return true;
 }
 
+// request_queue_ns is the time that a request waited in the I/O scheduler and the dispatch queues,
+// from its start until its last issue (issued_ns). From Linux 6.9 (and RHEL 9.6), the kernel takes the
+// start from the clock that the block plug of the submitter cached, which can make it longer. A
+// request that was never issued has its start as issued_ns, so it didn't wait. The flush sequence
+// exception of disk_accounted_start_ns doesn't apply: a write of a flush sequence keeps
+// RQF_FLUSH_SEQ until its last completion, with the start of an earlier use when not accounted.
+static __always_inline u64 request_queue_ns(struct request *rq, const u64 issued_ns) {
+    const u64 started_ns = disk_accounted_start_ns(
+        BPF_CORE_READ(rq, start_time_ns), BPF_CORE_READ(rq, rq_flags), disk_rqf_io_stat, 0);
+    return disk_queue_ns(started_ns, issued_ns);
+}
+
 // A request is counted once, at its final completion, if that completion takes its issue record or
 // the request was never issued: a write that the kernel completes again at the end of its flush
 // sequence was issued, and has no record left.
@@ -163,6 +175,7 @@ int obi_stats_raw_tp_block_rq_complete(struct bpf_raw_tracepoint_args *ctx) {
     const u32 bucket = disk_latency_bucket(disk_latency_bounds_ns, latency_ns);
     __sync_fetch_and_add(&accum->latency_count[bucket], 1);
     __sync_fetch_and_add(&accum->latency_sum_ns, latency_ns);
+    __sync_fetch_and_add(&accum->queue_ns, request_queue_ns(rq, start.issued_ns));
     if (key.status == 0) {
         __sync_fetch_and_add(&accum->bytes, start.bytes);
     }

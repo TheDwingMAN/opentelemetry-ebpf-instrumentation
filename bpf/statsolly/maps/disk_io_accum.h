@@ -31,6 +31,9 @@ typedef struct disk_io_accum {
     u64 latency_sum_ns;
     // bytes of the successful requests, at their issue
     u64 bytes;
+    // time that the requests waited in the block layer before their last issue, for those whose
+    // start the kernel accounts (request_queue_ns); 0 for the bios
+    u64 queue_ns;
 } disk_io_accum_t;
 
 // A hash map, not an LRU one, so that the kernel never evicts the cumulative values

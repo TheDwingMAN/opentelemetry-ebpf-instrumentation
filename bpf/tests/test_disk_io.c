@@ -118,6 +118,17 @@ static void test_accounted_start_ns(void) {
                 "the flush of a flush sequence is accounted without RQF_IO_STAT");
 }
 
+static void test_queue_ns(void) {
+    assert_true(disk_queue_ns(1000, 1500) == 500, "a request waits from its start until its issue");
+    assert_true(disk_queue_ns(1000, 1000) == 0, "a request issued at its start didn't wait");
+    assert_true(disk_queue_ns(0, 1500) == 0, "a request without a start has no known wait");
+    assert_true(disk_queue_ns(2000, 1500) == 0, "a start after the issue is not a wait");
+    const u32 io_stat = 1 << 8;
+    const u32 flush_seq = 1 << 1;
+    assert_true(disk_queue_ns(disk_accounted_start_ns(1000, flush_seq, io_stat, 0), 1500) == 0,
+                "a write of a flush sequence that is not accounted has no known wait");
+}
+
 static void test_status_code(void) {
     // a blk_status_t from Linux 5.16
     assert_true(disk_status_code(10, true) == 10, "BLK_STS_IOERR is status 10");
@@ -201,6 +212,7 @@ int main(void) {
     test_bio_op();
     test_final_completion();
     test_accounted_start_ns();
+    test_queue_ns();
     test_status_code();
     test_bio_status();
     test_rq_completes_bio();

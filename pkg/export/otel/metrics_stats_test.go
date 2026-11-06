@@ -59,15 +59,16 @@ func TestStatHistogramView_ExplicitUsesBuckets(t *testing.T) {
 	assert.Equal(t, buckets, aggregation.Boundaries)
 }
 
-// The disk counters split the requests and their time by outcome, as the histogram does, and count
+// The disk counters split the requests, their time and their wait by outcome, as the histogram does, and count
 // the requests of the paths of dm-multipath devices, which the histograms leave out. The cache
 // flushes are only in their own histogram.
 func TestStatMetricsExporter_DiskCounters(t *testing.T) {
 	stats, records := startStatExporter(t, export.FeatureStatsDisk, attributes.UndefinedGroup)
 	succeeded, failed, path := diskStat("vda"), diskStat("vda"), diskStat("sdb")
-	succeeded.DiskIO.Latency, succeeded.DiskIO.Bytes = *latency(0.0002, 2), 2*4096
-	failed.DiskIO.Latency, failed.DiskIO.ErrorType = *latency(30, 0, 1), "ETIMEDOUT"
+	succeeded.DiskIO.Latency, succeeded.DiskIO.Bytes, succeeded.DiskIO.QueueTime = *latency(0.0002, 2), 2*4096, 0.0001
+	failed.DiskIO.Latency, failed.DiskIO.ErrorType, failed.DiskIO.QueueTime = *latency(30, 0, 1), "ETIMEDOUT", 0.5
 	path.DiskIO.Latency, path.DiskIO.Bytes, path.DiskIO.MultipathPath = *latency(0.0003, 3), 3*4096, true
+	path.DiskIO.QueueTime = 0.0004
 	flush, pathFlush := diskStat("vda"), diskStat("sdb")
 	flush.DiskIO.Op, flush.DiskIO.Latency = ebpf.CodeDiskOpFlush, *latency(0.004, 0, 2)
 	pathFlush.DiskIO.Op, pathFlush.DiskIO.Latency, pathFlush.DiskIO.MultipathPath = ebpf.CodeDiskOpFlush, *latency(0.004, 0, 2), true
@@ -89,6 +90,9 @@ func TestStatMetricsExporter_DiskCounters(t *testing.T) {
 			"obi.stat.disk.service_time vda ":              0.0002,
 			"obi.stat.disk.service_time vda ETIMEDOUT":     30,
 			"obi.stat.disk.service_time sdb ":              0.0003,
+			"obi.stat.disk.queue_time vda ":                0.0001,
+			"obi.stat.disk.queue_time vda ETIMEDOUT":       0.5,
+			"obi.stat.disk.queue_time sdb ":                0.0004,
 			"obi.stat.disk.io vda ":                        2 * 4096,
 			"obi.stat.disk.io sdb ":                        3 * 4096,
 			"obi.stat.disk.flush.duration vda ":            0.004,
